@@ -1,0 +1,22 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: ArchiMate MCP Server Tests
+Bundle-SymbolicName: net.vheerden.archi.mcp.tests
+Bundle-Version: 1.0.0.qualifier
+Bundle-Vendor: JS van Heerden & Claude Code
+Fragment-Host: net.vheerden.archi.mcp;bundle-version="1.0.0"
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Bundle-ClassPath: .,
+ lib/elk/org.eclipse.elk.graph-0.11.0.jar,
+ lib/elk/org.eclipse.elk.core-0.11.0.jar,
+ lib/elk/org.eclipse.elk.alg.common-0.11.0.jar,
+ lib/elk/org.eclipse.elk.alg.layered-0.11.0.jar,
+ lib/elk/org.eclipse.xtext.xbase.lib-2.37.0.jar
+Require-Bundle: org.junit;bundle-version="4.13.0",
+ junit-vintage-engine,
+ junit-platform-commons,
+ junit-platform-engine,
+ junit-platform-launcher,
+ com.google.guava,
+ org.eclipse.emf.ecore,
+ org.eclipse.emf.common

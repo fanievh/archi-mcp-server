@@ -1,0 +1,7 @@
+# Plugin icons
+#
+# Required:
+# - mcp-server-16.png (16x16) - Small icon
+# - mcp-server-32.png (32x32) - Large icon
+#
+# Create icons before packaging the plugin for distribution.

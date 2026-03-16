@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/mcp-json-jackson2-0.17.2.jar"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-21">
+		<attributes>
+			<attribute name="module" value="true"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="con" path="org.eclipse.pde.core.requiredPlugins"/>
+	<classpathentry kind="src" path="src"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-server-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-ee10-servlet-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-http-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-io-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-util-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-security-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jackson/jackson-core-2.16.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jackson/jackson-databind-2.16.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jackson/jackson-annotations-2.16.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/slf4j/slf4j-api-2.0.11.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/mcp-core-0.17.2.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/mcp-json-0.17.2.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/reactor-core-3.7.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/reactive-streams-1.0.4.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jakarta.servlet-api-6.0.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/json-schema-validator-2.0.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/mcp-sdk/itu-1.14.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jackson/jackson-dataformat-yaml-2.16.1.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jackson/snakeyaml-2.2.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/jetty/jetty-session-12.0.18.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/elk/org.eclipse.elk.core-0.11.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/elk/org.eclipse.elk.alg.layered-0.11.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/elk/org.eclipse.elk.graph-0.11.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/elk/org.eclipse.elk.alg.common-0.11.0.jar"/>
+	<classpathentry exported="true" kind="lib" path="lib/elk/org.eclipse.xtext.xbase.lib-2.37.0.jar"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>

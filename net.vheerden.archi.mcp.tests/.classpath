@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/JavaSE-21"/>
+	<classpathentry kind="con" path="org.eclipse.pde.core.requiredPlugins"/>
+	<classpathentry kind="src" path="src">
+		<attributes>
+			<attribute name="test" value="true"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="lib/elk/org.eclipse.elk.graph-0.11.0.jar"/>
+	<classpathentry kind="lib" path="lib/elk/org.eclipse.elk.core-0.11.0.jar"/>
+	<classpathentry kind="lib" path="lib/elk/org.eclipse.elk.alg.common-0.11.0.jar"/>
+	<classpathentry kind="lib" path="lib/elk/org.eclipse.elk.alg.layered-0.11.0.jar"/>
+	<classpathentry kind="lib" path="lib/elk/org.eclipse.xtext.xbase.lib-2.37.0.jar"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>

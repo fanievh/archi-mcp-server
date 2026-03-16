@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+   <!-- Story 1.2: Preferences page -->
+   <extension point="org.eclipse.ui.preferencePages">
+      <page
+            id="net.vheerden.archi.mcp.preferences"
+            name="%preferencePage.name"
+            class="net.vheerden.archi.mcp.ui.McpPreferencePage">
+      </page>
+   </extension>
+   <extension point="org.eclipse.core.runtime.preferences">
+      <initializer class="net.vheerden.archi.mcp.ui.McpPreferenceInitializer"/>
+   </extension>
+
+   <!-- Story 1.4: Server lifecycle commands -->
+   <extension point="org.eclipse.ui.commands">
+      <command
+            id="net.vheerden.archi.mcp.toggleServer"
+            name="%command.toggleServer.name"
+            description="%command.toggleServer.description"/>
+   </extension>
+
+   <extension point="org.eclipse.ui.handlers">
+      <handler
+            commandId="net.vheerden.archi.mcp.toggleServer"
+            class="net.vheerden.archi.mcp.ui.ToggleServerHandler"/>
+   </extension>
+
+   <extension point="org.eclipse.ui.menus">
+      <menuContribution locationURI="menu:org.eclipse.ui.main.menu?after=window">
+         <menu
+               id="net.vheerden.archi.mcp.menu"
+               label="%menu.mcpServer.label">
+            <command
+                  commandId="net.vheerden.archi.mcp.toggleServer"
+                  label="%command.toggleServer.label"
+                  style="push"/>
+         </menu>
+      </menuContribution>
+   </extension>
+
+   <!-- Story 1.4: Auto-start on launch -->
+   <extension point="org.eclipse.ui.startup">
+      <startup class="net.vheerden.archi.mcp.ui.McpStartupHandler"/>
+   </extension>
+</plugin>

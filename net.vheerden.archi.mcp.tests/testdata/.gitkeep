@@ -1,0 +1,4 @@
+# Test data directory
+#
+# Place sample .archimate model files here for integration tests.
+# Example: test-model.archimate
