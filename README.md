@@ -6,7 +6,7 @@ An Eclipse PDE plugin for [Archi](https://www.archimatetool.com/) that exposes A
 
 Archi MCP Server embeds an HTTP server inside Archi that speaks MCP. Once running, any MCP-compatible LLM client (Claude, Cline, LM Studio, etc.) can connect and interact with the currently open ArchiMate model — asking questions, searching elements, traversing relationships, composing view diagrams, and even creating or modifying model content.
 
-The server provides **51 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, and more — plus **6 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
+The server provides **56 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, images, and more — plus **6 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
 
 **Example conversation:**
 
@@ -104,7 +104,7 @@ Clients must trust the self-signed certificate. For `curl` testing, use the `-k`
 
 ## Available Tools
 
-The server exposes **51 MCP tools** organised into functional categories.
+The server exposes **56 MCP tools** organised into functional categories.
 
 ### Query & Model Inspection (5 tools)
 
@@ -116,11 +116,12 @@ The server exposes **51 MCP tools** organised into functional categories.
 | `get-view-contents` | View diagram contents — elements, relationships, visual positions, connection routing |
 | `get-relationships` | Traverse relationships with configurable depth (0-3 hops) or multi-hop chain traversal with direction/type/layer filters |
 
-### Search & Discovery (3 tools)
+### Search & Discovery (4 tools)
 
 | Tool | Description |
 |---|---|
-| `search-elements` | Full-text search across names, documentation, and properties with optional type/layer filters |
+| `search-elements` | Full-text search across element names, documentation, and properties with optional type/layer filters |
+| `search-relationships` | Search all relationships by text, type, and source/target element layer — no element ID needed |
 | `get-or-create-element` | Discovery-first — returns existing element if exact name+type match exists, otherwise creates new |
 | `search-and-create` | Combined search + conditional create with duplicate candidate display |
 
@@ -143,12 +144,12 @@ The server exposes **51 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `add-to-view` | Place a model element onto a view diagram (same element can appear on multiple views) |
-| `add-group-to-view` | Add a visual grouping rectangle (pure visual container, no model representation) |
-| `add-note-to-view` | Add a text note annotation (pure visual, no model representation) |
-| `add-connection-to-view` | Add a visual connection representing an existing model relationship |
-| `update-view-object` | Update position, size, and/or styling of a visual element on a view |
-| `update-view-connection` | Replace bendpoints and/or update styling of a connection on a view |
+| `add-to-view` | Place a model element onto a view diagram (same element can appear on multiple views). Optional `imagePath`, `imagePosition`, and `showIcon` for custom images |
+| `add-group-to-view` | Add a visual grouping rectangle (pure visual container, no model representation). Optional `imagePath`, `imagePosition`, and `showIcon` for custom images |
+| `add-note-to-view` | Add a text note annotation (pure visual, no model representation). Optional `imagePath`, `imagePosition`, and `showIcon` for custom images |
+| `add-connection-to-view` | Add a visual connection representing an existing model relationship, with optional styling, label suppression, and label positioning |
+| `update-view-object` | Update position, size, styling, and/or image of a visual element on a view. Optional `imagePath`, `imagePosition`, and `showIcon` for custom images |
+| `update-view-connection` | Replace bendpoints, update styling, toggle label visibility, and/or set label position of a connection on a view |
 | `apply-positions` | Apply a complete visual layout atomically (up to 10,000 entries per call) |
 
 ### View Cleanup (2 tools)
@@ -158,28 +159,30 @@ The server exposes **51 MCP tools** organised into functional categories.
 | `remove-from-view` | Remove a visual element or connection from a view (model object preserved) |
 | `clear-view` | Remove all visual elements and connections from a view (model objects preserved) |
 
-### Layout & Routing (6 tools)
+### Layout & Routing (7 tools)
 
 | Tool | Description |
 |---|---|
 | `compute-layout` | Apply an automatic layout algorithm (tree, spring, directed, radial, grid) to a view |
-| `auto-route-connections` | Orthogonal connection routing using visibility-graph A* pathfinding |
-| `auto-layout-and-route` | ELK Layered algorithm — compute element positions AND connection routes in one operation |
+| `auto-route-connections` | Orthogonal connection routing using clearance-weighted visibility-graph A* pathfinding with corridor directionality, group-wall awareness, and post-routing path straightening. Optional `autoNudge` mode automatically moves blocking elements and re-routes failed connections in a single atomic operation |
+| `auto-layout-and-route` | Two modes: `auto` (default) uses ELK Layered to compute positions AND routes in one operation; `grouped` orchestrates the full grouped-view workflow (layout-within-group + arrange-groups + optimize-group-order + auto-route-connections) atomically |
 | `layout-within-group` | Arrange child elements within a group using row, column, or grid patterns |
+| `layout-flat-view` | Automatic layout for flat (non-grouped) views — row, column, or grid arrangement with optional sorting by name/type/layer and category grouping |
 | `arrange-groups` | Position top-level groups relative to each other in grid, row, or column layout |
 | `optimize-group-order` | Reorder elements within groups to minimise inter-group edge crossings |
 
-### Layout Assessment (1 tool)
+### Layout Assessment & Analysis (2 tools)
 
 | Tool | Description |
 |---|---|
-| `assess-layout` | Assess view layout quality with objective metrics — overlaps, crossings, spacing, alignment, rating, and actionable improvement suggestions |
+| `assess-layout` | Assess view layout quality with severity-tiered rating across 8 metrics — overlaps, crossings, pass-throughs, coincident segments, non-orthogonal terminals, spacing, alignment, label overlaps — with actionable improvement suggestions |
+| `detect-hub-elements` | Identify hub elements by counting visual connections per element, sorted descending. Includes sizing suggestions for elements with >6 connections based on the hub element formula |
 
 ### View Operations (1 tool)
 
 | Tool | Description |
 |---|---|
-| `auto-connect-view` | Create visual connections for all existing model relationships between elements already placed on a view |
+| `auto-connect-view` | Create visual connections for all existing model relationships between elements already placed on a view. Optional `showLabel: false` to suppress labels on all created connections |
 
 ### Folder Management (5 tools)
 
@@ -204,7 +207,14 @@ The server exposes **51 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `export-view` | Render a view as PNG or SVG — returned inline (base64) or written to file |
+| `export-view` | Render a view as PNG or SVG — returned inline (base64) or written to file. Optional `outputDirectory` to control where files are saved (auto-creates directories; defaults to temp) |
+
+### Images (2 tools)
+
+| Tool | Description |
+|---|---|
+| `add-image-to-model` | Import an image (icon) into the model archive. Preferred: `filePath` (local file) or `url` (HTTP download) — these bypass LLM text channel and avoid base64 corruption. Fallback: `imageData` (base64). Provide exactly ONE. Returns the archive `imagePath` for use with view composition tools. Images are deduplicated |
+| `list-model-images` | List all images stored in the model archive with their paths and dimensions. Use the `imagePath` values with view composition tools to set images on elements, groups, or notes without re-importing |
 
 ### Batch & Mutation Control (4 tools)
 
@@ -330,7 +340,7 @@ arch-mcp-server/
 │   ├── src/net/vheerden/archi/mcp/
 │   │   ├── McpPlugin.java           # Plugin lifecycle & preferences
 │   │   ├── server/                   # Jetty + MCP SDK wiring
-│   │   ├── handlers/                 # MCP tool implementations (15+ handler classes)
+│   │   ├── handlers/                 # MCP tool implementations (18 handler classes)
 │   │   ├── model/                    # EMF model access layer
 │   │   │   ├── geometry/             # Geometry utilities
 │   │   │   └── routing/              # Connection routing pipeline

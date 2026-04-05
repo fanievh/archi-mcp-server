@@ -25,12 +25,15 @@ public record OptimizeGroupOrderResultDto(
 	/**
 	 * Per-group detail of optimization.
 	 *
-	 * @param groupId   the group's view object ID
-	 * @param groupName the group's display name
-	 * @param elementCount number of elements in the group
-	 * @param reordered whether the element order changed
+	 * @param groupId           the group's view object ID
+	 * @param groupName         the group's display name
+	 * @param elementCount      number of elements in the group
+	 * @param reordered         whether the element order changed
+	 * @param arrangementUsed   the arrangement applied (row/column/grid)
+	 * @param arrangementSource how the arrangement was determined (detected/override/fallback)
 	 */
 	public record GroupDetail(String groupId, String groupName,
-							  int elementCount, boolean reordered) {
+							  int elementCount, boolean reordered,
+							  String arrangementUsed, String arrangementSource) {
 	}
 }

@@ -44,6 +44,7 @@ public class AllPluginTestsRunner {
                 Class.forName("net.vheerden.archi.mcp.handlers.SessionHandlerTest"),
                 Class.forName("net.vheerden.archi.mcp.handlers.TraversalHandlerTest"),
                 Class.forName("net.vheerden.archi.mcp.handlers.ViewHandlerTest"),
+                Class.forName("net.vheerden.archi.mcp.handlers.ViewHandlerTreeFormatTest"),
                 Class.forName("net.vheerden.archi.mcp.handlers.ViewPlacementHandlerTest"),
                 Class.forName("net.vheerden.archi.mcp.integration.ErrorConsistencyTest"),
                 Class.forName("net.vheerden.archi.mcp.integration.MultiStepWorkflowTest"),

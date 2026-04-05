@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
@@ -17,14 +18,17 @@ import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
 import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
 import net.vheerden.archi.mcp.response.dto.DeleteResultDto;
+import net.vheerden.archi.mcp.response.dto.DetectHubElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.DuplicateCandidate;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
+import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
+import net.vheerden.archi.mcp.response.dto.ModelImageDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
@@ -123,6 +127,23 @@ public interface ArchiModelAccessor {
      * @throws NoModelLoadedException if no model is loaded
      */
     List<ElementDto> searchElements(String query, String typeFilter, String layerFilter);
+
+    /**
+     * Searches all relationships in the model by text, type, and source/target element layer.
+     *
+     * <p>Case-insensitive substring matching against relationship name, documentation,
+     * and property values. An empty query string returns all relationships (wildcard).
+     * Filters are optional (null = no filtering).</p>
+     *
+     * @param query text to search for (required, empty string for wildcard)
+     * @param typeFilter ArchiMate relationship type to filter by (e.g., "FlowRelationship"), or null
+     * @param sourceLayerFilter ArchiMate layer of source element (e.g., "Application"), or null
+     * @param targetLayerFilter ArchiMate layer of target element (e.g., "Business"), or null
+     * @return list of matching relationships as DTOs (empty list if no matches, never null)
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    List<RelationshipDto> searchRelationships(String query, String typeFilter,
+                                              String sourceLayerFilter, String targetLayerFilter);
 
     /**
      * Gets all relationships where the specified element is the source or target.
@@ -354,7 +375,8 @@ public interface ArchiModelAccessor {
      */
     MutationResult<AddToViewResultDto> addToView(String sessionId, String viewId,
             String elementId, Integer x, Integer y, Integer width, Integer height,
-            boolean autoConnect, String parentViewObjectId, StylingParams styling);
+            boolean autoConnect, String parentViewObjectId, StylingParams styling,
+            ImageParams imageParams);
 
     /**
      * Creates a visual grouping rectangle on a view diagram (Story 8-6).
@@ -373,7 +395,7 @@ public interface ArchiModelAccessor {
      */
     MutationResult<ViewGroupDto> addGroupToView(String sessionId, String viewId,
             String label, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling);
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams);
 
     /**
      * Creates a text note on a view diagram (Story 8-6).
@@ -391,8 +413,9 @@ public interface ArchiModelAccessor {
      * @throws ModelAccessException if view not found, content is null, or parent is not a group
      */
     MutationResult<ViewNoteDto> addNoteToView(String sessionId, String viewId,
-            String content, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling);
+            String content, String position, Integer gap, Integer x, Integer y,
+            Integer width, Integer height,
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams);
 
     /**
      * Adds a visual connection between two view objects on a view.
@@ -409,13 +432,17 @@ public interface ArchiModelAccessor {
      * @param bendpoints          optional list of routing bendpoints in relative format (null for straight line)
      * @param absoluteBendpoints  optional list of routing bendpoints in absolute canvas coordinates
      *                            (mutually exclusive with bendpoints)
+     * @param styling             optional connection styling (lineColor, fontColor, lineWidth), null for defaults
+     * @param showLabel           optional label visibility override, null to leave default (true)
+     * @param textPosition        optional label position (0=source, 1=middle, 2=target), null for default
      * @return MutationResult containing the ViewConnectionDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if any reference is invalid or connection exists
      */
     MutationResult<ViewConnectionDto> addConnectionToView(String sessionId, String viewId,
             String relationshipId, String sourceViewObjectId, String targetViewObjectId,
-            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints);
+            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints,
+            StylingParams styling, Boolean showLabel, Integer textPosition);
 
     // ---- View editing and removal (Story 7-8) ----
 
@@ -443,7 +470,7 @@ public interface ArchiModelAccessor {
      */
     MutationResult<ViewObjectDto> updateViewObject(String sessionId,
             String viewObjectId, Integer x, Integer y, Integer width, Integer height,
-            String text, StylingParams styling);
+            String text, StylingParams styling, ImageParams imageParams);
 
     /**
      * Replaces the bendpoints of a connection on a view.
@@ -457,13 +484,16 @@ public interface ArchiModelAccessor {
      * @param bendpoints         the new set of bendpoints in relative format (may be null)
      * @param absoluteBendpoints the new set of bendpoints in absolute canvas coordinates
      *                           (mutually exclusive with bendpoints)
+     * @param showLabel           optional label visibility override, null to leave unchanged
+     * @param textPosition        optional label position (0=source, 1=middle, 2=target), null for no change
      * @return MutationResult containing the updated ViewConnectionDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if connection not found
      */
     MutationResult<ViewConnectionDto> updateViewConnection(String sessionId,
             String viewConnectionId, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling);
+            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling,
+            Boolean showLabel, Integer textPosition);
 
     /**
      * Removes a visual element or connection from a view without deleting
@@ -554,6 +584,17 @@ public interface ArchiModelAccessor {
      */
     AssessLayoutResultDto assessLayout(String viewId);
 
+    /**
+     * Returns the content bounding box for a view, excluding notes.
+     * Used by add-note-to-view to compute position-based placement.
+     *
+     * @param viewId the view's unique identifier (required)
+     * @return ContentBounds with absolute canvas coordinates, or null if view is empty
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if view not found
+     */
+    ContentBounds getContentBounds(String viewId);
+
     // ---- Auto-route connections (Story 9-5) ----
 
     /**
@@ -569,13 +610,18 @@ public interface ArchiModelAccessor {
      * @param strategy      routing strategy: "orthogonal" (default) or "clear"
      * @param force         when true, applies all routes including constraint-violating ones
      *                      and reports violations instead of failures
+     * @param autoNudge     when true, automatically applies move recommendations and re-routes
+     *                      in a single atomic operation (Story 13-7). Ignored when force is true.
+     * @param perimeterMargin exterior perimeter extension in pixels beyond outermost obstacles (B36).
+     *                        Larger values give A* more space for exterior routing around dense element clusters.
      * @return MutationResult containing AutoRouteResultDto with routing counts
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found, connection not found, or invalid strategy
      */
     MutationResult<AutoRouteResultDto> autoRouteConnections(
             String sessionId, String viewId,
-            List<String> connectionIds, String strategy, boolean force);
+            List<String> connectionIds, String strategy, boolean force,
+            boolean autoNudge, int snapThreshold, int perimeterMargin);
 
     // ---- Auto-layout-and-route (Story 10-29) ----
 
@@ -584,11 +630,13 @@ public interface ArchiModelAccessor {
      * connection routes in a single operation. Replaces all element positions
      * and computes orthogonal connection bendpoints.
      *
-     * <p>Unlike {@code layoutView} (positions only) or {@code autoRouteConnections}
-     * (routes only), this tool delegates both tasks to ELK simultaneously.</p>
+     * <p>Supports two modes: "auto" (default, ELK Layered) and "grouped" (orchestrated
+     * Branch 2 workflow: layout-within-group + arrange-groups + optimize-group-order +
+     * auto-route-connections). Grouped mode is best for views with structural groups.</p>
      *
      * @param sessionId    the session identifier for mode detection
      * @param viewId       the view's unique identifier (required)
+     * @param mode         layout mode: "auto" (ELK, default) or "grouped" (Branch 2 orchestration)
      * @param direction    layout direction: DOWN, RIGHT, UP, LEFT (default DOWN)
      * @param spacing      inter-element spacing in pixels (default 50)
      * @param targetRating optional quality target ("excellent", "good", "fair");
@@ -599,7 +647,7 @@ public interface ArchiModelAccessor {
      * @throws ModelAccessException if view not found or invalid parameters
      */
     MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
-            String sessionId, String viewId,
+            String sessionId, String viewId, String mode,
             String direction, int spacing, String targetRating);
 
     /**
@@ -614,13 +662,16 @@ public interface ArchiModelAccessor {
      * @param viewId            the view's unique identifier (required)
      * @param elementIds        optional filter: only consider relationships involving these elements
      * @param relationshipTypes optional filter: only connect relationships of these types
+     * @param showLabel         optional: set to false to suppress labels on all created connections,
+     *                          true to show labels explicitly, or null to use Archi default (shown)
      * @return MutationResult containing AutoConnectResultDto with connection counts
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found, element not on view, or invalid type
      */
     MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
-            List<String> elementIds, List<String> relationshipTypes);
+            List<String> elementIds, List<String> relationshipTypes,
+            Boolean showLabel);
 
     // ---- Layout within group (Story 9-9) ----
 
@@ -674,7 +725,8 @@ public interface ArchiModelAccessor {
      */
     MutationResult<ArrangeGroupsResultDto> arrangeGroups(
             String sessionId, String viewId, String arrangement,
-            Integer columns, Integer spacing, java.util.List<String> groupIds);
+            Integer columns, Integer spacing, java.util.List<String> groupIds,
+            String direction);
 
     /**
      * Optimizes element order within groups to minimize inter-group edge crossings.
@@ -683,15 +735,17 @@ public interface ArchiModelAccessor {
      * then re-lays them out using the specified arrangement pattern. Group structure
      * and membership are preserved — no elements are moved between groups.</p>
      *
-     * @param sessionId     the session identifier for mode detection
-     * @param viewId        the view to optimize (required)
-     * @param arrangement   arrangement pattern for re-layout: "row", "column", or "grid" (required)
-     * @param spacing       space between elements in pixels (default: 20)
-     * @param padding       space from group edges in pixels (default: 10)
-     * @param elementWidth  optional: resize all children to this width
-     * @param elementHeight optional: resize all children to this height
-     * @param autoWidth     compute each element's width from its label text (default: false)
-     * @param columns       optional: number of columns for grid arrangement
+     * @param sessionId          the session identifier for mode detection
+     * @param viewId             the view to optimize (required)
+     * @param arrangement        arrangement pattern for re-layout: "row", "column", or "grid" (optional;
+     *                           when omitted, each group's arrangement is auto-detected from current positions)
+     * @param spacing            space between elements in pixels (default: 20)
+     * @param padding            space from group edges in pixels (default: 10)
+     * @param elementWidth       optional: resize all children to this width
+     * @param elementHeight      optional: resize all children to this height
+     * @param autoWidth          compute each element's width from its label text (default: false)
+     * @param columns            optional: number of columns for grid arrangement
+     * @param groupArrangements  optional per-group arrangement overrides (groupId → "row"/"column"/"grid")
      * @return MutationResult containing OptimizeGroupOrderResultDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found or no groups with inter-group connections
@@ -699,7 +753,50 @@ public interface ArchiModelAccessor {
     MutationResult<OptimizeGroupOrderResultDto> optimizeGroupOrder(
             String sessionId, String viewId, String arrangement,
             Integer spacing, Integer padding, Integer elementWidth,
-            Integer elementHeight, boolean autoWidth, Integer columns);
+            Integer elementHeight, boolean autoWidth, Integer columns,
+            Map<String, String> groupArrangements);
+
+    // ---- Flat view layout (Story 13-6) ----
+
+    /**
+     * Positions all top-level elements on a flat view using a configurable arrangement.
+     *
+     * <p>Collects all top-level view objects (elements and groups, excluding notes)
+     * and repositions them using row, column, or grid arrangement. Respects each
+     * element's current size (heterogeneous sizes supported). Does not affect
+     * elements nested inside groups. Does not modify connection routing.</p>
+     *
+     * @param sessionId     the session identifier for mode detection
+     * @param viewId        the view to layout (required)
+     * @param arrangement   layout pattern: "row", "column", or "grid" (required)
+     * @param spacing       space between elements in pixels (default: 40)
+     * @param padding       margin from view origin in pixels (default: 20)
+     * @param sortBy        optional: sort elements by "name", "type", or "layer" before layout
+     * @param categoryField optional: group elements into visual sections by "type" or "layer"
+     * @param columns       optional: number of columns for grid arrangement (auto-detected if null)
+     * @param autoLayoutChildren auto-layout embedded children within parent elements (default: true)
+     * @return MutationResult containing LayoutFlatViewResultDto
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if view not found or invalid parameters
+     */
+    MutationResult<LayoutFlatViewResultDto> layoutFlatView(
+            String sessionId, String viewId, String arrangement,
+            Integer spacing, Integer padding, String sortBy,
+            String categoryField, Integer columns,
+            boolean autoLayoutChildren);
+
+    // ---- Hub element detection (Story 13-3) ----
+
+    /**
+     * Detects hub elements on a view by counting visual connections per element,
+     * sorted by connection count descending. Read-only — no model modifications.
+     *
+     * @param viewId the view's unique identifier (required)
+     * @return DetectHubElementsResultDto with sorted elements, summary stats, and suggestions
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if view not found
+     */
+    DetectHubElementsResultDto detectHubElements(String viewId);
 
     // ---- Deletion methods (Story 8-4) ----
 
@@ -850,15 +947,17 @@ public interface ArchiModelAccessor {
      * <p>PNG rendering uses SWT {@code DiagramUtils.createImage()} on the Display thread.
      * SVG rendering requires the optional {@code com.archimatetool.export.svg} bundle.</p>
      *
-     * @param viewId the view's unique identifier (required)
-     * @param format output format: "png" or "svg" (required)
-     * @param scale  rendering scale factor (1.0 = 100%)
-     * @param inline true to return image bytes, false to write to file
+     * @param viewId          the view's unique identifier (required)
+     * @param format          output format: "png" or "svg" (required)
+     * @param scale           rendering scale factor (1.0 = 100%)
+     * @param inline          true to return image bytes, false to write to file
+     * @param outputDirectory custom output directory path (null to use temp dir)
      * @return ExportResult containing metadata + optional image bytes/SVG content
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found or format not available
      */
-    ExportResult exportView(String viewId, String format, double scale, boolean inline);
+    ExportResult exportView(String viewId, String format, double scale, boolean inline,
+            String outputDirectory);
 
     // ---- Command stack undo/redo (Story 11-1) ----
 
@@ -943,6 +1042,51 @@ public interface ArchiModelAccessor {
      * @param listener the listener to remove
      */
     void removeModelChangeListener(ModelChangeListener listener);
+
+    // ---- Image management (Story C4) ----
+
+    /**
+     * Adds an image to the model's archive for use on view objects.
+     *
+     * @param sessionId    the session identifier for mode detection
+     * @param imageData    raw image bytes (decoded from base64)
+     * @param filenameHint filename hint for extension detection (e.g. "icon.png")
+     * @return AddImageResultDto containing archive path, dimensions, and format
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if image data is invalid or format unsupported
+     */
+    AddImageResultDto addImageToModel(String sessionId, byte[] imageData, String filenameHint);
+
+    /**
+     * Adds an image to the model's archive from a local file path.
+     *
+     * @param sessionId the session identifier for mode detection
+     * @param filePath  absolute path to a local image file
+     * @return AddImageResultDto containing archive path, dimensions, and format
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if file doesn't exist, is not readable, exceeds 1MB, or is not a valid image
+     */
+    AddImageResultDto addImageFromFilePath(String sessionId, String filePath);
+
+    /**
+     * Adds an image to the model's archive by downloading from a URL.
+     *
+     * @param sessionId the session identifier for mode detection
+     * @param url       HTTP or HTTPS URL to download the image from
+     * @return AddImageResultDto containing archive path, dimensions, and format
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if URL is unreachable, download fails, exceeds 1MB, or content is not a valid image
+     */
+    AddImageResultDto addImageFromUrl(String sessionId, String url);
+
+    /**
+     * Lists all images currently stored in the model's archive.
+     *
+     * @param sessionId the session identifier
+     * @return list of ModelImageDto with paths and dimensions
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    List<ModelImageDto> listModelImages(String sessionId);
 
     /**
      * Releases resources and unregisters listeners.

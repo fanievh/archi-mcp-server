@@ -7,21 +7,30 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Pure-geometry barycentric crossing minimizer for grouped views (Story 11-25).
+ * Pure-geometry two-phase crossing minimizer for grouped views (Story 11-25, backlog-b6).
  * Reorders elements within groups to minimize inter-group edge crossings.
  *
  * <p>No EMF imports — operates on simple coordinate arrays and string IDs.
  * Only used by {@link ArchiModelAccessorImpl}.</p>
  *
- * <p>Algorithm: barycentric heuristic — standard crossing minimization for
- * 2-layer graph drawing. For each group, elements are sorted by the average
- * position index of their connected elements in other groups. Multi-pass
- * iteration continues until convergence or max iterations.</p>
+ * <p>Algorithm: two-phase crossing minimization.
+ * Phase 1 (barycentric): standard 2-layer heuristic — elements sorted by
+ * average position index of connected elements in other groups.
+ * Phase 2 (adjacent-swap): greedy local search that tries adjacent-element
+ * swaps to escape barycentric fixed points on multi-group topologies
+ * (backlog-b6).</p>
  */
 class CrossingMinimizer {
 
     /** Maximum iterations before stopping (barycentric typically converges in 3-5). */
     static final int MAX_ITERATIONS = 10;
+
+    /**
+     * Maximum swap-phase iterations. Each pass evaluates N-1 adjacent swaps per
+     * group, so the swap phase is O(MAX_SWAP_ITERATIONS * G * N * E^2) where
+     * G = groups, N = max elements per group, E = edges.
+     */
+    static final int MAX_SWAP_ITERATIONS = 20;
 
     /**
      * A group with its element IDs and their center positions.
@@ -143,6 +152,12 @@ class CrossingMinimizer {
             }
         }
 
+        // Phase 2: Adjacent-swap local search
+        if (bestCrossings > 0) {
+            bestCrossings = adjacentSwapPhase(optimizableGroups, groups, edges,
+                    currentOrder, currentCenters, bestOrder, bestCrossings);
+        }
+
         // Determine which groups actually changed
         List<String> reorderedGroups = new ArrayList<>();
         int elementMoves = 0;
@@ -162,6 +177,72 @@ class CrossingMinimizer {
 
         return new OptimizationResult(
                 crossingsBefore, bestCrossings, reorderedGroups, bestOrder, elementMoves);
+    }
+
+    /**
+     * Adjacent-swap local search phase. Tries swapping each pair of adjacent
+     * elements within each optimizable group and greedily accepts any swap that
+     * reduces total crossings. Iterates until no improving swap is found or
+     * {@link #MAX_SWAP_ITERATIONS} is reached.
+     *
+     * @return the best crossing count achieved (may be unchanged if no improvement found)
+     */
+    private int adjacentSwapPhase(
+            List<GroupInfo> optimizableGroups, List<GroupInfo> allGroups,
+            List<InterGroupEdge> edges,
+            Map<String, List<String>> currentOrder,
+            Map<String, List<int[]>> currentCenters,
+            Map<String, List<String>> bestOrder, int bestCrossings) {
+
+        // Restore currentOrder/currentCenters to bestOrder before starting swaps
+        for (Map.Entry<String, List<String>> entry : bestOrder.entrySet()) {
+            currentOrder.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+        }
+        for (GroupInfo group : allGroups) {
+            recomputeCenters(group.groupId(),
+                    currentOrder.get(group.groupId()), group, currentCenters);
+        }
+
+        for (int iteration = 0; iteration < MAX_SWAP_ITERATIONS; iteration++) {
+            boolean improved = false;
+
+            for (GroupInfo group : optimizableGroups) {
+                String groupId = group.groupId();
+                List<String> order = currentOrder.get(groupId);
+
+                for (int i = 0; i < order.size() - 1; i++) {
+                    // Swap adjacent elements
+                    String tmp = order.get(i);
+                    order.set(i, order.get(i + 1));
+                    order.set(i + 1, tmp);
+                    recomputeCenters(groupId, order, group, currentCenters);
+
+                    List<GroupInfo> updatedGroups =
+                            buildUpdatedGroups(allGroups, currentOrder, currentCenters);
+                    int crossingsNow = countStraightLineCrossings(updatedGroups, edges);
+
+                    if (crossingsNow < bestCrossings) {
+                        bestCrossings = crossingsNow;
+                        // Copy entire current state as new best
+                        for (Map.Entry<String, List<String>> entry : currentOrder.entrySet()) {
+                            bestOrder.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+                        }
+                        improved = true;
+                    } else {
+                        // Revert swap
+                        order.set(i + 1, order.get(i));
+                        order.set(i, tmp);
+                        recomputeCenters(groupId, order, group, currentCenters);
+                    }
+                }
+            }
+
+            if (!improved) {
+                break; // No swap helped — converged
+            }
+        }
+
+        return bestCrossings;
     }
 
     /**

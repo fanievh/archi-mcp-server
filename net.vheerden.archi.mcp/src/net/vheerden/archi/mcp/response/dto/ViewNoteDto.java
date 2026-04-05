@@ -24,12 +24,48 @@ public record ViewNoteDto(
     String lineColor,
     String fontColor,
     Integer opacity,
-    Integer lineWidth
+    Integer lineWidth,
+    String note,
+    String imagePath,
+    String imagePosition,
+    String showIcon
 ) {
 
     /**
-     * Convenience constructor without styling fields (backward compat).
-     * Styling fields default to null (omitted from JSON via NON_NULL).
+     * Full constructor without image fields (backward compat with styling + note).
+     */
+    public ViewNoteDto(
+            String viewObjectId,
+            String content,
+            int x, int y, int width, int height,
+            String parentViewObjectId,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String note) {
+        this(viewObjectId, content, x, y, width, height,
+                parentViewObjectId,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                note, null, null, null);
+    }
+
+    /**
+     * Full constructor without note or image fields (backward compat with styling).
+     */
+    public ViewNoteDto(
+            String viewObjectId,
+            String content,
+            int x, int y, int width, int height,
+            String parentViewObjectId,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth) {
+        this(viewObjectId, content, x, y, width, height,
+                parentViewObjectId,
+                fillColor, lineColor, fontColor, opacity, lineWidth, null);
+    }
+
+    /**
+     * Convenience constructor without styling, note, or image fields (backward compat).
+     * All optional fields default to null (omitted from JSON via NON_NULL).
      */
     public ViewNoteDto(
             String viewObjectId,
@@ -38,6 +74,6 @@ public record ViewNoteDto(
             String parentViewObjectId) {
         this(viewObjectId, content, x, y, width, height,
                 parentViewObjectId,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 }

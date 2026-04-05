@@ -279,4 +279,167 @@ public class UpdateViewConnectionCommandTest {
         assertEquals("#00BB00", connection.getFontColor());
         assertEquals(2, connection.getLineWidth());
     }
+
+    // ---- Story 13-1: Label visibility tests ----
+
+    @Test
+    public void shouldHideLabel_whenShowLabelFalse() {
+        assertTrue("Default should be visible", connection.isNameVisible());
+
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, false);
+
+        cmd.execute();
+
+        assertFalse("Label should be hidden", connection.isNameVisible());
+        assertTrue(cmd.hasNameVisibleChange());
+        assertEquals(Boolean.FALSE, cmd.getNewNameVisible());
+    }
+
+    @Test
+    public void shouldShowLabel_whenShowLabelTrue() {
+        connection.setNameVisible(false);
+        assertFalse(connection.isNameVisible());
+
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, true);
+
+        cmd.execute();
+
+        assertTrue("Label should be shown", connection.isNameVisible());
+    }
+
+    @Test
+    public void shouldUndoLabelVisibility() {
+        assertTrue(connection.isNameVisible());
+
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, false);
+
+        cmd.execute();
+        assertFalse(connection.isNameVisible());
+
+        cmd.undo();
+        assertTrue("Label should be restored to visible", connection.isNameVisible());
+    }
+
+    @Test
+    public void shouldNotChangeLabel_whenShowLabelNull() {
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, null);
+
+        assertFalse(cmd.hasNameVisibleChange());
+        assertNull(cmd.getNewNameVisible());
+    }
+
+    @Test
+    public void shouldCombineStylingAndLabelChange() {
+        StylingParams styling = new StylingParams(null, "#FF0000", null, null, null);
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), styling, false);
+
+        cmd.execute();
+
+        assertEquals("#FF0000", connection.getLineColor());
+        assertFalse(connection.isNameVisible());
+        assertTrue(cmd.hasStylingChange());
+        assertTrue(cmd.hasNameVisibleChange());
+    }
+
+    // ---- Story 13-11: Label position (textPosition) tests ----
+
+    @Test
+    public void shouldSetTextPosition_toTarget() {
+        assertEquals("Default textPosition should be 1 (middle)", 1, connection.getTextPosition());
+
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, null, 2);
+
+        cmd.execute();
+
+        assertEquals(2, connection.getTextPosition());
+        assertTrue(cmd.hasTextPositionChange());
+        assertEquals(2, cmd.getNewTextPosition());
+        assertEquals(1, cmd.getOldTextPosition());
+    }
+
+    @Test
+    public void shouldSetTextPosition_toMiddle() {
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, null, 1);
+
+        cmd.execute();
+
+        assertEquals(1, connection.getTextPosition());
+    }
+
+    @Test
+    public void shouldUndoTextPosition() {
+        int originalPosition = connection.getTextPosition();
+
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, null, 2);
+
+        cmd.execute();
+        assertEquals(2, connection.getTextPosition());
+
+        cmd.undo();
+        assertEquals("TextPosition should be restored", originalPosition, connection.getTextPosition());
+    }
+
+    @Test
+    public void shouldNotChangeTextPosition_whenNull() {
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, null, null);
+
+        assertFalse(cmd.hasTextPositionChange());
+    }
+
+    @Test
+    public void shouldCombineShowLabelAndTextPosition() {
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), null, false, 2);
+
+        cmd.execute();
+
+        assertFalse(connection.isNameVisible());
+        assertEquals(2, connection.getTextPosition());
+        assertTrue(cmd.hasNameVisibleChange());
+        assertTrue(cmd.hasTextPositionChange());
+    }
+
+    @Test
+    public void shouldCombineStylingAndTextPosition() {
+        StylingParams styling = new StylingParams(null, "#FF0000", null, null, null);
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), styling, null, 1);
+
+        cmd.execute();
+
+        assertEquals("#FF0000", connection.getLineColor());
+        assertEquals(1, connection.getTextPosition());
+        assertTrue(cmd.hasStylingChange());
+        assertTrue(cmd.hasTextPositionChange());
+    }
+
+    @Test
+    public void shouldUndoAllCombined_stylingLabelAndTextPosition() {
+        String origLineColor = connection.getLineColor();
+        boolean origNameVisible = connection.isNameVisible();
+        int origTextPosition = connection.getTextPosition();
+
+        StylingParams styling = new StylingParams(null, "#0000FF", null, null, null);
+        UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
+                connection, new ArrayList<>(connection.getBendpoints()), styling, false, 2);
+
+        cmd.execute();
+        assertEquals("#0000FF", connection.getLineColor());
+        assertFalse(connection.isNameVisible());
+        assertEquals(2, connection.getTextPosition());
+
+        cmd.undo();
+        assertEquals(origLineColor, connection.getLineColor());
+        assertEquals(origNameVisible, connection.isNameVisible());
+        assertEquals(origTextPosition, connection.getTextPosition());
+    }
 }

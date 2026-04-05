@@ -39,6 +39,7 @@ public class OrthogonalVisibilityGraph {
     static final int CONGESTION_RADIUS = 60;
 
     private final int margin;
+    private final int perimeterMargin;
     private final boolean inclusiveBoundaries;
     private final Map<VisNode, List<VisEdge>> adjacency = new HashMap<>();
     private List<ExpandedRect> expandedObstacles = Collections.emptyList();
@@ -48,21 +49,36 @@ public class OrthogonalVisibilityGraph {
     }
 
     public OrthogonalVisibilityGraph(int margin) {
-        this(margin, false);
+        this(margin, margin, false);
     }
 
     /**
-     * Creates a visibility graph with the given margin and boundary mode.
+     * Creates a visibility graph with separate clearance and perimeter margins (B36).
+     *
+     * @param margin clearance in pixels around obstacles (used by expandObstacles)
+     * @param perimeterMargin extension in pixels beyond outermost obstacles for exterior routing
+     */
+    public OrthogonalVisibilityGraph(int margin, int perimeterMargin) {
+        this(margin, perimeterMargin, false);
+    }
+
+    /**
+     * Creates a visibility graph with the given margins and boundary mode.
      *
      * <p><b>Spike 10-19c finding:</b> Inclusive mode ({@code true}) eliminates
      * corner nodes that sit ON expanded obstacle boundaries, breaking graph
      * connectivity. Always use strict mode ({@code false}) in production.</p>
      *
      * @param margin clearance in pixels around obstacles
+     * @param perimeterMargin extension in pixels beyond outermost obstacles for exterior routing
      * @param inclusiveBoundaries if true, segments touching obstacle edges are blocked
      */
-    public OrthogonalVisibilityGraph(int margin, boolean inclusiveBoundaries) {
+    public OrthogonalVisibilityGraph(int margin, int perimeterMargin, boolean inclusiveBoundaries) {
+        if (perimeterMargin < 0) {
+            throw new IllegalArgumentException("perimeterMargin must be >= 0, got " + perimeterMargin);
+        }
         this.margin = margin;
+        this.perimeterMargin = perimeterMargin;
         this.inclusiveBoundaries = inclusiveBoundaries;
     }
 
@@ -107,11 +123,11 @@ public class OrthogonalVisibilityGraph {
                 perimRight = Math.max(perimRight, er.right);
                 perimBottom = Math.max(perimBottom, er.bottom);
             }
-            // Extend perimeter beyond all obstacles by margin
-            perimLeft -= margin;
-            perimTop -= margin;
-            perimRight += margin;
-            perimBottom += margin;
+            // Extend perimeter beyond all obstacles by perimeterMargin (B36: separate from obstacle clearance)
+            perimLeft -= perimeterMargin;
+            perimTop -= perimeterMargin;
+            perimRight += perimeterMargin;
+            perimBottom += perimeterMargin;
             nodes.add(new VisNode(perimLeft, perimTop, NodeType.OBSTACLE_CORNER));
             nodes.add(new VisNode(perimRight, perimTop, NodeType.OBSTACLE_CORNER));
             nodes.add(new VisNode(perimLeft, perimBottom, NodeType.OBSTACLE_CORNER));
@@ -203,6 +219,68 @@ public class OrthogonalVisibilityGraph {
             }
         }
         return count;
+    }
+
+    /**
+     * Computes the minimum perpendicular distance from an edge to any expanded obstacle
+     * boundary whose parallel range overlaps the edge (B41).
+     *
+     * <p>For a horizontal edge, measures vertical distance to the nearest obstacle
+     * top/bottom boundary. For a vertical edge, measures horizontal distance to
+     * the nearest obstacle left/right boundary.</p>
+     *
+     * @param from edge start node
+     * @param to   edge end node
+     * @return minimum perpendicular clearance in pixels, or {@code Double.MAX_VALUE} if no nearby obstacles
+     */
+    public double computePerpendicularClearance(VisNode from, VisNode to) {
+        double minClearance = Double.MAX_VALUE;
+        boolean isHorizontal = (from.y() == to.y());
+
+        if (isHorizontal) {
+            int edgeY = from.y();
+            int minX = Math.min(from.x(), to.x());
+            int maxX = Math.max(from.x(), to.x());
+
+            for (ExpandedRect er : expandedObstacles) {
+                // Check if obstacle's x-range overlaps the edge's x-span
+                if (er.right <= minX || er.left >= maxX) {
+                    continue;
+                }
+                // Perpendicular distance to top and bottom boundaries
+                double distToTop = Math.abs(edgeY - er.top);
+                double distToBottom = Math.abs(edgeY - er.bottom);
+                double nearest = Math.min(distToTop, distToBottom);
+                // Edge inside obstacle => clearance is 0
+                if (edgeY > er.top && edgeY < er.bottom) {
+                    nearest = 0;
+                }
+                minClearance = Math.min(minClearance, nearest);
+            }
+        } else {
+            // Vertical edge
+            int edgeX = from.x();
+            int minY = Math.min(from.y(), to.y());
+            int maxY = Math.max(from.y(), to.y());
+
+            for (ExpandedRect er : expandedObstacles) {
+                // Check if obstacle's y-range overlaps the edge's y-span
+                if (er.bottom <= minY || er.top >= maxY) {
+                    continue;
+                }
+                // Perpendicular distance to left and right boundaries
+                double distToLeft = Math.abs(edgeX - er.left);
+                double distToRight = Math.abs(edgeX - er.right);
+                double nearest = Math.min(distToLeft, distToRight);
+                // Edge inside obstacle => clearance is 0
+                if (edgeX > er.left && edgeX < er.right) {
+                    nearest = 0;
+                }
+                minClearance = Math.min(minClearance, nearest);
+            }
+        }
+
+        return minClearance;
     }
 
     // ---- Internal ----

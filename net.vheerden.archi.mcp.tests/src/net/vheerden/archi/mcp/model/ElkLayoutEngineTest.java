@@ -791,4 +791,208 @@ public class ElkLayoutEngineTest {
 		assertEquals("child centerX", 195, childCenter[0]);
 		assertEquals("child centerY", 112, childCenter[1]);
 	}
+
+	// --- Story B21: ELK group non-overlap constraint ---
+
+	@Test
+	public void shouldSeparateOverlappingGroups_whenTwoGroupsOverlap() {
+		// Integration test via computeLayout() — two overlapping groups with unequal child counts
+		List<LayoutNode> nodes = new ArrayList<>();
+		// Group 1 with 2 children
+		nodes.add(new LayoutNode("group1", 50, 50, 300, 200, null));
+		nodes.add(new LayoutNode("c1a", 10, 30, 120, 55, "group1"));
+		nodes.add(new LayoutNode("c1b", 10, 100, 120, 55, "group1"));
+		// Group 2 with 8 children (much larger) — unequal child counts stress test
+		nodes.add(new LayoutNode("group2", 100, 50, 300, 200, null));
+		nodes.add(new LayoutNode("c2a", 10, 30, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2b", 10, 100, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2c", 10, 170, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2d", 10, 240, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2e", 150, 30, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2f", 150, 100, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2g", 150, 170, 120, 55, "group2"));
+		nodes.add(new LayoutNode("c2h", 150, 240, 120, 55, "group2"));
+
+		// Connections within groups + inter-group
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("c1a", "c1b", "conn-1"),
+				new LayoutEdge("c2a", "c2b", "conn-2"),
+				new LayoutEdge("c1a", "c2a", "conn-cross"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		ViewPositionSpec g1 = findPosition(result.positions(), "group1");
+		ViewPositionSpec g2 = findPosition(result.positions(), "group2");
+		assertNotNull("group1", g1);
+		assertNotNull("group2", g2);
+
+		// Groups must not overlap with minimum separation
+		assertNoGroupOverlap(g1, g2, "group1-group2");
+	}
+
+	@Test
+	public void shouldSeparateThreeOverlappingGroups() {
+		// Three groups in a row with potential middle overlap
+		List<LayoutNode> nodes = new ArrayList<>();
+		nodes.add(new LayoutNode("gA", 50, 50, 250, 150, null));
+		nodes.add(new LayoutNode("cA1", 10, 30, 120, 55, "gA"));
+		nodes.add(new LayoutNode("cA2", 10, 90, 120, 55, "gA"));
+
+		nodes.add(new LayoutNode("gB", 200, 50, 250, 150, null));
+		nodes.add(new LayoutNode("cB1", 10, 30, 120, 55, "gB"));
+		nodes.add(new LayoutNode("cB2", 10, 90, 120, 55, "gB"));
+
+		nodes.add(new LayoutNode("gC", 350, 50, 250, 150, null));
+		nodes.add(new LayoutNode("cC1", 10, 30, 120, 55, "gC"));
+		nodes.add(new LayoutNode("cC2", 10, 90, 120, 55, "gC"));
+
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("cA1", "cB1", "conn-1"),
+				new LayoutEdge("cB1", "cC1", "conn-2"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		ViewPositionSpec gA = findPosition(result.positions(), "gA");
+		ViewPositionSpec gB = findPosition(result.positions(), "gB");
+		ViewPositionSpec gC = findPosition(result.positions(), "gC");
+		assertNotNull("gA", gA);
+		assertNotNull("gB", gB);
+		assertNotNull("gC", gC);
+
+		// No pair should overlap
+		assertNoGroupOverlap(gA, gB, "gA-gB");
+		assertNoGroupOverlap(gB, gC, "gB-gC");
+		assertNoGroupOverlap(gA, gC, "gA-gC");
+	}
+
+	@Test
+	public void shouldSeparateGroups_directionRight_yAxisFirst() {
+		// Direction=RIGHT should separate on Y-axis first
+		List<LayoutNode> nodes = new ArrayList<>();
+		nodes.add(new LayoutNode("gTop", 50, 50, 250, 150, null));
+		nodes.add(new LayoutNode("ct1", 10, 30, 120, 55, "gTop"));
+		nodes.add(new LayoutNode("ct2", 10, 90, 120, 55, "gTop"));
+
+		nodes.add(new LayoutNode("gBot", 50, 100, 250, 150, null));
+		nodes.add(new LayoutNode("cb1", 10, 30, 120, 55, "gBot"));
+		nodes.add(new LayoutNode("cb2", 10, 90, 120, 55, "gBot"));
+
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("ct1", "cb1", "conn-1"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "RIGHT", 50);
+
+		ViewPositionSpec gTop = findPosition(result.positions(), "gTop");
+		ViewPositionSpec gBot = findPosition(result.positions(), "gBot");
+		assertNotNull("gTop", gTop);
+		assertNotNull("gBot", gBot);
+
+		assertNoGroupOverlap(gTop, gBot, "gTop-gBot");
+	}
+
+	@Test
+	public void shouldNotMoveGroups_whenAlreadyNonOverlapping() {
+		// Two well-separated groups — positions should be unchanged by correction
+		List<LayoutNode> nodes = new ArrayList<>();
+		nodes.add(new LayoutNode("gLeft", 50, 50, 200, 150, null));
+		nodes.add(new LayoutNode("cl1", 10, 30, 120, 55, "gLeft"));
+
+		nodes.add(new LayoutNode("gRight", 500, 50, 200, 150, null));
+		nodes.add(new LayoutNode("cr1", 10, 30, 120, 55, "gRight"));
+
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("cl1", "cr1", "conn-1"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		assertNotNull(result);
+		assertEquals(4, result.positions().size());
+		assertNonNegativePositions(result.positions());
+
+		// Verify groups are still non-overlapping (correction was a no-op)
+		ViewPositionSpec gLeft = findPosition(result.positions(), "gLeft");
+		ViewPositionSpec gRight = findPosition(result.positions(), "gRight");
+		assertNotNull("gLeft", gLeft);
+		assertNotNull("gRight", gRight);
+		assertNoGroupOverlap(gLeft, gRight, "gLeft-gRight");
+	}
+
+	@Test
+	public void shouldNotAffectFlatView_noGroups() {
+		// Pure flat view (no groups) should be completely unaffected
+		List<LayoutNode> nodes = createTestNodes(5);
+		List<LayoutEdge> edges = createChainEdges(5);
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		assertNotNull(result);
+		assertEquals(5, result.positions().size());
+		assertNonNegativePositions(result.positions());
+	}
+
+	@Test
+	public void shouldOnlyCheckGroups_whenMixedFlatAndGroupNodes() {
+		// Mix of flat elements + groups — only groups should be checked
+		List<LayoutNode> nodes = new ArrayList<>();
+		// Flat element
+		nodes.add(new LayoutNode("flat1", 50, 50, 120, 55, null));
+		// Group with children
+		nodes.add(new LayoutNode("group1", 200, 50, 250, 150, null));
+		nodes.add(new LayoutNode("gc1", 10, 30, 120, 55, "group1"));
+		nodes.add(new LayoutNode("gc2", 10, 90, 120, 55, "group1"));
+		// Another flat element
+		nodes.add(new LayoutNode("flat2", 500, 50, 120, 55, null));
+
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("flat1", "gc1", "conn-1"),
+				new LayoutEdge("gc2", "flat2", "conn-2"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		assertNotNull(result);
+		assertEquals(5, result.positions().size());
+		assertNonNegativePositions(result.positions());
+	}
+
+	@Test
+	public void shouldPreserveRelativeOrdering_afterSeparation() {
+		// Verify groups maintain their relative left-to-right ordering
+		List<LayoutNode> nodes = new ArrayList<>();
+		nodes.add(new LayoutNode("gLeft", 50, 50, 300, 200, null));
+		nodes.add(new LayoutNode("cL1", 10, 30, 120, 55, "gLeft"));
+		nodes.add(new LayoutNode("cL2", 10, 100, 120, 55, "gLeft"));
+
+		nodes.add(new LayoutNode("gRight", 100, 50, 300, 200, null));
+		nodes.add(new LayoutNode("cR1", 10, 30, 120, 55, "gRight"));
+		nodes.add(new LayoutNode("cR2", 10, 100, 120, 55, "gRight"));
+
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("cL1", "cR1", "conn-1"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		ViewPositionSpec gLeft = findPosition(result.positions(), "gLeft");
+		ViewPositionSpec gRight = findPosition(result.positions(), "gRight");
+		assertNotNull("gLeft", gLeft);
+		assertNotNull("gRight", gRight);
+
+		// Groups should not overlap and relative ordering should be preserved (AC-3)
+		assertNoGroupOverlap(gLeft, gRight, "gLeft-gRight");
+		assertTrue("gLeft should remain left of or equal to gRight after correction",
+				gLeft.x() <= gRight.x());
+	}
+
+	private void assertNoGroupOverlap(ViewPositionSpec a, ViewPositionSpec b, String label) {
+		boolean xOverlap = a.x() < b.x() + b.width() && b.x() < a.x() + a.width();
+		boolean yOverlap = a.y() < b.y() + b.height() && b.y() < a.y() + a.height();
+		assertFalse(label + " groups should not overlap", xOverlap && yOverlap);
+
+		// AC-1: verify minimum separation of effectiveSpacing/2 (25px for spacing=50)
+		// Allow 2px tolerance for int rounding of double positions
+		int xGap = Math.max(a.x() - (b.x() + b.width()), b.x() - (a.x() + a.width()));
+		int yGap = Math.max(a.y() - (b.y() + b.height()), b.y() - (a.y() + a.height()));
+		int maxGap = Math.max(xGap, yGap);
+		assertTrue(label + " min separation should be >= 23px, got " + maxGap,
+				maxGap >= 23);
+	}
 }

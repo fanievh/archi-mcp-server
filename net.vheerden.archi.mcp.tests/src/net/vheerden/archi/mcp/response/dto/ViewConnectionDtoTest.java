@@ -106,4 +106,37 @@ public class ViewConnectionDtoTest {
         assertEquals(dto1, dto2);
         assertEquals(dto1.hashCode(), dto2.hashCode());
     }
+
+    // ---- Story 13-1: nameVisible tests ----
+
+    @Test
+    public void shouldDefaultNameVisibleToNull_inConvenienceConstructor() {
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "Serving", "vo-1", "vo-2", null);
+
+        assertNull("nameVisible should default to null (omitted from JSON)", dto.nameVisible());
+    }
+
+    @Test
+    public void shouldIncludeNameVisible_whenExplicitlyFalse() {
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "ServingRelationship", "vo-1", "vo-2",
+                null, null, null, null, null,
+                null, null, null, Boolean.FALSE);
+
+        assertEquals(Boolean.FALSE, dto.nameVisible());
+    }
+
+    @Test
+    public void shouldIncludeNameVisible_inFullConstructor() {
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "ServingRelationship", "vo-1", "vo-2",
+                null, null, null, null, null,
+                "#FF0000", 2, "#00FF00", Boolean.FALSE);
+
+        assertEquals("#FF0000", dto.lineColor());
+        assertEquals(Integer.valueOf(2), dto.lineWidth());
+        assertEquals("#00FF00", dto.fontColor());
+        assertEquals(Boolean.FALSE, dto.nameVisible());
+    }
 }

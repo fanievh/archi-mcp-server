@@ -114,6 +114,21 @@ class IntegrationStubAccessor extends BaseTestAccessor {
     }
 
     @Override
+    public List<RelationshipDto> searchRelationships(String query, String typeFilter,
+                                                      String sourceLayerFilter, String targetLayerFilter) {
+        if (!isModelLoaded()) throw new NoModelLoadedException();
+        String lowerQuery = query.toLowerCase();
+        RelationshipDto rel = new RelationshipDto("rel-int-1", "Serves",
+                "ServingRelationship", "elem-int-1", "elem-int-2");
+        List<RelationshipDto> all = List.of(rel);
+        return all.stream()
+                .filter(r -> typeFilter == null || typeFilter.equals(r.type()))
+                .filter(r -> r.name() == null || r.name().toLowerCase().contains(lowerQuery)
+                        || lowerQuery.isEmpty())
+                .toList();
+    }
+
+    @Override
     public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
         if (!isModelLoaded()) throw new NoModelLoadedException();
         String lowerQuery = query.toLowerCase();

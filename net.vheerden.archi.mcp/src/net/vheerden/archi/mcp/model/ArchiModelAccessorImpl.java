@@ -13,11 +13,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -41,6 +48,7 @@ import com.archimatetool.editor.diagram.util.DiagramUtils;
 import com.archimatetool.editor.model.IEditorModelManager;
 import com.archimatetool.editor.model.commands.NonNotifyingCompoundCommand;
 import com.archimatetool.model.FolderType;
+import com.archimatetool.editor.model.IArchiveManager;
 import com.archimatetool.model.IApplicationElement;
 import com.archimatetool.model.IArchimateConcept;
 import com.archimatetool.model.IArchimateDiagramModel;
@@ -75,12 +83,14 @@ import com.archimatetool.model.util.ArchimateModelUtils;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.model.routing.FailedConnection;
+import net.vheerden.archi.mcp.model.routing.LabelPositionOptimizer;
 import net.vheerden.archi.mcp.model.routing.MoveRecommendation;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.model.routing.RoutingResult;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.StringSimilarity;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
@@ -97,19 +107,25 @@ import net.vheerden.archi.mcp.response.dto.BulkOperationFailure;
 import net.vheerden.archi.mcp.response.dto.BulkOperationResult;
 import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
 import net.vheerden.archi.mcp.response.dto.DeleteResultDto;
+import net.vheerden.archi.mcp.response.dto.DetectHubElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.DuplicateCandidate;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.HubElementEntryDto;
 import net.vheerden.archi.mcp.response.dto.FailedConnectionDto;
 import net.vheerden.archi.mcp.response.dto.MoveRecommendationDto;
 import net.vheerden.archi.mcp.response.dto.RoutingViolationDto;
 import net.vheerden.archi.mcp.response.dto.ExportViewResultDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
+import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
+import net.vheerden.archi.mcp.response.dto.ModelImageDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
+import net.vheerden.archi.mcp.response.dto.NudgedElementDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizedGroupDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.UndoRedoResultDto;
@@ -444,6 +460,114 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return text != null && text.toLowerCase().contains(lowerQuery);
     }
 
+    // ---- Relationship search methods (Story C1) ----
+
+    @Override
+    public List<RelationshipDto> searchRelationships(String query, String typeFilter,
+                                                      String sourceLayerFilter, String targetLayerFilter) {
+        IArchimateModel model = requireAndCaptureModel();
+        try {
+            String lowerQuery = query.toLowerCase();
+
+            List<IArchimateRelationship> allRelationships = new ArrayList<>();
+            for (IFolder folder : model.getFolders()) {
+                collectRelationships(folder, allRelationships);
+            }
+
+            List<RelationshipDto> results = new ArrayList<>();
+            for (IArchimateRelationship rel : allRelationships) {
+                // B19: skip orphaned relationships (not in containment tree)
+                if (rel.eContainer() == null) {
+                    logger.warn("Skipping orphaned relationship {} (no container)", rel.getId());
+                    continue;
+                }
+                // Apply type filter before text matching (cheaper check first)
+                if (typeFilter != null && !rel.eClass().getName().equals(typeFilter)) {
+                    continue;
+                }
+                // Apply source layer filter
+                if (sourceLayerFilter != null) {
+                    IArchimateElement sourceElement = (IArchimateElement) rel.getSource();
+                    if (sourceElement == null || !resolveLayer(sourceElement).equals(sourceLayerFilter)) {
+                        continue;
+                    }
+                }
+                // Apply target layer filter
+                if (targetLayerFilter != null) {
+                    IArchimateElement targetElement = (IArchimateElement) rel.getTarget();
+                    if (targetElement == null || !resolveLayer(targetElement).equals(targetLayerFilter)) {
+                        continue;
+                    }
+                }
+                if (matchesRelationshipQuery(rel, lowerQuery)) {
+                    results.add(convertToSearchRelationshipDto(rel));
+                }
+            }
+            return results;
+        } catch (NoModelLoadedException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error searching relationships with query '" + query + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    private boolean matchesRelationshipQuery(IArchimateRelationship relationship, String lowerQuery) {
+        if (lowerQuery.isEmpty()) {
+            return true; // wildcard: empty query matches all
+        }
+        if (containsIgnoreCase(relationship.getName(), lowerQuery)) {
+            return true;
+        }
+        if (containsIgnoreCase(relationship.getDocumentation(), lowerQuery)) {
+            return true;
+        }
+        for (IProperty property : relationship.getProperties()) {
+            if (containsIgnoreCase(property.getValue(), lowerQuery)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Converts a relationship to a search-enriched DTO with documentation, properties,
+     * and resolved source/target element names.
+     */
+    private RelationshipDto convertToSearchRelationshipDto(IArchimateRelationship relationship) {
+        String documentation = relationship.getDocumentation();
+        if (documentation != null && documentation.isEmpty()) {
+            documentation = null; // normalize empty to null for @JsonInclude(NON_NULL)
+        }
+
+        List<Map<String, String>> properties = null;
+        if (relationship.getProperties() != null && !relationship.getProperties().isEmpty()) {
+            properties = new ArrayList<>();
+            for (IProperty prop : relationship.getProperties()) {
+                Map<String, String> propMap = new LinkedHashMap<>();
+                propMap.put("key", prop.getKey());
+                propMap.put("value", prop.getValue());
+                properties.add(propMap);
+            }
+        }
+
+        String sourceName = relationship.getSource() != null ? relationship.getSource().getName() : null;
+        String targetName = relationship.getTarget() != null ? relationship.getTarget().getName() : null;
+
+        return new RelationshipDto(
+                relationship.getId(),
+                relationship.getName(),
+                relationship.eClass().getName(),
+                relationship.getSource() != null ? relationship.getSource().getId() : null,
+                relationship.getTarget() != null ? relationship.getTarget().getId() : null,
+                false,
+                documentation,
+                properties,
+                sourceName,
+                targetName);
+    }
+
     // ---- Relationship methods (Story 4.1) ----
 
     @Override
@@ -456,9 +580,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
             List<RelationshipDto> results = new ArrayList<>();
             for (IArchimateRelationship rel : element.getSourceRelationships()) {
+                // B19: skip orphaned relationships (not in containment tree)
+                if (rel.eContainer() == null) continue;
                 results.add(convertToRelationshipDto(rel));
             }
             for (IArchimateRelationship rel : element.getTargetRelationships()) {
+                // B19: skip orphaned relationships (not in containment tree)
+                if (rel.eContainer() == null) continue;
                 results.add(convertToRelationshipDto(rel));
             }
             return results;
@@ -615,6 +743,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
     }
 
+    /**
+     * Finds an existing relationship matching (type, source, target) exactly.
+     * Used for idempotent create-relationship — returns existing instead of duplicating.
+     * Efficient: only iterates source element's outgoing relationships, not the full model.
+     */
+    private Optional<IArchimateRelationship> findDuplicateRelationship(
+            EClass relClass, IArchimateElement source, IArchimateElement target) {
+        for (IArchimateRelationship rel : source.getSourceRelationships()) {
+            if (rel.eClass() == relClass && rel.getTarget() == target) {
+                return Optional.of(rel);
+            }
+        }
+        return Optional.empty();
+    }
+
     // Design note: Returns the first matching element. ArchiMate allows non-unique
     // names within a type, so multiple matches are possible. Returning the first is
     // intentional for get-or-create idempotency — the caller gets a valid existing
@@ -708,6 +851,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         try {
             PreparedMutation<RelationshipDto> prepared = prepareCreateRelationship(
                     type, sourceId, targetId, name);
+
+            // Duplicate detected: return existing relationship without dispatching
+            if (prepared.entity().alreadyExisted()) {
+                return new MutationResult<>(prepared.entity(), null);
+            }
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -921,9 +1069,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     // ---- View export (Story 8-1) ----
 
     @Override
-    public ExportResult exportView(String viewId, String format, double scale, boolean inline) {
-        logger.info("Exporting view: viewId={}, format={}, scale={}, inline={}",
-                viewId, format, scale, inline);
+    public ExportResult exportView(String viewId, String format, double scale, boolean inline,
+            String outputDirectory) {
+        logger.info("Exporting view: viewId={}, format={}, scale={}, inline={}, outputDirectory={}",
+                viewId, format, scale, inline, outputDirectory);
         IArchimateModel model = requireAndCaptureModel();
         try {
             EObject obj = ArchimateModelUtils.getObjectByID(model, viewId);
@@ -937,9 +1086,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
 
             if ("png".equals(format)) {
-                return ViewExportService.renderPng(diagramModel, scale, inline);
+                return ViewExportService.renderPng(diagramModel, scale, inline, outputDirectory);
             } else if ("svg".equals(format)) {
-                return ViewExportService.renderSvg(diagramModel, scale, inline);
+                return ViewExportService.renderSvg(diagramModel, scale, inline, outputDirectory);
             } else {
                 throw new ModelAccessException(
                         "Unsupported export format: " + format
@@ -963,14 +1112,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<AddToViewResultDto> addToView(String sessionId, String viewId,
             String elementId, Integer x, Integer y, Integer width, Integer height,
-            boolean autoConnect, String parentViewObjectId, StylingParams styling) {
+            boolean autoConnect, String parentViewObjectId, StylingParams styling,
+            ImageParams imageParams) {
         logger.info("Adding element to view: viewId={}, elementId={}, autoConnect={}, parentViewObjectId={}",
                 viewId, elementId, autoConnect, parentViewObjectId);
         requireAndCaptureModel();
         try {
             PreparedMutation<AddToViewResultDto> prepared = prepareAddToView(
                     viewId, elementId, x, y, width, height, autoConnect, parentViewObjectId,
-                    null, styling);
+                    null, styling, imageParams);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1016,13 +1166,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ViewGroupDto> addGroupToView(String sessionId, String viewId,
             String label, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling) {
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
         logger.info("Adding group to view: viewId={}, label={}", viewId, label);
         requireAndCaptureModel();
         try {
             PreparedMutation<ViewGroupDto> prepared = prepareAddGroupToView(
                     viewId, label, x, y, width, height, parentViewObjectId,
-                    null, styling);
+                    null, styling, imageParams);
 
             // Approval gate
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1061,14 +1211,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<ViewNoteDto> addNoteToView(String sessionId, String viewId,
-            String content, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling) {
+            String content, String position, Integer gap, Integer x, Integer y,
+            Integer width, Integer height,
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
         logger.info("Adding note to view: viewId={}", viewId);
         requireAndCaptureModel();
         try {
             PreparedMutation<ViewNoteDto> prepared = prepareAddNoteToView(
-                    viewId, content, x, y, width, height, parentViewObjectId,
-                    null, styling);
+                    viewId, content, position, gap, x, y, width, height,
+                    parentViewObjectId, null, styling, imageParams);
 
             // Approval gate
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1078,6 +1229,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Map<String, Object> proposedChanges = new LinkedHashMap<>();
                 proposedChanges.put("viewId", viewId);
                 proposedChanges.put("content", content);
+                if (position != null) proposedChanges.put("position", position);
+                if (gap != null) proposedChanges.put("gap", gap);
                 if (x != null) proposedChanges.put("x", x);
                 if (y != null) proposedChanges.put("y", y);
                 if (width != null) proposedChanges.put("width", width);
@@ -1110,13 +1263,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ViewConnectionDto> addConnectionToView(String sessionId, String viewId,
             String relationshipId, String sourceViewObjectId, String targetViewObjectId,
-            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints) {
+            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints,
+            StylingParams styling, Boolean showLabel, Integer textPosition) {
         logger.info("Adding connection to view: viewId={}, relationshipId={}", viewId, relationshipId);
         requireAndCaptureModel();
         try {
             PreparedMutation<ViewConnectionDto> prepared = prepareAddConnectionToView(
                     viewId, relationshipId, sourceViewObjectId, targetViewObjectId,
-                    bendpoints, absoluteBendpoints);
+                    bendpoints, absoluteBendpoints, styling, showLabel, textPosition);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1158,12 +1312,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ViewObjectDto> updateViewObject(String sessionId, String viewObjectId,
             Integer x, Integer y, Integer width, Integer height, String text,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
         logger.info("Updating view object: viewObjectId={}, text={}", viewObjectId, text != null ? "provided" : "null");
         requireAndCaptureModel();
         try {
             PreparedMutation<ViewObjectDto> prepared = prepareUpdateViewObject(
-                    viewObjectId, x, y, width, height, text, styling);
+                    viewObjectId, x, y, width, height, text, styling, imageParams);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1203,12 +1357,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ViewConnectionDto> updateViewConnection(String sessionId,
             String viewConnectionId, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling) {
+            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling,
+            Boolean showLabel, Integer textPosition) {
         logger.info("Updating view connection: viewConnectionId={}", viewConnectionId);
         requireAndCaptureModel();
         try {
             PreparedMutation<ViewConnectionDto> prepared = prepareUpdateViewConnection(
-                    viewConnectionId, bendpoints, absoluteBendpoints, styling);
+                    viewConnectionId, bendpoints, absoluteBendpoints, styling, showLabel, textPosition);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1241,6 +1396,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     e, ErrorCode.INTERNAL_ERROR);
         }
     }
+
 
     @Override
     public MutationResult<RemoveFromViewResultDto> removeFromView(String sessionId,
@@ -1404,7 +1560,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         PreparedMutation<ViewObjectDto> prepared =
                                 prepareUpdateViewObject(pos.viewObjectId(),
                                         pos.x(), pos.y(), pos.width(), pos.height(),
-                                        null, null); // no text/styling for layout
+                                        null, null, null); // no text/styling/image for layout
                         commands.add(prepared.command());
                         positionCount++;
                     } catch (ModelAccessException e) {
@@ -1430,7 +1586,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         PreparedMutation<ViewConnectionDto> prepared =
                                 prepareUpdateViewConnection(
                                         conn.viewConnectionId(),
-                                        bps, absBps, null);
+                                        bps, absBps, null, null, null);
                         commands.add(prepared.command());
                         connectionCount++;
                     } catch (ModelAccessException e) {
@@ -1555,7 +1711,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 PreparedMutation<ViewObjectDto> prepared =
                         prepareUpdateViewObject(pos.viewObjectId(),
                                 pos.x(), pos.y(), pos.width(), pos.height(),
-                                null, null);
+                                null, null, null);
                 commands.add(prepared.command());
                 positionCount++;
             }
@@ -1566,7 +1722,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     AssessmentCollector.collectAllConnections(diagramModel)) {
                 String connId = conn.getId();
                 PreparedMutation<ViewConnectionDto> prepared =
-                        prepareUpdateViewConnection(connId, List.of(), null, null);
+                        prepareUpdateViewConnection(connId, List.of(), null, null, null, null);
                 commands.add(prepared.command());
                 connectionCount++;
             }
@@ -1625,9 +1781,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 | MutationException e) {
             throw e;
         } catch (Exception e) {
+            logger.error("compute-layout INTERNAL_ERROR: viewId={}, algorithm={}",
+                    viewId, algorithm, e);
             throw new ModelAccessException(
                     "Error computing/applying layout for view '"
-                    + (viewId != null ? viewId : "<null>") + "'",
+                    + (viewId != null ? viewId : "<null>") + "': "
+                    + e.getClass().getSimpleName() + " — " + e.getMessage(),
                     e, ErrorCode.INTERNAL_ERROR);
         }
     }
@@ -1714,7 +1873,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     "not-applicable", Map.of("overall", "not-applicable"),
                     null, null, null, null, 0, null,
                     orphanResult.count(), emptyToNull(orphanResult.descriptions()),
-                    0, null, false, 0, null,
+                    0, null, false, 0, 0, null,
                     List.of("View has no elements — layout assessment is not applicable."));
         }
         if (nodes.size() == 1) {
@@ -1723,7 +1882,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     "not-applicable", Map.of("overall", "not-applicable"),
                     null, null, null, null, 0, null,
                     orphanResult.count(), emptyToNull(orphanResult.descriptions()),
-                    0, null, false, 0, null,
+                    0, null, false, 0, 0, null,
                     List.of("View has only one element — layout assessment is not applicable."));
         }
 
@@ -1759,6 +1918,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 emptyToNull(result.noteOverlapDescriptions()),
                 result.hasGroups(),
                 result.coincidentSegmentCount(),
+                result.nonOrthogonalTerminalCount(),
                 mapContentBounds(result.contentBounds()),
                 result.suggestions());
     }
@@ -1768,6 +1928,78 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         if (bounds == null) return null;
         return new AssessLayoutResultDto.ContentBoundsDto(
                 bounds.x(), bounds.y(), bounds.width(), bounds.height());
+    }
+
+    @Override
+    public ContentBounds getContentBounds(String viewId) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+        if (!(viewObj instanceof IArchimateDiagramModel diagramModel)) {
+            throw new ModelAccessException(
+                    "View not found: " + viewId, ErrorCode.VIEW_NOT_FOUND);
+        }
+
+        return computeContentBoundsForView(diagramModel);
+    }
+
+    /**
+     * Computes content bounds for an already-resolved diagram model.
+     * Filters out notes so bounds reflect diagram content only (Story B16).
+     * Includes connection bendpoint extents so that position-based note
+     * placement clears connections that extend beyond element bounds.
+     * Returns null if the view has no non-note content.
+     */
+    private ContentBounds computeContentBoundsForView(IArchimateDiagramModel diagramModel) {
+        List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(diagramModel);
+
+        // Filter out notes — content bounds should reflect diagram content only,
+        // so existing notes don't push position-based placement further away.
+        List<AssessmentNode> contentNodes = nodes.stream()
+                .filter(n -> !n.isNote())
+                .toList();
+
+        if (contentNodes.isEmpty()) {
+            return null;
+        }
+
+        double minX = Double.MAX_VALUE;
+        double minY = Double.MAX_VALUE;
+        double maxX = -Double.MAX_VALUE;
+        double maxY = -Double.MAX_VALUE;
+        for (AssessmentNode node : contentNodes) {
+            if (node.x() < minX) minX = node.x();
+            if (node.y() < minY) minY = node.y();
+            double right = node.x() + node.width();
+            double bottom = node.y() + node.height();
+            if (right > maxX) maxX = right;
+            if (bottom > maxY) maxY = bottom;
+        }
+
+        // Extend bounds to include connection bendpoints that may extend
+        // beyond element boundaries (e.g., routed paths arcing above/below content).
+        for (IDiagramModelConnection conn : AssessmentCollector.collectAllConnections(diagramModel)) {
+            IConnectable source = conn.getSource();
+            IConnectable target = conn.getTarget();
+            if (!(source instanceof IDiagramModelObject sourceObj)
+                    || !(target instanceof IDiagramModelObject targetObj)) {
+                continue;
+            }
+            int[] srcCenter = ConnectionResponseBuilder.computeAbsoluteCenter(sourceObj);
+            int[] tgtCenter = ConnectionResponseBuilder.computeAbsoluteCenter(targetObj);
+            for (IDiagramModelBendpoint bp : conn.getBendpoints()) {
+                // Bendpoints are stored as relative offsets from source/target centers;
+                // absolute position is the average of source-relative and target-relative.
+                double absX = (bp.getStartX() + srcCenter[0] + bp.getEndX() + tgtCenter[0]) / 2.0;
+                double absY = (bp.getStartY() + srcCenter[1] + bp.getEndY() + tgtCenter[1]) / 2.0;
+                if (absX < minX) minX = absX;
+                if (absY < minY) minY = absY;
+                if (absX > maxX) maxX = absX;
+                if (absY > maxY) maxY = absY;
+            }
+        }
+
+        return new ContentBounds(minX, minY, maxX - minX, maxY - minY);
     }
 
     /** Result of orphaned connection detection (Story 10-14). */
@@ -1830,14 +2062,152 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return (list == null || list.isEmpty()) ? null : list;
     }
 
+    // ---- Hub element detection (Story 13-3) ----
+
+    @Override
+    public DetectHubElementsResultDto detectHubElements(String viewId) {
+        logger.info("Detect hub elements: viewId={}", viewId);
+        IArchimateModel model = requireAndCaptureModel();
+
+        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+        if (!(viewObj instanceof IArchimateDiagramModel diagramModel)) {
+            throw new ModelAccessException(
+                    "View not found: " + viewId, ErrorCode.VIEW_NOT_FOUND);
+        }
+
+        // Collect all archimate view objects and count connections per viewObjectId
+        Map<String, Integer> connectionCounts = new HashMap<>();
+        Map<String, IDiagramModelArchimateObject> viewObjectMap = new HashMap<>();
+        Map<String, Integer> maxLabelWidths = new HashMap<>();
+        int totalConnections = collectHubData(diagramModel, connectionCounts, viewObjectMap, maxLabelWidths);
+
+        // Count total elements on view (including zero-connection ones)
+        int totalElements = viewObjectMap.size();
+
+        // Filter to elements with at least 1 connection, sort descending (stable tie-break by viewObjectId)
+        List<HubElementEntryDto> entries = connectionCounts.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed()
+                        .thenComparing(Map.Entry::getKey))
+                .map(entry -> {
+                    IDiagramModelArchimateObject obj = viewObjectMap.get(entry.getKey());
+                    IArchimateElement element = obj.getArchimateElement();
+                    IBounds bounds = obj.getBounds();
+                    return new HubElementEntryDto(
+                            obj.getId(),
+                            element.getId(),
+                            element.getName(),
+                            element.eClass().getName(),
+                            entry.getValue(),
+                            bounds.getWidth(),
+                            bounds.getHeight(),
+                            maxLabelWidths.getOrDefault(entry.getKey(), 0));
+                })
+                .collect(Collectors.toList());
+
+        // Summary statistics
+        double avgConnectionCount = entries.isEmpty() ? 0.0
+                : entries.stream().mapToInt(HubElementEntryDto::connectionCount).average().orElse(0.0);
+        // Round to 1 decimal place
+        avgConnectionCount = Math.round(avgConnectionCount * 10.0) / 10.0;
+
+        // Generate sizing suggestions for hub elements (>6 connections)
+        List<String> suggestions = buildHubSuggestions(entries);
+
+        return new DetectHubElementsResultDto(
+                viewId, totalElements, totalConnections, avgConnectionCount,
+                entries.isEmpty() ? List.of() : entries,
+                suggestions.isEmpty() ? null : suggestions);
+    }
+
+    /**
+     * Collects hub detection data by traversing view objects and counting connections.
+     * Also tracks the maximum connection label width per view object for label-aware sizing.
+     *
+     * @return total connection count on the view
+     */
+    private int collectHubData(IDiagramModelContainer container,
+                               Map<String, Integer> connectionCounts,
+                               Map<String, IDiagramModelArchimateObject> viewObjectMap,
+                               Map<String, Integer> maxLabelWidths) {
+        int totalConnections = 0;
+        for (IDiagramModelObject child : container.getChildren()) {
+            if (child instanceof IDiagramModelArchimateObject archimateObject) {
+                IArchimateElement element = archimateObject.getArchimateElement();
+                if (element != null) {
+                    viewObjectMap.put(archimateObject.getId(), archimateObject);
+
+                    // Count connections where this object is source
+                    for (IDiagramModelConnection conn : archimateObject.getSourceConnections()) {
+                        if (conn instanceof IDiagramModelArchimateConnection archConn) {
+                            String sourceId = conn.getSource().getId();
+                            String targetId = conn.getTarget().getId();
+                            connectionCounts.merge(sourceId, 1, Integer::sum);
+                            connectionCounts.merge(targetId, 1, Integer::sum);
+                            totalConnections++;
+
+                            // Track max label width per element (both ends)
+                            String relName = archConn.getArchimateRelationship() != null
+                                    ? archConn.getArchimateRelationship().getName() : null;
+                            if (relName != null && !relName.isEmpty()) {
+                                int labelWidth = (int) Math.ceil(relName.length() * 8.0 + 10.0);
+                                maxLabelWidths.merge(sourceId, labelWidth, Math::max);
+                                maxLabelWidths.merge(targetId, labelWidth, Math::max);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Recurse into containers (groups and nested elements)
+            if (child instanceof IDiagramModelContainer nestedContainer) {
+                totalConnections += collectHubData(nestedContainer, connectionCounts,
+                        viewObjectMap, maxLabelWidths);
+            }
+        }
+        return totalConnections;
+    }
+
+    private List<String> buildHubSuggestions(List<HubElementEntryDto> entries) {
+        List<String> suggestions = new ArrayList<>();
+        for (HubElementEntryDto entry : entries) {
+            if (entry.connectionCount() > 6) {
+                int excess = entry.connectionCount() - 6;
+                int connectionBasedWidth = entry.width() + 15 * excess;
+                int suggestedHeight = entry.height() + 15 * excess;
+                int labelAwareWidth = entry.maxLabelWidth() > 0
+                        ? entry.maxLabelWidth() + entry.width() : 0;
+                int suggestedWidth = Math.max(connectionBasedWidth, labelAwareWidth);
+
+                String suggestion = String.format(
+                        "Element '%s' has %d connections (hub threshold: 6). "
+                        + "Consider increasing height to %dpx (%d + 15 \u00d7 %d) for horizontal layouts, "
+                        + "or width to %dpx (%d + 15 \u00d7 %d) for vertical layouts.",
+                        entry.elementName(), entry.connectionCount(),
+                        suggestedHeight, entry.height(), excess,
+                        suggestedWidth, entry.width(), excess);
+                if (labelAwareWidth > connectionBasedWidth) {
+                    suggestion += String.format(
+                            " Label-adjusted width: %dpx (longest label: %dpx).",
+                            labelAwareWidth, entry.maxLabelWidth());
+                }
+                suggestions.add(suggestion);
+            }
+        }
+        return suggestions;
+    }
+
     // ---- Auto-route connections (Story 9-5) ----
+
+    /** Maximum nudge iterations for autoNudge mode (Story 13-7). */
+    private static final int MAX_NUDGE_ITERATIONS = 2;
 
     @Override
     public MutationResult<AutoRouteResultDto> autoRouteConnections(
             String sessionId, String viewId,
-            List<String> connectionIds, String strategy, boolean force) {
-        logger.info("Auto-route connections: viewId={}, strategy={}, connectionIds={}, force={}",
-                viewId, strategy, connectionIds != null ? connectionIds.size() : "all", force);
+            List<String> connectionIds, String strategy, boolean force,
+            boolean autoNudge, int snapThreshold, int perimeterMargin) {
+        logger.info("Auto-route connections: viewId={}, strategy={}, connectionIds={}, force={}, autoNudge={}, snapThreshold={}, perimeterMargin={}",
+                viewId, strategy, connectionIds != null ? connectionIds.size() : "all", force, autoNudge, snapThreshold, perimeterMargin);
         IArchimateModel model = requireAndCaptureModel();
 
         try {
@@ -1899,15 +2269,20 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             List<Command> commands = new ArrayList<>();
             int routedCount = 0;
             int labelsOptimized = 0;
+            int crossingsBefore = 0;
+            int crossingsAfter = 0;
+            int straightLineCrossings = 0;
             List<FailedConnection> failedConnections = List.of();
             List<MoveRecommendation> moveRecommendations = List.of();
+            List<NudgedElementDto> nudgedElements = new ArrayList<>();
+            List<ResizedGroupDto> resizedGroups = new ArrayList<>(); // backlog-b15
 
             if ("clear".equals(effectiveStrategy)) {
                 // Clear: empty bendpoints for each connection
                 for (IDiagramModelConnection conn : targetConnections) {
                     if (conn instanceof IDiagramModelArchimateConnection archConn) {
                         PreparedMutation<ViewConnectionDto> prepared =
-                                prepareUpdateViewConnectionDirect(archConn, List.of(), null);
+                                prepareUpdateViewConnectionDirect(archConn, List.of(), null, null, null, null);
                         commands.add(prepared.command());
                         routedCount++;
                     }
@@ -1915,6 +2290,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             } else {
                 // Orthogonal: compute routing for each connection
                 List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(diagramModel);
+
+                // Crossing count before routing (backlog-b14):
+                // Collect assessment connections for targeted connections only
+                Set<String> targetIds = new HashSet<>();
+                for (IDiagramModelConnection tc : targetConnections) {
+                    targetIds.add(tc.getId());
+                }
+                List<AssessmentConnection> assessmentConns =
+                        AssessmentCollector.collectAssessmentConnections(diagramModel, nodes);
+                List<List<double[]>> beforePaths = new ArrayList<>();
+                Map<String, List<double[]>> beforePathMap = new LinkedHashMap<>();
+                for (AssessmentConnection ac : assessmentConns) {
+                    if (targetIds.contains(ac.id())) {
+                        beforePaths.add(ac.pathPoints());
+                        beforePathMap.put(ac.id(), ac.pathPoints());
+                    }
+                }
+                crossingsBefore = LayoutQualityAssessor.countPathCrossings(beforePaths);
 
                 // Pre-route validation: detect stacked elements sharing identical positions
                 {
@@ -1941,13 +2334,342 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 }
 
                 // Route all connections via shared helper
-                OrthogonalRoutingResult routeResult = buildOrthogonalRoutingCommands(
-                        diagramModel, targetConnections, nodes, force);
+                // Story 13-9: Catch degenerate geometry (zero-gap, touching) that can
+                // crash the routing pipeline. Return partial result instead of INTERNAL_ERROR.
+                OrthogonalRoutingResult routeResult;
+                try {
+                    routeResult = buildOrthogonalRoutingCommands(
+                            diagramModel, targetConnections, nodes, force, snapThreshold, perimeterMargin);
+                } catch (RuntimeException e) {
+                    logger.warn("Routing pipeline failed for view {} due to degenerate geometry: {}",
+                            viewId, e.getMessage());
+                    logger.debug("Routing pipeline failure stack trace", e);
+                    warnings.add("Routing failed due to degenerate element geometry (overlapping or "
+                            + "zero-gap elements). Use layout-flat-view or layout-within-group to "
+                            + "separate elements first, then re-route.");
+                    AutoRouteResultDto dto = new AutoRouteResultDto(
+                            viewId, 0, effectiveStrategy, false, warnings);
+                    return new MutationResult<>(dto, null);
+                }
                 commands.addAll(routeResult.commands);
                 routedCount = routeResult.routedCount;
                 labelsOptimized = routeResult.labelsOptimized;
                 failedConnections = routeResult.failedConnections;
                 moveRecommendations = routeResult.moveRecommendations;
+                straightLineCrossings = routeResult.straightLineCrossings;
+
+                // 6b. Auto-nudge: apply move recommendations and re-route (Story 13-7)
+                // Ignored when force=true (force already applies all routes) or clear strategy
+                boolean effectiveAutoNudge = autoNudge && !force;
+
+                // Story 13-9: Skip autoNudge when elements overlap — degenerate geometry
+                // can crash the re-routing pipeline. Fall back to standard failure reporting.
+                if (effectiveAutoNudge && OverlapResolver.hasOverlappingElements(nodes)) {
+                    effectiveAutoNudge = false;
+                    logger.warn("Auto-nudge skipped: overlapping elements detected on view {}. "
+                            + "Resolve overlaps first (e.g., layout-flat-view or layout-within-group), "
+                            + "then re-route.", viewId);
+                    warnings.add("autoNudge skipped because elements have overlapping bounding boxes. "
+                            + "Use layout-flat-view or layout-within-group to separate elements first.");
+                }
+
+                if (effectiveAutoNudge && !failedConnections.isEmpty()
+                        && !moveRecommendations.isEmpty()) {
+                    // Build view object map for nudge operations
+                    Map<String, IDiagramModelObject> allViewObjects = new LinkedHashMap<>();
+                    collectAllViewObjectMap(diagramModel, allViewObjects);
+
+                    // Build connection lookup for re-routing specific failed connections
+                    Map<String, IDiagramModelConnection> connLookup = new LinkedHashMap<>();
+                    for (IDiagramModelConnection conn : targetConnections) {
+                        connLookup.put(conn.getId(), conn);
+                    }
+
+                    // Track cumulative deltas per element for consolidation (M-1)
+                    Map<String, int[]> cumulativeDeltas = new LinkedHashMap<>();
+                    Map<String, String> elementNames = new LinkedHashMap<>();
+
+                    // Backlog-b15: Track group resize state across iterations
+                    // virtualGroupBounds: accumulated [x, y, w, h] per group (prevents stale EMF reads)
+                    // groupResizeCommands: ONE consolidated resize command per group
+                    Map<String, int[]> virtualGroupBounds = new LinkedHashMap<>();
+                    Map<String, Command> groupResizeCommands = new LinkedHashMap<>();
+
+                    for (int iteration = 0; iteration < MAX_NUDGE_ITERATIONS; iteration++) {
+                        if (failedConnections.isEmpty() || moveRecommendations.isEmpty()) {
+                            break;
+                        }
+
+                        logger.info("Auto-nudge iteration {}: {} recommendations, {} failed connections",
+                                iteration + 1, moveRecommendations.size(), failedConnections.size());
+
+                        // Apply each move recommendation
+                        List<NudgedElementDto> iterationNudges = new ArrayList<>();
+                        for (MoveRecommendation rec : moveRecommendations) {
+                            IDiagramModelObject dmo = allViewObjects.get(rec.elementId());
+                            if (dmo == null) {
+                                logger.warn("Auto-nudge: view object {} not found, skipping",
+                                        rec.elementId());
+                                continue;
+                            }
+
+                            IBounds bounds = dmo.getBounds();
+                            // Account for prior iteration deltas — EMF model is never
+                            // mutated, so bounds always returns the original position.
+                            int[] priorDelta = cumulativeDeltas.getOrDefault(
+                                    rec.elementId(), new int[]{0, 0});
+                            int newX = bounds.getX() + priorDelta[0] + rec.dx();
+                            int newY = bounds.getY() + priorDelta[1] + rec.dy();
+
+                            // Backlog-b15 AC-3: Clamp nested elements to non-negative relative
+                            // position within parent group. This prevents parent left/top
+                            // expansion that cascades to negative canvas coordinates.
+                            EObject container = dmo.eContainer();
+                            if (container instanceof IDiagramModelGroup) {
+                                int minPos = DEFAULT_GROUP_PADDING;
+                                if (newX < minPos) newX = minPos;
+                                if (newY < minPos) newY = minPos;
+                            }
+
+                            // Compute actual displacement after clamping
+                            int actualDx = newX - bounds.getX() - priorDelta[0];
+                            int actualDy = newY - bounds.getY() - priorDelta[1];
+
+                            // Apply move command
+                            commands.add(new UpdateViewObjectCommand(dmo, newX, newY,
+                                    bounds.getWidth(), bounds.getHeight()));
+
+                            // Backlog-b15 AC-1/AC-2: Resize parent group using virtual bounds
+                            if (container instanceof IDiagramModelGroup parentGroup) {
+                                resizeParentGroupIfNeeded(parentGroup, dmo, newX, newY,
+                                        bounds.getWidth(), bounds.getHeight(),
+                                        virtualGroupBounds, groupResizeCommands);
+                            }
+
+                            String elemName = dmo.getName() != null ? dmo.getName() : rec.elementId();
+                            iterationNudges.add(new NudgedElementDto(
+                                    rec.elementId(), elemName, actualDx, actualDy));
+
+                            // Accumulate deltas per element for consolidated response
+                            cumulativeDeltas.merge(rec.elementId(),
+                                    new int[]{actualDx, actualDy},
+                                    (old, neu) -> new int[]{old[0] + neu[0], old[1] + neu[1]});
+                            elementNames.putIfAbsent(rec.elementId(), elemName);
+                        }
+
+                        // Re-collect nodes from unmodified EMF model, then apply
+                        // cumulative nudge deltas virtually. Direct setBounds() is
+                        // forbidden here — it triggers EMF notifications that cascade
+                        // to SWT widgets, causing Invalid thread access (SWTException)
+                        // since MCP handlers run on a Reactor thread pool, not the
+                        // SWT Display thread.
+                        // Backlog-b15: Also apply virtual group bounds for accurate re-routing.
+                        nodes = AssessmentCollector.collectAssessmentNodes(diagramModel);
+                        nodes = applyNudgeDeltas(nodes, cumulativeDeltas, virtualGroupBounds);
+
+                        // Identify failed connections to re-route
+                        List<IDiagramModelConnection> failedConns = new ArrayList<>();
+                        for (FailedConnection fc : failedConnections) {
+                            IDiagramModelConnection conn = connLookup.get(fc.connectionId());
+                            if (conn != null) {
+                                failedConns.add(conn);
+                            }
+                        }
+
+                        if (failedConns.isEmpty()) {
+                            break;
+                        }
+
+                        // Re-route only the previously failed connections
+                        // Story 13-9: Wrap in try-catch — degenerate geometry after nudge
+                        // (zero-gap, overlapping) can crash the routing pipeline.
+                        // Fall back to pre-nudge results instead of INTERNAL_ERROR.
+                        try {
+                            OrthogonalRoutingResult reRouteResult = buildOrthogonalRoutingCommands(
+                                    diagramModel, failedConns, nodes, false, snapThreshold, perimeterMargin);
+                            commands.addAll(reRouteResult.commands);
+                            routedCount += reRouteResult.routedCount;
+                            labelsOptimized += reRouteResult.labelsOptimized;
+                            failedConnections = reRouteResult.failedConnections;
+                            moveRecommendations = reRouteResult.moveRecommendations;
+                            // Merge re-routed paths for crossing delta (backlog-b14)
+                            routeResult.routedPaths.putAll(reRouteResult.routedPaths);
+
+                            logger.info("Auto-nudge iteration {} result: {} re-routed, {} still failed",
+                                    iteration + 1, reRouteResult.routedCount,
+                                    reRouteResult.failedConnections.size());
+                        } catch (RuntimeException e) {
+                            logger.warn("Auto-nudge re-routing failed (iteration {}): {} — "
+                                    + "falling back to pre-nudge results",
+                                    iteration + 1, e.getMessage());
+                            logger.debug("Auto-nudge re-routing failure stack trace", e);
+                            warnings.add("autoNudge re-routing failed due to degenerate geometry. "
+                                    + "Pre-nudge routing results preserved.");
+                            break;
+                        }
+                    }
+
+                    // Backlog-b15: Add consolidated group resize commands AFTER all iterations
+                    // (one command per group — the latest resize wins via Map.put)
+                    commands.addAll(groupResizeCommands.values());
+
+                    // B29 fix: Re-align terminals and re-encode relative BPs using final
+                    // post-nudge centers. Connections routed in iteration N use element
+                    // centers from that iteration. If an element is nudged in iteration N+1:
+                    // (1) B29's center-aligned BPs target stale centers, and
+                    // (2) Archi's relative→absolute formula averages both endpoints, so
+                    //     the stale encoding shifts all absolute BPs by half the nudge delta.
+                    // Fix: re-run center alignment against final centers, then re-encode.
+                    if (!cumulativeDeltas.isEmpty()) {
+                        int correctedCount = 0;
+                        for (Map.Entry<String, List<AbsoluteBendpointDto>> entry
+                                : routeResult.routedPaths.entrySet()) {
+                            IDiagramModelConnection conn = connLookup.get(entry.getKey());
+                            if (conn == null
+                                    || !(conn instanceof IDiagramModelArchimateConnection archConn)) {
+                                continue;
+                            }
+                            IConnectable srcConn = conn.getSource();
+                            IConnectable tgtConn = conn.getTarget();
+                            if (!(srcConn instanceof IDiagramModelArchimateObject srcObj)
+                                    || !(tgtConn instanceof IDiagramModelArchimateObject tgtObj)) {
+                                continue;
+                            }
+                            // Check if source or target was nudged
+                            int[] srcDelta = cumulativeDeltas.get(srcObj.getId());
+                            int[] tgtDelta = cumulativeDeltas.get(tgtObj.getId());
+                            if (srcDelta == null && tgtDelta == null) {
+                                continue; // neither endpoint nudged — BPs are correct
+                            }
+                            // Compute final post-nudge element rects and centers
+                            int[] srcCenter = ConnectionResponseBuilder.computeAbsoluteCenter(srcObj);
+                            int[] tgtCenter = ConnectionResponseBuilder.computeAbsoluteCenter(tgtObj);
+                            int sdx = srcDelta != null ? srcDelta[0] : 0;
+                            int sdy = srcDelta != null ? srcDelta[1] : 0;
+                            int tdx = tgtDelta != null ? tgtDelta[0] : 0;
+                            int tdy = tgtDelta != null ? tgtDelta[1] : 0;
+                            int finalSrcCX = srcCenter[0] + sdx;
+                            int finalSrcCY = srcCenter[1] + sdy;
+                            int finalTgtCX = tgtCenter[0] + tdx;
+                            int finalTgtCY = tgtCenter[1] + tdy;
+
+                            // Build final post-nudge element rects for center alignment
+                            IBounds srcBounds = srcObj.getBounds();
+                            IBounds tgtBounds = tgtObj.getBounds();
+                            // Compute absolute position (sum parent chain)
+                            int srcAbsX = srcBounds.getX();
+                            int srcAbsY = srcBounds.getY();
+                            Object srcParent = srcObj.eContainer();
+                            while (srcParent instanceof IDiagramModelObject p) {
+                                srcAbsX += p.getBounds().getX();
+                                srcAbsY += p.getBounds().getY();
+                                srcParent = p.eContainer();
+                            }
+                            int tgtAbsX = tgtBounds.getX();
+                            int tgtAbsY = tgtBounds.getY();
+                            Object tgtParent = tgtObj.eContainer();
+                            while (tgtParent instanceof IDiagramModelObject p) {
+                                tgtAbsX += p.getBounds().getX();
+                                tgtAbsY += p.getBounds().getY();
+                                tgtParent = p.eContainer();
+                            }
+
+                            RoutingRect finalSrcRect = new RoutingRect(
+                                    srcAbsX + sdx, srcAbsY + sdy,
+                                    srcBounds.getWidth(), srcBounds.getHeight(), null);
+                            RoutingRect finalTgtRect = new RoutingRect(
+                                    tgtAbsX + tdx, tgtAbsY + tdy,
+                                    tgtBounds.getWidth(), tgtBounds.getHeight(), null);
+
+                            // B44: Fix center-terminated terminals before re-aligning
+                            // against final nudged positions. Without this,
+                            // alignTerminalsWithCenter can insert a BP at exact center
+                            // coordinates when the existing terminal's perpendicular
+                            // axis already matches center.
+                            List<AbsoluteBendpointDto> path = entry.getValue();
+                            RoutingPipeline.ConnectionEndpoints finalEndpoints =
+                                    new RoutingPipeline.ConnectionEndpoints(
+                                            entry.getKey(), finalSrcRect, finalTgtRect,
+                                            List.of(), "", 0);
+                            RoutingPipeline.fixCenterTerminatedPath(path, finalEndpoints);
+                            RoutingPipeline.fixInteriorTerminalBPs(path, finalEndpoints);
+                            RoutingPipeline.alignTerminalsWithCenter(path, finalEndpoints);
+                            RoutingPipeline.removeDuplicatePoints(path);
+                            RoutingPipeline.removeCollinearPoints(path);
+
+                            // Re-encode relative BPs using final centers
+                            List<BendpointDto> correctedBps =
+                                    ConnectionResponseBuilder.convertAbsoluteToRelative(
+                                            path, finalSrcCX, finalSrcCY, finalTgtCX, finalTgtCY);
+                            PreparedMutation<ViewConnectionDto> prepared =
+                                    prepareUpdateViewConnectionDirect(
+                                            archConn, correctedBps, null, null, null, null);
+                            commands.add(prepared.command());
+                            correctedCount++;
+                        }
+                        if (correctedCount > 0) {
+                            logger.info("Auto-nudge: corrected {} connections with nudged endpoints "
+                                    + "(re-aligned terminals + re-encoded relative BPs)",
+                                    correctedCount);
+                        }
+                    }
+
+                    // Build consolidated nudgedElements list (one entry per element)
+                    for (Map.Entry<String, int[]> entry : cumulativeDeltas.entrySet()) {
+                        int[] deltas = entry.getValue();
+                        nudgedElements.add(new NudgedElementDto(
+                                entry.getKey(), elementNames.get(entry.getKey()),
+                                deltas[0], deltas[1]));
+                    }
+
+                    // Backlog-b15 AC-6: Build resizedGroups list from virtual bounds
+                    for (Map.Entry<String, int[]> entry : virtualGroupBounds.entrySet()) {
+                        String groupId = entry.getKey();
+                        int[] bounds = entry.getValue();
+                        IDiagramModelObject groupObj = allViewObjects.get(groupId);
+                        String groupName = groupObj != null && groupObj.getName() != null
+                                ? groupObj.getName() : groupId;
+                        resizedGroups.add(new ResizedGroupDto(
+                                groupId, groupName,
+                                bounds[0], bounds[1], bounds[2], bounds[3]));
+                    }
+                }
+
+                // 6c. Compute crossings after routing (backlog-b14)
+                // Build after-paths from routed paths (merged with autoNudge re-routes)
+                // + original paths for connections that were not routed.
+                // Note: source/target centers are from pre-nudge state. After autoNudge,
+                // nudged element centers shift but the B29 relative BP correction pass
+                // ensures absolute BPs match the final post-nudge positions.
+                List<List<double[]>> afterPaths = new ArrayList<>();
+                for (Map.Entry<String, List<double[]>> entry : beforePathMap.entrySet()) {
+                    String connId = entry.getKey();
+                    List<AbsoluteBendpointDto> routedBps = routeResult.routedPaths.get(connId);
+                    if (routedBps != null) {
+                        // Build full path: source center → bendpoints → target center
+                        List<double[]> origPath = entry.getValue();
+                        double[] srcCenter = origPath.get(0);
+                        double[] tgtCenter = origPath.get(origPath.size() - 1);
+                        List<double[]> afterPath = new ArrayList<>();
+                        afterPath.add(srcCenter);
+                        for (AbsoluteBendpointDto bp : routedBps) {
+                            afterPath.add(new double[]{bp.x(), bp.y()});
+                        }
+                        afterPath.add(tgtCenter);
+                        afterPaths.add(afterPath);
+                    } else {
+                        // Connection not routed — use original path
+                        afterPaths.add(entry.getValue());
+                    }
+                }
+                crossingsAfter = LayoutQualityAssessor.countPathCrossings(afterPaths);
+            }
+
+            // 6d. Crossing inflation warning (backlog-b22)
+            String inflationWarning = RoutingPipeline.buildCrossingInflationWarning(
+                    crossingsAfter, straightLineCrossings);
+            if (inflationWarning != null) {
+                warnings.add(inflationWarning);
             }
 
             // 7. Switch view to bendpoint mode if needed (Story 10-11)
@@ -1977,7 +2699,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             // 9. Build compound command
             String label = "Auto-route connections (" + effectiveStrategy
-                    + ", " + routedCount + " connections)";
+                    + ", " + routedCount + " connections"
+                    + (nudgedElements.isEmpty() ? "" : ", " + nudgedElements.size() + " nudged")
+                    + (resizedGroups.isEmpty() ? "" : ", " + resizedGroups.size() + " groups resized")
+                    + ")";
             NonNotifyingCompoundCommand compound =
                     new NonNotifyingCompoundCommand(label);
             commands.forEach(compound::add);
@@ -2023,7 +2748,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 }
                 dto = new AutoRouteResultDto(
                         viewId, routedCount, 0, effectiveStrategy,
-                        routerTypeSwitched, labelsOptimized, warnings, List.of(), List.of(), violationDtos);
+                        routerTypeSwitched, labelsOptimized,
+                        crossingsBefore, crossingsAfter, straightLineCrossings,
+                        warnings, List.of(), List.of(),
+                        violationDtos, nudgedElements, resizedGroups);
             } else {
                 // Default mode: failed connections excluded, report failures + recommendations
                 List<FailedConnectionDto> failedDtos = new ArrayList<>();
@@ -2045,8 +2773,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 }
                 dto = new AutoRouteResultDto(
                         viewId, routedCount, failedDtos.size(), effectiveStrategy,
-                        routerTypeSwitched, labelsOptimized, warnings, failedDtos,
-                        recommendationDtos, List.of());
+                        routerTypeSwitched, labelsOptimized,
+                        crossingsBefore, crossingsAfter, straightLineCrossings,
+                        warnings, failedDtos,
+                        recommendationDtos, List.of(), nudgedElements, resizedGroups);
             }
 
             // 10. Approval gate
@@ -2057,6 +2787,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (routerTypeSwitched) {
                     proposedChanges.put("routerTypeSwitched",
                             "manhattan -> manual (bendpoint mode)");
+                }
+                if (!nudgedElements.isEmpty()) {
+                    proposedChanges.put("nudgedElements", nudgedElements.size());
+                }
+                if (!resizedGroups.isEmpty()) {
+                    proposedChanges.put("resizedGroups", resizedGroups.size());
                 }
                 ProposalContext ctx = storeAsProposal(sessionId,
                         "auto-route-connections", compound, dto, label,
@@ -2081,6 +2817,180 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     "Error auto-routing connections for view '"
                     + (viewId != null ? viewId : "<null>") + "'",
                     e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Applies cumulative nudge deltas to a list of assessment nodes without mutating
+     * the EMF model. Returns a new list where nudged elements have adjusted absolute
+     * positions. Non-nudged elements are returned unchanged.
+     *
+     * <p>This avoids calling {@code dmo.setBounds()} which triggers EMF notifications
+     * that cascade to SWT widgets (Invalid thread access when called from non-SWT threads).
+     */
+    static List<AssessmentNode> applyNudgeDeltas(
+            List<AssessmentNode> nodes, Map<String, int[]> cumulativeDeltas) {
+        if (cumulativeDeltas.isEmpty()) {
+            return nodes;
+        }
+        List<AssessmentNode> adjusted = new ArrayList<>(nodes.size());
+        for (AssessmentNode node : nodes) {
+            int[] delta = cumulativeDeltas.get(node.id());
+            if (delta != null) {
+                adjusted.add(new AssessmentNode(
+                        node.id(), node.x() + delta[0], node.y() + delta[1],
+                        node.width(), node.height(),
+                        node.parentId(), node.isGroup(), node.isNote()));
+            } else {
+                adjusted.add(node);
+            }
+        }
+        return adjusted;
+    }
+
+    /**
+     * Applies cumulative nudge deltas AND virtual group bounds to assessment nodes (backlog-b15).
+     * Extends the two-parameter overload with group-level size adjustments for accurate re-routing.
+     *
+     * <p>For each group in {@code virtualGroupBounds}, the group node's size is updated to the
+     * virtual dimensions. Position is unchanged (right/bottom expansion only, per AC-3 clamping).
+     *
+     * @param nodes              original nodes from {@code AssessmentCollector}
+     * @param cumulativeDeltas   element nudge deltas (same as two-parameter overload)
+     * @param virtualGroupBounds group ID → [relX, relY, newWidth, newHeight] from resize tracking
+     */
+    static List<AssessmentNode> applyNudgeDeltas(
+            List<AssessmentNode> nodes, Map<String, int[]> cumulativeDeltas,
+            Map<String, int[]> virtualGroupBounds) {
+        if (cumulativeDeltas.isEmpty()
+                && (virtualGroupBounds == null || virtualGroupBounds.isEmpty())) {
+            return nodes;
+        }
+        if (virtualGroupBounds == null || virtualGroupBounds.isEmpty()) {
+            return applyNudgeDeltas(nodes, cumulativeDeltas);
+        }
+
+        // Build a lookup: group ID → original EMF bounds [x, y, w, h] from the node list
+        // and compute position deltas per group
+        Map<String, double[]> groupPositionDeltas = new LinkedHashMap<>();
+        for (AssessmentNode node : nodes) {
+            int[] vBounds = virtualGroupBounds.get(node.id());
+            if (vBounds != null && node.isGroup()) {
+                // AC-3 clamping prevents negative child positions, so groups only expand
+                // right/bottom. Position unchanged (delta=0), only size updated.
+                groupPositionDeltas.put(node.id(),
+                        new double[]{0, 0, vBounds[2], vBounds[3]});
+            }
+        }
+
+        List<AssessmentNode> adjusted = new ArrayList<>(nodes.size());
+        for (AssessmentNode node : nodes) {
+            double adjX = node.x();
+            double adjY = node.y();
+            double adjW = node.width();
+            double adjH = node.height();
+
+            // Apply element nudge delta
+            int[] delta = cumulativeDeltas.get(node.id());
+            if (delta != null) {
+                adjX += delta[0];
+                adjY += delta[1];
+            }
+
+            // Apply group size adjustment
+            double[] groupAdj = groupPositionDeltas.get(node.id());
+            if (groupAdj != null) {
+                // groupAdj = [dx, dy, newWidth, newHeight]
+                adjX += groupAdj[0];
+                adjY += groupAdj[1];
+                adjW = groupAdj[2];
+                adjH = groupAdj[3];
+            }
+
+            if (delta != null || groupAdj != null) {
+                adjusted.add(new AssessmentNode(
+                        node.id(), adjX, adjY, adjW, adjH,
+                        node.parentId(), node.isGroup(), node.isNote()));
+            } else {
+                adjusted.add(node);
+            }
+        }
+        return adjusted;
+    }
+
+    /**
+     * Resizes a parent group if the moved child element exceeds the group's current bounds.
+     * Walks up the ancestor chain to resize grandparent groups as needed (Story 13-7, AC-7).
+     *
+     * <p>Backlog-b15: Uses {@code virtualGroupBounds} to track accumulated resize state across
+     * multiple children in the same group within one nudge iteration. This prevents stale EMF
+     * bounds from causing later resize commands to overwrite earlier ones.
+     *
+     * @param virtualGroupBounds  accumulated group bounds [x, y, w, h] keyed by group ID;
+     *                            checked before EMF bounds, updated on resize
+     * @param groupResizeCommands consolidated resize commands keyed by group ID; one per group
+     */
+    private void resizeParentGroupIfNeeded(IDiagramModelGroup parentGroup,
+            IDiagramModelObject child, int childNewX, int childNewY,
+            int childW, int childH,
+            Map<String, int[]> virtualGroupBounds,
+            Map<String, Command> groupResizeCommands) {
+        String groupId = parentGroup.getId();
+        int padding = DEFAULT_GROUP_PADDING;
+
+        // Use accumulated virtual bounds if this group was already resized in this iteration,
+        // otherwise fall back to stale EMF bounds (backlog-b15 primary fix)
+        int parentX, parentY, parentW, parentH;
+        int[] vBounds = virtualGroupBounds.get(groupId);
+        if (vBounds != null) {
+            parentX = vBounds[0]; parentY = vBounds[1];
+            parentW = vBounds[2]; parentH = vBounds[3];
+        } else {
+            IBounds parentBounds = parentGroup.getBounds();
+            parentX = parentBounds.getX(); parentY = parentBounds.getY();
+            parentW = parentBounds.getWidth(); parentH = parentBounds.getHeight();
+        }
+
+        // Check if child's new position exceeds parent's current dimensions
+        // Handle both right/bottom overflow and left/top overflow (M-2)
+        int requiredWidth = childNewX + childW + padding;
+        int requiredHeight = childNewY + childH + padding;
+
+        boolean needsResize = requiredWidth > parentW
+                || requiredHeight > parentH
+                || childNewX < 0 || childNewY < 0;
+
+        if (needsResize) {
+            int newWidth = Math.max(parentW, requiredWidth);
+            int newHeight = Math.max(parentH, requiredHeight);
+            int newX = parentX;
+            int newY = parentY;
+
+            // Expand left/top if child has negative position within parent
+            if (childNewX < 0) {
+                newX += childNewX - padding;
+                newWidth += -(childNewX - padding);
+            }
+            if (childNewY < 0) {
+                newY += childNewY - padding;
+                newHeight += -(childNewY - padding);
+            }
+
+            // Store accumulated bounds and consolidated command (one per group)
+            virtualGroupBounds.put(groupId, new int[]{newX, newY, newWidth, newHeight});
+            groupResizeCommands.put(groupId, new UpdateViewObjectCommand(parentGroup,
+                    newX, newY, newWidth, newHeight));
+            logger.debug("Auto-nudge: resized parent group {} to ({},{}) {}x{}",
+                    groupId, newX, newY, newWidth, newHeight);
+
+            // Recursively resize ancestor groups
+            EObject grandparent = parentGroup.eContainer();
+            if (grandparent instanceof IDiagramModelGroup grandparentGroup) {
+                resizeParentGroupIfNeeded(grandparentGroup, parentGroup,
+                        newX, newY,
+                        newWidth, newHeight,
+                        virtualGroupBounds, groupResizeCommands);
+            }
         }
     }
 
@@ -2121,10 +3031,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
-            String sessionId, String viewId,
+            String sessionId, String viewId, String mode,
             String direction, int spacing, String targetRating) {
-        logger.info("Auto-layout-and-route: viewId={}, direction={}, spacing={}, targetRating={}",
-                viewId, direction, spacing, targetRating);
+        String effectiveMode = (mode != null) ? mode.toLowerCase() : "auto";
+        logger.info("Auto-layout-and-route: viewId={}, mode={}, direction={}, spacing={}, targetRating={}",
+                viewId, effectiveMode, direction, spacing, targetRating);
         IArchimateModel model = requireAndCaptureModel();
 
         try {
@@ -2135,7 +3046,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         "View not found: " + viewId, ErrorCode.VIEW_NOT_FOUND);
             }
 
-            // 2. Collect all nodes (including nested children) for ELK
+            // 2. Route based on mode
+            if ("grouped".equals(effectiveMode)) {
+                return executeGroupedMode(sessionId, viewId, direction,
+                        spacing, targetRating, model, diagramModel);
+            }
+
+            // Auto mode (ELK) — original behavior
+            // 3. Collect all nodes (including nested children) for ELK
             List<LayoutNode> nodes = collectLayoutNodesRecursive(diagramModel);
             List<LayoutEdge> edges = collectLayoutEdgesRecursive(diagramModel, nodes);
 
@@ -2159,9 +3077,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 | MutationException e) {
             throw e;
         } catch (Exception e) {
+            logger.error("auto-layout-and-route INTERNAL_ERROR: mode={}, viewId={}, direction={}, "
+                    + "spacing={}, targetRating={}", effectiveMode, viewId, direction, spacing,
+                    targetRating, e);
             throw new ModelAccessException(
-                    "Error computing/applying ELK layout for view '"
-                    + (viewId != null ? viewId : "<null>") + "'",
+                    "Error computing/applying layout for view '"
+                    + (viewId != null ? viewId : "<null>") + "': "
+                    + e.getClass().getSimpleName() + " — " + e.getMessage(),
                     e, ErrorCode.INTERNAL_ERROR);
         }
     }
@@ -2354,13 +3276,27 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     ErrorCode.INTERNAL_ERROR);
         }
 
+        // Label optimization fallback (Story backlog-b12)
+        int labelFallbackTrials = 0;
+        LabelFallbackResult fallback = executeLabelFallback(
+                bestCompound, bestRating, bestScore, bestLabelsOptimized,
+                bestAssessment, targetRating, viewId, diagramModel, model);
+        if (fallback != null) {
+            labelFallbackTrials = fallback.trials;
+            bestRating = fallback.rating;
+            bestScore = fallback.score;
+            bestAssessment = fallback.assessment;
+            bestLabelsOptimized = fallback.labelsOptimized;
+        }
+
         logger.info("Quality target loop complete: best='{}' after {} iterations (target='{}')",
                 bestRating, iterationsPerformed, targetRating);
 
         AutoLayoutAndRouteResultDto dto = buildQualityTargetDto(
-                viewId, effectiveDirection, bestSpacing,
+                "auto", viewId, effectiveDirection, bestSpacing,
                 bestPositionCount, bestRoutedCount, bestRouterTypeSwitched,
-                bestCompound.size(), bestLabelsOptimized, targetRating, bestRating,
+                bestCompound.size(), 0, bestLabelsOptimized, labelFallbackTrials,
+                targetRating, bestRating,
                 iterationsPerformed, bestAssessment);
 
         // Approval gate (Story 11-16 edge case #4: applies to final iteration only)
@@ -2391,10 +3327,601 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return new MutationResult<>(dto, batchSeq);
     }
 
-    private AutoLayoutAndRouteResultDto buildQualityTargetDto(
+    // ---- Grouped mode (backlog-b24) ----
+
+    /**
+     * Result from a single grouped layout pass (backlog-b24).
+     * Contains layout-within-group + arrange-groups commands only.
+     * Optimize-group-order and auto-route are handled separately by the caller
+     * because they require the layout commands to be dispatched first (EMF state).
+     */
+    private static class GroupedLayoutPassResult {
+        final NonNotifyingCompoundCommand compound;
+        final int elementsRepositioned;
+        final int groupsArranged;
+
+        GroupedLayoutPassResult(NonNotifyingCompoundCommand compound,
+                int elementsRepositioned, int groupsArranged) {
+            this.compound = compound;
+            this.elementsRepositioned = elementsRepositioned;
+            this.groupsArranged = groupsArranged;
+        }
+    }
+
+    /**
+     * Entry point for grouped mode (backlog-b24).
+     * Validates that the view has groups, then delegates to single-pass or quality loop.
+     */
+    private MutationResult<AutoLayoutAndRouteResultDto> executeGroupedMode(
+            String sessionId, String viewId, String direction, int spacing,
+            String targetRating, IArchimateModel model,
+            IArchimateDiagramModel diagramModel) {
+
+        // Flat-view guard (AC-5): check for top-level groups with children
+        List<IDiagramModelGroup> topLevelGroups = new ArrayList<>();
+        for (IDiagramModelObject child : diagramModel.getChildren()) {
+            if (child instanceof IDiagramModelGroup group
+                    && !group.getChildren().isEmpty()) {
+                topLevelGroups.add(group);
+            }
+        }
+        if (topLevelGroups.isEmpty()) {
+            throw new ModelAccessException(
+                    "mode='grouped' requires a view with groups. "
+                    + "Use mode='auto' (default) for flat views.",
+                    ErrorCode.INVALID_PARAMETER);
+        }
+
+        String effectiveDirection = direction != null ? direction.toUpperCase() : "DOWN";
+        int effectiveSpacing = spacing > 0 ? spacing : 50;
+
+        if (targetRating == null) {
+            // Single-pass grouped mode
+            return executeGroupedSinglePass(sessionId, viewId, effectiveDirection,
+                    effectiveSpacing, model, diagramModel, topLevelGroups);
+        }
+
+        // Quality target iteration loop for grouped mode
+        return executeGroupedQualityTargetLoop(sessionId, viewId, effectiveDirection,
+                effectiveSpacing, targetRating, model, diagramModel, topLevelGroups);
+    }
+
+    /**
+     * Computes a single grouped layout pass: layout-within-group for each group,
+     * arrange-groups, optimize-group-order, auto-route-connections.
+     * Returns all commands merged into a single compound for atomic undo.
+     */
+    private GroupedLayoutPassResult computeGroupedLayoutPass(
             String viewId, String direction, int spacing,
+            IArchimateModel model, IArchimateDiagramModel diagramModel,
+            List<IDiagramModelGroup> topLevelGroups) {
+
+        NonNotifyingCompoundCommand compound =
+                new NonNotifyingCompoundCommand("Grouped Layout (mode=grouped)");
+        int elementsRepositioned = 0;
+        int groupsArranged = 0;
+
+        // Step 1: Layout within each top-level group
+        int resolvedPadding = DEFAULT_GROUP_PADDING;
+        int startX = resolvedPadding;
+        int startY = resolvedPadding + GROUP_LABEL_HEIGHT;
+
+        for (IDiagramModelGroup group : topLevelGroups) {
+            // Collect direct children (skip notes)
+            List<IDiagramModelObject> children = new ArrayList<>();
+            for (IDiagramModelObject child : group.getChildren()) {
+                if (!(child instanceof IDiagramModelNote)) {
+                    children.add(child);
+                }
+            }
+            if (children.isEmpty()) continue;
+
+            // Compute column layout (default arrangement for grouped mode)
+            boolean effectiveAutoWidth = true;
+            List<int[]> positions = computeColumnLayout(children, startX, startY,
+                    spacing, null, null, effectiveAutoWidth);
+
+            // Build update commands for each child
+            for (int i = 0; i < children.size(); i++) {
+                IDiagramModelObject child = children.get(i);
+                int[] pos = positions.get(i);
+                compound.add(new UpdateViewObjectCommand(child,
+                        pos[0], pos[1], pos[2], pos[3]));
+                elementsRepositioned++;
+            }
+
+            // Auto-resize group
+            int[] groupDims = computeAutoResizeDimensions(
+                    positions, resolvedPadding, GROUP_LABEL_HEIGHT);
+            IBounds currentBounds = group.getBounds();
+            compound.add(new UpdateViewObjectCommand(group,
+                    currentBounds.getX(), currentBounds.getY(),
+                    groupDims[0], groupDims[1]));
+
+            // Resize ancestors if nested
+            List<Command> ancestorCommands = new ArrayList<>();
+            resizeAncestorGroups(group, ancestorCommands, resolvedPadding);
+            ancestorCommands.forEach(compound::add);
+        }
+
+        // Step 2: Arrange groups by topology
+        // Determine arrangement direction
+        String arrangement = ("RIGHT".equalsIgnoreCase(direction)
+                || "LEFT".equalsIgnoreCase(direction)) ? "row" : "column";
+
+        // Re-read top-level groups (positions may have changed from step 1 resizing).
+        // Intentionally includes empty groups: they should be positioned alongside
+        // populated groups even though layout-within-group skipped them.
+        List<IDiagramModelGroup> arrangeTargets = new ArrayList<>();
+        for (IDiagramModelObject child : diagramModel.getChildren()) {
+            if (child instanceof IDiagramModelGroup group) {
+                arrangeTargets.add(group);
+            }
+        }
+
+        if (!arrangeTargets.isEmpty()) {
+            // Build topology ordering
+            Map<String, String> elementToGroup = new HashMap<>();
+            for (IDiagramModelGroup group : arrangeTargets) {
+                mapElementsToGroup(group, group.getId(), elementToGroup);
+            }
+
+            Map<String, Map<String, Integer>> weights = new HashMap<>();
+            for (IDiagramModelObject child : diagramModel.getChildren()) {
+                collectConnectionWeights(child, elementToGroup, weights);
+            }
+
+            List<String> groupIdsList = new ArrayList<>();
+            for (IDiagramModelGroup g : arrangeTargets) {
+                groupIdsList.add(g.getId());
+            }
+
+            GroupTopologyOrderer orderer = new GroupTopologyOrderer();
+            List<String> orderedIds = orderer.orderLinear(groupIdsList, weights);
+
+            // Reorder targets to match topology
+            Map<String, IDiagramModelGroup> groupById = new LinkedHashMap<>();
+            for (IDiagramModelGroup g : arrangeTargets) {
+                groupById.put(g.getId(), g);
+            }
+            List<IDiagramModelGroup> orderedGroups = new ArrayList<>();
+            for (String id : orderedIds) {
+                IDiagramModelGroup g = groupById.get(id);
+                if (g != null) orderedGroups.add(g);
+            }
+
+            // Compute positions
+            int arrangeStartX = ARRANGE_GROUPS_ORIGIN;
+            int arrangeStartY = ARRANGE_GROUPS_ORIGIN;
+            List<int[]> positions;
+
+            if ("row".equals(arrangement)) {
+                positions = new ArrayList<>();
+                int curX = arrangeStartX;
+                for (IDiagramModelGroup g : orderedGroups) {
+                    IBounds b = g.getBounds();
+                    positions.add(new int[]{curX, arrangeStartY});
+                    curX += b.getWidth() + spacing;
+                }
+            } else {
+                positions = new ArrayList<>();
+                int curY = arrangeStartY;
+                for (IDiagramModelGroup g : orderedGroups) {
+                    IBounds b = g.getBounds();
+                    positions.add(new int[]{arrangeStartX, curY});
+                    curY += b.getHeight() + spacing;
+                }
+            }
+
+            // Build arrange commands
+            for (int i = 0; i < orderedGroups.size(); i++) {
+                IDiagramModelGroup g = orderedGroups.get(i);
+                IBounds b = g.getBounds();
+                int[] pos = positions.get(i);
+                compound.add(new UpdateViewObjectCommand(g,
+                        pos[0], pos[1], b.getWidth(), b.getHeight()));
+            }
+            groupsArranged = orderedGroups.size();
+        }
+
+        // Step 3: Optimize group order (crossing minimization)
+        // This is done via computeOptimizeGroupOrderPass which reads current EMF state
+        // We need to dispatch what we have so far temporarily, then compute optimize pass
+        // But since this is called from the loop, the caller handles dispatch.
+        // Instead, we just return the layout+arrange commands; optimize and route are
+        // handled by the existing computeOptimizeGroupOrderPass and computeAutoRoutePass.
+
+        return new GroupedLayoutPassResult(compound, elementsRepositioned, groupsArranged);
+    }
+
+    /**
+     * Single-pass grouped mode without quality iteration (backlog-b24).
+     */
+    private MutationResult<AutoLayoutAndRouteResultDto> executeGroupedSinglePass(
+            String sessionId, String viewId, String direction, int spacing,
+            IArchimateModel model, IArchimateDiagramModel diagramModel,
+            List<IDiagramModelGroup> topLevelGroups) {
+
+        logger.info("Grouped single-pass: step 1/4 — computing layout for {} groups, spacing={}",
+                topLevelGroups.size(), spacing);
+        GroupedLayoutPassResult layoutPass = computeGroupedLayoutPass(
+                viewId, direction, spacing, model, diagramModel, topLevelGroups);
+
+        // Apply layout+arrange temporarily to compute optimize+route
+        logger.info("Grouped single-pass: step 2/4 — applying layout temporarily");
+        mutationDispatcher.dispatchImmediate(layoutPass.compound);
+        int undoCount = 1;
+
+        // Optimize group order
+        logger.info("Grouped single-pass: step 3/4 — optimizing group order");
+        OptimizeGroupOrderPassResult optimizeResult =
+                computeOptimizeGroupOrderPass(diagramModel, model, direction);
+        if (optimizeResult != null) {
+            mutationDispatcher.dispatchImmediate(optimizeResult.compound);
+            undoCount++;
+        }
+
+        // Auto-route connections
+        logger.info("Grouped single-pass: step 4/4 — routing connections");
+        AutoRoutePassResult routeResult = computeAutoRoutePass(viewId, diagramModel, model);
+        if (routeResult != null) {
+            mutationDispatcher.dispatchImmediate(routeResult.compound);
+            undoCount++;
+        }
+
+        // Undo all temporary dispatches
+        mutationDispatcher.undo(undoCount);
+
+        // Merge all compounds into one for final dispatch
+        NonNotifyingCompoundCommand mergedCompound =
+                new NonNotifyingCompoundCommand(layoutPass.compound.getLabel());
+        for (Object cmd : layoutPass.compound.getCommands()) {
+            mergedCompound.add((Command) cmd);
+        }
+        if (optimizeResult != null) {
+            for (Object cmd : optimizeResult.compound.getCommands()) {
+                mergedCompound.add((Command) cmd);
+            }
+        }
+        if (routeResult != null) {
+            for (Object cmd : routeResult.compound.getCommands()) {
+                mergedCompound.add((Command) cmd);
+            }
+        }
+
+        int totalPositionCount = layoutPass.elementsRepositioned
+                + (optimizeResult != null ? optimizeResult.positionCount : 0);
+        int totalRoutedCount = (routeResult != null ? routeResult.routedCount : 0);
+        int labelsOptimized = (routeResult != null ? routeResult.labelsOptimized : 0);
+        boolean routerTypeSwitched = (routeResult != null && routeResult.routerTypeSwitched);
+
+        AutoLayoutAndRouteResultDto dto = new AutoLayoutAndRouteResultDto(
+                viewId, "grouped", direction, spacing,
+                totalPositionCount, totalRoutedCount, routerTypeSwitched,
+                mergedCompound.size(), layoutPass.groupsArranged,
+                labelsOptimized, 0, null, null, null, null, null, null);
+
+        // Approval gate
+        if (mutationDispatcher.isApprovalRequired(sessionId)) {
+            Map<String, Object> proposedChanges = new LinkedHashMap<>();
+            proposedChanges.put("mode", "grouped");
+            proposedChanges.put("direction", direction);
+            proposedChanges.put("spacing", spacing);
+            proposedChanges.put("elementsRepositioned", totalPositionCount);
+            proposedChanges.put("connectionsRouted", totalRoutedCount);
+            proposedChanges.put("groupsArranged", layoutPass.groupsArranged);
+            ProposalContext ctx = storeAsProposal(sessionId,
+                    "auto-layout-and-route", mergedCompound, dto,
+                    mergedCompound.getLabel(), null, proposedChanges,
+                    "Grouped layout computed and ready for application.");
+            return new MutationResult<>(dto, null, ctx);
+        }
+
+        // Dispatch or queue
+        Integer batchSeq = dispatchOrQueue(sessionId, mergedCompound,
+                mergedCompound.getLabel());
+        if (batchSeq == null) {
+            versionCounter.incrementAndGet();
+        }
+        return new MutationResult<>(dto, batchSeq);
+    }
+
+    /**
+     * Quality target iteration loop for grouped mode (backlog-b24).
+     * Same iteration strategy as ELK mode: increase spacing, track best, plateau detection.
+     */
+    private MutationResult<AutoLayoutAndRouteResultDto> executeGroupedQualityTargetLoop(
+            String sessionId, String viewId, String direction, int baseSpacing,
+            String targetRating, IArchimateModel model,
+            IArchimateDiagramModel diagramModel,
+            List<IDiagramModelGroup> topLevelGroups) {
+
+        // Track best result across iterations
+        NonNotifyingCompoundCommand bestCompound = null;
+        String bestRating = "not-applicable";
+        int bestScore = Integer.MAX_VALUE;
+        int bestPositionCount = 0;
+        int bestRoutedCount = 0;
+        int bestLabelsOptimized = 0;
+        boolean bestRouterTypeSwitched = false;
+        int bestGroupsArranged = 0;
+        int bestSpacing = baseSpacing;
+        AssessLayoutResultDto bestAssessment = null;
+
+        String previousRating = null;
+        int previousScore = -1;
+        double previousAvgSpacing = 0;
+        int iterationsPerformed = 0;
+
+        for (int i = 0; i < MAX_TARGET_RATING_ITERATIONS; i++) {
+            int currentSpacing = baseSpacing + (i * TARGET_RATING_SPACING_INCREMENT);
+            iterationsPerformed = i + 1;
+            logger.info("Grouped quality target iteration {}/{}: spacing={}, target={}",
+                    iterationsPerformed, MAX_TARGET_RATING_ITERATIONS,
+                    currentSpacing, targetRating);
+
+            // Re-discover top-level groups each iteration (EMF state changes after undo)
+            List<IDiagramModelGroup> iterGroups;
+            if (i == 0) {
+                iterGroups = topLevelGroups;
+            } else {
+                iterGroups = new ArrayList<>();
+                for (IDiagramModelObject child : diagramModel.getChildren()) {
+                    if (child instanceof IDiagramModelGroup group
+                            && !group.getChildren().isEmpty()) {
+                        iterGroups.add(group);
+                    }
+                }
+            }
+
+            // Compute grouped layout pass
+            GroupedLayoutPassResult layoutPass = computeGroupedLayoutPass(
+                    viewId, direction, currentSpacing, model, diagramModel, iterGroups);
+
+            // Apply temporarily for optimize + route + assessment
+            mutationDispatcher.dispatchImmediate(layoutPass.compound);
+            int undoCount = 1;
+
+            // Optimize group order
+            OptimizeGroupOrderPassResult optimizeResult =
+                    computeOptimizeGroupOrderPass(diagramModel, model, direction);
+            if (optimizeResult != null) {
+                mutationDispatcher.dispatchImmediate(optimizeResult.compound);
+                undoCount++;
+            }
+
+            // Auto-route connections
+            AutoRoutePassResult routeResult = computeAutoRoutePass(viewId, diagramModel, model);
+            if (routeResult != null) {
+                mutationDispatcher.dispatchImmediate(routeResult.compound);
+                undoCount++;
+            }
+
+            // Assess layout quality
+            AssessLayoutResultDto assessment = assessLayout(viewId);
+            String rating = assessment.overallRating();
+            int score = assessment.overlapCount() + assessment.edgeCrossingCount();
+
+            logger.info("Grouped quality target iteration {}: spacing={}, rating={}, "
+                    + "overlaps={}, crossings={}, groups={}",
+                    iterationsPerformed, currentSpacing, rating,
+                    assessment.overlapCount(), assessment.edgeCrossingCount(),
+                    layoutPass.groupsArranged);
+
+            // Track best result — merge all compounds into one
+            if (LayoutQualityAssessor.ratingOrdinal(rating)
+                        > LayoutQualityAssessor.ratingOrdinal(bestRating)
+                    || (LayoutQualityAssessor.ratingOrdinal(rating)
+                            == LayoutQualityAssessor.ratingOrdinal(bestRating)
+                        && score < bestScore)) {
+
+                NonNotifyingCompoundCommand mergedCompound =
+                        new NonNotifyingCompoundCommand(layoutPass.compound.getLabel());
+                for (Object cmd : layoutPass.compound.getCommands()) {
+                    mergedCompound.add((Command) cmd);
+                }
+                if (optimizeResult != null) {
+                    for (Object cmd : optimizeResult.compound.getCommands()) {
+                        mergedCompound.add((Command) cmd);
+                    }
+                }
+                if (routeResult != null) {
+                    for (Object cmd : routeResult.compound.getCommands()) {
+                        mergedCompound.add((Command) cmd);
+                    }
+                }
+                bestCompound = mergedCompound;
+                bestRating = rating;
+                bestScore = score;
+                bestPositionCount = layoutPass.elementsRepositioned
+                        + (optimizeResult != null ? optimizeResult.positionCount : 0);
+                bestRoutedCount = (routeResult != null ? routeResult.routedCount : 0);
+                bestLabelsOptimized = (routeResult != null ? routeResult.labelsOptimized : 0);
+                bestRouterTypeSwitched = (routeResult != null && routeResult.routerTypeSwitched);
+                bestGroupsArranged = layoutPass.groupsArranged;
+                bestSpacing = currentSpacing;
+                bestAssessment = assessment;
+            }
+
+            // Undo ALL dispatched commands
+            mutationDispatcher.undo(undoCount);
+
+            // Target met — break
+            if (LayoutQualityAssessor.meetsTarget(rating, targetRating)) {
+                logger.info("Grouped quality target '{}' met with rating '{}' on iteration {}",
+                        targetRating, rating, iterationsPerformed);
+                break;
+            }
+
+            // Plateau detection
+            double avgSpacing = assessment.averageSpacing();
+            if (i > 0 && isPlateauReached(rating, previousRating, score,
+                    previousScore, avgSpacing, previousAvgSpacing)) {
+                logger.info("Grouped quality target plateau detected at iteration {} — stopping early",
+                        iterationsPerformed);
+                break;
+            }
+
+            previousRating = rating;
+            previousScore = score;
+            previousAvgSpacing = avgSpacing;
+        }
+
+        if (bestCompound == null) {
+            throw new ModelAccessException(
+                    "Grouped quality target iteration produced no results",
+                    ErrorCode.INTERNAL_ERROR);
+        }
+
+        // Label optimization fallback (Story backlog-b12)
+        int labelFallbackTrials = 0;
+        LabelFallbackResult fallback = executeLabelFallback(
+                bestCompound, bestRating, bestScore, bestLabelsOptimized,
+                bestAssessment, targetRating, viewId, diagramModel, model);
+        if (fallback != null) {
+            labelFallbackTrials = fallback.trials;
+            bestRating = fallback.rating;
+            bestScore = fallback.score;
+            bestAssessment = fallback.assessment;
+            bestLabelsOptimized = fallback.labelsOptimized;
+        }
+
+        logger.info("Grouped quality target loop complete: best='{}' after {} iterations (target='{}')",
+                bestRating, iterationsPerformed, targetRating);
+
+        AutoLayoutAndRouteResultDto dto = buildQualityTargetDto(
+                "grouped", viewId, direction, bestSpacing,
+                bestPositionCount, bestRoutedCount, bestRouterTypeSwitched,
+                bestCompound.size(), bestGroupsArranged,
+                bestLabelsOptimized, labelFallbackTrials,
+                targetRating, bestRating,
+                iterationsPerformed, bestAssessment);
+
+        // Approval gate
+        if (mutationDispatcher.isApprovalRequired(sessionId)) {
+            Map<String, Object> proposedChanges = new LinkedHashMap<>();
+            proposedChanges.put("mode", "grouped");
+            proposedChanges.put("direction", direction);
+            proposedChanges.put("spacing", bestSpacing);
+            proposedChanges.put("elementsRepositioned", bestPositionCount);
+            proposedChanges.put("connectionsRouted", bestRoutedCount);
+            proposedChanges.put("groupsArranged", bestGroupsArranged);
+            proposedChanges.put("targetRating", targetRating);
+            proposedChanges.put("achievedRating", bestRating);
+            proposedChanges.put("iterationsPerformed", iterationsPerformed);
+            ProposalContext ctx = storeAsProposal(sessionId,
+                    "auto-layout-and-route", bestCompound, dto,
+                    bestCompound.getLabel(), null, proposedChanges,
+                    "Grouped layout with quality target '" + targetRating
+                    + "' computed — achieved '" + bestRating
+                    + "' after " + iterationsPerformed + " iteration(s).");
+            return new MutationResult<>(dto, null, ctx);
+        }
+
+        // Dispatch or queue
+        Integer batchSeq = dispatchOrQueue(sessionId, bestCompound,
+                bestCompound.getLabel());
+        if (batchSeq == null) {
+            versionCounter.incrementAndGet();
+        }
+        return new MutationResult<>(dto, batchSeq);
+    }
+
+    /**
+     * Attempts label optimization as a zero-layout-cost fallback (Story backlog-b12).
+     * Dispatches bestCompound temporarily, runs multi-trial label optimization,
+     * and if improved, merges label commands into bestCompound.
+     *
+     * @return result with updated metrics, or null if no fallback needed or no improvement
+     */
+    private LabelFallbackResult executeLabelFallback(
+            NonNotifyingCompoundCommand bestCompound,
+            String bestRating, int bestScore, int bestLabelsOptimized,
+            AssessLayoutResultDto bestAssessment, String targetRating,
+            String viewId, IArchimateDiagramModel diagramModel, IArchimateModel model) {
+
+        if (bestAssessment == null || bestAssessment.labelOverlapCount() == 0) {
+            return null;
+        }
+
+        Map<String, String> breakdown = bestAssessment.ratingBreakdown();
+        String labelRating = breakdown != null ? breakdown.get("labelOverlaps") : null;
+        if (labelRating == null || LayoutQualityAssessor.meetsTarget(labelRating, targetRating)) {
+            return null;
+        }
+
+        logger.info("Label fallback triggered: labelOverlaps rating='{}' < target='{}', overlaps={}",
+                labelRating, targetRating, bestAssessment.labelOverlapCount());
+
+        // Temporarily re-apply best layout to read EMF state
+        mutationDispatcher.dispatchImmediate(bestCompound);
+
+        LabelOptimizationPassResult labelResult =
+                computeLabelOptimizationPass(diagramModel, model, 10);
+
+        if (labelResult == null) {
+            // No label improvements found — undo best compound only
+            mutationDispatcher.undo(1);
+            return null;
+        }
+
+        int labelFallbackTrials = labelResult.trials;
+
+        // Apply label changes and re-assess
+        mutationDispatcher.dispatchImmediate(labelResult.compound);
+        AssessLayoutResultDto fallbackAssessment = assessLayout(viewId);
+        String fallbackRating = fallbackAssessment.overallRating();
+        int fallbackScore = fallbackAssessment.overlapCount()
+                + fallbackAssessment.edgeCrossingCount();
+
+        boolean improved =
+                LayoutQualityAssessor.ratingOrdinal(fallbackRating)
+                        > LayoutQualityAssessor.ratingOrdinal(bestRating)
+                || (LayoutQualityAssessor.ratingOrdinal(fallbackRating)
+                        == LayoutQualityAssessor.ratingOrdinal(bestRating)
+                    && fallbackScore < bestScore);
+
+        logger.info("Label fallback: {} trials, rating {} -> {}, labelOverlaps {} -> {}",
+                labelResult.trials, bestRating, fallbackRating,
+                bestAssessment.labelOverlapCount(),
+                fallbackAssessment.labelOverlapCount());
+
+        String resultRating = bestRating;
+        int resultScore = bestScore;
+        AssessLayoutResultDto resultAssessment = bestAssessment;
+        int resultLabelsOptimized = bestLabelsOptimized;
+
+        if (improved) {
+            // Merge label commands into bestCompound
+            for (Object cmd : labelResult.compound.getCommands()) {
+                bestCompound.add((Command) cmd);
+            }
+            resultRating = fallbackRating;
+            resultScore = fallbackScore;
+            resultAssessment = fallbackAssessment;
+
+            // Deduplicate label count: unique connections with SetTextPositionCommand
+            Set<String> optimizedLabelIds = new HashSet<>();
+            for (Object cmd : bestCompound.getCommands()) {
+                if (cmd instanceof SetTextPositionCommand stpc) {
+                    optimizedLabelIds.add(stpc.getConnection().getId());
+                }
+            }
+            resultLabelsOptimized = optimizedLabelIds.size();
+        }
+
+        // Undo label + best compound (2 dispatches)
+        mutationDispatcher.undo(2);
+
+        return new LabelFallbackResult(labelFallbackTrials, resultRating, resultScore,
+                resultAssessment, resultLabelsOptimized);
+    }
+
+    private AutoLayoutAndRouteResultDto buildQualityTargetDto(
+            String mode, String viewId, String direction, int spacing,
             int positionCount, int routedCount, boolean routerTypeSwitched,
-            int totalOperations, int labelsOptimized,
+            int totalOperations, int groupsArranged,
+            int labelsOptimized, int labelFallbackTrials,
             String targetRating, String achievedRating,
             int iterationsPerformed, AssessLayoutResultDto assessment) {
         AutoLayoutAssessmentSummaryDto summary = assessment != null
@@ -2406,11 +3933,93 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         assessment.overallRating(),
                         assessment.suggestions())
                 : null;
+
+        // Compute limiting factor when target not met (backlog-b13)
+        String limitingFactor = null;
+        String suggestedRemediation = null;
+        if (targetRating != null && !LayoutQualityAssessor.meetsTarget(achievedRating, targetRating)
+                && assessment != null && assessment.ratingBreakdown() != null) {
+            limitingFactor = findLimitingFactor(assessment);
+            if (limitingFactor != null) {
+                suggestedRemediation = getRemediation(limitingFactor);
+            }
+        }
+
         return new AutoLayoutAndRouteResultDto(
-                viewId, direction, spacing,
+                viewId, mode, direction, spacing,
                 positionCount, routedCount, routerTypeSwitched, totalOperations,
-                labelsOptimized, targetRating, achievedRating,
-                iterationsPerformed, summary);
+                groupsArranged, labelsOptimized, labelFallbackTrials,
+                targetRating, achievedRating,
+                iterationsPerformed, summary, limitingFactor, suggestedRemediation);
+    }
+
+    /**
+     * Finds the worst-performing metric from the rating breakdown (backlog-b13).
+     * Skips "overall" and "pass" ratings. Tie-breaks by count from the assessment.
+     * When counts are equal (e.g. spacing and alignment both have count 0),
+     * the first metric in iteration order wins (LinkedHashMap from LayoutQualityAssessor).
+     */
+    static String findLimitingFactor(AssessLayoutResultDto assessment) {
+        Map<String, String> breakdown = assessment.ratingBreakdown();
+        String worstMetric = null;
+        int worstOrdinal = Integer.MAX_VALUE;
+        int worstCount = -1;
+
+        for (Map.Entry<String, String> entry : breakdown.entrySet()) {
+            String metric = entry.getKey();
+            String rating = entry.getValue();
+
+            // Skip the aggregate "overall" entry and "pass" (not-applicable) metrics
+            if ("overall".equals(metric) || "pass".equals(rating)) {
+                continue;
+            }
+
+            int ordinal = LayoutQualityAssessor.ratingOrdinal(rating);
+            int count = getMetricCount(metric, assessment);
+
+            if (ordinal < worstOrdinal || (ordinal == worstOrdinal && count > worstCount)) {
+                worstOrdinal = ordinal;
+                worstCount = count;
+                worstMetric = metric;
+            }
+        }
+        return worstMetric;
+    }
+
+    /**
+     * Returns the count associated with a breakdown metric for tie-breaking (backlog-b13).
+     */
+    static int getMetricCount(String metric, AssessLayoutResultDto assessment) {
+        return switch (metric) {
+            case "overlaps" -> assessment.overlapCount();
+            case "edgeCrossings" -> assessment.edgeCrossingCount();
+            case "labelOverlaps" -> assessment.labelOverlapCount();
+            case "passThroughs" -> assessment.connectionPassThroughs() != null
+                    ? assessment.connectionPassThroughs().size() : 0;
+            default -> 0; // spacing, alignment — no direct count
+        };
+    }
+
+    /**
+     * Maps a limiting factor to an actionable remediation string (backlog-b13).
+     */
+    static String getRemediation(String limitingFactor) {
+        return switch (limitingFactor) {
+            case "labelOverlaps" -> "Use update-view-connection to set labelPosition "
+                    + "(source/middle/target) on overlapping labels, or suppress labels "
+                    + "with showLabel=false";
+            case "overlaps" -> "Increase spacing parameter or use layout-within-group "
+                    + "to reposition overlapping elements";
+            case "edgeCrossings" -> "Run optimize-group-order to reduce inter-group crossings, "
+                    + "or reposition hub elements manually";
+            case "passThroughs" -> "Reposition elements that connections pass through, "
+                    + "or increase spacing to create routing corridors";
+            case "spacing" -> "Increase the spacing parameter "
+                    + "(current spacing may be too tight for element count)";
+            case "alignment" -> "Use layout-within-group with consistent arrangement "
+                    + "to improve alignment within groups";
+            default -> "Review the assess-layout ratingBreakdown for details";
+        };
     }
 
     /**
@@ -2441,16 +4050,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         final List<FailedConnection> failedConnections;
         final List<MoveRecommendation> moveRecommendations;
         final int labelsOptimized;
+        /** Routed absolute bendpoints per connection ID (backlog-b14: crossing delta). */
+        final Map<String, List<AbsoluteBendpointDto>> routedPaths;
+        /** Straight-line crossing estimate (backlog-b22). */
+        final int straightLineCrossings;
 
         OrthogonalRoutingResult(List<Command> commands, int routedCount,
                 List<FailedConnection> failedConnections,
                 List<MoveRecommendation> moveRecommendations,
-                int labelsOptimized) {
+                int labelsOptimized,
+                Map<String, List<AbsoluteBendpointDto>> routedPaths,
+                int straightLineCrossings) {
             this.commands = commands;
             this.routedCount = routedCount;
             this.failedConnections = failedConnections;
             this.moveRecommendations = moveRecommendations;
             this.labelsOptimized = labelsOptimized;
+            this.routedPaths = new LinkedHashMap<>(routedPaths);
+            this.straightLineCrossings = straightLineCrossings;
         }
     }
 
@@ -2474,12 +4091,50 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         final NonNotifyingCompoundCommand compound;
         final int routedCount;
         final int labelsOptimized;
+        final boolean routerTypeSwitched;
 
         AutoRoutePassResult(NonNotifyingCompoundCommand compound, int routedCount,
-                int labelsOptimized) {
+                int labelsOptimized, boolean routerTypeSwitched) {
             this.compound = compound;
             this.routedCount = routedCount;
             this.labelsOptimized = labelsOptimized;
+            this.routerTypeSwitched = routerTypeSwitched;
+        }
+    }
+
+    /**
+     * Result from label optimization fallback (extracted from quality loops).
+     */
+    private static class LabelFallbackResult {
+        final int trials;
+        final String rating;
+        final int score;
+        final AssessLayoutResultDto assessment;
+        final int labelsOptimized;
+
+        LabelFallbackResult(int trials, String rating, int score,
+                AssessLayoutResultDto assessment, int labelsOptimized) {
+            this.trials = trials;
+            this.rating = rating;
+            this.score = score;
+            this.assessment = assessment;
+            this.labelsOptimized = labelsOptimized;
+        }
+    }
+
+    /**
+     * Result from computeLabelOptimizationPass (Story backlog-b12).
+     */
+    private static class LabelOptimizationPassResult {
+        final NonNotifyingCompoundCommand compound;
+        final int labelsOptimized;
+        final int trials;
+
+        LabelOptimizationPassResult(NonNotifyingCompoundCommand compound,
+                int labelsOptimized, int trials) {
+            this.compound = compound;
+            this.labelsOptimized = labelsOptimized;
+            this.trials = trials;
         }
     }
 
@@ -2503,7 +4158,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             PreparedMutation<ViewObjectDto> prepared =
                     prepareUpdateViewObject(pos.viewObjectId(),
                             pos.x(), pos.y(), pos.width(), pos.height(),
-                            null, null);
+                            null, null, null);
             commands.add(prepared.command());
             positionCount++;
         }
@@ -2547,7 +4202,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     tgtCenter[0], tgtCenter[1]);
 
             PreparedMutation<ViewConnectionDto> prepared =
-                    prepareUpdateViewConnectionDirect(archConn, relativeBendpoints, null);
+                    prepareUpdateViewConnectionDirect(archConn, relativeBendpoints, null, null, null, null);
             commands.add(prepared.command());
             routedCount++;
         }
@@ -2599,7 +4254,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             IArchimateDiagramModel diagramModel,
             List<IDiagramModelConnection> targetConnections,
             List<AssessmentNode> nodes,
-            boolean force) {
+            boolean force, int snapThreshold, int perimeterMargin) {
 
         Map<String, AssessmentNode> nodeMap = new LinkedHashMap<>();
         for (AssessmentNode node : nodes) {
@@ -2607,7 +4262,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         // Build batch routing input with per-connection obstacle exclusion
-        RoutingPipeline pipeline = new RoutingPipeline();
+        RoutingPipeline pipeline = new RoutingPipeline(
+                RoutingPipeline.DEFAULT_BEND_PENALTY, RoutingPipeline.DEFAULT_MARGIN,
+                RoutingPipeline.DEFAULT_CONGESTION_WEIGHT, perimeterMargin);
         List<RoutingPipeline.ConnectionEndpoints> batchInput = new ArrayList<>();
         List<IDiagramModelArchimateConnection> batchConnections = new ArrayList<>();
 
@@ -2640,8 +4297,25 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             excludeIds.addAll(getChildIds(tgtNode.id(), nodes));
 
             List<RoutingRect> obstacles = new ArrayList<>();
+            // B43-b: Build per-connection group boundaries for group-wall clearance cost.
+            // Exclude groups that are ancestors of either endpoint (connections inside a group
+            // should not see their own group wall as a clearance boundary).
+            List<RoutingRect> groupBoundaries = new ArrayList<>();
             for (AssessmentNode node : nodes) {
-                if (!excludeIds.contains(node.id()) && !node.isGroup()) {
+                if (excludeIds.contains(node.id())) {
+                    continue;
+                }
+                // Notes are not routing obstacles — routing should use all
+                // available space; note placement adjusts to avoid connections.
+                if (node.isNote()) {
+                    continue;
+                }
+                if (node.isGroup()) {
+                    groupBoundaries.add(new RoutingRect(
+                            (int) node.x(), (int) node.y(),
+                            (int) node.width(), (int) node.height(),
+                            node.id()));
+                } else {
                     obstacles.add(new RoutingRect(
                             (int) node.x(), (int) node.y(),
                             (int) node.width(), (int) node.height(),
@@ -2667,13 +4341,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             batchInput.add(new RoutingPipeline.ConnectionEndpoints(
                     archConn.getId(), srcRect, tgtRect, obstacles,
-                    labelText, archConn.getTextPosition()));
+                    labelText, archConn.getTextPosition(), groupBoundaries));
             batchConnections.add(archConn);
         }
 
         if (batchInput.isEmpty()) {
             return new OrthogonalRoutingResult(
-                    List.of(), 0, List.of(), List.of(), 0);
+                    List.of(), 0, List.of(), List.of(), 0, Map.of(), 0);
         }
 
         // Build unified obstacle list for corridor width and neighbor collision checks.
@@ -2712,7 +4386,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         // Route all connections with path ordering and edge nudging
         RoutingResult routingResult =
-                pipeline.routeAllConnections(batchInput, allObstacles, labelExcludeSets);
+                pipeline.routeAllConnections(batchInput, allObstacles, labelExcludeSets, snapThreshold);
 
         // Build routes to apply based on force mode
         Map<String, List<AbsoluteBendpointDto>> routesToApply;
@@ -2743,7 +4417,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     absBendpoints, srcCX, srcCY, tgtCX, tgtCY);
 
             PreparedMutation<ViewConnectionDto> prepared =
-                    prepareUpdateViewConnectionDirect(archConn, relativeBendpoints, null);
+                    prepareUpdateViewConnectionDirect(archConn, relativeBendpoints, null, null, null, null);
             commands.add(prepared.command());
             routedCount++;
         }
@@ -2767,7 +4441,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return new OrthogonalRoutingResult(
                 commands, routedCount,
                 routingResult.failed(), routingResult.recommendations(),
-                routingResult.labelsOptimized());
+                routingResult.labelsOptimized(), routesToApply,
+                routingResult.straightLineCrossings());
     }
 
     /**
@@ -2966,7 +4641,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         // Route via shared helper (force=true for best quality during iteration)
         OrthogonalRoutingResult routeResult = buildOrthogonalRoutingCommands(
-                diagramModel, allConnections, nodes, true);
+                diagramModel, allConnections, nodes, true, RoutingPipeline.DEFAULT_SNAP_THRESHOLD,
+                RoutingPipeline.DEFAULT_PERIMETER_MARGIN);
         if (routeResult.commands.isEmpty()) {
             return null;
         }
@@ -2974,11 +4650,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         List<Command> commands = new ArrayList<>(routeResult.commands);
 
         // Switch to bendpoint mode if needed
+        boolean routerTypeSwitched = false;
         int currentRouterType = diagramModel.getConnectionRouterType();
         if (currentRouterType != IDiagramModel.CONNECTION_ROUTER_BENDPOINT) {
             commands.add(new UpdateViewCommand(diagramModel,
                     null, null, false, null, null,
                     IDiagramModel.CONNECTION_ROUTER_BENDPOINT));
+            routerTypeSwitched = true;
         }
 
         String label = "Auto-route connections (re-route after optimize-group-order, "
@@ -2987,7 +4665,159 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 new NonNotifyingCompoundCommand(label);
         commands.forEach(compound::add);
         return new AutoRoutePassResult(compound, routeResult.routedCount,
-                routeResult.labelsOptimized);
+                routeResult.labelsOptimized, routerTypeSwitched);
+    }
+
+    /**
+     * Computes a standalone label optimization pass (Story backlog-b12).
+     * Reads current EMF state (element positions and connection bendpoints),
+     * runs multi-trial label position optimization, and returns commands to
+     * apply the best label positions found.
+     *
+     * <p>This method does NOT re-route connections — it only changes label
+     * text positions via {@link SetTextPositionCommand}.</p>
+     *
+     * @param diagramModel the diagram to optimize labels for
+     * @param model        the parent ArchiMate model
+     * @param trials       number of optimization trials to run
+     * @return result with compound command and optimization counts, or null if no improvements
+     */
+    private LabelOptimizationPassResult computeLabelOptimizationPass(
+            IArchimateDiagramModel diagramModel, IArchimateModel model, int trials) {
+
+        List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(diagramModel);
+        List<IDiagramModelConnection> allConnections =
+                AssessmentCollector.collectAllConnections(diagramModel);
+        if (allConnections.isEmpty()) {
+            return null;
+        }
+
+        // Build node map for ancestor/child lookups
+        Map<String, AssessmentNode> nodeMap = new LinkedHashMap<>();
+        for (AssessmentNode node : nodes) {
+            nodeMap.put(node.id(), node);
+        }
+
+        // Build optimizer inputs: ConnectionEndpoints + paths from current EMF state
+        List<RoutingPipeline.ConnectionEndpoints> batchInput = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> batchPaths = new ArrayList<>();
+        List<IDiagramModelArchimateConnection> batchConnections = new ArrayList<>();
+
+        for (IDiagramModelConnection conn : allConnections) {
+            if (!(conn instanceof IDiagramModelArchimateConnection archConn)) {
+                continue;
+            }
+
+            IConnectable srcConn = conn.getSource();
+            IConnectable tgtConn = conn.getTarget();
+            if (!(srcConn instanceof IDiagramModelObject)
+                    || !(tgtConn instanceof IDiagramModelObject)) {
+                continue;
+            }
+
+            AssessmentNode srcNode = nodeMap.get(srcConn.getId());
+            AssessmentNode tgtNode = nodeMap.get(tgtConn.getId());
+            if (srcNode == null || tgtNode == null) {
+                continue;
+            }
+
+            // Extract label text
+            String labelText = "";
+            IArchimateRelationship connRel = archConn.getArchimateRelationship();
+            if (connRel != null && connRel.getName() != null) {
+                labelText = connRel.getName();
+            }
+            if (labelText.isEmpty()) {
+                continue; // skip unlabeled connections
+            }
+
+            RoutingRect srcRect = new RoutingRect(
+                    (int) srcNode.x(), (int) srcNode.y(),
+                    (int) srcNode.width(), (int) srcNode.height(),
+                    srcNode.id());
+            RoutingRect tgtRect = new RoutingRect(
+                    (int) tgtNode.x(), (int) tgtNode.y(),
+                    (int) tgtNode.width(), (int) tgtNode.height(),
+                    tgtNode.id());
+
+            // Read current bendpoints from EMF state (absolute coordinates in bendpoint mode)
+            List<AbsoluteBendpointDto> path = new ArrayList<>();
+            for (IDiagramModelBendpoint bp : conn.getBendpoints()) {
+                path.add(new AbsoluteBendpointDto(bp.getStartX(), bp.getStartY()));
+            }
+
+            batchInput.add(new RoutingPipeline.ConnectionEndpoints(
+                    archConn.getId(), srcRect, tgtRect, List.of(),
+                    labelText, archConn.getTextPosition()));
+            batchPaths.add(path);
+            batchConnections.add(archConn);
+        }
+
+        if (batchInput.isEmpty()) {
+            return null;
+        }
+
+        // Build obstacle list (non-group elements)
+        List<RoutingRect> allObstacles = new ArrayList<>();
+        for (AssessmentNode node : nodes) {
+            if (!node.isGroup()) {
+                allObstacles.add(new RoutingRect(
+                        (int) node.x(), (int) node.y(),
+                        (int) node.width(), (int) node.height(),
+                        node.id()));
+            }
+        }
+
+        // Build per-connection label exclusion sets
+        Map<String, Set<String>> labelExcludeSets = new LinkedHashMap<>();
+        for (RoutingPipeline.ConnectionEndpoints conn : batchInput) {
+            Set<String> excludeIds = new HashSet<>();
+            if (conn.source().id() != null) {
+                excludeIds.add(conn.source().id());
+                excludeIds.addAll(getAncestorIds(conn.source().id(), nodeMap, nodes));
+                excludeIds.addAll(getChildIds(conn.source().id(), nodes));
+            }
+            if (conn.target().id() != null) {
+                excludeIds.add(conn.target().id());
+                excludeIds.addAll(getAncestorIds(conn.target().id(), nodeMap, nodes));
+                excludeIds.addAll(getChildIds(conn.target().id(), nodes));
+            }
+            labelExcludeSets.put(conn.connectionId(), excludeIds);
+        }
+
+        // Run multi-trial optimization (seeded for reproducibility given same EMF state)
+        LabelPositionOptimizer optimizer = new LabelPositionOptimizer();
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                batchInput, batchPaths, allObstacles, labelExcludeSets,
+                trials, new Random(batchInput.size() * 31L + allObstacles.size()));
+
+        if (result.changedPositions().isEmpty()) {
+            return null;
+        }
+
+        // Build SetTextPositionCommands for changed positions
+        Map<String, IDiagramModelArchimateConnection> connLookup = new LinkedHashMap<>();
+        for (IDiagramModelArchimateConnection archConn : batchConnections) {
+            connLookup.put(archConn.getId(), archConn);
+        }
+
+        List<Command> commands = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : result.changedPositions().entrySet()) {
+            IDiagramModelArchimateConnection conn = connLookup.get(entry.getKey());
+            if (conn != null && conn.getTextPosition() != entry.getValue()) {
+                commands.add(new SetTextPositionCommand(conn, entry.getValue()));
+            }
+        }
+
+        if (commands.isEmpty()) {
+            return null;
+        }
+
+        NonNotifyingCompoundCommand compound =
+                new NonNotifyingCompoundCommand("Label optimization fallback ("
+                        + commands.size() + " labels, " + trials + " trials)");
+        commands.forEach(compound::add);
+        return new LabelOptimizationPassResult(compound, commands.size(), trials);
     }
 
     /**
@@ -3067,7 +4897,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
-            List<String> elementIds, List<String> relationshipTypes) {
+            List<String> elementIds, List<String> relationshipTypes,
+            Boolean showLabel) {
         logger.info("Auto-connect view: viewId={}, elementIds={}, relationshipTypes={}",
                 viewId, elementIds != null ? elementIds.size() : "all",
                 relationshipTypes != null ? relationshipTypes.size() : "all");
@@ -3150,6 +4981,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
                 // Scan source relationships
                 for (IArchimateRelationship rel : element.getSourceRelationships()) {
+                    // B19: skip orphaned relationships (not in containment tree)
+                    if (rel.eContainer() == null) continue;
+
                     String relId = rel.getId();
                     if (processedRelationships.contains(relId)) continue;
                     processedRelationships.add(relId);
@@ -3185,6 +5019,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             IArchimateFactory.eINSTANCE
                                     .createDiagramModelArchimateConnection();
                     conn.setArchimateRelationship(rel);
+                    if (showLabel != null) {
+                        conn.setNameVisible(showLabel);
+                    }
                     commands.add(new AddConnectionToViewCommand(
                             conn, viewObject, targetViewObj));
                     connectedRelationshipIds.add(relId);
@@ -3192,6 +5029,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
                 // Scan target relationships
                 for (IArchimateRelationship rel : element.getTargetRelationships()) {
+                    // B19: skip orphaned relationships (not in containment tree)
+                    if (rel.eContainer() == null) continue;
+
                     String relId = rel.getId();
                     if (processedRelationships.contains(relId)) continue;
                     processedRelationships.add(relId);
@@ -3227,6 +5067,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             IArchimateFactory.eINSTANCE
                                     .createDiagramModelArchimateConnection();
                     conn.setArchimateRelationship(rel);
+                    if (showLabel != null) {
+                        conn.setNameVisible(showLabel);
+                    }
                     commands.add(new AddConnectionToViewCommand(
                             conn, sourceViewObj, viewObject));
                     connectedRelationshipIds.add(relId);
@@ -3347,20 +5190,17 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     // ---- Layout within group (Story 9-9) ----
 
-    /** Default spacing between elements in pixels. */
-    private static final int DEFAULT_GROUP_SPACING = 20;
+    /** Default spacing between elements in pixels (increased from 20 for routing corridors — B30). */
+    private static final int DEFAULT_GROUP_SPACING = 40;
     /** Default padding from group edges in pixels. */
     private static final int DEFAULT_GROUP_PADDING = 10;
     /** Approximate height of the group label bar in Archi's rendering. */
     private static final int GROUP_LABEL_HEIGHT = 24;
-    /** Average character width in pixels for Archi's ~9pt sans-serif font. */
-    static final int AVG_CHAR_WIDTH = 7;
-    /** Horizontal padding for element icon space + text margins. */
-    static final int HORIZONTAL_PADDING = 30;
-    /** Minimum auto-computed width to prevent degenerate sizing. */
-    static final int MIN_AUTO_WIDTH = 60;
-    /** Default width for elements with null/empty names (Archi's default). */
-    static final int DEFAULT_ELEMENT_WIDTH = 120;
+    // Auto-width constants delegated to GroupLayoutCalculator (B30)
+    static final int AVG_CHAR_WIDTH = GroupLayoutCalculator.AVG_CHAR_WIDTH;
+    static final int HORIZONTAL_PADDING = GroupLayoutCalculator.HORIZONTAL_PADDING;
+    static final int MIN_AUTO_WIDTH = GroupLayoutCalculator.MIN_AUTO_WIDTH;
+    static final int DEFAULT_ELEMENT_WIDTH = GroupLayoutCalculator.DEFAULT_ELEMENT_WIDTH;
 
     /** Maximum recursion depth for recursive auto-resize (Story 11-18). */
     private static final int MAX_RECURSIVE_RESIZE_DEPTH = 10;
@@ -3492,7 +5332,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             case "grid":
                 IBounds groupBounds = group.getBounds();
                 int groupWidth = groupBounds.getWidth();
-                GridLayoutResult gridResult = computeGridLayout(children, startX, startY,
+                GroupLayoutCalculator.GridLayoutResult gridResult = computeGridLayout(children, startX, startY,
                         resolvedSpacing, resolvedPadding, groupWidth,
                         elementWidth, elementHeight, effectiveAutoWidth, columns);
                 positions = gridResult.positions();
@@ -3593,13 +5433,694 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
     }
 
+    // ---- layout-flat-view (Story 13-6) ----
+
+    private static final int DEFAULT_FLAT_VIEW_SPACING = 40;
+    private static final int DEFAULT_FLAT_VIEW_PADDING = 20;
+    private static final int CATEGORY_SPACING_MULTIPLIER = 2;
+    private static final int ELEMENT_LABEL_HEIGHT = 25;
+
+    /** Standard ArchiMate layer ordering for sort/category purposes. */
+    private static final List<String> LAYER_ORDER = List.of(
+            "Strategy", "Business", "Application", "Technology",
+            "Physical", "Implementation & Migration", "Motivation", "Other");
+
+    @Override
+    public MutationResult<LayoutFlatViewResultDto> layoutFlatView(
+            String sessionId, String viewId, String arrangement,
+            Integer spacing, Integer padding, String sortBy,
+            String categoryField, Integer columns,
+            boolean autoLayoutChildren) {
+        logger.info("Layout flat view: viewId={}, arrangement={}, sortBy={}, categoryField={}",
+                viewId, arrangement, sortBy, categoryField);
+        IArchimateModel model = requireAndCaptureModel();
+
+        try {
+            // 1. Validate view
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel diagramModel)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId, ErrorCode.VIEW_NOT_FOUND);
+            }
+
+            // 2. Validate arrangement
+            if (arrangement == null || arrangement.isBlank()) {
+                throw new ModelAccessException(
+                        "Parameter 'arrangement' is required. Valid values: row, column, grid.",
+                        ErrorCode.INVALID_PARAMETER);
+            }
+            String normalizedArrangement = arrangement.toLowerCase().trim();
+            if (!"row".equals(normalizedArrangement)
+                    && !"column".equals(normalizedArrangement)
+                    && !"grid".equals(normalizedArrangement)) {
+                throw new ModelAccessException(
+                        "Invalid arrangement: '" + arrangement
+                                + "'. Valid values: row, column, grid.",
+                        ErrorCode.INVALID_PARAMETER);
+            }
+
+            // 3. Validate optional parameters
+            if (spacing != null && spacing < 0) {
+                throw new ModelAccessException(
+                        "spacing must be non-negative", ErrorCode.INVALID_PARAMETER);
+            }
+            if (padding != null && padding < 0) {
+                throw new ModelAccessException(
+                        "padding must be non-negative", ErrorCode.INVALID_PARAMETER);
+            }
+            if (columns != null && columns < 1) {
+                throw new ModelAccessException(
+                        "columns must be positive (>= 1)", ErrorCode.INVALID_PARAMETER);
+            }
+            if (sortBy != null && !sortBy.isBlank()) {
+                String normalizedSort = sortBy.toLowerCase().trim();
+                if (!"name".equals(normalizedSort) && !"type".equals(normalizedSort)
+                        && !"layer".equals(normalizedSort)) {
+                    throw new ModelAccessException(
+                            "Invalid sortBy: '" + sortBy
+                                    + "'. Valid values: name, type, layer.",
+                            ErrorCode.INVALID_PARAMETER);
+                }
+            }
+            if (categoryField != null && !categoryField.isBlank()) {
+                String normalizedCategory = categoryField.toLowerCase().trim();
+                if (!"type".equals(normalizedCategory) && !"layer".equals(normalizedCategory)) {
+                    throw new ModelAccessException(
+                            "Invalid categoryField: '" + categoryField
+                                    + "'. Valid values: type, layer.",
+                            ErrorCode.INVALID_PARAMETER);
+                }
+            }
+
+            int resolvedSpacing = (spacing != null) ? spacing : DEFAULT_FLAT_VIEW_SPACING;
+            int resolvedPadding = (padding != null) ? padding : DEFAULT_FLAT_VIEW_PADDING;
+
+            // 4. Collect top-level elements (skip notes)
+            List<IDiagramModelObject> topLevelElements = new ArrayList<>();
+            for (IDiagramModelObject child : diagramModel.getChildren()) {
+                if (child instanceof IDiagramModelNote) {
+                    continue; // Notes are not laid out
+                }
+                topLevelElements.add(child);
+            }
+
+            if (topLevelElements.isEmpty()) {
+                throw new ModelAccessException(
+                        "View has no top-level elements to layout",
+                        ErrorCode.INVALID_PARAMETER);
+            }
+
+            // 5. Sort elements if requested
+            String normalizedSort = (sortBy != null && !sortBy.isBlank())
+                    ? sortBy.toLowerCase().trim() : null;
+            if (normalizedSort != null) {
+                sortFlatViewElements(topLevelElements, normalizedSort);
+            }
+
+            // 6. Compute positions (with or without category grouping)
+            String normalizedCategory = (categoryField != null && !categoryField.isBlank())
+                    ? categoryField.toLowerCase().trim() : null;
+            List<int[]> positions;
+            List<String> categories = null;
+            Integer columnsUsed = null;
+
+            if (normalizedCategory != null) {
+                // Category-based layout: partition elements by category, lay out each section
+                FlatCategoryLayoutResult catResult = computeFlatCategoryLayout(
+                        topLevelElements, normalizedArrangement, normalizedCategory,
+                        resolvedSpacing, resolvedPadding, columns);
+                positions = catResult.positions();
+                categories = catResult.categories();
+                columnsUsed = catResult.columnsUsed();
+                // Re-order topLevelElements to match category-sorted order
+                topLevelElements = catResult.orderedElements();
+            } else {
+                // Simple layout: all elements in one group
+                positions = computeFlatPositions(topLevelElements, normalizedArrangement,
+                        resolvedSpacing, resolvedPadding, columns);
+                if ("grid".equals(normalizedArrangement)) {
+                    columnsUsed = computeFlatGridColumns(topLevelElements, columns);
+                }
+            }
+
+            // 7. Auto-layout embedded children within parent elements (B20)
+            int childrenRepositioned = 0;
+            // Maps parent index -> child positions (for command building)
+            Map<Integer, List<int[]>> parentChildPositions = new LinkedHashMap<>();
+            // Maps parent index -> list of child objects
+            Map<Integer, List<IDiagramModelObject>> parentChildObjects = new LinkedHashMap<>();
+
+            if (autoLayoutChildren) {
+                boolean anyParentResized = false;
+
+                for (int i = 0; i < topLevelElements.size(); i++) {
+                    IDiagramModelObject element = topLevelElements.get(i);
+                    if (!(element instanceof IDiagramModelContainer container)) {
+                        continue;
+                    }
+                    // Collect non-note children
+                    List<IDiagramModelObject> children = new ArrayList<>();
+                    for (IDiagramModelObject child : container.getChildren()) {
+                        if (!(child instanceof IDiagramModelNote)) {
+                            children.add(child);
+                        }
+                    }
+                    if (children.isEmpty()) {
+                        continue;
+                    }
+
+                    // Compute column layout for children within parent bounds (relative coords)
+                    int childStartX = DEFAULT_GROUP_PADDING;
+                    int childStartY = ELEMENT_LABEL_HEIGHT;
+                    List<int[]> childPositions = computeColumnLayout(children,
+                            childStartX, childStartY, DEFAULT_GROUP_SPACING,
+                            null, null, false);
+
+                    parentChildPositions.put(i, childPositions);
+                    parentChildObjects.put(i, children);
+                    childrenRepositioned += children.size();
+
+                    // Check if children exceed parent bounds and resize if needed
+                    int[] autoSize = computeAutoResizeDimensions(childPositions,
+                            DEFAULT_GROUP_PADDING, ELEMENT_LABEL_HEIGHT);
+                    int[] pos = positions.get(i);
+                    int currentWidth = pos[2];
+                    int currentHeight = pos[3];
+
+                    if (autoSize[0] > currentWidth || autoSize[1] > currentHeight) {
+                        int newWidth = Math.max(currentWidth, autoSize[0]);
+                        int newHeight = Math.max(currentHeight, autoSize[1]);
+                        positions.set(i, new int[]{pos[0], pos[1], newWidth, newHeight});
+                        anyParentResized = true;
+                    }
+                }
+
+                // Re-layout top-level elements if any parent was resized (AC-3)
+                // Must use positions array's sizes (not getBounds()) since parents were resized
+                if (anyParentResized) {
+                    if (normalizedCategory != null) {
+                        recomputeFlatCategoryPositionsInPlace(positions, topLevelElements,
+                                normalizedArrangement, normalizedCategory,
+                                resolvedSpacing, resolvedPadding, columns);
+                    } else {
+                        recomputeFlatPositionsInPlace(positions, normalizedArrangement,
+                                resolvedSpacing, resolvedPadding, columns);
+                    }
+                }
+            }
+
+            // 8. Build commands
+            List<Command> commands = new ArrayList<>();
+            for (int i = 0; i < topLevelElements.size(); i++) {
+                IDiagramModelObject element = topLevelElements.get(i);
+                int[] pos = positions.get(i);
+                commands.add(new UpdateViewObjectCommand(element,
+                        pos[0], pos[1], pos[2], pos[3]));
+            }
+
+            // Add child repositioning commands
+            for (Map.Entry<Integer, List<int[]>> entry : parentChildPositions.entrySet()) {
+                List<IDiagramModelObject> children = parentChildObjects.get(entry.getKey());
+                List<int[]> childPositions = entry.getValue();
+                for (int j = 0; j < children.size(); j++) {
+                    IDiagramModelObject child = children.get(j);
+                    int[] childPos = childPositions.get(j);
+                    commands.add(new UpdateViewObjectCommand(child,
+                            childPos[0], childPos[1], childPos[2], childPos[3]));
+                }
+            }
+
+            // 9. Build compound command and result DTO
+            String label = "Layout flat view ("
+                    + normalizedArrangement + ", "
+                    + topLevelElements.size() + " elements"
+                    + (childrenRepositioned > 0 ? ", " + childrenRepositioned + " children" : "")
+                    + (normalizedSort != null ? ", sorted by " + normalizedSort : "")
+                    + (normalizedCategory != null ? ", grouped by " + normalizedCategory : "")
+                    + ")";
+
+            NonNotifyingCompoundCommand compound =
+                    new NonNotifyingCompoundCommand(label);
+            commands.forEach(compound::add);
+
+            LayoutFlatViewResultDto dto = new LayoutFlatViewResultDto(
+                    viewId, normalizedArrangement, topLevelElements.size(),
+                    childrenRepositioned,
+                    normalizedSort, normalizedCategory, categories, columnsUsed);
+
+            // 10. Approval gate
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                proposedChanges.put("arrangement", normalizedArrangement);
+                proposedChanges.put("elementsRepositioned", topLevelElements.size());
+                if (childrenRepositioned > 0) proposedChanges.put("childrenRepositioned", childrenRepositioned);
+                if (normalizedSort != null) proposedChanges.put("sortBy", normalizedSort);
+                if (normalizedCategory != null) proposedChanges.put("categoryField", normalizedCategory);
+                ProposalContext ctx = storeAsProposal(sessionId,
+                        "layout-flat-view", compound, dto, label,
+                        null, proposedChanges,
+                        "Flat view layout computed and ready for application.");
+                return new MutationResult<>(dto, null, ctx);
+            }
+
+            // 11. Dispatch or queue
+            Integer batchSeq = dispatchOrQueue(sessionId, compound, label);
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+
+            return new MutationResult<>(dto, batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException
+                | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error computing/applying flat view layout for view '"
+                    + (viewId != null ? viewId : "<null>") + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Sorts flat view elements by name, type, or layer.
+     */
+    private void sortFlatViewElements(List<IDiagramModelObject> elements, String sortBy) {
+        elements.sort((a, b) -> {
+            String aVal = getFlatViewSortKey(a, sortBy);
+            String bVal = getFlatViewSortKey(b, sortBy);
+            return aVal.compareToIgnoreCase(bVal);
+        });
+    }
+
+    private String getFlatViewSortKey(IDiagramModelObject obj, String sortBy) {
+        if (obj instanceof IDiagramModelArchimateObject archObj) {
+            IArchimateElement element = archObj.getArchimateElement();
+            switch (sortBy) {
+            case "name":
+                return element.getName() != null ? element.getName() : "";
+            case "type":
+                return element.eClass().getName();
+            case "layer":
+                String layer = resolveLayer(element);
+                int idx = LAYER_ORDER.indexOf(layer);
+                // Pad with leading zeros for correct sort order, then append name for stability
+                return String.format("%02d-%s", idx >= 0 ? idx : 99,
+                        element.getName() != null ? element.getName() : "");
+            default:
+                return element.getName() != null ? element.getName() : "";
+            }
+        }
+        // Groups and other non-archimate objects: sort by name
+        if (obj instanceof IDiagramModelGroup group) {
+            return switch (sortBy) {
+                case "type" -> "ZZGroup"; // Groups sort last by type
+                case "layer" -> String.format("%02d-%s", 99,
+                        group.getName() != null ? group.getName() : "");
+                default -> group.getName() != null ? group.getName() : "";
+            };
+        }
+        return "";
+    }
+
+    private String getFlatViewCategoryValue(IDiagramModelObject obj, String categoryField) {
+        if (obj instanceof IDiagramModelArchimateObject archObj) {
+            IArchimateElement element = archObj.getArchimateElement();
+            return switch (categoryField) {
+                case "type" -> element.eClass().getName();
+                case "layer" -> resolveLayer(element);
+                default -> "Other";
+            };
+        }
+        if (obj instanceof IDiagramModelGroup) {
+            return switch (categoryField) {
+                case "type" -> "Group";
+                case "layer" -> "Other";
+                default -> "Other";
+            };
+        }
+        return "Other";
+    }
+
+    /** Result of category-based flat layout computation. */
+    private record FlatCategoryLayoutResult(
+            List<int[]> positions,
+            List<String> categories,
+            List<IDiagramModelObject> orderedElements,
+            Integer columnsUsed) {}
+
+    /**
+     * Computes positions for elements grouped by category.
+     * Each category section is laid out separately with extra spacing between sections.
+     */
+    private FlatCategoryLayoutResult computeFlatCategoryLayout(
+            List<IDiagramModelObject> elements, String arrangement,
+            String categoryField, int spacing, int padding, Integer columns) {
+
+        // Partition elements by category, preserving order within each category
+        Map<String, List<IDiagramModelObject>> categoryMap = new LinkedHashMap<>();
+        for (IDiagramModelObject obj : elements) {
+            String category = getFlatViewCategoryValue(obj, categoryField);
+            categoryMap.computeIfAbsent(category, k -> new ArrayList<>()).add(obj);
+        }
+
+        // Sort categories: for layer use standard layer order, for type use alphabetical
+        List<String> sortedCategories;
+        if ("layer".equals(categoryField)) {
+            sortedCategories = new ArrayList<>(categoryMap.keySet());
+            sortedCategories.sort((a, b) -> {
+                int idxA = LAYER_ORDER.indexOf(a);
+                int idxB = LAYER_ORDER.indexOf(b);
+                return Integer.compare(idxA >= 0 ? idxA : 99, idxB >= 0 ? idxB : 99);
+            });
+        } else {
+            sortedCategories = new ArrayList<>(categoryMap.keySet());
+            sortedCategories.sort(String::compareToIgnoreCase);
+        }
+
+        int categorySpacing = spacing * CATEGORY_SPACING_MULTIPLIER;
+        List<int[]> allPositions = new ArrayList<>();
+        List<IDiagramModelObject> orderedElements = new ArrayList<>();
+        Integer columnsUsed = null;
+
+        // Layout each category section
+        int currentX = padding;
+        int currentY = padding;
+
+        for (String category : sortedCategories) {
+            List<IDiagramModelObject> catElements = categoryMap.get(category);
+            orderedElements.addAll(catElements);
+
+            // Compute positions for this category section
+            List<int[]> sectionPositions;
+            switch (arrangement) {
+            case "row":
+                sectionPositions = computeFlatRowPositions(catElements, currentX, currentY, spacing);
+                allPositions.addAll(sectionPositions);
+                // Next category starts below this row
+                int rowMaxH = sectionPositions.stream()
+                        .mapToInt(p -> p[3]).max().orElse(0);
+                currentY += rowMaxH + categorySpacing;
+                break;
+            case "column":
+                sectionPositions = computeFlatColumnPositions(catElements, currentX, currentY, spacing);
+                allPositions.addAll(sectionPositions);
+                // Next category starts to the right of this column
+                int colMaxW = sectionPositions.stream()
+                        .mapToInt(p -> p[2]).max().orElse(0);
+                currentX += colMaxW + categorySpacing;
+                break;
+            case "grid":
+                int cols = computeFlatGridColumns(catElements, columns);
+                if (columnsUsed == null || cols > columnsUsed) {
+                    columnsUsed = cols; // Track max across categories (varies when auto-detected)
+                }
+                FlatGridResult gridResult = computeFlatGridPositions(
+                        catElements, currentX, currentY, spacing, cols);
+                allPositions.addAll(gridResult.positions());
+                // Next category starts below this grid
+                currentY = gridResult.maxY() + categorySpacing;
+                break;
+            }
+        }
+
+        return new FlatCategoryLayoutResult(allPositions, sortedCategories,
+                orderedElements, columnsUsed);
+    }
+
+    /**
+     * Computes positions for all elements without category grouping.
+     */
+    private List<int[]> computeFlatPositions(
+            List<IDiagramModelObject> elements, String arrangement,
+            int spacing, int padding, Integer columns) {
+        switch (arrangement) {
+        case "row":
+            return computeFlatRowPositions(elements, padding, padding, spacing);
+        case "column":
+            return computeFlatColumnPositions(elements, padding, padding, spacing);
+        case "grid":
+            int cols = computeFlatGridColumns(elements, columns);
+            return computeFlatGridPositions(elements, padding, padding, spacing, cols).positions();
+        default:
+            return computeFlatRowPositions(elements, padding, padding, spacing);
+        }
+    }
+
+    /** Row layout: elements placed left-to-right, preserving current sizes. */
+    private List<int[]> computeFlatRowPositions(
+            List<IDiagramModelObject> elements, int startX, int startY, int spacing) {
+        List<int[]> positions = new ArrayList<>();
+        int currentX = startX;
+        for (IDiagramModelObject element : elements) {
+            IBounds bounds = element.getBounds();
+            int w = bounds.getWidth();
+            int h = bounds.getHeight();
+            positions.add(new int[]{currentX, startY, w, h});
+            currentX += w + spacing;
+        }
+        return positions;
+    }
+
+    /** Column layout: elements placed top-to-bottom, preserving current sizes. */
+    private List<int[]> computeFlatColumnPositions(
+            List<IDiagramModelObject> elements, int startX, int startY, int spacing) {
+        List<int[]> positions = new ArrayList<>();
+        int currentY = startY;
+        for (IDiagramModelObject element : elements) {
+            IBounds bounds = element.getBounds();
+            int w = bounds.getWidth();
+            int h = bounds.getHeight();
+            positions.add(new int[]{startX, currentY, w, h});
+            currentY += h + spacing;
+        }
+        return positions;
+    }
+
+    /** Determines grid column count: explicit, or auto-detected from element count. */
+    private int computeFlatGridColumns(List<IDiagramModelObject> elements, Integer columns) {
+        if (columns != null) {
+            return Math.min(columns, elements.size());
+        }
+        // Auto-detect: ceil(sqrt(n)) gives a roughly square grid
+        return Math.max(1, (int) Math.ceil(Math.sqrt(elements.size())));
+    }
+
+    private record FlatGridResult(List<int[]> positions, int maxY) {}
+
+    /** Grid layout: elements in rows and columns, using max width/height for uniform cells. */
+    private FlatGridResult computeFlatGridPositions(
+            List<IDiagramModelObject> elements, int startX, int startY,
+            int spacing, int cols) {
+        // Determine max cell size for uniform grid
+        int maxW = 0;
+        int maxH = 0;
+        for (IDiagramModelObject element : elements) {
+            IBounds bounds = element.getBounds();
+            maxW = Math.max(maxW, bounds.getWidth());
+            maxH = Math.max(maxH, bounds.getHeight());
+        }
+
+        List<int[]> positions = new ArrayList<>();
+        int currentX = startX;
+        int currentY = startY;
+        int col = 0;
+
+        for (IDiagramModelObject element : elements) {
+            IBounds bounds = element.getBounds();
+            // Preserve actual size but use uniform grid cell spacing
+            positions.add(new int[]{currentX, currentY, bounds.getWidth(), bounds.getHeight()});
+
+            col++;
+            if (col >= cols) {
+                col = 0;
+                currentX = startX;
+                currentY += maxH + spacing;
+            } else {
+                currentX += maxW + spacing;
+            }
+        }
+
+        // Calculate maxY: bottom of last row
+        int lastRowY = positions.isEmpty() ? startY
+                : positions.get(positions.size() - 1)[1]
+                + positions.get(positions.size() - 1)[3];
+        return new FlatGridResult(positions, lastRowY);
+    }
+
+    /**
+     * Recomputes x,y positions in-place for a list of position arrays using their
+     * current width/height values instead of reading from model objects.
+     * Used after parent elements are resized to prevent top-level overlaps (B20 AC-3).
+     */
+    private void recomputeFlatPositionsInPlace(List<int[]> positions,
+            String arrangement, int spacing, int padding, Integer columns) {
+        if (positions.isEmpty()) return;
+
+        switch (arrangement) {
+        case "row": {
+            int currentX = padding;
+            for (int[] pos : positions) {
+                pos[0] = currentX;
+                pos[1] = padding;
+                currentX += pos[2] + spacing;
+            }
+            break;
+        }
+        case "column": {
+            int currentY = padding;
+            for (int[] pos : positions) {
+                pos[0] = padding;
+                pos[1] = currentY;
+                currentY += pos[3] + spacing;
+            }
+            break;
+        }
+        case "grid": {
+            int maxW = 0;
+            int maxH = 0;
+            for (int[] pos : positions) {
+                maxW = Math.max(maxW, pos[2]);
+                maxH = Math.max(maxH, pos[3]);
+            }
+            int cols = (columns != null) ? Math.min(columns, positions.size())
+                    : Math.max(1, (int) Math.ceil(Math.sqrt(positions.size())));
+            int currentX = padding;
+            int currentY = padding;
+            int col = 0;
+            for (int[] pos : positions) {
+                pos[0] = currentX;
+                pos[1] = currentY;
+                col++;
+                if (col >= cols) {
+                    col = 0;
+                    currentX = padding;
+                    currentY += maxH + spacing;
+                } else {
+                    currentX += maxW + spacing;
+                }
+            }
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    /**
+     * Recomputes positions in-place for category-based layouts after parent resize (B20).
+     * Uses sizes already stored in positions array rather than reading stale getBounds().
+     * Preserves category grouping with 2x category spacing between sections.
+     */
+    private void recomputeFlatCategoryPositionsInPlace(List<int[]> positions,
+            List<IDiagramModelObject> elements, String arrangement,
+            String categoryField, int spacing, int padding, Integer columns) {
+        if (positions.isEmpty()) return;
+
+        int categorySpacing = spacing * CATEGORY_SPACING_MULTIPLIER;
+
+        // Group indices by category, preserving element order
+        Map<String, List<Integer>> categoryIndices = new LinkedHashMap<>();
+        for (int i = 0; i < elements.size(); i++) {
+            String category = getFlatViewCategoryValue(elements.get(i), categoryField);
+            categoryIndices.computeIfAbsent(category, k -> new ArrayList<>()).add(i);
+        }
+
+        // Sort categories same as computeFlatCategoryLayout
+        List<String> sortedCategories;
+        if ("layer".equals(categoryField)) {
+            sortedCategories = new ArrayList<>(categoryIndices.keySet());
+            sortedCategories.sort((a, b) -> {
+                int idxA = LAYER_ORDER.indexOf(a);
+                int idxB = LAYER_ORDER.indexOf(b);
+                return Integer.compare(idxA >= 0 ? idxA : 99, idxB >= 0 ? idxB : 99);
+            });
+        } else {
+            sortedCategories = new ArrayList<>(categoryIndices.keySet());
+            sortedCategories.sort(String::compareToIgnoreCase);
+        }
+
+        int currentX = padding;
+        int currentY = padding;
+
+        for (String category : sortedCategories) {
+            List<Integer> indices = categoryIndices.get(category);
+
+            switch (arrangement) {
+            case "row": {
+                int rowX = padding;
+                int maxH = 0;
+                for (int idx : indices) {
+                    int[] pos = positions.get(idx);
+                    pos[0] = rowX;
+                    pos[1] = currentY;
+                    rowX += pos[2] + spacing;
+                    maxH = Math.max(maxH, pos[3]);
+                }
+                currentY += maxH + categorySpacing;
+                break;
+            }
+            case "column": {
+                int colY = padding;
+                int maxW = 0;
+                for (int idx : indices) {
+                    int[] pos = positions.get(idx);
+                    pos[0] = currentX;
+                    pos[1] = colY;
+                    colY += pos[3] + spacing;
+                    maxW = Math.max(maxW, pos[2]);
+                }
+                currentX += maxW + categorySpacing;
+                break;
+            }
+            case "grid": {
+                int maxW = 0;
+                int maxH = 0;
+                for (int idx : indices) {
+                    int[] pos = positions.get(idx);
+                    maxW = Math.max(maxW, pos[2]);
+                    maxH = Math.max(maxH, pos[3]);
+                }
+                int cols = (columns != null) ? Math.min(columns, indices.size())
+                        : Math.max(1, (int) Math.ceil(Math.sqrt(indices.size())));
+                int gridX = padding;
+                int gridY = currentY;
+                int col = 0;
+                for (int idx : indices) {
+                    int[] pos = positions.get(idx);
+                    pos[0] = gridX;
+                    pos[1] = gridY;
+                    col++;
+                    if (col >= cols) {
+                        col = 0;
+                        gridX = padding;
+                        gridY += maxH + spacing;
+                    } else {
+                        gridX += maxW + spacing;
+                    }
+                }
+                // Compute bottom of grid for next category
+                int lastRowY = currentY;
+                for (int idx : indices) {
+                    lastRowY = Math.max(lastRowY, positions.get(idx)[1]);
+                }
+                currentY = lastRowY + maxH + categorySpacing;
+                break;
+            }
+            default:
+                break;
+            }
+        }
+    }
+
     // ---- optimize-group-order (Story 11-25) ----
 
     @Override
     public MutationResult<OptimizeGroupOrderResultDto> optimizeGroupOrder(
             String sessionId, String viewId, String arrangement,
             Integer spacing, Integer padding, Integer elementWidth,
-            Integer elementHeight, boolean autoWidth, Integer columns) {
+            Integer elementHeight, boolean autoWidth, Integer columns,
+            Map<String, String> groupArrangements) {
         logger.info("Optimize group order: viewId={}, arrangement={}", viewId, arrangement);
         IArchimateModel model = requireAndCaptureModel();
 
@@ -3610,20 +6131,32 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         "View not found: " + viewId, ErrorCode.VIEW_NOT_FOUND);
             }
 
-            // 1. Validate arrangement
-            if (arrangement == null || arrangement.isBlank()) {
-                throw new ModelAccessException(
-                        "arrangement is required (row, column, or grid)",
-                        ErrorCode.INVALID_PARAMETER);
+            // 1. Validate arrangement (now optional — null means auto-detect)
+            String normalizedArrangement = null;
+            if (arrangement != null && !arrangement.isBlank()) {
+                normalizedArrangement = arrangement.trim().toLowerCase();
+                if (!normalizedArrangement.equals("row")
+                        && !normalizedArrangement.equals("column")
+                        && !normalizedArrangement.equals("grid")) {
+                    throw new ModelAccessException(
+                            "Invalid arrangement '" + arrangement
+                            + "'. Must be 'row', 'column', or 'grid'.",
+                            ErrorCode.INVALID_PARAMETER);
+                }
             }
-            String normalizedArrangement = arrangement.trim().toLowerCase();
-            if (!normalizedArrangement.equals("row")
-                    && !normalizedArrangement.equals("column")
-                    && !normalizedArrangement.equals("grid")) {
-                throw new ModelAccessException(
-                        "Invalid arrangement '" + arrangement
-                        + "'. Must be 'row', 'column', or 'grid'.",
-                        ErrorCode.INVALID_PARAMETER);
+
+            // Validate groupArrangements values if provided
+            if (groupArrangements != null) {
+                for (Map.Entry<String, String> entry : groupArrangements.entrySet()) {
+                    String val = entry.getValue().trim().toLowerCase();
+                    if (!val.equals("row") && !val.equals("column") && !val.equals("grid")) {
+                        throw new ModelAccessException(
+                                "Invalid arrangement '" + entry.getValue()
+                                + "' for group '" + entry.getKey()
+                                + "'. Must be 'row', 'column', or 'grid'.",
+                                ErrorCode.INVALID_PARAMETER);
+                    }
+                }
             }
 
             // 2. Validate optional params
@@ -3663,6 +6196,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             // Map elementViewObjectId → groupId for connection mapping
             Map<String, String> elementToGroupId = new HashMap<>();
             List<CrossingMinimizer.GroupInfo> groupInfos = new ArrayList<>();
+            // Map groupId → relative child positions [x, y, w, h] for arrangement detection
+            Map<String, List<int[]>> groupChildPositions = new LinkedHashMap<>();
 
             for (IDiagramModelGroup group : topLevelGroups) {
                 String groupId = group.getId();
@@ -3670,6 +6205,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
                 List<String> elementIds = new ArrayList<>();
                 List<int[]> centers = new ArrayList<>();
+                List<int[]> childPositions = new ArrayList<>();
 
                 for (IDiagramModelObject child : group.getChildren()) {
                     if (child instanceof IDiagramModelNote) {
@@ -3679,8 +6215,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     elementIds.add(childId);
                     elementToGroupId.put(childId, groupId);
 
-                    // Compute center in absolute coordinates for crossing calculation
                     IBounds bounds = child.getBounds();
+                    // Store relative positions for arrangement detection
+                    childPositions.add(new int[]{
+                            bounds.getX(), bounds.getY(),
+                            bounds.getWidth(), bounds.getHeight()});
+
+                    // Compute center in absolute coordinates for crossing calculation
                     IBounds groupBounds = group.getBounds();
                     int absCenterX = groupBounds.getX() + bounds.getX() + bounds.getWidth() / 2;
                     int absCenterY = groupBounds.getY() + bounds.getY() + bounds.getHeight() / 2;
@@ -3690,6 +6231,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (!elementIds.isEmpty()) {
                     groupInfos.add(new CrossingMinimizer.GroupInfo(
                             groupId, elementIds, centers));
+                    groupChildPositions.put(groupId, childPositions);
                 }
             }
 
@@ -3740,9 +6282,39 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 List<String> newOrder = optResult.newOrderByGroup().get(groupId);
                 boolean reordered = optResult.reorderedGroups().contains(groupId);
 
+                // Resolve per-group arrangement: override > detected > fallback
+                String resolvedGroupArrangement;
+                String arrangementSource;
+                Integer resolvedGridColumns = columns; // start with global columns param
+
+                if (groupArrangements != null
+                        && groupArrangements.containsKey(groupId)) {
+                    // Priority 1: explicit per-group override
+                    resolvedGroupArrangement = groupArrangements.get(groupId)
+                            .trim().toLowerCase();
+                    arrangementSource = "override";
+                } else if (normalizedArrangement == null) {
+                    // Priority 2: auto-detect (when no global arrangement provided)
+                    List<int[]> childPositions = groupChildPositions.get(groupId);
+                    ArrangementDetector.DetectedArrangement detected =
+                            ArrangementDetector.detect(childPositions);
+                    resolvedGroupArrangement = detected.type();
+                    arrangementSource = "detected";
+                    if ("grid".equals(detected.type())
+                            && detected.gridColumns() != null
+                            && columns == null) {
+                        resolvedGridColumns = detected.gridColumns();
+                    }
+                } else {
+                    // Priority 3: global arrangement fallback
+                    resolvedGroupArrangement = normalizedArrangement;
+                    arrangementSource = "fallback";
+                }
+
                 groupDetails.add(new OptimizeGroupOrderResultDto.GroupDetail(
                         groupId, group.getName(),
-                        groupInfo.elementIds().size(), reordered));
+                        groupInfo.elementIds().size(), reordered,
+                        resolvedGroupArrangement, arrangementSource));
 
                 if (!reordered || newOrder == null) continue;
 
@@ -3762,9 +6334,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     }
                 }
 
-                // Compute new positions using the arrangement
+                // Compute new positions using the resolved per-group arrangement
                 List<int[]> positions;
-                switch (normalizedArrangement) {
+                switch (resolvedGroupArrangement) {
                 case "row":
                     positions = computeRowLayout(orderedChildren, startX, startY,
                             resolvedSpacing, elementWidth, elementHeight,
@@ -3778,14 +6350,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 case "grid":
                     IBounds groupBounds = group.getBounds();
                     int groupWidth = groupBounds.getWidth();
-                    GridLayoutResult gridResult = computeGridLayout(
+                    GroupLayoutCalculator.GridLayoutResult gridResult = computeGridLayout(
                             orderedChildren, startX, startY,
                             resolvedSpacing, resolvedPadding, groupWidth,
-                            elementWidth, elementHeight, effectiveAutoWidth, columns);
+                            elementWidth, elementHeight, effectiveAutoWidth,
+                            resolvedGridColumns);
                     positions = gridResult.positions();
                     break;
                 default:
-                    positions = computeRowLayout(orderedChildren, startX, startY,
+                    positions = computeColumnLayout(orderedChildren, startX, startY,
                             resolvedSpacing, elementWidth, elementHeight,
                             effectiveAutoWidth);
                 }
@@ -3880,133 +6453,77 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     /**
      * Computes auto-width for a single element based on its label text.
-     * Returns DEFAULT_ELEMENT_WIDTH for null/empty names, MIN_AUTO_WIDTH floor applied.
+     * Delegates to {@link GroupLayoutCalculator#computeAutoWidth(String)}.
      */
     int computeAutoWidth(IDiagramModelObject child) {
-        String name = getDisplayName(child);
-        if (name == null || name.isEmpty()) {
-            return DEFAULT_ELEMENT_WIDTH;
+        return GroupLayoutCalculator.computeAutoWidth(getDisplayName(child));
+    }
+
+    /**
+     * Resolves element sizes for layout computation, applying elementWidth/elementHeight
+     * overrides and autoWidth as needed.
+     */
+    private List<int[]> resolveElementSizes(List<IDiagramModelObject> children,
+            Integer elementWidth, Integer elementHeight, boolean autoWidth) {
+        List<int[]> sizes = new ArrayList<>();
+        for (IDiagramModelObject child : children) {
+            IBounds bounds = child.getBounds();
+            int w = (elementWidth != null) ? elementWidth
+                    : autoWidth ? computeAutoWidth(child)
+                    : bounds.getWidth();
+            int h = (elementHeight != null) ? elementHeight : bounds.getHeight();
+            sizes.add(new int[]{w, h});
         }
-        int estimatedWidth = (name.length() * AVG_CHAR_WIDTH) + HORIZONTAL_PADDING;
-        return Math.max(MIN_AUTO_WIDTH, estimatedWidth);
+        return sizes;
     }
 
     /**
      * Computes row arrangement positions (left-to-right).
+     * Delegates to {@link GroupLayoutCalculator#computeRowLayout}.
      */
     private List<int[]> computeRowLayout(List<IDiagramModelObject> children,
             int startX, int startY, int spacing,
             Integer elementWidth, Integer elementHeight,
             boolean autoWidth) {
-        List<int[]> positions = new ArrayList<>();
-        int currentX = startX;
-        for (IDiagramModelObject child : children) {
-            IBounds bounds = child.getBounds();
-            int w = (elementWidth != null) ? elementWidth
-                    : autoWidth ? computeAutoWidth(child)
-                    : bounds.getWidth();
-            int h = (elementHeight != null) ? elementHeight : bounds.getHeight();
-            positions.add(new int[]{currentX, startY, w, h});
-            currentX += w + spacing;
-        }
-        return positions;
+        List<int[]> sizes = resolveElementSizes(children, elementWidth, elementHeight, autoWidth);
+        return GroupLayoutCalculator.computeRowLayout(sizes, startX, startY, spacing);
     }
 
     /**
      * Computes column arrangement positions (top-to-bottom).
+     * Delegates to {@link GroupLayoutCalculator#computeColumnLayout}.
      */
     private List<int[]> computeColumnLayout(List<IDiagramModelObject> children,
             int startX, int startY, int spacing,
             Integer elementWidth, Integer elementHeight,
             boolean autoWidth) {
-        List<int[]> positions = new ArrayList<>();
-        int currentY = startY;
-        for (IDiagramModelObject child : children) {
-            IBounds bounds = child.getBounds();
-            int w = (elementWidth != null) ? elementWidth
-                    : autoWidth ? computeAutoWidth(child)
-                    : bounds.getWidth();
-            int h = (elementHeight != null) ? elementHeight : bounds.getHeight();
-            positions.add(new int[]{startX, currentY, w, h});
-            currentY += h + spacing;
-        }
-        return positions;
+        List<int[]> sizes = resolveElementSizes(children, elementWidth, elementHeight, autoWidth);
+        return GroupLayoutCalculator.computeColumnLayout(sizes, startX, startY, spacing);
     }
-
-    /** Result of grid layout computation, including positions and the actual column count used. */
-    private record GridLayoutResult(List<int[]> positions, int columnsUsed) {}
 
     /**
      * Computes grid arrangement positions (left-to-right, top-to-bottom).
-     * If columns is non-null, uses the specified column count (capped at element count).
-     * Otherwise auto-detects from available group width.
+     * Delegates to {@link GroupLayoutCalculator#computeGridLayout}.
      */
-    private GridLayoutResult computeGridLayout(List<IDiagramModelObject> children,
+    private GroupLayoutCalculator.GridLayoutResult computeGridLayout(
+            List<IDiagramModelObject> children,
             int startX, int startY, int spacing, int padding, int groupWidth,
             Integer elementWidth, Integer elementHeight,
             boolean autoWidth, Integer columns) {
-        List<int[]> positions = new ArrayList<>();
-
-        // Determine effective element size (use max if widths vary)
-        // For autoWidth grid: compute max auto-width across all elements for uniform columns
-        int maxW = 0;
-        int maxH = 0;
-        for (IDiagramModelObject child : children) {
-            IBounds bounds = child.getBounds();
-            int w = (elementWidth != null) ? elementWidth
-                    : autoWidth ? computeAutoWidth(child)
-                    : bounds.getWidth();
-            int h = (elementHeight != null) ? elementHeight : bounds.getHeight();
-            maxW = Math.max(maxW, w);
-            maxH = Math.max(maxH, h);
-        }
-
-        // Calculate column count: explicit columns param (capped at element count),
-        // or auto-detect from available width (Story 11-18)
-        int cols;
-        if (columns != null) {
-            cols = Math.min(columns, children.size());
-        } else {
-            int availableWidth = groupWidth - 2 * padding;
-            cols = Math.max(1, (availableWidth + spacing) / (maxW + spacing));
-        }
-
-        int currentX = startX;
-        int currentY = startY;
-        int col = 0;
-
-        for (IDiagramModelObject child : children) {
-            // Grid uses uniform maxW for all elements (including autoWidth)
-            IBounds bounds = child.getBounds();
-            int h = (elementHeight != null) ? elementHeight : bounds.getHeight();
-            positions.add(new int[]{currentX, currentY, maxW, h});
-
-            col++;
-            if (col >= cols) {
-                col = 0;
-                currentX = startX;
-                currentY += maxH + spacing;
-            } else {
-                currentX += maxW + spacing;
-            }
-        }
-        return new GridLayoutResult(positions, cols);
+        List<int[]> sizes = resolveElementSizes(children, elementWidth, elementHeight, autoWidth);
+        return GroupLayoutCalculator.computeGridLayout(sizes, startX, startY, spacing,
+                padding, groupWidth, columns);
     }
 
     /**
      * Computes the auto-resize dimensions for a group based on child positions.
+     * Delegates to {@link GroupLayoutCalculator#computeAutoResizeDimensions}.
+     * The labelHeight parameter is retained for caller compatibility but is not
+     * forwarded — it is already baked into positions via startY.
      */
     private int[] computeAutoResizeDimensions(List<int[]> positions,
             int padding, int labelHeight) {
-        int maxRight = 0;
-        int maxBottom = 0;
-        for (int[] pos : positions) {
-            maxRight = Math.max(maxRight, pos[0] + pos[2]);
-            maxBottom = Math.max(maxBottom, pos[1] + pos[3]);
-        }
-        int newWidth = maxRight + padding;
-        int newHeight = maxBottom + padding;
-        return new int[]{newWidth, newHeight};
+        return GroupLayoutCalculator.computeAutoResizeDimensions(positions, padding);
     }
 
     /**
@@ -4077,10 +6594,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ArrangeGroupsResultDto> arrangeGroups(
             String sessionId, String viewId, String arrangement,
-            Integer columns, Integer spacing, List<String> groupIds) {
-        logger.info("Arrange groups: viewId={}, arrangement={}, columns={}, spacing={}, groupIds={}",
+            Integer columns, Integer spacing, List<String> groupIds,
+            String direction) {
+        logger.info("Arrange groups: viewId={}, arrangement={}, columns={}, spacing={}, groupIds={}, direction={}",
                 viewId, arrangement, columns, spacing,
-                groupIds != null ? groupIds.size() : "all");
+                groupIds != null ? groupIds.size() : "all", direction);
         IArchimateModel model = requireAndCaptureModel();
 
         try {
@@ -4100,10 +6618,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             String normalizedArrangement = arrangement.toLowerCase().trim();
             if (!"grid".equals(normalizedArrangement)
                     && !"row".equals(normalizedArrangement)
-                    && !"column".equals(normalizedArrangement)) {
+                    && !"column".equals(normalizedArrangement)
+                    && !"topology".equals(normalizedArrangement)) {
                 throw new ModelAccessException(
                         "Invalid arrangement: '" + arrangement
-                                + "'. Valid values: grid, row, column.",
+                                + "'. Valid values: grid, row, column, topology.",
                         ErrorCode.INVALID_PARAMETER);
             }
 
@@ -4170,6 +6689,59 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         "Add groups to the view first using add-group-to-view.",
                         null);
             }
+
+            // 6b. Topology reordering: reorder targetGroups based on connection density
+            if ("topology".equals(normalizedArrangement)) {
+                // Build adjacency weight matrix from view connections
+                Map<String, String> elementToGroup = new HashMap<>();
+                for (IDiagramModelGroup group : targetGroups) {
+                    mapElementsToGroup(group, group.getId(), elementToGroup);
+                }
+
+                Map<String, Map<String, Integer>> weights = new HashMap<>();
+                for (IDiagramModelObject child : view.getChildren()) {
+                    collectConnectionWeights(child, elementToGroup, weights);
+                }
+
+                List<String> groupIds2 = new ArrayList<>();
+                for (IDiagramModelGroup g : targetGroups) {
+                    groupIds2.add(g.getId());
+                }
+
+                GroupTopologyOrderer orderer = new GroupTopologyOrderer();
+                List<String> orderedIds;
+                if (columns != null && columns > 0) {
+                    orderedIds = orderer.orderGrid(groupIds2, weights, columns);
+                } else {
+                    orderedIds = orderer.orderLinear(groupIds2, weights);
+                }
+
+                // Reorder targetGroups to match topology order
+                Map<String, IDiagramModelGroup> groupById = new LinkedHashMap<>();
+                for (IDiagramModelGroup g : targetGroups) {
+                    groupById.put(g.getId(), g);
+                }
+                List<IDiagramModelGroup> reordered = new ArrayList<>();
+                for (String id : orderedIds) {
+                    IDiagramModelGroup g = groupById.get(id);
+                    if (g != null) {
+                        reordered.add(g);
+                    }
+                }
+                targetGroups = reordered;
+
+                // Topology defaults to column arrangement (unless columns specified → grid)
+                if (columns != null && columns > 0) {
+                    normalizedArrangement = "grid";
+                } else if ("horizontal".equalsIgnoreCase(direction)) {
+                    normalizedArrangement = "row";
+                } else {
+                    normalizedArrangement = "column"; // default: vertical
+                }
+                logger.info("Topology arrangement: reordered {} groups, using {} layout",
+                        targetGroups.size(), normalizedArrangement);
+            }
+            String reportedArrangement = arrangement.toLowerCase().trim();
 
             // 7. Compute positions based on arrangement
             int startX = ARRANGE_GROUPS_ORIGIN;
@@ -4270,7 +6842,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             // 9. Build compound command
             String label = "Arrange groups ("
-                    + normalizedArrangement + ", "
+                    + reportedArrangement + ", "
                     + targetGroups.size() + " groups)";
             NonNotifyingCompoundCommand compound =
                     new NonNotifyingCompoundCommand(label);
@@ -4278,12 +6850,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             ArrangeGroupsResultDto dto = new ArrangeGroupsResultDto(
                     viewId, targetGroups.size(), layoutWidth, layoutHeight,
-                    columnsUsed, normalizedArrangement);
+                    columnsUsed, reportedArrangement);
 
             // 10. Approval gate
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
                 Map<String, Object> proposedChanges = new LinkedHashMap<>();
-                proposedChanges.put("arrangement", normalizedArrangement);
+                proposedChanges.put("arrangement", reportedArrangement);
                 proposedChanges.put("groupsPositioned", targetGroups.size());
                 if (columnsUsed != null) proposedChanges.put("columnsUsed", columnsUsed);
                 proposedChanges.put("layoutWidth", layoutWidth);
@@ -4311,6 +6883,49 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     "Error arranging groups in view '"
                     + (viewId != null ? viewId : "<null>") + "'",
                     e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    // ---- Topology arrangement helpers (Tech Spec 13-2) ----
+
+    /**
+     * Recursively maps all elements within a group (and nested groups) to their
+     * top-level group ID for connection weight counting.
+     */
+    private void mapElementsToGroup(IDiagramModelObject container, String topLevelGroupId,
+                                     Map<String, String> elementToGroup) {
+        if (container instanceof IDiagramModelContainer modelContainer) {
+            for (IDiagramModelObject child : modelContainer.getChildren()) {
+                elementToGroup.put(child.getId(), topLevelGroupId);
+                mapElementsToGroup(child, topLevelGroupId, elementToGroup);
+            }
+        }
+    }
+
+    /**
+     * Collects connection weights between groups by traversing view connections.
+     * For each connection, if source and target are in different groups, increments
+     * the weight for that group pair.
+     */
+    private void collectConnectionWeights(IDiagramModelObject obj,
+                                           Map<String, String> elementToGroup,
+                                           Map<String, Map<String, Integer>> weights) {
+        // Check outgoing connections from this object
+        if (obj instanceof IConnectable connectable) {
+            for (IDiagramModelConnection conn : connectable.getSourceConnections()) {
+                String sourceGroup = elementToGroup.get(conn.getSource().getId());
+                String targetGroup = elementToGroup.get(conn.getTarget().getId());
+                if (sourceGroup != null && targetGroup != null && !sourceGroup.equals(targetGroup)) {
+                    weights.computeIfAbsent(sourceGroup, k -> new HashMap<>())
+                            .merge(targetGroup, 1, Integer::sum);
+                }
+            }
+        }
+        // Recurse into children
+        if (obj instanceof IDiagramModelContainer container) {
+            for (IDiagramModelObject child : container.getChildren()) {
+                collectConnectionWeights(child, elementToGroup, weights);
+            }
         }
     }
 
@@ -4571,12 +7186,26 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     .collect(Collectors.joining(", "));
             throw new ModelAccessException(
                     type + " is not valid between " + sourceElement.eClass().getName()
-                            + " (source) and " + targetElement.eClass().getName() + " (target)",
+                            + " (source) and " + targetElement.eClass().getName()
+                            + " (target). Valid types for this combination: " + validNames,
                     ErrorCode.RELATIONSHIP_NOT_ALLOWED,
                     "Valid relationship types: " + validNames,
-                    "Try one of the valid types listed in details, or use "
+                    "Try one of the valid types listed above, or use "
                             + "AssociationRelationship which is valid between most elements",
                     "ArchiMate 3.2 specification, relationship rules");
+        }
+
+        // Duplicate detection: return existing relationship if (type, source, target) match
+        Optional<IArchimateRelationship> existing = findDuplicateRelationship(
+                relClass, sourceElement, targetElement);
+        if (existing.isPresent()) {
+            IArchimateRelationship existingRel = existing.get();
+            RelationshipDto base = convertToRelationshipDto(existingRel);
+            RelationshipDto dto = new RelationshipDto(
+                    base.id(), base.name(), base.type(),
+                    base.sourceId(), base.targetId(), true);
+            // No-op command: nothing to execute on the command stack
+            return new PreparedMutation<>(new NoOpCommand(), dto, existingRel.getId(), existingRel);
         }
 
         IArchimateRelationship relationship =
@@ -4584,13 +7213,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         if (name != null && !name.isBlank()) {
             relationship.setName(name);
         }
-        relationship.connect(sourceElement, targetElement);
+        // B19: connect() deferred to command execution — prevents orphaned EMF cross-refs
+        // if the command never executes (partial failure, approval mode, concurrency race)
 
         IFolder relationsFolder = model.getFolder(FolderType.RELATIONS);
-        Command cmd = new CreateRelationshipCommand(relationship, relationsFolder);
+        Command cmd = new CreateRelationshipCommand(relationship, relationsFolder,
+                sourceElement, targetElement);
 
-        return new PreparedMutation<>(cmd, convertToRelationshipDto(relationship),
-                relationship.getId(), relationship);
+        // Build DTO manually since connect() hasn't been called yet (source/target not set on relationship)
+        RelationshipDto dto = new RelationshipDto(
+                relationship.getId(), relationship.getName(), relationship.eClass().getName(),
+                sourceElement.getId(), targetElement.getId());
+
+        return new PreparedMutation<>(cmd, dto, relationship.getId(), relationship);
     }
 
     /**
@@ -4626,7 +7261,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         ViewDto dto = buildViewDto(view, FolderOperations.buildFolderPath(targetFolder));
 
-        return new PreparedMutation<>(cmd, dto, view.getId());
+        return new PreparedMutation<>(cmd, dto, view.getId(), view);
     }
 
     /**
@@ -4785,20 +7420,34 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             Integer width, Integer height, boolean autoConnect,
             String parentViewObjectId) {
         return prepareAddToView(viewId, elementId, x, y, width, height,
-                autoConnect, parentViewObjectId, null, null);
+                autoConnect, parentViewObjectId, null, null, null);
     }
 
     /**
      * Prepares an add-to-view mutation with optional pre-resolved batch parent container.
      * When batchParentContainer is non-null, it overrides parentViewObjectId lookup
      * (used for groups created earlier in the same bulk-mutate batch, Story 9-0g).
+     * When batchView is non-null, it overrides viewId lookup
+     * (used for views created earlier in the same bulk-mutate batch).
      */
     private PreparedMutation<AddToViewResultDto> prepareAddToView(
             String viewId, String elementId, Integer x, Integer y,
             Integer width, Integer height, boolean autoConnect,
             String parentViewObjectId,
             IDiagramModelContainer batchParentContainer,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
+        return prepareAddToView(viewId, elementId, x, y, width, height,
+                autoConnect, parentViewObjectId, batchParentContainer,
+                styling, imageParams, null);
+    }
+
+    private PreparedMutation<AddToViewResultDto> prepareAddToView(
+            String viewId, String elementId, Integer x, Integer y,
+            Integer width, Integer height, boolean autoConnect,
+            String parentViewObjectId,
+            IDiagramModelContainer batchParentContainer,
+            StylingParams styling, ImageParams imageParams,
+            IArchimateDiagramModel batchView) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Validate x/y both-or-neither
@@ -4811,15 +7460,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        // Find view
-        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
-        if (!(viewObj instanceof IArchimateDiagramModel view)) {
-            throw new ModelAccessException(
-                    "View not found: " + viewId,
-                    ErrorCode.VIEW_NOT_FOUND,
-                    null,
-                    "Use get-views to find valid view IDs",
-                    null);
+        // Find view — use batch-created view if available
+        IArchimateDiagramModel view = batchView;
+        if (view == null) {
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel resolvedView)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId,
+                        ErrorCode.VIEW_NOT_FOUND,
+                        null,
+                        "Use get-views to find valid view IDs",
+                        null);
+            }
+            view = resolvedView;
         }
 
         // Find element
@@ -4865,14 +7518,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Story 11-2: Apply styling at creation time
         StylingHelper.applyStylingToNewObject(diagramObj, styling);
 
-        // Build view object DTO (Story 11-2: include styling applied to new object)
+        // Story C4: Apply image at creation time
+        ImageHelper.applyImageToNewObject(diagramObj, imageParams);
+
+        // Build view object DTO (Story 11-2: include styling; Story C4: include image fields)
         ViewObjectDto viewObjectDto = new ViewObjectDto(
                 diagramObj.getId(), element.getId(), element.getName(),
                 element.eClass().getName(), resolvedX, resolvedY,
                 resolvedWidth, resolvedHeight,
                 StylingHelper.readFillColor(diagramObj), StylingHelper.readLineColor(diagramObj),
                 StylingHelper.readFontColor(diagramObj), StylingHelper.readOpacity(diagramObj),
-                StylingHelper.readLineWidth(diagramObj));
+                StylingHelper.readLineWidth(diagramObj),
+                ImageHelper.readImagePath(diagramObj), ImageHelper.readImagePosition(diagramObj),
+                ImageHelper.readShowIcon(diagramObj), null, null);
 
         Command cmd;
         List<ViewConnectionDto> autoConnections = null;
@@ -4893,6 +7551,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             // Scan source relationships
             for (IArchimateRelationship rel : element.getSourceRelationships()) {
+                // B19: skip orphaned relationships (not in containment tree)
+                if (rel.eContainer() == null) continue;
+
                 IArchimateElement targetElement = (IArchimateElement) rel.getTarget();
                 IDiagramModelArchimateObject targetViewObj =
                         findViewObjectForElement(viewObjectMap, targetElement.getId());
@@ -4913,6 +7574,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             // Scan target relationships
             for (IArchimateRelationship rel : element.getTargetRelationships()) {
+                // B19: skip orphaned relationships (not in containment tree)
+                if (rel.eContainer() == null) continue;
+
                 IArchimateElement sourceElement = (IArchimateElement) rel.getSource();
                 IDiagramModelArchimateObject sourceViewObj =
                         findViewObjectForElement(viewObjectMap, sourceElement.getId());
@@ -4949,19 +7613,31 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             String viewId, String label, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId) {
         return prepareAddGroupToView(viewId, label, x, y, width, height,
-                parentViewObjectId, null, null);
+                parentViewObjectId, null, null, null);
     }
 
     /**
      * Prepares an add-group-to-view mutation with optional pre-resolved batch parent container.
      * When batchParentContainer is non-null, it overrides parentViewObjectId lookup
      * (used for groups created earlier in the same bulk-mutate batch, Story 9-8).
+     * When batchView is non-null, it overrides viewId lookup
+     * (used for views created earlier in the same bulk-mutate batch).
      */
     private PreparedMutation<ViewGroupDto> prepareAddGroupToView(
             String viewId, String label, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId,
             IDiagramModelContainer batchParentContainer,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
+        return prepareAddGroupToView(viewId, label, x, y, width, height,
+                parentViewObjectId, batchParentContainer, styling, imageParams, null);
+    }
+
+    private PreparedMutation<ViewGroupDto> prepareAddGroupToView(
+            String viewId, String label, Integer x, Integer y,
+            Integer width, Integer height, String parentViewObjectId,
+            IDiagramModelContainer batchParentContainer,
+            StylingParams styling, ImageParams imageParams,
+            IArchimateDiagramModel batchView) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Validate label
@@ -4984,15 +7660,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        // Find view
-        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
-        if (!(viewObj instanceof IArchimateDiagramModel view)) {
-            throw new ModelAccessException(
-                    "View not found: " + viewId,
-                    ErrorCode.VIEW_NOT_FOUND,
-                    null,
-                    "Use get-views to find valid view IDs",
-                    null);
+        // Find view — use batch-created view if available
+        IArchimateDiagramModel view = batchView;
+        if (view == null) {
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel resolvedView)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId,
+                        ErrorCode.VIEW_NOT_FOUND,
+                        null,
+                        "Use get-views to find valid view IDs",
+                        null);
+            }
+            view = resolvedView;
         }
 
         IDiagramModelContainer parentContainer = resolveParentContainer(
@@ -5029,16 +7709,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Story 11-2: Apply styling at creation time
         StylingHelper.applyStylingToNewObject(group, styling);
 
+        // Story C4: Apply image at creation time
+        ImageHelper.applyImageToNewObject(group, imageParams);
+
         // Build command
         Command cmd = new AddGroupToViewCommand(group, parentContainer);
 
-        // Build DTO (Story 11-2: include styling applied to new object)
+        // Build DTO (Story 11-2: include styling; Story C4: include image fields)
         ViewGroupDto dto = new ViewGroupDto(
                 group.getId(), label, resolvedX, resolvedY,
                 resolvedWidth, resolvedHeight, null, List.of(),
                 StylingHelper.readFillColor(group), StylingHelper.readLineColor(group),
                 StylingHelper.readFontColor(group), StylingHelper.readOpacity(group),
-                StylingHelper.readLineWidth(group));
+                StylingHelper.readLineWidth(group),
+                ImageHelper.readImagePath(group), ImageHelper.readImagePosition(group),
+                ImageHelper.readShowIcon(group));
 
         return new PreparedMutation<>(cmd, dto, group.getId(), group);
     }
@@ -5046,20 +7731,34 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private PreparedMutation<ViewNoteDto> prepareAddNoteToView(
             String viewId, String content, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId) {
-        return prepareAddNoteToView(viewId, content, x, y, width, height,
-                parentViewObjectId, null, null);
+        return prepareAddNoteToView(viewId, content, null, null, x, y, width, height,
+                parentViewObjectId, null, null, null);
     }
 
     /**
      * Prepares an add-note-to-view mutation with optional pre-resolved batch parent container.
      * When batchParentContainer is non-null, it overrides parentViewObjectId lookup
      * (used for groups created earlier in the same bulk-mutate batch, Story 9-8).
+     * Story B16: position-based placement (above-content, below-content).
      */
     private PreparedMutation<ViewNoteDto> prepareAddNoteToView(
-            String viewId, String content, Integer x, Integer y,
+            String viewId, String content, String position, Integer gap,
+            Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId,
             IDiagramModelContainer batchParentContainer,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
+        return prepareAddNoteToView(viewId, content, position, gap, x, y,
+                width, height, parentViewObjectId, batchParentContainer,
+                styling, imageParams, null);
+    }
+
+    private PreparedMutation<ViewNoteDto> prepareAddNoteToView(
+            String viewId, String content, String position, Integer gap,
+            Integer x, Integer y,
+            Integer width, Integer height, String parentViewObjectId,
+            IDiagramModelContainer batchParentContainer,
+            StylingParams styling, ImageParams imageParams,
+            IArchimateDiagramModel batchView) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Validate content
@@ -5072,8 +7771,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        // Validate x/y both-or-neither
-        if ((x == null) != (y == null)) {
+        // Validate position enum value
+        if (position != null && !position.equals("above-content")
+                && !position.equals("below-content")) {
+            throw new ModelAccessException(
+                    "Invalid position value: '" + position
+                            + "'. Must be 'above-content' or 'below-content'",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Use position='above-content' for title notes above the diagram, "
+                    + "or 'below-content' for notes below",
+                    null);
+        }
+
+        // Validate x/y both-or-neither (only when position is not set)
+        if (position == null && (x == null) != (y == null)) {
             throw new ModelAccessException(
                     "Both x and y must be specified together, or both omitted for auto-placement",
                     ErrorCode.INVALID_PARAMETER,
@@ -5082,15 +7794,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        // Find view
-        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
-        if (!(viewObj instanceof IArchimateDiagramModel view)) {
-            throw new ModelAccessException(
-                    "View not found: " + viewId,
-                    ErrorCode.VIEW_NOT_FOUND,
-                    null,
-                    "Use get-views to find valid view IDs",
-                    null);
+        // Find view — use batch-created view if available
+        IArchimateDiagramModel view = batchView;
+        if (view == null) {
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel resolvedView)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId,
+                        ErrorCode.VIEW_NOT_FOUND,
+                        null,
+                        "Use get-views to find valid view IDs",
+                        null);
+            }
+            view = resolvedView;
         }
 
         IDiagramModelContainer parentContainer = resolveParentContainer(
@@ -5104,10 +7820,33 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int resolvedWidth = (width != null) ? width : DEFAULT_NOTE_WIDTH;
         int resolvedHeight = (height != null) ? height : DEFAULT_NOTE_HEIGHT;
 
-        // Resolve position
+        // Resolve position — Story B16: position-based placement
         int resolvedX;
         int resolvedY;
-        if (x != null) {
+        String positionNote = null;
+        if (position != null) {
+            // Position takes precedence over explicit x/y
+            if (x != null || y != null) {
+                positionNote = "position='" + position + "' takes precedence over explicit x/y coordinates";
+            }
+            int resolvedGap = (gap != null) ? gap : 10;
+            ContentBounds bounds = computeContentBoundsForView(view);
+            if (bounds != null) {
+                if ("above-content".equals(position)) {
+                    resolvedX = (int) Math.round(bounds.x());
+                    resolvedY = (int) Math.round(bounds.y() - resolvedHeight - resolvedGap);
+                } else {
+                    // below-content
+                    resolvedX = (int) Math.round(bounds.x());
+                    resolvedY = (int) Math.round(bounds.y() + bounds.height() + resolvedGap);
+                }
+            } else {
+                // Empty view fallback
+                resolvedX = 10;
+                resolvedY = 10;
+                positionNote = "View has no content — note placed at default position (10, 10)";
+            }
+        } else if (x != null) {
             resolvedX = x;
             resolvedY = y;
         } else {
@@ -5127,16 +7866,22 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Story 11-2: Apply styling at creation time
         StylingHelper.applyStylingToNewObject(note, styling);
 
+        // Story C4: Apply image at creation time
+        ImageHelper.applyImageToNewObject(note, imageParams);
+
         // Build command
         Command cmd = new AddNoteToViewCommand(note, parentContainer);
 
-        // Build DTO (Story 11-2: include styling applied to new object)
+        // Build DTO — include positionNote if set (Story B16), image fields (Story C4)
+        String parentVoId = (parentViewObjectId != null) ? parentViewObjectId : null;
         ViewNoteDto dto = new ViewNoteDto(
                 note.getId(), content, resolvedX, resolvedY,
-                resolvedWidth, resolvedHeight, null,
+                resolvedWidth, resolvedHeight, parentVoId,
                 StylingHelper.readFillColor(note), StylingHelper.readLineColor(note),
                 StylingHelper.readFontColor(note), StylingHelper.readOpacity(note),
-                StylingHelper.readLineWidth(note));
+                StylingHelper.readLineWidth(note), positionNote,
+                ImageHelper.readImagePath(note), ImageHelper.readImagePosition(note),
+                ImageHelper.readShowIcon(note));
 
         return new PreparedMutation<>(cmd, dto, note.getId(), note);
     }
@@ -5147,7 +7892,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private PreparedMutation<ViewConnectionDto> prepareAddConnectionToView(
             String viewId, String relationshipId, String sourceViewObjectId,
             String targetViewObjectId, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints) {
+            List<AbsoluteBendpointDto> absoluteBendpoints,
+            StylingParams styling, Boolean showLabel, Integer textPosition) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Find view
@@ -5238,17 +7984,59 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     absoluteBendpoints, sourceViewObj, targetViewObj);
         }
 
+        // Validate styling if provided (Story 13-1)
+        if (styling != null && styling.hasAnyValue()) {
+            StylingHelper.validateConnectionStylingParams(styling);
+        }
+
         // Create connection
         IDiagramModelArchimateConnection conn =
                 IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
         conn.setArchimateRelationship(relationship);
         ConnectionResponseBuilder.applyBendpointsToConnection(conn, effectiveBendpoints);
 
+        // Apply styling at creation time (Story 13-1)
+        if (styling != null && styling.hasAnyValue()) {
+            if (styling.lineColor() != null) {
+                conn.setLineColor(styling.lineColor().isEmpty() ? null : styling.lineColor());
+            }
+            if (styling.fontColor() != null) {
+                conn.setFontColor(styling.fontColor().isEmpty() ? null : styling.fontColor());
+            }
+            if (styling.lineWidth() != null) {
+                conn.setLineWidth(styling.lineWidth());
+            }
+        }
+
+        // Apply label visibility at creation time (Story 13-1)
+        if (showLabel != null) {
+            conn.setNameVisible(showLabel);
+        }
+
+        // Apply label position at creation time (Story 13-11)
+        if (textPosition != null) {
+            conn.setTextPosition(textPosition);
+        }
+
         Command cmd = new AddConnectionToViewCommand(conn, sourceViewObj, targetViewObj);
 
-        ViewConnectionDto dto = ConnectionResponseBuilder.buildConnectionResponseDto(
+        // Build DTO with styling info included in response
+        String dtoLineColor = StylingHelper.readConnectionLineColor(conn);
+        String dtoFontColor = StylingHelper.readConnectionFontColor(conn);
+        Integer dtoLineWidth = StylingHelper.readConnectionLineWidth(conn);
+        Boolean dtoNameVisible = StylingHelper.readConnectionNameVisible(conn);
+
+        ViewConnectionDto baseDto = ConnectionResponseBuilder.buildConnectionResponseDto(
                 conn.getId(), relationship, sourceViewObjectId, targetViewObjectId,
                 effectiveBendpoints, sourceViewObj, targetViewObj, conn.getTextPosition());
+
+        ViewConnectionDto dto = new ViewConnectionDto(
+                baseDto.viewConnectionId(), baseDto.relationshipId(),
+                baseDto.relationshipType(), baseDto.sourceViewObjectId(),
+                baseDto.targetViewObjectId(), baseDto.bendpoints(),
+                baseDto.absoluteBendpoints(), baseDto.sourceAnchor(),
+                baseDto.targetAnchor(), baseDto.textPosition(),
+                dtoLineColor, dtoLineWidth, dtoFontColor, dtoNameVisible);
 
         return new PreparedMutation<>(cmd, dto, conn.getId(), conn);
     }
@@ -5261,7 +8049,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      */
     private PreparedMutation<ViewObjectDto> prepareUpdateViewObject(
             String viewObjectId, Integer x, Integer y, Integer width, Integer height,
-            String text, StylingParams styling) {
+            String text, StylingParams styling, ImageParams imageParams) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Story 11-2: Validate hex colours before any other processing
@@ -5269,14 +8057,20 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             StylingHelper.validateStylingParams(styling);
         }
 
-        // Validate at least one field provided (including styling, Story 11-2)
+        // Story C4: Validate image params before any other processing
+        if (imageParams != null) {
+            ImageHelper.validateImageParams(imageParams);
+        }
+
+        // Validate at least one field provided (including styling, Story 11-2; image, Story C4)
         boolean hasStyling = styling != null && styling.hasAnyValue();
-        if (x == null && y == null && width == null && height == null && text == null && !hasStyling) {
+        boolean hasImage = imageParams != null && imageParams.hasAnyValue();
+        if (x == null && y == null && width == null && height == null && text == null && !hasStyling && !hasImage) {
             throw new ModelAccessException(
-                    "At least one of x, y, width, height, text, or styling parameter must be provided",
+                    "At least one of x, y, width, height, text, styling, or image parameter must be provided",
                     ErrorCode.INVALID_PARAMETER,
                     null,
-                    "At least one of x, y, width, height, text, fillColor, lineColor, fontColor, opacity, lineWidth must be provided.",
+                    "At least one of x, y, width, height, text, fillColor, lineColor, fontColor, opacity, lineWidth, imagePath, imagePosition, showIcon must be provided.",
                     null);
         }
 
@@ -5316,15 +8110,30 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int mergedWidth = (width != null) ? width : bounds.getWidth();
         int mergedHeight = (height != null) ? height : bounds.getHeight();
 
-        // Build command (with optional text and styling update, Story 11-2)
-        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, text, styling);
+        // Build command (with optional text, styling, and image update)
+        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, text, styling, imageParams);
 
-        // Build DTO — generic for all view object types (Story 11-2: include post-execution styling)
+        // Build DTO — generic for all view object types (Story 11-2: include post-execution styling; Story C4: image)
         String dtoFillColor = StylingHelper.computePostStylingColor(StylingHelper.readFillColor(diagramObj), styling != null ? styling.fillColor() : null);
         String dtoLineColor = StylingHelper.computePostStylingColor(StylingHelper.readLineColor(diagramObj), styling != null ? styling.lineColor() : null);
         String dtoFontColor = StylingHelper.computePostStylingColor(StylingHelper.readFontColor(diagramObj), styling != null ? styling.fontColor() : null);
         Integer dtoOpacity = StylingHelper.computePostStylingOpacity(StylingHelper.readOpacity(diagramObj), styling != null ? styling.opacity() : null);
         Integer dtoLineWidth = StylingHelper.computePostStylingLineWidth(StylingHelper.readLineWidth(diagramObj), styling != null ? styling.lineWidth() : null);
+
+        // Story C4: Compute post-execution image fields
+        String dtoImagePath = computePostImagePath(diagramObj, imageParams);
+        String dtoImagePosition = computePostImagePosition(diagramObj, imageParams);
+        String dtoShowIcon = computePostShowIcon(diagramObj, imageParams);
+        Double dtoCoveragePercent = null;
+        String dtoCoverageWarning = null;
+
+        // Compute coverage if image is being set (not cleared)
+        if (dtoImagePath != null && !dtoImagePath.isEmpty()) {
+            dtoCoveragePercent = computeImageCoverage(dtoImagePath, mergedWidth, mergedHeight);
+            if (dtoCoveragePercent != null) {
+                dtoCoverageWarning = ImageHelper.coverageWarning(dtoCoveragePercent);
+            }
+        }
 
         ViewObjectDto dto;
         if (diagramObj instanceof IDiagramModelArchimateObject archObj) {
@@ -5333,14 +8142,18 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     viewObjectId, element.getId(), element.getName(),
                     element.eClass().getName(), mergedX, mergedY,
                     mergedWidth, mergedHeight,
-                    dtoFillColor, dtoLineColor, dtoFontColor, dtoOpacity, dtoLineWidth);
+                    dtoFillColor, dtoLineColor, dtoFontColor, dtoOpacity, dtoLineWidth,
+                    dtoImagePath, dtoImagePosition, dtoShowIcon,
+                    dtoCoveragePercent, dtoCoverageWarning);
         } else {
             // Group or note — no element association
             dto = new ViewObjectDto(
                     viewObjectId, null, diagramObj.getName(),
                     diagramObj.eClass().getName(), mergedX, mergedY,
                     mergedWidth, mergedHeight,
-                    dtoFillColor, dtoLineColor, dtoFontColor, dtoOpacity, dtoLineWidth);
+                    dtoFillColor, dtoLineColor, dtoFontColor, dtoOpacity, dtoLineWidth,
+                    dtoImagePath, dtoImagePosition, dtoShowIcon,
+                    dtoCoveragePercent, dtoCoverageWarning);
         }
 
         return new PreparedMutation<>(cmd, dto, viewObjectId);
@@ -5353,14 +8166,36 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private PreparedMutation<ViewObjectDto> prepareUpdateViewObjectDirect(
             IDiagramModelArchimateObject diagramObj, Integer x, Integer y,
             Integer width, Integer height) {
+        return prepareUpdateViewObjectDirect(diagramObj, x, y, width, height, null, null);
+    }
+
+    /**
+     * Extended Direct variant that also handles styling and image params.
+     * Used by bulk-mutate when the view object was created earlier in the same batch.
+     */
+    private PreparedMutation<ViewObjectDto> prepareUpdateViewObjectDirect(
+            IDiagramModelArchimateObject diagramObj, Integer x, Integer y,
+            Integer width, Integer height, StylingParams styling, ImageParams imageParams) {
+
+        // Validate styling colours before other processing (Story 11-2)
+        if (styling != null) {
+            StylingHelper.validateStylingParams(styling);
+        }
+
+        // Validate image params (Story C4)
+        if (imageParams != null) {
+            ImageHelper.validateImageParams(imageParams);
+        }
 
         // Validate at least one field provided
-        if (x == null && y == null && width == null && height == null) {
+        boolean hasStyling = styling != null && styling.hasAnyValue();
+        boolean hasImage = imageParams != null && imageParams.hasAnyValue();
+        if (x == null && y == null && width == null && height == null && !hasStyling && !hasImage) {
             throw new ModelAccessException(
-                    "At least one of x, y, width, height must be provided",
+                    "At least one of x, y, width, height, styling, or image parameter must be provided",
                     ErrorCode.INVALID_PARAMETER,
                     null,
-                    "At least one of x, y, width, height must be provided.",
+                    "At least one of x, y, width, height, fillColor, lineColor, fontColor, opacity, lineWidth, imagePath, imagePosition, showIcon must be provided.",
                     null);
         }
 
@@ -5375,18 +8210,36 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int mergedWidth = (width != null) ? width : bounds.getWidth();
         int mergedHeight = (height != null) ? height : bounds.getHeight();
 
-        // Build command
-        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight);
+        // Build command (with optional styling and image update)
+        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, null, styling, imageParams);
 
-        // Build DTO (include current styling for consistency)
+        // Build DTO with post-execution styling and image fields
+        String dtoFillColor = StylingHelper.computePostStylingColor(StylingHelper.readFillColor(diagramObj), styling != null ? styling.fillColor() : null);
+        String dtoLineColor = StylingHelper.computePostStylingColor(StylingHelper.readLineColor(diagramObj), styling != null ? styling.lineColor() : null);
+        String dtoFontColor = StylingHelper.computePostStylingColor(StylingHelper.readFontColor(diagramObj), styling != null ? styling.fontColor() : null);
+        Integer dtoOpacity = StylingHelper.computePostStylingOpacity(StylingHelper.readOpacity(diagramObj), styling != null ? styling.opacity() : null);
+        Integer dtoLineWidth = StylingHelper.computePostStylingLineWidth(StylingHelper.readLineWidth(diagramObj), styling != null ? styling.lineWidth() : null);
+
+        String dtoImagePath = computePostImagePath(diagramObj, imageParams);
+        String dtoImagePosition = computePostImagePosition(diagramObj, imageParams);
+        String dtoShowIcon = computePostShowIcon(diagramObj, imageParams);
+        Double dtoCoveragePercent = null;
+        String dtoCoverageWarning = null;
+        if (dtoImagePath != null && !dtoImagePath.isEmpty()) {
+            dtoCoveragePercent = computeImageCoverage(dtoImagePath, mergedWidth, mergedHeight);
+            if (dtoCoveragePercent != null) {
+                dtoCoverageWarning = ImageHelper.coverageWarning(dtoCoveragePercent);
+            }
+        }
+
         IArchimateElement element = diagramObj.getArchimateElement();
         ViewObjectDto dto = new ViewObjectDto(
                 diagramObj.getId(), element.getId(), element.getName(),
                 element.eClass().getName(), mergedX, mergedY,
                 mergedWidth, mergedHeight,
-                StylingHelper.readFillColor(diagramObj), StylingHelper.readLineColor(diagramObj),
-                StylingHelper.readFontColor(diagramObj), StylingHelper.readOpacity(diagramObj),
-                StylingHelper.readLineWidth(diagramObj));
+                dtoFillColor, dtoLineColor, dtoFontColor, dtoOpacity, dtoLineWidth,
+                dtoImagePath, dtoImagePosition, dtoShowIcon,
+                dtoCoveragePercent, dtoCoverageWarning);
 
         return new PreparedMutation<>(cmd, dto, diagramObj.getId());
     }
@@ -5397,7 +8250,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      */
     private PreparedMutation<ViewConnectionDto> prepareUpdateViewConnection(
             String viewConnectionId, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling) {
+            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling,
+            Boolean showLabel, Integer textPosition) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Story 11-2: Validate hex colours before any other processing
@@ -5428,7 +8282,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         } else {
             emfBendpoints = ConnectionResponseBuilder.createEmfBendpoints(effectiveBendpoints);
         }
-        Command cmd = new UpdateViewConnectionCommand(connection, emfBendpoints, styling);
+        Command cmd = new UpdateViewConnectionCommand(connection, emfBendpoints, styling, showLabel, textPosition);
 
         // Build DTO — extract source/target for anchor points
         IDiagramModelArchimateObject sourceViewObj =
@@ -5442,10 +8296,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // When effectiveBendpoints is null (styling-only), read current bendpoints for response
         List<BendpointDto> responseBendpoints = (effectiveBendpoints != null)
                 ? effectiveBendpoints : ConnectionResponseBuilder.collectBendpoints(connection);
+
+        // Compute post-execution text position (Story 13-11)
+        int dtoTextPosition = (textPosition != null) ? textPosition : connection.getTextPosition();
+
         ViewConnectionDto baseDto = ConnectionResponseBuilder.buildConnectionResponseDto(
                 viewConnectionId, connection.getArchimateRelationship(),
                 sourceVoId, targetVoId, responseBendpoints, sourceViewObj, targetViewObj,
-                connection.getTextPosition());
+                dtoTextPosition);
 
         // Compute post-execution connection styling
         String dtoLineColor = StylingHelper.computePostStylingColor(
@@ -5455,13 +8313,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         Integer dtoLineWidth = StylingHelper.computePostStylingLineWidth(
                 StylingHelper.readConnectionLineWidth(connection), styling != null ? styling.lineWidth() : null);
 
+        // Compute post-execution label visibility (Story 13-1)
+        Boolean dtoNameVisible;
+        if (showLabel != null) {
+            dtoNameVisible = showLabel ? null : Boolean.FALSE;
+        } else {
+            dtoNameVisible = StylingHelper.readConnectionNameVisible(connection);
+        }
+
         ViewConnectionDto dto = new ViewConnectionDto(
                 baseDto.viewConnectionId(), baseDto.relationshipId(),
                 baseDto.relationshipType(), baseDto.sourceViewObjectId(),
                 baseDto.targetViewObjectId(), baseDto.bendpoints(),
                 baseDto.absoluteBendpoints(), baseDto.sourceAnchor(),
                 baseDto.targetAnchor(), baseDto.textPosition(),
-                dtoLineColor, dtoLineWidth, dtoFontColor);
+                dtoLineColor, dtoLineWidth, dtoFontColor, dtoNameVisible);
 
         return new PreparedMutation<>(cmd, dto, viewConnectionId);
     }
@@ -5472,14 +8338,27 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      */
     private PreparedMutation<ViewConnectionDto> prepareUpdateViewConnectionDirect(
             IDiagramModelArchimateConnection connection, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints) {
+            List<AbsoluteBendpointDto> absoluteBendpoints,
+            StylingParams styling, Boolean showLabel, Integer textPosition) {
+
+        // Validate styling if provided (Story 13-1)
+        if (styling != null) {
+            StylingHelper.validateConnectionStylingParams(styling);
+        }
 
         // Story 8-0d: convert absolute bendpoints to relative if provided
         List<BendpointDto> effectiveBendpoints = ConnectionResponseBuilder.resolveEffectiveBendpointsFromConnection(
                 bendpoints, absoluteBendpoints, connection);
 
-        // Build command
-        Command cmd = new UpdateViewConnectionCommand(connection, ConnectionResponseBuilder.createEmfBendpoints(effectiveBendpoints));
+        // Build command (with optional styling, label visibility, and text position)
+        // When effectiveBendpoints is null (styling-only update), preserve existing bendpoints
+        List<IDiagramModelBendpoint> emfBendpoints;
+        if (effectiveBendpoints == null) {
+            emfBendpoints = new ArrayList<>(connection.getBendpoints());
+        } else {
+            emfBendpoints = ConnectionResponseBuilder.createEmfBendpoints(effectiveBendpoints);
+        }
+        Command cmd = new UpdateViewConnectionCommand(connection, emfBendpoints, styling, showLabel, textPosition);
 
         // Build DTO — extract source/target for anchor points
         String viewConnectionId = connection.getId();
@@ -5490,10 +8369,41 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         String sourceVoId = sourceViewObj != null ? sourceViewObj.getId() : null;
         String targetVoId = targetViewObj != null ? targetViewObj.getId() : null;
 
-        ViewConnectionDto dto = ConnectionResponseBuilder.buildConnectionResponseDto(
+        // Build base DTO then overlay post-execution styling (Story 13-1)
+        List<BendpointDto> responseBendpoints = (effectiveBendpoints != null)
+                ? effectiveBendpoints : ConnectionResponseBuilder.collectBendpoints(connection);
+
+        // Compute post-execution text position (Story 13-11)
+        int dtoTextPosition = (textPosition != null) ? textPosition : connection.getTextPosition();
+
+        ViewConnectionDto baseDto = ConnectionResponseBuilder.buildConnectionResponseDto(
                 viewConnectionId, connection.getArchimateRelationship(),
-                sourceVoId, targetVoId, effectiveBendpoints, sourceViewObj, targetViewObj,
-                connection.getTextPosition());
+                sourceVoId, targetVoId, responseBendpoints, sourceViewObj, targetViewObj,
+                dtoTextPosition);
+
+        // Compute post-execution connection styling
+        String dtoLineColor = StylingHelper.computePostStylingColor(
+                StylingHelper.readConnectionLineColor(connection), styling != null ? styling.lineColor() : null);
+        String dtoFontColor = StylingHelper.computePostStylingColor(
+                StylingHelper.readConnectionFontColor(connection), styling != null ? styling.fontColor() : null);
+        Integer dtoLineWidth = StylingHelper.computePostStylingLineWidth(
+                StylingHelper.readConnectionLineWidth(connection), styling != null ? styling.lineWidth() : null);
+
+        // Compute post-execution label visibility (Story 13-1)
+        Boolean dtoNameVisible;
+        if (showLabel != null) {
+            dtoNameVisible = showLabel ? null : Boolean.FALSE;
+        } else {
+            dtoNameVisible = StylingHelper.readConnectionNameVisible(connection);
+        }
+
+        ViewConnectionDto dto = new ViewConnectionDto(
+                baseDto.viewConnectionId(), baseDto.relationshipId(),
+                baseDto.relationshipType(), baseDto.sourceViewObjectId(),
+                baseDto.targetViewObjectId(), baseDto.bendpoints(),
+                baseDto.absoluteBendpoints(), baseDto.sourceAnchor(),
+                baseDto.targetAnchor(), baseDto.textPosition(),
+                dtoLineColor, dtoLineWidth, dtoFontColor, dtoNameVisible);
 
         return new PreparedMutation<>(cmd, dto, viewConnectionId);
     }
@@ -5696,8 +8606,16 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 allViewConnections, viewRefs);
 
         // Build relationship cascade records (sorted descending by index)
+        // B19: orphaned relationships (eContainer == null) are skipped — they exist
+        // only in EMF cross-references and cannot be safely removed from a folder.
         List<DeleteElementCommand.CascadedRelationship> cascadedRels = new ArrayList<>();
         for (IArchimateRelationship rel : allRels) {
+            if (rel.eContainer() == null) {
+                logger.warn("Skipping orphaned relationship {} during element deletion "
+                        + "(exists in cross-references but not in containment tree)",
+                        rel.getId());
+                continue;
+            }
             IFolder relFolder = (IFolder) rel.eContainer();
             int relIndex = relFolder.getElements().indexOf(rel);
             cascadedRels.add(new DeleteElementCommand.CascadedRelationship(
@@ -5910,11 +8828,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         for (Object obj : new ArrayList<>(folder.getElements())) {
             if (obj instanceof IArchimateElement element) {
                 // Track relationship IDs that will be cascade-deleted with this element
+                // B19: only track contained relationships — orphans won't be cascade-deleted
                 for (IArchimateRelationship rel : element.getSourceRelationships()) {
-                    cascadedRelIds.add(rel.getId());
+                    if (rel.eContainer() != null) cascadedRelIds.add(rel.getId());
                 }
                 for (IArchimateRelationship rel : element.getTargetRelationships()) {
-                    cascadedRelIds.add(rel.getId());
+                    if (rel.eContainer() != null) cascadedRelIds.add(rel.getId());
                 }
                 PreparedMutation<DeleteResultDto> prepared = prepareDeleteElement(element.getId());
                 subCommands.add(prepared.command());
@@ -6804,6 +9723,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             Map<Integer, IDiagramModelArchimateConnection> createdViewConnections = new LinkedHashMap<>();
             // Tracks EMF group objects for parentViewObjectId resolution in add-to-view (Story 9-0g)
             Map<Integer, IDiagramModelGroup> createdGroups = new LinkedHashMap<>();
+            // Tracks EMF view objects created by create-view for viewId back-reference resolution
+            Map<Integer, IArchimateDiagramModel> createdViews = new LinkedHashMap<>();
             Map<Integer, String> createdEntityIds = new LinkedHashMap<>();
             Map<Integer, String> operationTools = new LinkedHashMap<>();
             // Tracks failed operation indices for back-reference cascade (Story 11-9)
@@ -6835,7 +9756,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     PreparedMutation<?> prepared = prepareOperation(
                             op.tool(), resolvedParams, i, createdElements,
                             createdViewObjects, createdRelationships,
-                            createdViewConnections, createdGroups);
+                            createdViewConnections, createdGroups, createdViews);
                     preparedMutations.add(prepared);
 
                     // Store for future back-references
@@ -6843,6 +9764,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
                     // Build per-operation result
                     String action = resolveActionString(op.tool());
+                    if (prepared.entity() instanceof RelationshipDto relDto
+                            && relDto.alreadyExisted()) {
+                        action = "already_existed";
+                    }
                     BulkOperationResult opResult = buildOperationResult(
                             i, op.tool(), action, prepared);
                     operationResults.add(opResult);
@@ -7034,7 +9959,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             Map<Integer, IDiagramModelArchimateObject> createdViewObjects,
             Map<Integer, IArchimateRelationship> createdRelationships,
             Map<Integer, IDiagramModelArchimateConnection> createdViewConnections,
-            Map<Integer, IDiagramModelGroup> createdGroups) {
+            Map<Integer, IDiagramModelGroup> createdGroups,
+            Map<Integer, IArchimateDiagramModel> createdViews) {
         return switch (tool) {
             case "create-element" -> {
                 String type = requireParam(params, "type");
@@ -7105,7 +10031,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 String viewpoint = optionalParam(params, "viewpoint");
                 String folderId = optionalParam(params, "folderId");
                 String connectionRouterType = optionalParam(params, "connectionRouterType");
-                yield prepareCreateView(name, viewpoint, folderId, connectionRouterType);
+                PreparedMutation<ViewDto> viewPrepared =
+                        prepareCreateView(name, viewpoint, folderId, connectionRouterType);
+                // Store raw view for viewId back-reference resolution
+                if (viewPrepared.rawObject() instanceof IArchimateDiagramModel view) {
+                    createdViews.put(operationIndex, view);
+                }
+                yield viewPrepared;
             }
             case "update-element" -> {
                 String id = requireParam(params, "id");
@@ -7139,6 +10071,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Integer height = optionalIntParam(params, "height");
                 String parentViewObjectId = optionalParam(params, "parentViewObjectId");
                 StylingParams bulkStyling = extractBulkStylingParams(params);
+                ImageParams bulkImageParams = extractBulkImageParams(params);
 
                 // Story 10-20: Resolve batch-created parent container (group or element
                 // created earlier in this batch via add-group-to-view or add-to-view)
@@ -7149,18 +10082,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 IArchimateElement backRefElement = findBackReferencedElement(
                         elementId, createdElements);
 
+                // Resolve batch-created view for viewId back-reference
+                IArchimateDiagramModel batchView = findBackReferencedView(viewId, createdViews);
+
                 PreparedMutation<AddToViewResultDto> addToViewPrepared;
                 if (backRefElement != null) {
                     addToViewPrepared = prepareAddToViewDirect(viewId, backRefElement,
                             x, y, width, height,
                             batchParent != null ? null : parentViewObjectId,
-                            batchParent, bulkStyling);
+                            batchParent, bulkStyling, bulkImageParams, batchView);
                 } else {
                     // autoConnect forced false in bulk context
                     addToViewPrepared = prepareAddToView(viewId, elementId,
                             x, y, width, height, false,
                             batchParent != null ? null : parentViewObjectId,
-                            batchParent, bulkStyling);
+                            batchParent, bulkStyling, bulkImageParams, batchView);
                 }
 
                 // Store raw view object for back-reference by add-connection-to-view
@@ -7177,6 +10113,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 List<BendpointDto> bendpoints = parseBendpoints(params);
                 List<AbsoluteBendpointDto> absoluteBendpoints = parseAbsoluteBendpoints(params);
                 validateBendpointMutualExclusion(bendpoints, absoluteBendpoints);
+                StylingParams connStyling = extractBulkStylingParams(params);
+                Boolean showLabel = optionalBoolParam(params, "showLabel");
+                Integer textPosition = parseBulkLabelPosition(params);
 
                 // C1 fix: check if relationship is a back-referenced relationship
                 IArchimateRelationship directRelationship = findBackReferencedRelationship(
@@ -7188,18 +10127,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 IDiagramModelArchimateObject targetViewObj = findBackReferencedViewObject(
                         targetViewObjectId, createdViewObjects);
 
+                // Resolve batch-created view for viewId back-reference
+                IArchimateDiagramModel connBatchView = findBackReferencedView(viewId, createdViews);
+
                 PreparedMutation<ViewConnectionDto> connPrepared;
-                if (sourceViewObj != null || targetViewObj != null || directRelationship != null) {
+                if (sourceViewObj != null || targetViewObj != null
+                        || directRelationship != null || connBatchView != null) {
                     connPrepared = prepareAddConnectionToViewDirect(
                             viewId, relationshipId,
                             sourceViewObj, sourceViewObjectId,
                             targetViewObj, targetViewObjectId,
-                            bendpoints, absoluteBendpoints, directRelationship);
+                            bendpoints, absoluteBendpoints, directRelationship,
+                            connStyling, showLabel, textPosition, connBatchView);
                 } else {
                     connPrepared = prepareAddConnectionToView(
                             viewId, relationshipId,
                             sourceViewObjectId, targetViewObjectId,
-                            bendpoints, absoluteBendpoints);
+                            bendpoints, absoluteBendpoints,
+                            connStyling, showLabel, textPosition);
                 }
                 // H1 fix: store raw view connection for back-reference by update-view-connection
                 if (connPrepared.rawObject() instanceof IDiagramModelArchimateConnection conn) {
@@ -7220,14 +10165,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Integer height = optionalIntParam(params, "height");
                 String text = optionalParam(params, "text");
                 StylingParams voStyling = extractBulkStylingParams(params);
+                ImageParams voImageParams = extractBulkImageParams(params);
 
                 // H2 fix: check if viewObjectId is a back-referenced view object
                 IDiagramModelArchimateObject backRefViewObj = findBackReferencedViewObject(
                         viewObjectId, createdViewObjects);
                 if (backRefViewObj != null) {
-                    yield prepareUpdateViewObjectDirect(backRefViewObj, x, y, width, height);
+                    yield prepareUpdateViewObjectDirect(backRefViewObj, x, y, width, height, voStyling, voImageParams);
                 }
-                yield prepareUpdateViewObject(viewObjectId, x, y, width, height, text, voStyling);
+                yield prepareUpdateViewObject(viewObjectId, x, y, width, height, text, voStyling, voImageParams);
             }
             case "update-view-connection" -> {
                 String viewConnectionId = requireParam(params, "viewConnectionId");
@@ -7235,9 +10181,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 List<AbsoluteBendpointDto> absoluteBendpoints = parseAbsoluteBendpoints(params);
                 validateBendpointMutualExclusion(bendpoints, absoluteBendpoints);
                 StylingParams connStyling = extractBulkStylingParams(params);
+                Boolean showLabel = optionalBoolParam(params, "showLabel");
+                Integer textPosition = parseBulkLabelPosition(params);
 
                 // Neither format provided means clear bendpoints (consistent with handler path)
-                if (bendpoints == null && absoluteBendpoints == null && connStyling == null) {
+                if (bendpoints == null && absoluteBendpoints == null && connStyling == null
+                        && showLabel == null && textPosition == null) {
                     bendpoints = List.of();
                 }
 
@@ -7246,10 +10195,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         viewConnectionId, createdViewConnections);
                 if (backRefConn != null) {
                     yield prepareUpdateViewConnectionDirect(backRefConn, bendpoints,
-                            absoluteBendpoints);
+                            absoluteBendpoints, connStyling, showLabel, textPosition);
                 }
                 yield prepareUpdateViewConnection(viewConnectionId, bendpoints,
-                        absoluteBendpoints, connStyling);
+                        absoluteBendpoints, connStyling, showLabel, textPosition);
             }
             case "clear-view" -> {
                 String viewId = requireParam(params, "viewId");
@@ -7264,15 +10213,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Integer height = optionalIntParam(params, "height");
                 String parentVoId = optionalParam(params, "parentViewObjectId");
                 StylingParams groupStyling = extractBulkStylingParams(params);
+                ImageParams groupImageParams = extractBulkImageParams(params);
 
                 // Story 10-20: Resolve batch-created parent container (group or element)
                 IDiagramModelContainer batchParent = findBatchCreatedParentContainer(
                         parentVoId, createdGroups, createdViewObjects);
 
+                // Resolve batch-created view for viewId back-reference
+                IArchimateDiagramModel batchView = findBackReferencedView(viewId, createdViews);
+
                 PreparedMutation<ViewGroupDto> groupPrepared =
                         prepareAddGroupToView(viewId, label, x, y, width, height,
                                 batchParent != null ? null : parentVoId,
-                                batchParent, groupStyling);
+                                batchParent, groupStyling, groupImageParams, batchView);
                 // Story 9-0g: Track group for parentViewObjectId resolution in add-to-view
                 if (groupPrepared.rawObject() instanceof IDiagramModelGroup group) {
                     createdGroups.put(operationIndex, group);
@@ -7288,14 +10241,18 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Integer height = optionalIntParam(params, "height");
                 String parentVoId = optionalParam(params, "parentViewObjectId");
                 StylingParams noteStyling = extractBulkStylingParams(params);
+                ImageParams noteImageParams = extractBulkImageParams(params);
 
                 // Story 10-20: Resolve batch-created parent container (group or element)
                 IDiagramModelContainer batchParent = findBatchCreatedParentContainer(
                         parentVoId, createdGroups, createdViewObjects);
 
-                yield prepareAddNoteToView(viewId, content, x, y, width, height,
+                // Resolve batch-created view for viewId back-reference
+                IArchimateDiagramModel noteBatchView = findBackReferencedView(viewId, createdViews);
+
+                yield prepareAddNoteToView(viewId, content, null, null, x, y, width, height,
                         batchParent != null ? null : parentVoId,
-                        batchParent, noteStyling);
+                        batchParent, noteStyling, noteImageParams, noteBatchView);
             }
             case "delete-element" -> {
                 String elementId = requireParam(params, "elementId");
@@ -7391,6 +10348,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         for (IDiagramModelArchimateObject viewObj : createdViewObjects.values()) {
             if (viewObj.getId().equals(entityId)) {
                 return viewObj;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Finds an EMF diagram model from the back-reference map by entity ID.
+     * Returns null if the ID doesn't match any back-referenced view.
+     */
+    private IArchimateDiagramModel findBackReferencedView(String viewId,
+            Map<Integer, IArchimateDiagramModel> createdViews) {
+        if (viewId == null || createdViews.isEmpty()) return null;
+        for (IArchimateDiagramModel view : createdViews.values()) {
+            if (view.getId().equals(viewId)) {
+                return view;
             }
         }
         return null;
@@ -7550,7 +10522,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private PreparedMutation<AddToViewResultDto> prepareAddToViewDirect(
             String viewId, IArchimateElement element, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId,
-            IDiagramModelContainer batchParentContainer, StylingParams styling) {
+            IDiagramModelContainer batchParentContainer, StylingParams styling,
+            ImageParams imageParams, IArchimateDiagramModel batchView) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Validate x/y both-or-neither
@@ -7563,15 +10536,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        // Find view
-        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
-        if (!(viewObj instanceof IArchimateDiagramModel view)) {
-            throw new ModelAccessException(
-                    "View not found: " + viewId,
-                    ErrorCode.VIEW_NOT_FOUND,
-                    null,
-                    "Use get-views to find valid view IDs",
-                    null);
+        // Find view — use batch-created view if available
+        IArchimateDiagramModel view = batchView;
+        if (view == null) {
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel resolvedView)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId,
+                        ErrorCode.VIEW_NOT_FOUND,
+                        null,
+                        "Use get-views to find valid view IDs",
+                        null);
+            }
+            view = resolvedView;
         }
 
         // Validate dimensions
@@ -7603,14 +10580,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Apply styling at creation time (consistent with prepareAddToView)
         StylingHelper.applyStylingToNewObject(diagramObj, styling);
 
-        // Build view object DTO with styling
+        // Apply image at creation time (consistent with prepareAddToView)
+        ImageHelper.applyImageToNewObject(diagramObj, imageParams);
+
+        // Build view object DTO with styling and image fields
         ViewObjectDto viewObjectDto = new ViewObjectDto(
                 diagramObj.getId(), element.getId(), element.getName(),
                 element.eClass().getName(), resolvedX, resolvedY,
                 resolvedWidth, resolvedHeight,
                 StylingHelper.readFillColor(diagramObj), StylingHelper.readLineColor(diagramObj),
                 StylingHelper.readFontColor(diagramObj), StylingHelper.readOpacity(diagramObj),
-                StylingHelper.readLineWidth(diagramObj));
+                StylingHelper.readLineWidth(diagramObj),
+                ImageHelper.readImagePath(diagramObj), ImageHelper.readImagePosition(diagramObj),
+                ImageHelper.readShowIcon(diagramObj), null, null);
 
         IDiagramModelContainer parentContainer = resolveParentContainer(
                 view, parentViewObjectId, batchParentContainer);
@@ -7633,18 +10615,37 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             IDiagramModelArchimateObject directSource, String sourceViewObjectId,
             IDiagramModelArchimateObject directTarget, String targetViewObjectId,
             List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints,
-            IArchimateRelationship directRelationship) {
+            IArchimateRelationship directRelationship,
+            StylingParams styling, Boolean showLabel, Integer textPosition) {
+        return prepareAddConnectionToViewDirect(viewId, relationshipId,
+                directSource, sourceViewObjectId, directTarget, targetViewObjectId,
+                bendpoints, absoluteBendpoints, directRelationship,
+                styling, showLabel, textPosition, null);
+    }
+
+    private PreparedMutation<ViewConnectionDto> prepareAddConnectionToViewDirect(
+            String viewId, String relationshipId,
+            IDiagramModelArchimateObject directSource, String sourceViewObjectId,
+            IDiagramModelArchimateObject directTarget, String targetViewObjectId,
+            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints,
+            IArchimateRelationship directRelationship,
+            StylingParams styling, Boolean showLabel, Integer textPosition,
+            IArchimateDiagramModel batchView) {
         IArchimateModel model = requireAndCaptureModel();
 
-        // Find view
-        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
-        if (!(viewObj instanceof IArchimateDiagramModel view)) {
-            throw new ModelAccessException(
-                    "View not found: " + viewId,
-                    ErrorCode.VIEW_NOT_FOUND,
-                    null,
-                    "Use get-views to find valid view IDs",
-                    null);
+        // Find view — use batch-created view if available
+        IArchimateDiagramModel view = batchView;
+        if (view == null) {
+            EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+            if (!(viewObj instanceof IArchimateDiagramModel resolvedView)) {
+                throw new ModelAccessException(
+                        "View not found: " + viewId,
+                        ErrorCode.VIEW_NOT_FOUND,
+                        null,
+                        "Use get-views to find valid view IDs",
+                        null);
+            }
+            view = resolvedView;
         }
 
         // Find relationship — use direct reference if available (C1 fix), else look up
@@ -7697,27 +10698,35 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         // Validate relationship-element match
+        // B19: skip validation only for same-batch back-referenced relationships —
+        // connect() is deferred to command execution, so getSource()/getTarget() are null
+        // AND the relationship is not yet in containment (eContainer == null).
+        // Committed relationships (eContainer != null) must always be validated.
         IArchimateElement relSource = (IArchimateElement) relationship.getSource();
         IArchimateElement relTarget = (IArchimateElement) relationship.getTarget();
-        IArchimateElement sourceElem = sourceViewObj.getArchimateElement();
-        IArchimateElement targetElem = targetViewObj.getArchimateElement();
+        boolean isSameBatchBackRef = relSource == null && relTarget == null
+                && relationship.eContainer() == null;
+        if (!isSameBatchBackRef) {
+            IArchimateElement sourceElem = sourceViewObj.getArchimateElement();
+            IArchimateElement targetElem = targetViewObj.getArchimateElement();
 
-        boolean forwardMatch = relSource.getId().equals(sourceElem.getId())
-                && relTarget.getId().equals(targetElem.getId());
-        boolean reversedMatch = relSource.getId().equals(targetElem.getId())
-                && relTarget.getId().equals(sourceElem.getId());
+            boolean forwardMatch = relSource.getId().equals(sourceElem.getId())
+                    && relTarget.getId().equals(targetElem.getId());
+            boolean reversedMatch = relSource.getId().equals(targetElem.getId())
+                    && relTarget.getId().equals(sourceElem.getId());
 
-        if (!forwardMatch && !reversedMatch) {
-            throw new ModelAccessException(
-                    "Relationship '" + relationshipId + "' does not connect the elements "
-                            + "referenced by the source and target view objects",
-                    ErrorCode.RELATIONSHIP_MISMATCH,
-                    "Relationship connects " + relSource.getId() + " -> " + relTarget.getId()
-                            + ", but view objects reference " + sourceElem.getId()
-                            + " and " + targetElem.getId(),
-                    "Verify the relationship connects the correct elements, "
-                            + "or use different view objects",
-                    null);
+            if (!forwardMatch && !reversedMatch) {
+                throw new ModelAccessException(
+                        "Relationship '" + relationshipId + "' does not connect the elements "
+                                + "referenced by the source and target view objects",
+                        ErrorCode.RELATIONSHIP_MISMATCH,
+                        "Relationship connects " + relSource.getId() + " -> " + relTarget.getId()
+                                + ", but view objects reference " + sourceElem.getId()
+                                + " and " + targetElem.getId(),
+                        "Verify the relationship connects the correct elements, "
+                                + "or use different view objects",
+                        null);
+            }
         }
 
         // Story 8-0d: convert absolute bendpoints to relative if provided
@@ -7727,17 +10736,59 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     absoluteBendpoints, sourceViewObj, targetViewObj);
         }
 
+        // Validate styling if provided (Story 13-1)
+        if (styling != null && styling.hasAnyValue()) {
+            StylingHelper.validateConnectionStylingParams(styling);
+        }
+
         // Create connection
         IDiagramModelArchimateConnection conn =
                 IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
         conn.setArchimateRelationship(relationship);
         ConnectionResponseBuilder.applyBendpointsToConnection(conn, effectiveBendpoints);
 
+        // Apply styling at creation time (Story 13-1)
+        if (styling != null && styling.hasAnyValue()) {
+            if (styling.lineColor() != null) {
+                conn.setLineColor(styling.lineColor().isEmpty() ? null : styling.lineColor());
+            }
+            if (styling.fontColor() != null) {
+                conn.setFontColor(styling.fontColor().isEmpty() ? null : styling.fontColor());
+            }
+            if (styling.lineWidth() != null) {
+                conn.setLineWidth(styling.lineWidth());
+            }
+        }
+
+        // Apply label visibility at creation time (Story 13-1)
+        if (showLabel != null) {
+            conn.setNameVisible(showLabel);
+        }
+
+        // Apply label position at creation time (Story 13-11)
+        if (textPosition != null) {
+            conn.setTextPosition(textPosition);
+        }
+
         Command cmd = new AddConnectionToViewCommand(conn, sourceViewObj, targetViewObj);
 
-        ViewConnectionDto dto = ConnectionResponseBuilder.buildConnectionResponseDto(
+        // Build DTO with styling info included in response
+        String dtoLineColor = StylingHelper.readConnectionLineColor(conn);
+        String dtoFontColor = StylingHelper.readConnectionFontColor(conn);
+        Integer dtoLineWidth = StylingHelper.readConnectionLineWidth(conn);
+        Boolean dtoNameVisible = StylingHelper.readConnectionNameVisible(conn);
+
+        ViewConnectionDto baseDto = ConnectionResponseBuilder.buildConnectionResponseDto(
                 conn.getId(), relationship, sourceViewObj.getId(), targetViewObj.getId(),
                 effectiveBendpoints, sourceViewObj, targetViewObj, conn.getTextPosition());
+
+        ViewConnectionDto dto = new ViewConnectionDto(
+                baseDto.viewConnectionId(), baseDto.relationshipId(),
+                baseDto.relationshipType(), baseDto.sourceViewObjectId(),
+                baseDto.targetViewObjectId(), baseDto.bendpoints(),
+                baseDto.absoluteBendpoints(), baseDto.sourceAnchor(),
+                baseDto.targetAnchor(), baseDto.textPosition(),
+                dtoLineColor, dtoLineWidth, dtoFontColor, dtoNameVisible);
 
         return new PreparedMutation<>(cmd, dto, conn.getId(), conn);
     }
@@ -7849,6 +10900,48 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             return null;
         }
         return new StylingParams(fillColor, lineColor, fontColor, opacity, lineWidth);
+    }
+
+    /**
+     * Extracts optional image parameters from bulk operation params.
+     * Returns null if no image params are present.
+     * Cross-ref: ViewPlacementHandler.extractImageParams() uses
+     * HandlerUtils.optionalStringParamAllowEmpty() for the same empty-string semantics.
+     * This method inlines that logic because the model layer uses optionalParam() instead.
+     */
+    private ImageParams extractBulkImageParams(Map<String, Object> params) {
+        String imagePath = optionalParam(params, "imagePath");
+        // Allow empty string for imagePath (means "remove image") —
+        // mirrors HandlerUtils.optionalStringParamAllowEmpty() semantics
+        if (imagePath == null && params.containsKey("imagePath")) {
+            Object raw = params.get("imagePath");
+            if (raw instanceof String s && s.isEmpty()) {
+                imagePath = "";
+            }
+        }
+        String imagePosition = optionalParam(params, "imagePosition");
+        String showIcon = optionalParam(params, "showIcon");
+        if (imagePath == null && imagePosition == null && showIcon == null) {
+            return null;
+        }
+        return new ImageParams(imagePath, imagePosition, showIcon);
+    }
+
+    /**
+     * Parses a labelPosition string ("source"/"middle"/"target") to integer (0/1/2)
+     * from bulk-mutate operation parameters. Mirrors the handler-level parseLabelPosition.
+     */
+    private Integer parseBulkLabelPosition(Map<String, Object> params) {
+        Object value = params.get("labelPosition");
+        if (value == null) return null;
+        String pos = value.toString().toLowerCase();
+        return switch (pos) {
+            case "source" -> 0;
+            case "middle" -> 1;
+            case "target" -> 2;
+            default -> throw new IllegalArgumentException(
+                    "Invalid labelPosition: '" + pos + "'. Must be 'source', 'middle', or 'target'.");
+        };
     }
 
     private Boolean optionalBoolParam(Map<String, Object> params, String key) {
@@ -8291,7 +11384,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                                 StylingHelper.readLineColor(archimateObject),
                                 StylingHelper.readFontColor(archimateObject),
                                 StylingHelper.readOpacity(archimateObject),
-                                StylingHelper.readLineWidth(archimateObject)));
+                                StylingHelper.readLineWidth(archimateObject),
+                                ImageHelper.readImagePath(archimateObject),
+                                ImageHelper.readImagePosition(archimateObject),
+                                ImageHelper.readShowIcon(archimateObject)));
                     }
                 }
 
@@ -8320,7 +11416,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         StylingHelper.readLineColor(groupObj),
                         StylingHelper.readFontColor(groupObj),
                         StylingHelper.readOpacity(groupObj),
-                        StylingHelper.readLineWidth(groupObj)));
+                        StylingHelper.readLineWidth(groupObj),
+                        ImageHelper.readImagePath(groupObj),
+                        ImageHelper.readImagePosition(groupObj),
+                        ImageHelper.readShowIcon(groupObj)));
 
                 // Recurse into group's children
                 collectViewContents(groupObj, elements, relationships, visualMetadata,
@@ -8344,7 +11443,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         StylingHelper.readLineColor(noteObj),
                         StylingHelper.readFontColor(noteObj),
                         StylingHelper.readOpacity(noteObj),
-                        StylingHelper.readLineWidth(noteObj)));
+                        StylingHelper.readLineWidth(noteObj),
+                        null, // note field
+                        ImageHelper.readImagePath(noteObj),
+                        ImageHelper.readImagePosition(noteObj),
+                        ImageHelper.readShowIcon(noteObj)));
                 continue; // Notes are not containers, no recursion needed
             }
 
@@ -8408,7 +11511,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             archimateConn.getTextPosition(),
                             StylingHelper.readConnectionLineColor(archimateConn),
                             StylingHelper.readConnectionLineWidth(archimateConn),
-                            StylingHelper.readConnectionFontColor(archimateConn)));
+                            StylingHelper.readConnectionFontColor(archimateConn),
+                            StylingHelper.readConnectionNameVisible(archimateConn)));
                 }
             }
         });
@@ -8542,6 +11646,384 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
         }
         return ids;
+    }
+
+    // ---- Image management (Story C4) ----
+
+    @Override
+    public AddImageResultDto addImageToModel(String sessionId, byte[] imageData, String filenameHint) {
+        logger.info("Adding image to model: filenameHint={}, dataSize={}", filenameHint, imageData != null ? imageData.length : 0);
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (imageData == null || imageData.length == 0) {
+            throw new ModelAccessException(
+                    "Image data must not be empty",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide base64-encoded image data (PNG, JPEG, GIF, BMP, ICO, TIFF).",
+                    null);
+        }
+
+        if (filenameHint == null || filenameHint.isBlank()) {
+            filenameHint = "image.png";
+        }
+
+        // Detect extension from filename hint
+        String ext = filenameHint.contains(".")
+                ? filenameHint.substring(filenameHint.lastIndexOf('.') + 1).toLowerCase()
+                : "png";
+
+        // Write to temp file, validate, and store via addImageFromFile
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("archi-mcp-image-", "." + ext);
+            Files.write(tempFile.toPath(), imageData);
+            return storeImageFile(tempFile, model);
+        } catch (Exception e) {
+            if (e instanceof ModelAccessException) throw (ModelAccessException) e;
+            if (e instanceof org.eclipse.swt.SWTException) {
+                throw new ModelAccessException(
+                        "Invalid or unsupported image data: " + e.getMessage(),
+                        ErrorCode.INVALID_PARAMETER,
+                        e.getMessage(),
+                        "Provide valid image data in a supported format: PNG, JPEG, GIF, BMP, ICO, TIFF. SVG is not supported.",
+                        null);
+            }
+            throw new ModelAccessException(
+                    "Failed to add image to model: " + e.getMessage(),
+                    ErrorCode.INTERNAL_ERROR,
+                    e.getMessage(),
+                    null,
+                    null);
+        } finally {
+            if (tempFile != null) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    @Override
+    public AddImageResultDto addImageFromFilePath(String sessionId, String filePath) {
+        logger.info("Adding image from file path: {}", filePath);
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (filePath == null || filePath.isBlank()) {
+            throw new ModelAccessException(
+                    "filePath must not be empty",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide an absolute path to a local image file.",
+                    null);
+        }
+
+        File file = new File(filePath);
+        if (!file.isAbsolute()) {
+            throw new ModelAccessException(
+                    "filePath must be an absolute path: " + filePath,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide an absolute path (e.g., /Users/me/icons/aws-eks.png).",
+                    null);
+        }
+        if (!file.exists()) {
+            throw new ModelAccessException(
+                    "File not found: " + filePath,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Check the file path and ensure the file exists.",
+                    null);
+        }
+        if (!file.isFile()) {
+            throw new ModelAccessException(
+                    "Path is not a regular file: " + filePath,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide a path to a file, not a directory.",
+                    null);
+        }
+        if (!file.canRead()) {
+            throw new ModelAccessException(
+                    "File is not readable: " + filePath,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Check file permissions.",
+                    null);
+        }
+        if (file.length() > 1_048_576) {
+            throw new ModelAccessException(
+                    "File exceeds 1MB limit (" + file.length() + " bytes): " + filePath,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide a smaller image (max 1MB).",
+                    null);
+        }
+
+        try {
+            return storeImageFile(file, model);
+        } catch (Exception e) {
+            if (e instanceof ModelAccessException) throw (ModelAccessException) e;
+            if (e instanceof org.eclipse.swt.SWTException) {
+                throw new ModelAccessException(
+                        "Invalid or unsupported image file: " + e.getMessage(),
+                        ErrorCode.INVALID_PARAMETER,
+                        e.getMessage(),
+                        "Provide a valid image file in a supported format: PNG, JPEG, GIF, BMP, ICO, TIFF. SVG is not supported.",
+                        null);
+            }
+            throw new ModelAccessException(
+                    "Failed to add image from file: " + e.getMessage(),
+                    ErrorCode.INTERNAL_ERROR,
+                    e.getMessage(),
+                    null,
+                    null);
+        }
+    }
+
+    @Override
+    public AddImageResultDto addImageFromUrl(String sessionId, String url) {
+        logger.info("Adding image from URL: {}", url);
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (url == null || url.isBlank()) {
+            throw new ModelAccessException(
+                    "url must not be empty",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide an HTTP or HTTPS URL to an image file.",
+                    null);
+        }
+
+        // Validate URL scheme
+        if (!url.startsWith("http://") && !url.startsWith("https://")) {
+            throw new ModelAccessException(
+                    "Only http:// and https:// URLs are supported. Got: " + url,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Use filePath for local files. Use http:// or https:// URLs for remote images.",
+                    null);
+        }
+
+        // Validate URL syntax early (M3: clear error for malformed URLs)
+        URI uri;
+        try {
+            uri = URI.create(url);
+        } catch (IllegalArgumentException e) {
+            throw new ModelAccessException(
+                    "Malformed URL: " + url,
+                    ErrorCode.INVALID_PARAMETER,
+                    e.getMessage(),
+                    "Ensure the URL is properly encoded and contains no invalid characters.",
+                    null);
+        }
+
+        File tempFile = null;
+        try (HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build()) {
+            // Download image
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(uri)
+                    .timeout(Duration.ofSeconds(30))
+                    .GET()
+                    .build();
+            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+
+            if (response.statusCode() != 200) {
+                throw new ModelAccessException(
+                        "HTTP " + response.statusCode() + " downloading image from URL: " + url,
+                        ErrorCode.INTERNAL_ERROR,
+                        "HTTP status: " + response.statusCode(),
+                        "Check the URL is correct and the server is accessible.",
+                        null);
+            }
+
+            byte[] data = response.body();
+            if (data == null || data.length == 0) {
+                throw new ModelAccessException(
+                        "Empty response body from URL: " + url,
+                        ErrorCode.INTERNAL_ERROR,
+                        null,
+                        "The URL returned no data. Check the URL points to an image.",
+                        null);
+            }
+            if (data.length > 1_048_576) {
+                throw new ModelAccessException(
+                        "Downloaded image exceeds 1MB limit (" + data.length + " bytes)",
+                        ErrorCode.INVALID_PARAMETER,
+                        null,
+                        "Provide a URL to a smaller image (max 1MB).",
+                        null);
+            }
+
+            // Detect extension from URL path
+            String ext = "png";
+            String urlPath = uri.getPath();
+            if (urlPath != null && urlPath.contains(".")) {
+                ext = urlPath.substring(urlPath.lastIndexOf('.') + 1).toLowerCase();
+                if (ext.length() > 5 || ext.contains("/")) {
+                    ext = "png"; // fallback for weird URLs
+                }
+            }
+
+            tempFile = File.createTempFile("archi-mcp-image-", "." + ext);
+            Files.write(tempFile.toPath(), data);
+            return storeImageFile(tempFile, model);
+        } catch (ModelAccessException e) {
+            throw e;
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new ModelAccessException(
+                    "Timeout downloading image from URL: " + url,
+                    ErrorCode.INTERNAL_ERROR,
+                    e.getMessage(),
+                    "The server did not respond within the timeout. Try again or use filePath with a locally downloaded file.",
+                    null);
+        } catch (Exception e) {
+            if (e instanceof org.eclipse.swt.SWTException) {
+                throw new ModelAccessException(
+                        "Downloaded content is not a valid image: " + e.getMessage(),
+                        ErrorCode.INVALID_PARAMETER,
+                        e.getMessage(),
+                        "The URL does not point to a valid image. Supported formats: PNG, JPEG, GIF, BMP, ICO, TIFF.",
+                        null);
+            }
+            throw new ModelAccessException(
+                    "Failed to download image from URL: " + e.getMessage(),
+                    ErrorCode.INTERNAL_ERROR,
+                    e.getMessage(),
+                    null,
+                    null);
+        } finally {
+            if (tempFile != null) {
+                tempFile.delete();
+            }
+        }
+    }
+
+    /**
+     * Validates an image file and stores it in the model's archive via IArchiveManager.addImageFromFile().
+     * Returns the result DTO with archive path, dimensions, and format.
+     *
+     * @param file  the image file to validate and store
+     * @param model the model to store the image in (caller already validated via requireAndCaptureModel)
+     */
+    private AddImageResultDto storeImageFile(File file, IArchimateModel model) throws IOException {
+        // Validate image by loading ImageData (throws SWTException for invalid/unsupported formats)
+        ImageData imgData = new ImageData(file.getAbsolutePath());
+        int width = imgData.width;
+        int height = imgData.height;
+
+        // Detect format from file extension
+        String fileName = file.getName();
+        String ext = fileName.contains(".")
+                ? fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase()
+                : "png";
+        String formatDetected = switch (ext) {
+            case "jpg", "jpeg" -> "JPEG";
+            case "gif" -> "GIF";
+            case "bmp" -> "BMP";
+            case "ico" -> "ICO";
+            case "tiff", "tif" -> "TIFF";
+            default -> "PNG";
+        };
+
+        // Store via IArchiveManager.addImageFromFile — uses Archi's standard archive path naming.
+        // NOTE: Archive writes are NOT undoable (no command stack entry). This matches
+        // Archi's own behavior — images persist in the archive even if the referencing
+        // view object change is undone. Deduplication prevents unbounded orphan growth.
+        IArchiveManager archiveManager = (IArchiveManager) model.getAdapter(IArchiveManager.class);
+        if (archiveManager == null) {
+            throw new ModelAccessException(
+                    "Archive manager not available — model may not be saved yet",
+                    ErrorCode.INTERNAL_ERROR,
+                    null,
+                    "Save the model once in Archi before adding images.",
+                    null);
+        }
+        String imagePath = archiveManager.addImageFromFile(file);
+
+        logger.info("Image added to model: path={}, size={}x{}, format={}", imagePath, width, height, formatDetected);
+        return new AddImageResultDto(imagePath, width, height, formatDetected);
+    }
+
+    @Override
+    public List<ModelImageDto> listModelImages(String sessionId) {
+        logger.info("Listing model images");
+        IArchimateModel model = requireAndCaptureModel();
+
+        IArchiveManager archiveManager = (IArchiveManager) model.getAdapter(IArchiveManager.class);
+        if (archiveManager == null) {
+            return List.of();
+        }
+
+        // Use getLoadedImagePaths() to include all images in the archive cache,
+        // not just those currently referenced by model objects (getImagePaths()).
+        // This fixes the C4 known issue where newly added images were not listed.
+        java.util.Set<String> imagePaths = archiveManager.getLoadedImagePaths();
+        if (imagePaths == null || imagePaths.isEmpty()) {
+            return List.of();
+        }
+
+        List<ModelImageDto> result = new ArrayList<>();
+        for (String path : imagePaths) {
+            try {
+                // Get image dimensions — use createImageData to avoid SWT Image disposal
+                ImageData data = archiveManager.createImageData(path);
+                if (data != null) {
+                    result.add(new ModelImageDto(path, data.width, data.height));
+                }
+            } catch (Exception e) {
+                // Skip images that can't be loaded — don't fail the whole list
+                logger.warn("Could not load image dimensions for path: {}", path, e);
+                result.add(new ModelImageDto(path, 0, 0));
+            }
+        }
+
+        logger.info("Found {} images in model archive", result.size());
+        return result;
+    }
+
+    // ---- Image helper methods for DTO construction (Story C4) ----
+
+    private String computePostImagePath(IDiagramModelObject diagramObj, ImageParams imageParams) {
+        if (imageParams == null || imageParams.imagePath() == null) {
+            return ImageHelper.readImagePath(diagramObj);
+        }
+        return imageParams.imagePath().isEmpty() ? null : imageParams.imagePath();
+    }
+
+    private String computePostImagePosition(IDiagramModelObject diagramObj, ImageParams imageParams) {
+        if (imageParams == null || imageParams.imagePosition() == null) {
+            return ImageHelper.readImagePosition(diagramObj);
+        }
+        return imageParams.imagePosition();
+    }
+
+    private String computePostShowIcon(IDiagramModelObject diagramObj, ImageParams imageParams) {
+        if (imageParams == null || imageParams.showIcon() == null) {
+            return ImageHelper.readShowIcon(diagramObj);
+        }
+        return imageParams.showIcon();
+    }
+
+    /**
+     * Computes image coverage percentage given an archive image path and element dimensions.
+     * Returns null if dimensions cannot be determined.
+     */
+    private Double computeImageCoverage(String imagePath, int elementWidth, int elementHeight) {
+        if (imagePath == null || imagePath.isEmpty()) return null;
+        try {
+            IArchimateModel model = requireAndCaptureModel();
+            IArchiveManager archiveManager = (IArchiveManager) model.getAdapter(IArchiveManager.class);
+            if (archiveManager == null) return null;
+            ImageData data = archiveManager.createImageData(imagePath);
+            if (data == null) return null;
+            double coverage = ImageHelper.calculateCoverage(data.width, data.height, elementWidth, elementHeight);
+            return Math.round(coverage * 10.0) / 10.0; // round to 1 decimal
+        } catch (Exception e) {
+            logger.debug("Could not compute image coverage for path: {}", imagePath, e);
+            return null;
+        }
     }
 
     /**

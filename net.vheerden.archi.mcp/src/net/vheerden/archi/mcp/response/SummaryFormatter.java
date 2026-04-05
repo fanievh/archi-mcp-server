@@ -273,6 +273,62 @@ public final class SummaryFormatter {
         return sb.toString();
     }
 
+    /**
+     * Summarizes relationship search results with type distribution and
+     * source/target layer breakdown.
+     *
+     * @param relationships the full result set (before pagination)
+     * @param searchContext the search query (e.g., "data transfer"), or null
+     * @return natural language summary string
+     */
+    public static String summarizeRelationshipSearch(
+            List<RelationshipDto> relationships, String searchContext) {
+        if (relationships == null || relationships.isEmpty()) {
+            if (searchContext != null && !searchContext.isEmpty()) {
+                return "No relationships found matching '" + searchContext + "'.";
+            }
+            return "No relationships found.";
+        }
+
+        int count = relationships.size();
+        String contextPart = (searchContext != null && !searchContext.isEmpty())
+                ? " matching '" + searchContext + "'" : "";
+
+        // Type distribution
+        Map<String, Integer> typeCounts = new LinkedHashMap<>();
+        // Source/target name pairs for unique connected element count
+        Set<String> uniqueSourceIds = new HashSet<>();
+        Set<String> uniqueTargetIds = new HashSet<>();
+        for (RelationshipDto r : relationships) {
+            if (r.type() != null) {
+                typeCounts.merge(r.type(), 1, Integer::sum);
+            }
+            if (r.sourceId() != null) uniqueSourceIds.add(r.sourceId());
+            if (r.targetId() != null) uniqueTargetIds.add(r.targetId());
+        }
+
+        StringBuilder sb = new StringBuilder();
+        if (count == 1) {
+            RelationshipDto r = relationships.get(0);
+            sb.append("Found 1 relationship").append(contextPart).append(": ");
+            sb.append("1 ").append(r.type() != null ? r.type() : "unknown type").append(".");
+        } else {
+            sb.append("Found ").append(count).append(" relationships").append(contextPart).append(": ");
+            sb.append(formatDistribution(typeCounts)).append(".");
+        }
+
+        // Add connected element counts
+        Set<String> allUniqueElements = new HashSet<>(uniqueSourceIds);
+        allUniqueElements.addAll(uniqueTargetIds);
+        if (!allUniqueElements.isEmpty()) {
+            sb.append(" Connecting ").append(allUniqueElements.size())
+                    .append(" unique element").append(allUniqueElements.size() != 1 ? "s" : "")
+                    .append(".");
+        }
+
+        return sb.toString();
+    }
+
     // ---- Private Helpers ----
 
     /**

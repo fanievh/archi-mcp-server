@@ -27,12 +27,34 @@ public record ViewObjectDto(
     String lineColor,
     String fontColor,
     Integer opacity,
-    Integer lineWidth
+    Integer lineWidth,
+    String imagePath,
+    String imagePosition,
+    String showIcon,
+    Double imageCoveragePercent,
+    String imageCoverageWarning
 ) {
 
     /**
-     * Convenience constructor without styling fields (backward compat).
-     * Styling fields default to null (omitted from JSON via NON_NULL).
+     * Constructor with styling but no image fields (backward compat).
+     */
+    public ViewObjectDto(
+            String viewObjectId,
+            String elementId,
+            String elementName,
+            String elementType,
+            int x, int y, int width, int height,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth) {
+        this(viewObjectId, elementId, elementName, elementType,
+                x, y, width, height,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                null, null, null, null, null);
+    }
+
+    /**
+     * Convenience constructor without styling or image fields (backward compat).
+     * All optional fields default to null (omitted from JSON via NON_NULL).
      */
     public ViewObjectDto(
             String viewObjectId,

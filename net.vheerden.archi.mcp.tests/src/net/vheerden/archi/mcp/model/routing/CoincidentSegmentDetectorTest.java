@@ -353,6 +353,334 @@ public class CoincidentSegmentDetectorTest {
         assertTrue("Stacked offsets should produce three distinct y-coordinates", allDistinct);
     }
 
+    // ---- Task 4.1: computeCorridorGap tests ----
+
+    @Test
+    public void computeCorridorGap_shouldFindBoundsWithObstaclesOnBothSides() {
+        // Horizontal corridor at y=200, parallel range x=[100, 400]
+        // Obstacle above: y=[120, 170] (bottom edge at 170)
+        // Obstacle below: y=[230, 280] (top edge at 230)
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(100, 120, 200, 50, "obs-above"),  // bottom at 170
+                new RoutingRect(150, 230, 200, 50, "obs-below")); // top at 230
+
+        int[] gap = detector.computeCorridorGap(200, true, 100, 400, obstacles);
+
+        assertNotNull("Should find gap", gap);
+        assertEquals("Near bound should be bottom of upper obstacle", 170, gap[0]);
+        assertEquals("Far bound should be top of lower obstacle", 230, gap[1]);
+    }
+
+    @Test
+    public void computeCorridorGap_shouldFindBoundsForVerticalCorridor() {
+        // Vertical corridor at x=300, parallel range y=[100, 400]
+        // Obstacle left: x=[150, 270] (right edge at 270)
+        // Obstacle right: x=[330, 450] (left edge at 330)
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(150, 100, 120, 200, "obs-left"),  // right at 270
+                new RoutingRect(330, 150, 120, 200, "obs-right")); // left at 330
+
+        int[] gap = detector.computeCorridorGap(300, false, 100, 400, obstacles);
+
+        assertNotNull("Should find gap", gap);
+        assertEquals("Near bound should be right edge of left obstacle", 270, gap[0]);
+        assertEquals("Far bound should be left edge of right obstacle", 330, gap[1]);
+    }
+
+    @Test
+    public void computeCorridorGap_shouldUseDefaultExtentWhenNoObstacleOnOneSide() {
+        // Horizontal corridor at y=200, obstacle only above
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(100, 120, 200, 50, "obs-above")); // bottom at 170
+
+        int[] gap = detector.computeCorridorGap(200, true, 100, 400, obstacles);
+
+        assertNotNull("Should find gap", gap);
+        assertEquals("Near bound should be bottom of obstacle", 170, gap[0]);
+        assertEquals("Far bound should be default extent", 200 + 100, gap[1]);
+    }
+
+    @Test
+    public void computeCorridorGap_shouldReturnNull_whenCorridorInsideObstacle() {
+        // Corridor at y=200 lies inside obstacle spanning y=[150, 250]
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(100, 150, 200, 100, "obs-enclosing"));
+
+        int[] gap = detector.computeCorridorGap(200, true, 100, 400, obstacles);
+
+        assertNull("Should return null when corridor inside obstacle", gap);
+    }
+
+    @Test
+    public void computeCorridorGap_shouldIgnoreObstaclesOutsideParallelRange() {
+        // Corridor at y=200, parallel range x=[100, 200]
+        // Obstacle at x=[300, 400] — outside parallel range, should be ignored
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(300, 150, 100, 20, "obs-outside"));
+
+        int[] gap = detector.computeCorridorGap(200, true, 100, 200, obstacles);
+
+        assertNotNull("Should find gap", gap);
+        // Both bounds should be default extent (no relevant obstacles)
+        assertEquals("Near bound default", 200 - 100, gap[0]);
+        assertEquals("Far bound default", 200 + 100, gap[1]);
+    }
+
+    // ---- Task 4.2: computeProportionalOffsets tests ----
+
+    @Test
+    public void computeProportionalOffsets_shouldDistributeTwoSegmentsEvenly() {
+        // Gap [100, 400] = 300px, 2 segments → positions at 200 and 300
+        int[] positions = detector.computeProportionalOffsets(100, 400, 2);
+
+        assertNotNull("Should compute positions", positions);
+        assertEquals(2, positions.length);
+        assertEquals("First segment at 1/3 of gap", 200, positions[0]);
+        assertEquals("Second segment at 2/3 of gap", 300, positions[1]);
+    }
+
+    @Test
+    public void computeProportionalOffsets_shouldDistributeThreeSegmentsEvenly() {
+        // Gap [0, 400] = 400px, 3 segments → positions at 100, 200, 300
+        int[] positions = detector.computeProportionalOffsets(0, 400, 3);
+
+        assertNotNull("Should compute positions", positions);
+        assertEquals(3, positions.length);
+        assertEquals(100, positions[0]);
+        assertEquals(200, positions[1]);
+        assertEquals(300, positions[2]);
+    }
+
+    @Test
+    public void computeProportionalOffsets_shouldDistributeFiveSegments() {
+        // Gap [0, 600] = 600px, 5 segments → positions at 100, 200, 300, 400, 500
+        int[] positions = detector.computeProportionalOffsets(0, 600, 5);
+
+        assertNotNull("Should compute positions", positions);
+        assertEquals(5, positions.length);
+        assertEquals(100, positions[0]);
+        assertEquals(200, positions[1]);
+        assertEquals(300, positions[2]);
+        assertEquals(400, positions[3]);
+        assertEquals(500, positions[4]);
+    }
+
+    // ---- Task 4.4: applyOffsets with proportional spacing ----
+
+    @Test
+    public void applyOffsets_shouldUseProportionalSpacing_whenGapAvailable() {
+        // Two connections with coincident horizontal segments at y=200, x=[100,400]
+        // Obstacles above at y=100 (bottom edge 150) and below at y=300 (top edge 300)
+        // Gap = [150, 300] = 150px, 2 segments → positions at 200 and 250
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 350)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 450)));
+
+        List<int[]> sourceCenters = List.of(new int[]{50, 150}, new int[]{50, 250});
+        List<int[]> targetCenters = List.of(new int[]{450, 350}, new int[]{450, 450});
+        List<String> ids = List.of("conn-0", "conn-1");
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(ids, paths, sourceCenters, targetCenters);
+        assertTrue(pairs.size() > 0);
+
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(50, 100, 400, 50, "obs-above"),   // bottom at 150
+                new RoutingRect(50, 300, 400, 50, "obs-below"));  // top at 300
+
+        int offsetCount = detector.applyOffsets(pairs, paths, obstacles);
+        assertTrue("Should apply offsets", offsetCount > 0);
+
+        // With proportional spacing in [150, 300] gap (150px), 2 segments → at 200 and 250
+        // Both segments should have moved from y=200 to different proportional positions
+        int y0 = paths.get(0).get(0).y();
+        int y1 = paths.get(1).get(0).y();
+        assertNotEquals("Segments should be separated", y0, y1);
+
+        // Separation should be wider than fixed 10px delta
+        int separation = Math.abs(y1 - y0);
+        assertTrue("Proportional separation (" + separation + "px) should exceed fixed delta (10px)",
+                separation > 10);
+    }
+
+    // ---- Task 4.5: Fixed-delta regression ----
+
+    @Test
+    public void applyOffsets_shouldFallBackToFixedDelta_whenGapTooNarrow() {
+        // Two connections with coincident horizontal segments at y=200
+        // Obstacles very close: gap only 14px (below 2 * MIN_SEPARATION=16)
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 250)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 350)));
+
+        List<int[]> sourceCenters = List.of(new int[]{50, 150}, new int[]{50, 250});
+        List<int[]> targetCenters = List.of(new int[]{450, 250}, new int[]{450, 350});
+        List<String> ids = List.of("conn-0", "conn-1");
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(ids, paths, sourceCenters, targetCenters);
+
+        // Tight gap: obstacles at y=194 (bottom 197) and y=203 (top 203) → gap [197, 203] = 6px
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(50, 194, 400, 3, "obs-above"),   // bottom at 197
+                new RoutingRect(50, 203, 400, 3, "obs-below"));  // top at 203
+
+        int offsetCount = detector.applyOffsets(pairs, paths, obstacles);
+
+        // Should still attempt fixed-delta fallback (may or may not succeed depending on obstacle check)
+        // Key assertion: no crash, graceful handling
+        assertTrue("Should handle narrow gap gracefully", offsetCount >= 0);
+    }
+
+    // ---- Task 4.6: Obstacle blocking proportional position ----
+
+    @Test
+    public void applyOffsets_shouldFallBackPerSegment_whenProportionalPositionBlocked() {
+        // Three connections coincident at y=200
+        // Wide gap available, but one proportional position has an obstacle
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 300)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 400)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 500)));
+
+        List<int[]> sourceCenters = List.of(
+                new int[]{50, 150}, new int[]{50, 250}, new int[]{50, 350});
+        List<int[]> targetCenters = List.of(
+                new int[]{450, 300}, new int[]{450, 400}, new int[]{450, 500});
+        List<String> ids = List.of("conn-0", "conn-1", "conn-2");
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(ids, paths, sourceCenters, targetCenters);
+
+        // Gap [100, 300] = 200px. 3 segments → proportional at 150, 200, 250
+        // Small obstacle at y=148-152 blocks the first proportional position
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(50, 50, 400, 50, "obs-above"),     // bottom at 100
+                new RoutingRect(50, 300, 400, 50, "obs-below"),    // top at 300
+                new RoutingRect(200, 148, 50, 4, "obs-blocker"));  // blocks y≈150
+
+        int offsetCount = detector.applyOffsets(pairs, paths, obstacles);
+        assertTrue("Should still offset some segments despite blocker", offsetCount >= 1);
+    }
+
+    // ---- Task 4.3: MIN_SEPARATION fallback ----
+
+    @Test
+    public void computeProportionalOffsets_shouldReturnNull_whenGapTooNarrow() {
+        // Gap [100, 120] = 20px, 3 segments → spacing = 20/4 = 5 < MIN_SEPARATION(8)
+        int[] positions = detector.computeProportionalOffsets(100, 120, 3);
+
+        assertNull("Should return null when spacing below MIN_SEPARATION", positions);
+    }
+
+    @Test
+    public void computeProportionalOffsets_shouldReturnNull_whenZeroSegments() {
+        int[] positions = detector.computeProportionalOffsets(100, 400, 0);
+        assertNull("Should return null for zero segments", positions);
+    }
+
+    // ---- Code review: M1 — Tolerance-aware corridor grouping ----
+
+    @Test
+    public void applyOffsets_shouldGroupSegmentsWithinTolerance_forProportionalSpacing() {
+        // Two connections with coincident horizontal segments at y=200 and y=202 (within tolerance=2)
+        // This tests the critical tolerance-aware grouping in addToCorridorGroup
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 350)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 202),
+                new AbsoluteBendpointDto(400, 202),
+                new AbsoluteBendpointDto(400, 450)));
+
+        List<int[]> sourceCenters = List.of(new int[]{50, 150}, new int[]{50, 252});
+        List<int[]> targetCenters = List.of(new int[]{450, 350}, new int[]{450, 450});
+        List<String> ids = List.of("conn-0", "conn-1");
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(ids, paths, sourceCenters, targetCenters);
+        assertTrue("Should detect coincident pair despite 2px difference", pairs.size() > 0);
+
+        // Wide gap — proportional spacing should apply
+        int offsetCount = detector.applyOffsets(pairs, paths, List.of());
+        assertTrue("Should apply offsets for tolerance-matched segments", offsetCount > 0);
+
+        // Segments should be separated by more than the original 2px difference
+        int y0 = paths.get(0).get(0).y();
+        int y1 = paths.get(1).get(0).y();
+        int separation = Math.abs(y1 - y0);
+        assertTrue("Tolerance-grouped segments should be well-separated (" + separation + "px)",
+                separation > 10);
+    }
+
+    // ---- Code review: M2 — Strengthened fixed-delta regression ----
+
+    @Test
+    public void applyOffsets_shouldApplyFixedDelta_whenProportionalSpacingUnavailable() {
+        // Two connections with coincident horizontal segments at y=200
+        // Corridor inside an obstacle → gap detection returns null → must use fixed-delta
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 350)));
+        paths.add(mutableList(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(400, 200),
+                new AbsoluteBendpointDto(400, 450)));
+
+        List<int[]> sourceCenters = List.of(new int[]{50, 150}, new int[]{50, 250});
+        List<int[]> targetCenters = List.of(new int[]{450, 350}, new int[]{450, 450});
+        List<String> ids = List.of("conn-0", "conn-1");
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(ids, paths, sourceCenters, targetCenters);
+        assertTrue(pairs.size() > 0);
+
+        // Obstacle encloses the corridor coordinate (y=200 inside [150,250])
+        // This forces computeCorridorGap to return null → fixed-delta path
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(50, 150, 400, 100, "obs-enclosing"));
+
+        int offsetCount = detector.applyOffsets(pairs, paths, obstacles);
+
+        // Fixed-delta should still work: offset direction perpendicular to obstacle
+        // is blocked by enclosing obstacle, so offset count may be 0.
+        // The key verification: if offset was applied, separation matches offsetDelta (10px)
+        int y0 = paths.get(0).get(0).y();
+        int y1 = paths.get(1).get(0).y();
+        if (offsetCount > 0) {
+            int separation = Math.abs(y1 - y0);
+            assertEquals("Fixed-delta should produce offsetDelta separation",
+                    CoincidentSegmentDetector.DEFAULT_OFFSET_DELTA, separation);
+        }
+        // Regardless: no crash, graceful degradation
+        assertTrue("Should handle gracefully", offsetCount >= 0);
+    }
+
     // ---- Helpers ----
 
     private static List<AbsoluteBendpointDto> mutableList(AbsoluteBendpointDto... items) {

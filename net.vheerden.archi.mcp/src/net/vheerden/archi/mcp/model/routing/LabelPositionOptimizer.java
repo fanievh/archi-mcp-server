@@ -1,11 +1,11 @@
 package net.vheerden.archi.mcp.model.routing;
 
 import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -24,7 +24,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * longest-path-first (greedy order) so that labels with the most flexibility
  * are locked in first.</p>
  */
-class LabelPositionOptimizer {
+public class LabelPositionOptimizer {
 
     private static final Logger logger = LoggerFactory.getLogger(LabelPositionOptimizer.class);
 
@@ -34,9 +34,24 @@ class LabelPositionOptimizer {
     static final double LABEL_PROXIMITY_THRESHOLD = 5.0;
 
     /**
+     * Result of a multi-trial label optimization pass (Story backlog-b12).
+     *
+     * @param allPositions     connectionId → chosen textPosition for ALL labeled connections
+     * @param changedPositions connectionId → new textPosition (only connections whose position changed)
+     * @param totalScore       sum of overlap scores for all labeled connections at their chosen positions
+     */
+    public record MultiTrialResult(Map<String, Integer> allPositions,
+                            Map<String, Integer> changedPositions,
+                            double totalScore) {}
+
+    /**
      * Optimizes label positions for all connections with non-empty labels.
      * Returns a map of connectionId → optimal textPosition for connections
      * whose position was changed (i.e., different from the input textPosition).
+     *
+     * <p>Single-pass deterministic optimization using longest-first ordering.
+     * For multi-trial optimization with shuffled orderings, use
+     * {@link #optimizeMultiTrial}.</p>
      *
      * @param connections  batch routing input (includes labelText, textPosition)
      * @param paths        corresponding routed paths (same index as connections)
@@ -51,8 +66,99 @@ class LabelPositionOptimizer {
             List<RoutingRect> allObstacles,
             Map<String, Set<String>> connectionExcludeSets) {
 
-        // Build index of connections with labels, paired with their path index
-        List<int[]> labeledIndices = new ArrayList<>(); // each entry: [originalIndex, pathLength]
+        List<int[]> labeledIndices = buildLongestFirstOrder(connections, paths);
+        if (labeledIndices.isEmpty()) {
+            return Map.of();
+        }
+
+        GreedyPassResult result = runGreedyPass(
+                labeledIndices, connections, paths, allObstacles, connectionExcludeSets);
+
+        if (!result.changedPositions.isEmpty()) {
+            logger.info("Label position optimization: {} labels repositioned out of {} labeled connections",
+                    result.changedPositions.size(), labeledIndices.size());
+        }
+
+        return result.changedPositions;
+    }
+
+    /**
+     * Runs multiple greedy optimization trials with different processing orders
+     * and returns the result with the lowest total overlap score (Story backlog-b12).
+     *
+     * <p>Trial 0 uses the deterministic longest-first ordering (same as {@link #optimize}).
+     * Trials 1+ shuffle the ordering using the provided {@link Random}. The trial with
+     * the lowest total score wins; ties are broken by preferring fewer position changes.</p>
+     *
+     * @param connections  batch routing input (includes labelText, textPosition)
+     * @param paths        corresponding routed paths (same index as connections)
+     * @param allObstacles all element rectangles on the view (for overlap scoring)
+     * @param connectionExcludeSets per-connection exclude sets (connectionId → set of IDs to skip)
+     * @param trials       number of trials to run (must be >= 1)
+     * @param rng          random number generator for shuffling (trials 1+)
+     * @return best result across all trials
+     */
+    public MultiTrialResult optimizeMultiTrial(
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths,
+            List<RoutingRect> allObstacles,
+            Map<String, Set<String>> connectionExcludeSets,
+            int trials, Random rng) {
+
+        if (trials < 1) {
+            throw new IllegalArgumentException("trials must be >= 1, got " + trials);
+        }
+
+        List<int[]> baseOrder = buildLongestFirstOrder(connections, paths);
+        if (baseOrder.isEmpty()) {
+            return new MultiTrialResult(Map.of(), Map.of(), 0.0);
+        }
+
+        MultiTrialResult bestResult = null;
+        double bestTotalScore = Double.MAX_VALUE;
+        int bestChangeCount = Integer.MAX_VALUE;
+
+        for (int t = 0; t < trials; t++) {
+            List<int[]> order;
+            if (t == 0) {
+                order = baseOrder;
+            } else {
+                order = new ArrayList<>(baseOrder);
+                Collections.shuffle(order, rng);
+            }
+
+            GreedyPassResult passResult = runGreedyPass(
+                    order, connections, paths, allObstacles, connectionExcludeSets);
+            double totalScore = computeTotalScore(
+                    passResult.allPositions, connections, paths,
+                    allObstacles, connectionExcludeSets);
+
+            if (totalScore < bestTotalScore
+                    || (totalScore == bestTotalScore
+                        && passResult.changedPositions.size() < bestChangeCount)) {
+                bestResult = new MultiTrialResult(
+                        passResult.allPositions, passResult.changedPositions, totalScore);
+                bestTotalScore = totalScore;
+                bestChangeCount = passResult.changedPositions.size();
+            }
+        }
+
+        if (bestResult != null && !bestResult.changedPositions.isEmpty()) {
+            logger.info("Multi-trial label optimization: {} trials, best score={}, {} labels repositioned",
+                    trials, bestTotalScore, bestResult.changedPositions.size());
+        }
+
+        return bestResult;
+    }
+
+    /**
+     * Builds the labeled connection indices sorted by path length descending (longest first).
+     */
+    private List<int[]> buildLongestFirstOrder(
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths) {
+
+        List<int[]> labeledIndices = new ArrayList<>();
         for (int i = 0; i < connections.size(); i++) {
             RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
             if (conn.labelText() != null && !conn.labelText().isEmpty()) {
@@ -62,19 +168,29 @@ class LabelPositionOptimizer {
                 labeledIndices.add(new int[]{i, pathLen});
             }
         }
-
-        if (labeledIndices.isEmpty()) {
-            return Map.of();
-        }
-
-        // Sort by path length descending (longest first = most flexibility)
         labeledIndices.sort((a, b) -> Integer.compare(b[1], a[1]));
+        return labeledIndices;
+    }
 
-        // Filter obstacles to non-group elements (groups are transparent containers)
-        // allObstacles already excludes groups in the routing pipeline caller
+    /**
+     * Internal result of a single greedy pass — includes both changed and all positions.
+     */
+    private record GreedyPassResult(Map<String, Integer> allPositions,
+                                     Map<String, Integer> changedPositions) {}
 
-        // Greedy optimization pass
+    /**
+     * Runs a single greedy optimization pass in the given index order.
+     * Returns both changed positions and all positions (for total score computation).
+     */
+    private GreedyPassResult runGreedyPass(
+            List<int[]> labeledIndices,
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths,
+            List<RoutingRect> allObstacles,
+            Map<String, Set<String>> connectionExcludeSets) {
+
         Map<String, Integer> changedPositions = new LinkedHashMap<>();
+        Map<String, Integer> allPositions = new LinkedHashMap<>();
         List<RoutingRect> lockedLabels = new ArrayList<>();
 
         for (int[] entry : labeledIndices) {
@@ -112,7 +228,7 @@ class LabelPositionOptimizer {
                 lockedLabels.add(chosenRect);
             }
 
-            // Only record if position actually changed
+            allPositions.put(conn.connectionId(), bestPosition);
             if (bestPosition != conn.textPosition()) {
                 changedPositions.put(conn.connectionId(), bestPosition);
                 logger.debug("Optimized label position for connection {}: {} -> {}",
@@ -120,12 +236,72 @@ class LabelPositionOptimizer {
             }
         }
 
-        if (!changedPositions.isEmpty()) {
-            logger.info("Label position optimization: {} labels repositioned out of {} labeled connections",
-                    changedPositions.size(), labeledIndices.size());
+        return new GreedyPassResult(allPositions, changedPositions);
+    }
+
+    /**
+     * Computes the total overlap score for a complete position assignment.
+     * Evaluates every labeled connection at its assigned position against all
+     * obstacles and all other assigned labels.
+     */
+    double computeTotalScore(
+            Map<String, Integer> allPositions,
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths,
+            List<RoutingRect> allObstacles,
+            Map<String, Set<String>> connectionExcludeSets) {
+
+        // Build label rects for all assigned positions
+        List<RoutingRect> allLabelRects = new ArrayList<>();
+        List<Set<String>> allExcludeIds = new ArrayList<>();
+        for (int i = 0; i < connections.size(); i++) {
+            RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
+            Integer assignedPos = allPositions.get(conn.connectionId());
+            if (assignedPos == null) {
+                continue;
+            }
+            List<AbsoluteBendpointDto> path = paths.get(i);
+            int[] sourceCenter = {conn.source().centerX(), conn.source().centerY()};
+            int[] targetCenter = {conn.target().centerX(), conn.target().centerY()};
+            RoutingRect labelRect = LabelClearance.computeLabelRect(
+                    path, sourceCenter, targetCenter, conn.labelText(), assignedPos);
+            if (labelRect != null) {
+                allLabelRects.add(labelRect);
+                allExcludeIds.add(connectionExcludeSets.getOrDefault(
+                        conn.connectionId(), Set.of()));
+            }
         }
 
-        return changedPositions;
+        // Score each label against obstacles and all OTHER labels
+        double totalScore = 0;
+        for (int i = 0; i < allLabelRects.size(); i++) {
+            RoutingRect labelRect = allLabelRects.get(i);
+            Set<String> excludeIds = allExcludeIds.get(i);
+
+            // Score against obstacles
+            for (RoutingRect obs : allObstacles) {
+                if (obs.id() != null && excludeIds.contains(obs.id())) {
+                    continue;
+                }
+                if (insetRectOverlap(labelRect, obs)) {
+                    totalScore += 1.0;
+                } else if (isWithinProximity(labelRect, obs)) {
+                    totalScore += 0.5;
+                }
+            }
+
+            // Score against other labels (each pair counted once per label)
+            for (int j = i + 1; j < allLabelRects.size(); j++) {
+                RoutingRect other = allLabelRects.get(j);
+                if (insetRectOverlap(labelRect, other)) {
+                    totalScore += 2.0; // both labels score 1.0 each
+                } else if (isWithinProximity(labelRect, other)) {
+                    totalScore += 1.0; // both labels score 0.5 each
+                }
+            }
+        }
+
+        return totalScore;
     }
 
     /**

@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.handlers;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,8 +33,12 @@ import net.vheerden.archi.mcp.response.PaginationCursor;
 import net.vheerden.archi.mcp.response.ResponseFormat;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.SummaryFormatter;
+import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
+import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
+import net.vheerden.archi.mcp.response.dto.ViewNodeDto;
+import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
@@ -51,6 +56,7 @@ public class ViewHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ViewHandler.class);
     private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<>() {};
+    private static final String TREE_ROOT_KEY = "__root__";
 
     /**
      * Default page size for view results when no limit parameter is provided.
@@ -221,7 +227,8 @@ public class ViewHandler {
                                 "Invalid exclude field: '" + field + "'",
                                 null,
                                 "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata, connections",
+                                        + "viewpointType, folderPath, visualMetadata, connections, "
+                                        + "groups, notes",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -248,7 +255,7 @@ public class ViewHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid format: '" + f + "'",
                                 null,
-                                "Valid formats: json, graph, summary",
+                                "Valid formats: json, graph, summary, tree",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -606,7 +613,8 @@ public class ViewHandler {
         excludeProp.put("items", excludeItemsDef);
         excludeProp.put("description", "Fields to exclude from element/view data. "
                 + "Applied after fields preset. "
-                + "Valid values: documentation, properties, layer, type, visualMetadata, connections. "
+                + "Valid values: documentation, properties, layer, type, visualMetadata, connections, "
+                + "groups, notes. "
                 + "Note: id and name cannot be excluded. "
                 + "Use exclude=['visualMetadata','connections'] to omit position and routing data.");
         properties.put("exclude", excludeProp);
@@ -621,8 +629,11 @@ public class ViewHandler {
         formatProp.put("type", "string");
         formatProp.put("description", "Response format. 'json' (default) returns standard result object. "
                 + "'graph' returns deduplicated nodes/edges structure (elements as nodes, relationships as edges). "
-                + "'summary' returns condensed natural language overview with element/relationship distributions.");
-        formatProp.put("enum", List.of("json", "graph", "summary"));
+                + "'summary' returns condensed natural language overview with element/relationship distributions. "
+                + "'tree' returns compact containment hierarchy showing groups and their children — "
+                + "ideal for discovering group viewObjectIds before calling layout-within-group, arrange-groups, or optimize-group-order. "
+                + "Much more token-efficient than json for grouped view workflows.");
+        formatProp.put("enum", List.of("json", "graph", "summary", "tree"));
         properties.put("format", formatProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
@@ -640,6 +651,9 @@ public class ViewHandler {
                         + "Use 'fields' to control response verbosity and 'exclude' to omit specific fields. "
                         + "Use exclude=['visualMetadata','connections'] to omit position and routing data. "
                         + "Set dryRun=true to get a cost estimate without returning results. "
+                        + "Set format=tree for a compact containment hierarchy showing groups and their children — "
+                        + "ideal first step for grouped view workflows (discover viewObjectIds for "
+                        + "layout-within-group, arrange-groups, optimize-group-order). "
                         + "Set format=graph for deduplicated node/edge structure, format=summary for condensed text overview. "
                         + "Related: get-element (full element details), "
                         + "get-relationships (connections beyond this view), "
@@ -707,7 +721,7 @@ public class ViewHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid format: '" + f + "'",
                                 null,
-                                "Valid formats: json, graph, summary",
+                                "Valid formats: json, graph, summary, tree",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -724,7 +738,8 @@ public class ViewHandler {
                                 "Invalid exclude field: '" + field + "'",
                                 null,
                                 "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata, connections",
+                                        + "viewpointType, folderPath, visualMetadata, connections, "
+                                        + "groups, notes",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -845,6 +860,52 @@ public class ViewHandler {
 
                     Map<String, Object> envelope = formatter.formatSummary(
                             summaryText, summaryNextSteps, modelVersion, resultCount, resultCount);
+
+                    if (warningMessage != null) {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+                        meta.put("warning", warningMessage);
+                    }
+                    if (modelChanged) {
+                        ResponseFormatter.addModelChangedFlag(envelope);
+                    }
+
+                    String jsonResult = formatter.toJsonString(envelope);
+                    if (sessionManager != null && sessionId != null && !modelChanged) {
+                        sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
+                    }
+                    return buildResult(jsonResult, false);
+                }
+
+                // Tree format: compact containment hierarchy for group discovery (skip field selection)
+                if (format == ResponseFormat.TREE) {
+                    Map<String, Object> treeResult = buildContainmentTree(contents);
+
+                    List<String> treeNextSteps;
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> treeStats = (Map<String, Object>) treeResult.get("stats");
+                    int totalGroups = (int) treeStats.get("totalGroups");
+                    if (totalGroups > 0) {
+                        treeNextSteps = List.of(
+                                "Use layout-within-group with a group's viewObjectId to layout its children",
+                                "Use arrange-groups to position groups relative to each other",
+                                "Use optimize-group-order to minimize inter-group edge crossings",
+                                "Use get-view-contents format=json for full element and relationship detail");
+                    } else {
+                        treeNextSteps = List.of(
+                                "Use layout-flat-view for flat views (no groups) — recommended default layout tool",
+                                "Use compute-layout with a preset for alternative layout algorithms",
+                                "Use get-view-contents format=json for full element and relationship detail");
+                    }
+
+                    logger.info("Returning get-view-contents tree: groups={}, elements={}, notes={}",
+                            treeStats.get("totalGroups"), treeStats.get("totalElements"),
+                            treeStats.get("totalNotes"));
+
+                    Map<String, Object> envelope = formatter.formatSuccess(
+                            treeResult, treeNextSteps, modelVersion,
+                            elementCount + relationshipCount,
+                            elementCount + relationshipCount, false);
 
                     if (warningMessage != null) {
                         @SuppressWarnings("unchecked")
@@ -995,6 +1056,150 @@ public class ViewHandler {
         }
         return List.of(
                 "Use get-model-info to verify the model is loaded correctly");
+    }
+
+    /**
+     * Builds a compact containment tree from view contents (Story backlog-a1).
+     *
+     * <p>Transforms the flat lists in {@link ViewContentsDto} into a nested tree
+     * structure showing group containment hierarchy. Each node includes only the
+     * fields needed for group discovery: viewObjectId, type, name/label, and for
+     * groups: childCount and children array.</p>
+     *
+     * @param contents the full view contents DTO
+     * @return map with viewId, viewName, tree array, and stats object
+     */
+    private Map<String, Object> buildContainmentTree(ViewContentsDto contents) {
+        // Build element lookup by ID for name/type resolution
+        Map<String, ElementDto> elementById = new HashMap<>();
+        if (contents.elements() != null) {
+            for (ElementDto e : contents.elements()) {
+                elementById.put(e.id(), e);
+            }
+        }
+
+        // Index: parentViewObjectId → list of child tree nodes
+        Map<String, List<Map<String, Object>>> childrenByParent = new LinkedHashMap<>();
+        // Track group nodes by viewObjectId for later nesting
+        Map<String, Map<String, Object>> groupNodes = new LinkedHashMap<>();
+
+        // Stats counters
+        int totalElements = 0;
+        int totalNotes = 0;
+        int ungroupedElements = 0;
+
+        // Process elements (visualMetadata)
+        if (contents.visualMetadata() != null) {
+            for (ViewNodeDto node : contents.visualMetadata()) {
+                Map<String, Object> treeNode = new LinkedHashMap<>();
+                treeNode.put("viewObjectId", node.viewObjectId());
+                treeNode.put("type", "element");
+
+                // Resolve name and elementType from elements list
+                ElementDto element = elementById.get(node.elementId());
+                if (element != null) {
+                    treeNode.put("name", element.name());
+                    treeNode.put("elementType", element.type());
+                }
+
+                String parent = node.parentViewObjectId();
+                childrenByParent.computeIfAbsent(
+                        parent != null ? parent : TREE_ROOT_KEY, k -> new ArrayList<>()).add(treeNode);
+
+                totalElements++;
+                if (parent == null) {
+                    ungroupedElements++;
+                }
+            }
+        }
+
+        // Process notes
+        if (contents.notes() != null) {
+            for (ViewNoteDto note : contents.notes()) {
+                Map<String, Object> treeNode = new LinkedHashMap<>();
+                treeNode.put("viewObjectId", note.viewObjectId());
+                treeNode.put("type", "note");
+                treeNode.put("label", note.content());
+
+                String parent = note.parentViewObjectId();
+                childrenByParent.computeIfAbsent(
+                        parent != null ? parent : TREE_ROOT_KEY, k -> new ArrayList<>()).add(treeNode);
+
+                totalNotes++;
+            }
+        }
+
+        // Process groups — build group nodes with children
+        int totalGroups = 0;
+        int topLevelGroups = 0;
+        int nestedGroups = 0;
+
+        if (contents.groups() != null) {
+            // First pass: create group nodes
+            for (ViewGroupDto group : contents.groups()) {
+                Map<String, Object> groupNode = new LinkedHashMap<>();
+                groupNode.put("viewObjectId", group.viewObjectId());
+                groupNode.put("type", "group");
+                groupNode.put("label", group.label());
+                groupNodes.put(group.viewObjectId(), groupNode);
+                totalGroups++;
+            }
+
+            // Second pass: assemble children and nest groups
+            for (ViewGroupDto group : contents.groups()) {
+                Map<String, Object> groupNode = groupNodes.get(group.viewObjectId());
+
+                // Get children for this group (elements and notes already indexed)
+                List<Map<String, Object>> children =
+                        childrenByParent.getOrDefault(group.viewObjectId(), new ArrayList<>());
+
+                // Add nested child groups
+                if (group.childViewObjectIds() != null) {
+                    for (String childId : group.childViewObjectIds()) {
+                        Map<String, Object> childGroup = groupNodes.get(childId);
+                        if (childGroup != null) {
+                            children.add(childGroup);
+                        }
+                    }
+                }
+
+                groupNode.put("childCount", children.size());
+                groupNode.put("children", children);
+
+                // Add group to its parent's list or root
+                String parent = group.parentViewObjectId();
+                if (parent == null) {
+                    topLevelGroups++;
+                } else {
+                    nestedGroups++;
+                }
+                // Only add top-level groups to root; nested groups are added via childViewObjectIds
+                if (parent == null) {
+                    childrenByParent.computeIfAbsent(TREE_ROOT_KEY, k -> new ArrayList<>()).add(groupNode);
+                }
+            }
+        }
+
+        // Build root-level tree array
+        List<Map<String, Object>> tree = childrenByParent.getOrDefault(TREE_ROOT_KEY, List.of());
+
+        // Build stats
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("totalGroups", totalGroups);
+        stats.put("topLevelGroups", topLevelGroups);
+        stats.put("nestedGroups", nestedGroups);
+        stats.put("totalElements", totalElements);
+        stats.put("totalNotes", totalNotes);
+        stats.put("ungroupedElements", ungroupedElements);
+
+        // Build result
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("viewId", contents.viewId());
+        result.put("viewName", contents.viewName());
+        result.put("tree", tree);
+        result.put("stats", stats);
+
+        return result;
     }
 
     private McpSchema.CallToolResult buildResult(String json, boolean isError) {

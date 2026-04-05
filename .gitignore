@@ -1,10 +1,4 @@
-# Build output
-net.vheerden.archi.mcp/bin/
-net.vheerden.archi.mcp.tests/bin/
-
-# macOS
 .DS_Store
-
-# IDE
-*.launch
-.metadata/
+.gitnexus
+AGENTS.md
+CLAUDE.md

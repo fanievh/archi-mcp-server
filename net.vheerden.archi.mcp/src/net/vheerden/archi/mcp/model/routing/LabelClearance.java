@@ -17,7 +17,7 @@ class LabelClearance {
 
     // Keep in sync with LayoutQualityAssessor.LABEL_CHAR_WIDTH etc.
     // (duplicated due to architecture boundary: model.routing vs model)
-    static final double CHAR_WIDTH = 7.0;
+    static final double CHAR_WIDTH = 8.0;
     static final double CHAR_HEIGHT = 14.0;
     static final double PADDING_X = 10.0;
     static final double PADDING_Y = 6.0;

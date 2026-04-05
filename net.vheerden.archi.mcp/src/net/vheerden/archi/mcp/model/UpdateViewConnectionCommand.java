@@ -40,6 +40,16 @@ public class UpdateViewConnectionCommand extends Command {
     private final int newLineWidth;
     private final boolean hasStylingChange;
 
+    // Label visibility support (Story 13-1)
+    private final Boolean oldNameVisible;
+    private final Boolean newNameVisible;
+    private final boolean hasNameVisibleChange;
+
+    // Label position support (Story 13-11)
+    private final int oldTextPosition;
+    private final int newTextPosition;
+    private final boolean hasTextPositionChange;
+
     /**
      * Creates a command to replace a connection's bendpoints (no styling change).
      *
@@ -48,7 +58,7 @@ public class UpdateViewConnectionCommand extends Command {
      */
     public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
                                         List<IDiagramModelBendpoint> newBendpoints) {
-        this(connection, newBendpoints, null);
+        this(connection, newBendpoints, null, null, null);
     }
 
     /**
@@ -61,6 +71,38 @@ public class UpdateViewConnectionCommand extends Command {
     public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
                                         List<IDiagramModelBendpoint> newBendpoints,
                                         StylingParams styling) {
+        this(connection, newBendpoints, styling, null, null);
+    }
+
+    /**
+     * Creates a command to replace bendpoints, optionally update styling, and optionally
+     * toggle label visibility (Story 13-1).
+     *
+     * @param connection    the connection to update
+     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param styling       styling parameters to apply, null for no styling change
+     * @param showLabel     label visibility override, null for no change
+     */
+    public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
+                                        List<IDiagramModelBendpoint> newBendpoints,
+                                        StylingParams styling, Boolean showLabel) {
+        this(connection, newBendpoints, styling, showLabel, null);
+    }
+
+    /**
+     * Creates a command to replace bendpoints, optionally update styling, toggle label
+     * visibility, and/or set label position (Stories 13-1, 13-11).
+     *
+     * @param connection    the connection to update
+     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param styling       styling parameters to apply, null for no styling change
+     * @param showLabel     label visibility override, null for no change
+     * @param textPosition  label position (0=source, 1=middle, 2=target), null for no change
+     */
+    public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
+                                        List<IDiagramModelBendpoint> newBendpoints,
+                                        StylingParams styling, Boolean showLabel,
+                                        Integer textPosition) {
         this.connection = connection;
         this.oldBendpoints = new ArrayList<>(connection.getBendpoints());
         this.newBendpoints = new ArrayList<>(newBendpoints);
@@ -86,6 +128,26 @@ public class UpdateViewConnectionCommand extends Command {
             this.newLineWidth = 0;
         }
 
+        // Label visibility support (Story 13-1)
+        this.hasNameVisibleChange = (showLabel != null);
+        if (hasNameVisibleChange) {
+            this.oldNameVisible = connection.isNameVisible();
+            this.newNameVisible = showLabel;
+        } else {
+            this.oldNameVisible = null;
+            this.newNameVisible = null;
+        }
+
+        // Label position support (Story 13-11)
+        this.hasTextPositionChange = (textPosition != null);
+        if (hasTextPositionChange) {
+            this.oldTextPosition = connection.getTextPosition();
+            this.newTextPosition = textPosition;
+        } else {
+            this.oldTextPosition = 0;
+            this.newTextPosition = 0;
+        }
+
         setLabel("Update connection");
     }
 
@@ -96,6 +158,12 @@ public class UpdateViewConnectionCommand extends Command {
         if (hasStylingChange) {
             applyStyling(newLineColor, newFontColor, newLineWidth);
         }
+        if (hasNameVisibleChange) {
+            connection.setNameVisible(newNameVisible);
+        }
+        if (hasTextPositionChange) {
+            connection.setTextPosition(newTextPosition);
+        }
     }
 
     @Override
@@ -104,6 +172,12 @@ public class UpdateViewConnectionCommand extends Command {
         connection.getBendpoints().addAll(oldBendpoints);
         if (hasStylingChange) {
             applyStyling(oldLineColor, oldFontColor, oldLineWidth);
+        }
+        if (hasNameVisibleChange) {
+            connection.setNameVisible(oldNameVisible);
+        }
+        if (hasTextPositionChange) {
+            connection.setTextPosition(oldTextPosition);
         }
     }
 
@@ -149,4 +223,22 @@ public class UpdateViewConnectionCommand extends Command {
 
     /** Package-visible for testing. */
     int getNewLineWidth() { return newLineWidth; }
+
+    /** Package-visible for testing. */
+    boolean hasNameVisibleChange() { return hasNameVisibleChange; }
+
+    /** Package-visible for testing. */
+    Boolean getOldNameVisible() { return oldNameVisible; }
+
+    /** Package-visible for testing. */
+    Boolean getNewNameVisible() { return newNameVisible; }
+
+    /** Package-visible for testing. */
+    boolean hasTextPositionChange() { return hasTextPositionChange; }
+
+    /** Package-visible for testing. */
+    int getOldTextPosition() { return oldTextPosition; }
+
+    /** Package-visible for testing. */
+    int getNewTextPosition() { return newTextPosition; }
 }

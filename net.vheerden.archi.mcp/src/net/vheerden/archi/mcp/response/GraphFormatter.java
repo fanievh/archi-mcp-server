@@ -219,6 +219,60 @@ public final class GraphFormatter {
         return graph;
     }
 
+    /**
+     * Creates a graph from relationship search results.
+     * Relationships become edges; source/target element IDs become minimal nodes.
+     * If {@code sourceName}/{@code targetName} fields are present (full preset),
+     * they are used as node names.
+     *
+     * @param relationships field-selected relationship maps (must have sourceId/targetId)
+     * @return graph map with {@code nodes} (unique source/target elements) and {@code edges}
+     */
+    public static Map<String, Object> formatRelationshipsAsGraph(
+            List<Map<String, Object>> relationships) {
+
+        Map<String, Map<String, Object>> nodeMap = new LinkedHashMap<>();
+        List<Map<String, Object>> edges = new ArrayList<>();
+
+        if (relationships != null) {
+            for (Map<String, Object> rel : relationships) {
+                // Build edge
+                Map<String, Object> edge = new LinkedHashMap<>();
+                edge.put("id", rel.get("id"));
+                if (rel.get("name") != null) edge.put("name", rel.get("name"));
+                if (rel.get("type") != null) edge.put("type", rel.get("type"));
+                edge.put("sourceId", rel.get("sourceId"));
+                edge.put("targetId", rel.get("targetId"));
+                edges.add(edge);
+
+                // Add source node (with name if available from full preset)
+                String sourceId = (String) rel.get("sourceId");
+                if (sourceId != null && !nodeMap.containsKey(sourceId)) {
+                    Map<String, Object> node = new LinkedHashMap<>();
+                    node.put("id", sourceId);
+                    Object sourceName = rel.get("sourceName");
+                    node.put("name", sourceName != null ? sourceName : "(referenced)");
+                    nodeMap.put(sourceId, node);
+                }
+
+                // Add target node
+                String targetId = (String) rel.get("targetId");
+                if (targetId != null && !nodeMap.containsKey(targetId)) {
+                    Map<String, Object> node = new LinkedHashMap<>();
+                    node.put("id", targetId);
+                    Object targetName = rel.get("targetName");
+                    node.put("name", targetName != null ? targetName : "(referenced)");
+                    nodeMap.put(targetId, node);
+                }
+            }
+        }
+
+        Map<String, Object> graph = new LinkedHashMap<>();
+        graph.put("nodes", new ArrayList<>(nodeMap.values()));
+        graph.put("edges", edges);
+        return graph;
+    }
+
     // ---- Private Helpers ----
 
     private static void addMinimalNodeIfMissing(

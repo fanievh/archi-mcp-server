@@ -6,10 +6,12 @@ import java.util.Map;
 import java.util.Optional;
 
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+import net.vheerden.archi.mcp.response.dto.DetectHubElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoLayoutAndRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
@@ -22,10 +24,12 @@ import net.vheerden.archi.mcp.response.dto.DuplicateCandidate;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
+import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
+import net.vheerden.archi.mcp.response.dto.ModelImageDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
@@ -89,6 +93,13 @@ public class BaseTestAccessor implements ArchiModelAccessor {
 
     @Override
     public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        return Collections.emptyList();
+    }
+
+    @Override
+    public List<RelationshipDto> searchRelationships(String query, String typeFilter,
+                                                      String sourceLayerFilter, String targetLayerFilter) {
         if (!modelLoaded) throw new NoModelLoadedException();
         return Collections.emptyList();
     }
@@ -200,42 +211,46 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<AddToViewResultDto> addToView(String sessionId, String viewId,
             String elementId, Integer x, Integer y, Integer width, Integer height,
-            boolean autoConnect, String parentViewObjectId, StylingParams styling) {
+            boolean autoConnect, String parentViewObjectId, StylingParams styling,
+            ImageParams imageParams) {
         throw new UnsupportedOperationException("addToView not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ViewGroupDto> addGroupToView(String sessionId, String viewId,
             String label, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling) {
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
         throw new UnsupportedOperationException("addGroupToView not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ViewNoteDto> addNoteToView(String sessionId, String viewId,
-            String content, Integer x, Integer y, Integer width, Integer height,
-            String parentViewObjectId, StylingParams styling) {
+            String content, String position, Integer gap, Integer x, Integer y,
+            Integer width, Integer height,
+            String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
         throw new UnsupportedOperationException("addNoteToView not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ViewConnectionDto> addConnectionToView(String sessionId, String viewId,
             String relationshipId, String sourceViewObjectId, String targetViewObjectId,
-            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints) {
+            List<BendpointDto> bendpoints, List<AbsoluteBendpointDto> absoluteBendpoints,
+            StylingParams styling, Boolean showLabel, Integer textPosition) {
         throw new UnsupportedOperationException("addConnectionToView not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ViewObjectDto> updateViewObject(String sessionId, String viewObjectId,
             Integer x, Integer y, Integer width, Integer height, String text,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
         throw new UnsupportedOperationException("updateViewObject not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ViewConnectionDto> updateViewConnection(String sessionId,
             String viewConnectionId, List<BendpointDto> bendpoints,
-            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling) {
+            List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling,
+            Boolean showLabel, Integer textPosition) {
         throw new UnsupportedOperationException("updateViewConnection not implemented in test accessor");
     }
 
@@ -273,16 +288,39 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
+    public ContentBounds getContentBounds(String viewId) {
+        throw new UnsupportedOperationException(
+                "getContentBounds not implemented in test accessor");
+    }
+
+    @Override
+    public MutationResult<LayoutFlatViewResultDto> layoutFlatView(
+            String sessionId, String viewId, String arrangement,
+            Integer spacing, Integer padding, String sortBy,
+            String categoryField, Integer columns,
+            boolean autoLayoutChildren) {
+        throw new UnsupportedOperationException(
+                "layoutFlatView not implemented in test accessor");
+    }
+
+    @Override
+    public DetectHubElementsResultDto detectHubElements(String viewId) {
+        throw new UnsupportedOperationException(
+                "detectHubElements not implemented in test accessor");
+    }
+
+    @Override
     public MutationResult<AutoRouteResultDto> autoRouteConnections(
             String sessionId, String viewId,
-            List<String> connectionIds, String strategy, boolean force) {
+            List<String> connectionIds, String strategy, boolean force,
+            boolean autoNudge, int snapThreshold, int perimeterMargin) {
         throw new UnsupportedOperationException(
                 "autoRouteConnections not implemented in test accessor");
     }
 
     @Override
     public MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
-            String sessionId, String viewId,
+            String sessionId, String viewId, String mode,
             String direction, int spacing, String targetRating) {
         throw new UnsupportedOperationException(
                 "autoLayoutAndRoute not implemented in test accessor");
@@ -291,7 +329,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
-            List<String> elementIds, List<String> relationshipTypes) {
+            List<String> elementIds, List<String> relationshipTypes,
+            Boolean showLabel) {
         throw new UnsupportedOperationException(
                 "autoConnectView not implemented in test accessor");
     }
@@ -309,7 +348,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<ArrangeGroupsResultDto> arrangeGroups(
             String sessionId, String viewId, String arrangement,
-            Integer columns, Integer spacing, java.util.List<String> groupIds) {
+            Integer columns, Integer spacing, java.util.List<String> groupIds,
+            String direction) {
         throw new UnsupportedOperationException(
                 "arrangeGroups not implemented in test accessor");
     }
@@ -318,7 +358,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     public MutationResult<OptimizeGroupOrderResultDto> optimizeGroupOrder(
             String sessionId, String viewId, String arrangement,
             Integer spacing, Integer padding, Integer elementWidth,
-            Integer elementHeight, boolean autoWidth, Integer columns) {
+            Integer elementHeight, boolean autoWidth, Integer columns,
+            Map<String, String> groupArrangements) {
         throw new UnsupportedOperationException(
                 "optimizeGroupOrder not implemented in test accessor");
     }
@@ -374,7 +415,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
-    public ExportResult exportView(String viewId, String format, double scale, boolean inline) {
+    public ExportResult exportView(String viewId, String format, double scale, boolean inline,
+            String outputDirectory) {
         throw new UnsupportedOperationException("exportView not implemented in test accessor");
     }
 
@@ -406,6 +448,26 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public void removeModelChangeListener(ModelChangeListener listener) {
         // no-op
+    }
+
+    @Override
+    public AddImageResultDto addImageToModel(String sessionId, byte[] imageData, String filenameHint) {
+        throw new UnsupportedOperationException("addImageToModel not implemented in test accessor");
+    }
+
+    @Override
+    public AddImageResultDto addImageFromFilePath(String sessionId, String filePath) {
+        throw new UnsupportedOperationException("addImageFromFilePath not implemented in test accessor");
+    }
+
+    @Override
+    public AddImageResultDto addImageFromUrl(String sessionId, String url) {
+        throw new UnsupportedOperationException("addImageFromUrl not implemented in test accessor");
+    }
+
+    @Override
+    public List<ModelImageDto> listModelImages(String sessionId) {
+        throw new UnsupportedOperationException("listModelImages not implemented in test accessor");
     }
 
     @Override

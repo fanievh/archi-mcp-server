@@ -87,11 +87,19 @@ public class RenderHandler {
                         + "to a file and return the path (false). Inline mode returns "
                         + "PNG as ImageContent for LLM vision analysis. Default: true");
 
+        Map<String, Object> outputDirProp = new LinkedHashMap<>();
+        outputDirProp.put("type", "string");
+        outputDirProp.put("description",
+                "Absolute path to write the exported image file. Only used when "
+                        + "inline is false. If omitted, files are written to a temporary "
+                        + "directory. The directory is created if it does not exist.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("format", formatProp);
         properties.put("scale", scaleProp);
         properties.put("inline", inlineProp);
+        properties.put("outputDirectory", outputDirProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("viewId"), null, null, null);
@@ -137,13 +145,22 @@ public class RenderHandler {
                         null);
             }
             boolean inline = HandlerUtils.optionalBooleanParam(args, "inline", true);
+            String outputDirectory = HandlerUtils.optionalStringParam(args, "outputDirectory");
+            if (outputDirectory != null && outputDirectory.isBlank()) {
+                outputDirectory = null;
+            }
 
-            ExportResult result = accessor.exportView(viewId, format, scale, inline);
+            // outputDirectory only applies to file output mode
+            boolean outputDirIgnored = inline && outputDirectory != null;
+            String effectiveOutputDir = inline ? null : outputDirectory;
+
+            ExportResult result = accessor.exportView(viewId, format, scale, inline,
+                    effectiveOutputDir);
 
             if (inline && "png".equals(format)) {
-                return buildInlinePngResponse(result);
+                return buildInlinePngResponse(result, outputDirIgnored);
             } else if (inline && "svg".equals(format)) {
-                return buildInlineSvgResponse(result);
+                return buildInlineSvgResponse(result, outputDirIgnored);
             } else {
                 return buildFileResponse(result, format);
             }
@@ -157,11 +174,15 @@ public class RenderHandler {
         }
     }
 
-    private McpSchema.CallToolResult buildInlinePngResponse(ExportResult result) {
+    private McpSchema.CallToolResult buildInlinePngResponse(ExportResult result,
+                                                              boolean outputDirIgnored) {
         String base64 = Base64.getEncoder().encodeToString(result.imageBytes());
 
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        if (outputDirIgnored) {
+            wrapper.put("note", "outputDirectory is ignored when inline is true");
+        }
         wrapper.put("nextSteps", buildInlineNextSteps("png"));
         String metadataJson = formatter.toJsonString(wrapper);
         McpSchema.TextContent textContent = new McpSchema.TextContent(metadataJson);
@@ -174,9 +195,13 @@ public class RenderHandler {
                 .build();
     }
 
-    private McpSchema.CallToolResult buildInlineSvgResponse(ExportResult result) {
+    private McpSchema.CallToolResult buildInlineSvgResponse(ExportResult result,
+                                                              boolean outputDirIgnored) {
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        if (outputDirIgnored) {
+            wrapper.put("note", "outputDirectory is ignored when inline is true");
+        }
         wrapper.put("nextSteps", buildInlineNextSteps("svg"));
         String metadataJson = formatter.toJsonString(wrapper);
         McpSchema.TextContent metaContent = new McpSchema.TextContent(metadataJson);

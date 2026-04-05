@@ -2,9 +2,11 @@ package net.vheerden.archi.mcp.model;
 
 import org.eclipse.gef.commands.Command;
 
+import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IFontAttribute;
+import com.archimatetool.model.IIconic;
 import com.archimatetool.model.ILineObject;
 import com.archimatetool.model.ITextContent;
 
@@ -60,6 +62,17 @@ public class UpdateViewObjectCommand extends Command {
     private final int newLineWidth;
     private final boolean hasStylingChange;
 
+    // Image update support (Story C4)
+    private final String oldImagePath;
+    private final String newImagePath;
+    private final int oldImagePosition;
+    private final int newImagePosition;
+    private final int oldImageSource;
+    private final int newImageSource;
+    private final int oldShowIcon;
+    private final int newShowIcon;
+    private final boolean hasImageChange;
+
     /**
      * Creates a command to update a diagram object's bounds (no text or styling change).
      *
@@ -104,6 +117,25 @@ public class UpdateViewObjectCommand extends Command {
     public UpdateViewObjectCommand(IDiagramModelObject diagramObject,
                                     int newX, int newY, int newWidth, int newHeight,
                                     String newText, StylingParams styling) {
+        this(diagramObject, newX, newY, newWidth, newHeight, newText, styling, null);
+    }
+
+    /**
+     * Creates a command to update a diagram object's bounds, text, styling, and image.
+     *
+     * @param diagramObject the diagram object to update
+     * @param newX          the new X coordinate
+     * @param newY          the new Y coordinate
+     * @param newWidth      the new width
+     * @param newHeight     the new height
+     * @param newText       new text for groups (label) or notes (content), null to leave unchanged
+     * @param styling       styling parameters to apply, null or StylingParams.NONE for no styling change
+     * @param imageParams   image parameters to apply, null or ImageParams.NONE for no image change
+     */
+    public UpdateViewObjectCommand(IDiagramModelObject diagramObject,
+                                    int newX, int newY, int newWidth, int newHeight,
+                                    String newText, StylingParams styling,
+                                    ImageParams imageParams) {
         this.diagramObject = diagramObject;
         this.oldX = diagramObject.getBounds().getX();
         this.oldY = diagramObject.getBounds().getY();
@@ -165,6 +197,48 @@ public class UpdateViewObjectCommand extends Command {
             this.newLineWidth = 0;
         }
 
+        // Image support (Story C4)
+        boolean imageChangeRequested = (imageParams != null && imageParams.hasAnyValue());
+
+        if (imageChangeRequested && diagramObject instanceof IIconic iconic) {
+            this.hasImageChange = true;
+            // Capture old values for undo
+            this.oldImagePath = iconic.getImagePath();
+            this.oldImagePosition = iconic.getImagePosition();
+            this.oldShowIcon = ImageHelper.readShowIconInt(diagramObject);
+            this.oldImageSource = (diagramObject instanceof IDiagramModelArchimateObject archiObj)
+                ? archiObj.getImageSource() : 0;
+
+            // Compute new values — null in ImageParams means "no change", keep old value
+            this.newImagePath = (imageParams.imagePath() != null)
+                ? (imageParams.imagePath().isEmpty() ? null : imageParams.imagePath())
+                : oldImagePath;
+            this.newImagePosition = (imageParams.imagePosition() != null)
+                ? ImageParams.positionToInt(imageParams.imagePosition())
+                : oldImagePosition;
+            this.newShowIcon = (imageParams.showIcon() != null)
+                ? ImageParams.showIconToInt(imageParams.showIcon())
+                : oldShowIcon;
+            // Compute imageSource based on whether image is being set or cleared
+            if (imageParams.imagePath() != null) {
+                this.newImageSource = (newImagePath != null && !newImagePath.isEmpty())
+                    ? IDiagramModelArchimateObject.IMAGE_SOURCE_CUSTOM
+                    : IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE;
+            } else {
+                this.newImageSource = oldImageSource;
+            }
+        } else {
+            this.hasImageChange = false;
+            this.oldImagePath = null;
+            this.newImagePath = null;
+            this.oldImagePosition = 0;
+            this.newImagePosition = 0;
+            this.oldImageSource = 0;
+            this.newImageSource = 0;
+            this.oldShowIcon = 0;
+            this.newShowIcon = 0;
+        }
+
         setLabel("Update view object");
     }
 
@@ -175,6 +249,9 @@ public class UpdateViewObjectCommand extends Command {
         if (hasStylingChange) {
             applyStyling(newFillColor, newLineColor, newFontColor, newAlpha, newLineWidth);
         }
+        if (hasImageChange) {
+            applyImage(newImagePath, newImagePosition, newImageSource, newShowIcon);
+        }
     }
 
     @Override
@@ -183,6 +260,9 @@ public class UpdateViewObjectCommand extends Command {
         applyText(oldText);
         if (hasStylingChange) {
             applyStyling(oldFillColor, oldLineColor, oldFontColor, oldAlpha, oldLineWidth);
+        }
+        if (hasImageChange) {
+            applyImage(oldImagePath, oldImagePosition, oldImageSource, oldShowIcon);
         }
     }
 
@@ -206,6 +286,18 @@ public class UpdateViewObjectCommand extends Command {
         if (diagramObject instanceof IFontAttribute fa) {
             fa.setFontColor(fontColor);
         }
+    }
+
+    private void applyImage(String imagePath, int imagePosition, int imageSource, int showIcon) {
+        if (diagramObject instanceof IIconic iconic) {
+            iconic.setImagePath(imagePath);
+            iconic.setImagePosition(imagePosition);
+        }
+        if (diagramObject instanceof IDiagramModelArchimateObject archiObj) {
+            archiObj.setImageSource(imageSource);
+        }
+        // showIcon (iconVisibleState) is on IDiagramModelObject, available for all types
+        diagramObject.setIconVisibleState(showIcon);
     }
 
     /**
@@ -280,4 +372,31 @@ public class UpdateViewObjectCommand extends Command {
 
     /** Package-visible for testing. */
     int getNewLineWidth() { return newLineWidth; }
+
+    /** Package-visible for testing. */
+    boolean hasImageChange() { return hasImageChange; }
+
+    /** Package-visible for testing. */
+    String getOldImagePath() { return oldImagePath; }
+
+    /** Package-visible for testing. */
+    String getNewImagePath() { return newImagePath; }
+
+    /** Package-visible for testing. */
+    int getOldImagePosition() { return oldImagePosition; }
+
+    /** Package-visible for testing. */
+    int getNewImagePosition() { return newImagePosition; }
+
+    /** Package-visible for testing. */
+    int getOldImageSource() { return oldImageSource; }
+
+    /** Package-visible for testing. */
+    int getNewImageSource() { return newImageSource; }
+
+    /** Package-visible for testing. */
+    int getOldShowIcon() { return oldShowIcon; }
+
+    /** Package-visible for testing. */
+    int getNewShowIcon() { return newShowIcon; }
 }

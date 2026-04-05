@@ -72,6 +72,7 @@ public class RenderHandlerTest {
         assertTrue(props.containsKey("format"));
         assertTrue(props.containsKey("scale"));
         assertTrue(props.containsKey("inline"));
+        assertTrue(props.containsKey("outputDirectory"));
 
         assertNotNull(schema.required());
         assertTrue(schema.required().contains("viewId"));
@@ -298,6 +299,186 @@ public class RenderHandlerTest {
         assertEquals("MODEL_NOT_LOADED", error.get("code"));
     }
 
+    // ---- outputDirectory parameter (Story 13-2) ----
+
+    @Test
+    public void shouldPassOutputDirectory_whenFileExport() {
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600,
+                "/custom/dir/view-1_12345.png", 200);
+        ExportResult exportResult = new ExportResult(metadata, null, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", false);
+        args.put("outputDirectory", "/custom/dir");
+
+        invokeExportViewWithArgs(args);
+
+        assertEquals("/custom/dir", accessor.lastOutputDirectory);
+        assertFalse(accessor.lastInline);
+    }
+
+    @Test
+    public void shouldPassNullOutputDirectory_whenOmitted() {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("inline", false);
+
+        invokeExportViewWithArgs(args);
+
+        assertNull("outputDirectory should be null when not provided",
+                accessor.lastOutputDirectory);
+    }
+
+    @Test
+    public void shouldTreatEmptyStringAsNull_forOutputDirectory() {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("inline", false);
+        args.put("outputDirectory", "");
+
+        invokeExportViewWithArgs(args);
+
+        assertNull("Empty outputDirectory should be treated as null",
+                accessor.lastOutputDirectory);
+    }
+
+    @Test
+    public void shouldTreatBlankStringAsNull_forOutputDirectory() {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("inline", false);
+        args.put("outputDirectory", "   ");
+
+        invokeExportViewWithArgs(args);
+
+        assertNull("Blank outputDirectory should be treated as null",
+                accessor.lastOutputDirectory);
+    }
+
+    @Test
+    public void shouldIgnoreOutputDirectory_whenInlineTrue() throws Exception {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600, null, 100);
+        ExportResult exportResult = new ExportResult(metadata, pngBytes, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", true);
+        args.put("outputDirectory", "/some/dir");
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertFalse(result.isError());
+        // outputDirectory should NOT be passed to accessor when inline=true
+        assertNull("outputDirectory should be null when inline is true",
+                accessor.lastOutputDirectory);
+        assertTrue("Should still be inline", accessor.lastInline);
+    }
+
+    @Test
+    public void shouldIncludeNote_whenOutputDirectoryIgnored() throws Exception {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600, null, 100);
+        ExportResult exportResult = new ExportResult(metadata, pngBytes, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", true);
+        args.put("outputDirectory", "/some/dir");
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertFalse(result.isError());
+        // First content item is metadata JSON — should contain "note" field
+        McpSchema.TextContent textContent =
+                (McpSchema.TextContent) result.content().get(0);
+        Map<String, Object> parsed = objectMapper.readValue(textContent.text(),
+                new TypeReference<Map<String, Object>>() {});
+        assertEquals("outputDirectory is ignored when inline is true",
+                parsed.get("note"));
+    }
+
+    @Test
+    public void shouldReturnError_whenOutputDirectoryNotWritable() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        accessor.throwOnExport = new ModelAccessException(
+                "Output directory is not writable: /forbidden/dir",
+                ErrorCode.INVALID_PARAMETER,
+                null,
+                "Provide a writable directory path or omit outputDirectory to use the temp directory",
+                null);
+
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", false);
+        args.put("outputDirectory", "/forbidden/dir");
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertTrue(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
+    @Test
+    public void shouldNotIncludeNote_whenNoOutputDirectoryAndInline() throws Exception {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600, null, 100);
+        ExportResult exportResult = new ExportResult(metadata, pngBytes, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", null, null);
+
+        assertFalse(result.isError());
+        McpSchema.TextContent textContent =
+                (McpSchema.TextContent) result.content().get(0);
+        Map<String, Object> parsed = objectMapper.readValue(textContent.text(),
+                new TypeReference<Map<String, Object>>() {});
+        assertNull("No note should be present when outputDirectory not provided",
+                parsed.get("note"));
+    }
+
     // ---- Scale validation (Finding 3/4) ----
 
     @Test
@@ -392,6 +573,7 @@ public class RenderHandlerTest {
         String lastFormat;
         double lastScale;
         boolean lastInline;
+        String lastOutputDirectory;
 
         StubAccessor(boolean modelLoaded) {
             super(modelLoaded);
@@ -404,7 +586,8 @@ public class RenderHandlerTest {
 
         @Override
         public ExportResult exportView(String viewId, String format,
-                                        double scale, boolean inline) {
+                                        double scale, boolean inline,
+                                        String outputDirectory) {
             if (!isModelLoaded()) {
                 throw new NoModelLoadedException();
             }
@@ -415,6 +598,7 @@ public class RenderHandlerTest {
             this.lastFormat = format;
             this.lastScale = scale;
             this.lastInline = inline;
+            this.lastOutputDirectory = outputDirectory;
             return exportResult;
         }
     }

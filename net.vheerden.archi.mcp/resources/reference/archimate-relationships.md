@@ -104,6 +104,19 @@ Junctions are not relationships but connectors used to combine or split relation
 | AndJunction | All incoming relationships must be satisfied for outgoing to activate |
 | OrJunction | Any incoming relationship is sufficient for outgoing to activate |
 
+## Common Mistakes
+
+These errors occur frequently when LLMs create ArchiMate models. Check this section before creating relationships.
+
+| Mistake | Why It's Wrong | Correct Relationship |
+|---------|---------------|---------------------|
+| `CompositionRelationship` between `ApplicationComponent` → `ApplicationFunction` | Composition requires same-type elements (e.g., component→sub-component). Functions are **behaviour**, not structural parts. | `AssignmentRelationship` — assigns the component (who/what) to the function (does) |
+| `CompositionRelationship` between `Node` → `SystemSoftware` | Nodes don't structurally contain software in ArchiMate's type system. | `AssignmentRelationship` — the node is assigned to run the software |
+| `CompositionRelationship` between `BusinessActor` → `BusinessRole` | Actors don't structurally compose roles; they perform them. | `AssignmentRelationship` — the actor is assigned to the role |
+| `ServingRelationship` where `FlowRelationship` is needed | Serving = "provides capability to." Flow = "something moves from A to B." | Use `FlowRelationship` when data/messages/events move between elements. Use `ServingRelationship` when one element provides a service consumed by another. |
+
+**Rule of thumb:** If you're thinking "A contains B" but A and B are different element types (e.g., component vs function), use `AssignmentRelationship` instead of `CompositionRelationship`. Composition is for same-type structural decomposition (component → sub-component).
+
 ## Relationship Usage Guide
 
 ### For Dependency Analysis

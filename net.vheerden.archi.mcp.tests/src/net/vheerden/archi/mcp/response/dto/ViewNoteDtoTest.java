@@ -45,4 +45,34 @@ public class ViewNoteDtoTest {
         assertEquals(dto1, dto2);
         assertEquals(dto1.hashCode(), dto2.hashCode());
     }
+
+    // ---- Story B16: note field tests ----
+
+    @Test
+    public void shouldStoreNoteField_whenCanonicalConstructor() {
+        ViewNoteDto dto = new ViewNoteDto(
+                "vo-1", "Title", 100, 10, 185, 80, null,
+                null, null, null, null, null,
+                "position='above-content' takes precedence over explicit x/y coordinates");
+
+        assertEquals("position='above-content' takes precedence over explicit x/y coordinates",
+                dto.note());
+    }
+
+    @Test
+    public void shouldDefaultNoteToNull_whenStylingConstructor() {
+        ViewNoteDto dto = new ViewNoteDto(
+                "vo-1", "Title", 100, 10, 185, 80, null,
+                "#FFFF00", null, null, null, null);
+
+        assertNull("note should be null when using 12-param styling constructor", dto.note());
+    }
+
+    @Test
+    public void shouldDefaultNoteToNull_whenBasicConstructor() {
+        ViewNoteDto dto = new ViewNoteDto(
+                "vo-1", "Title", 100, 10, 185, 80, null);
+
+        assertNull("note should be null when using 7-param basic constructor", dto.note());
+    }
 }

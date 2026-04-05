@@ -32,7 +32,8 @@ public record ViewConnectionDto(
     Integer textPosition,
     String lineColor,
     Integer lineWidth,
-    String fontColor
+    String fontColor,
+    Boolean nameVisible
 ) {
 
     /**
@@ -48,7 +49,7 @@ public record ViewConnectionDto(
             List<BendpointDto> bendpoints) {
         this(viewConnectionId, relationshipId, relationshipType,
                 sourceViewObjectId, targetViewObjectId, bendpoints,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -69,6 +70,6 @@ public record ViewConnectionDto(
         this(viewConnectionId, relationshipId, relationshipType,
                 sourceViewObjectId, targetViewObjectId, bendpoints,
                 absoluteBendpoints, sourceAnchor, targetAnchor, textPosition,
-                null, null, null);
+                null, null, null, null);
     }
 }

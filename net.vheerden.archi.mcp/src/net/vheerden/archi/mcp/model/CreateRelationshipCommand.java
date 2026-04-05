@@ -7,11 +7,12 @@ import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IFolder;
 
 /**
- * GEF Command that adds an ArchiMate relationship to a folder (Story 7-2).
+ * GEF Command that creates an ArchiMate relationship: connects source/target
+ * and adds to a folder (Story 7-2, B19).
  *
- * <p>The relationship must be fully configured (name, source/target connected
- * via {@code connect()}) before this command is created. The command only
- * handles folder placement and removal (undo).</p>
+ * <p><strong>B19 fix:</strong> {@code connect()} is called inside {@code execute()},
+ * not during preparation. This ensures EMF cross-references only exist after the
+ * command runs on the command stack, preventing orphaned relationships.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -25,24 +26,28 @@ public class CreateRelationshipCommand extends Command {
     private final IArchimateElement target;
 
     /**
-     * Creates a command to add a relationship to a folder.
+     * Creates a command to connect and add a relationship to a folder.
      *
-     * <p>Captures source/target references at construction time so that
-     * {@link #redo()} can reconnect after {@link #undo()} disconnects.</p>
+     * <p>Source and target are passed explicitly because {@code connect()} has not
+     * been called yet at construction time (B19: deferred connect).</p>
      *
-     * @param relationship the fully-configured relationship to add
+     * @param relationship the relationship to connect and add (NOT yet connected)
      * @param folder       the target folder (typically the Relations folder)
+     * @param source       the source element to connect
+     * @param target       the target element to connect
      */
-    public CreateRelationshipCommand(IArchimateRelationship relationship, IFolder folder) {
+    public CreateRelationshipCommand(IArchimateRelationship relationship, IFolder folder,
+            IArchimateElement source, IArchimateElement target) {
         this.relationship = relationship;
         this.folder = folder;
-        this.source = (IArchimateElement) relationship.getSource();
-        this.target = (IArchimateElement) relationship.getTarget();
+        this.source = source;
+        this.target = target;
         setLabel("Create " + relationship.eClass().getName());
     }
 
     @Override
     public void execute() {
+        relationship.connect(source, target);
         folder.getElements().add(relationship);
     }
 

@@ -18,6 +18,7 @@ import net.vheerden.archi.mcp.handlers.ModelQueryHandler;
 import net.vheerden.archi.mcp.handlers.ElementCreationHandler;
 import net.vheerden.archi.mcp.handlers.ElementUpdateHandler;
 import net.vheerden.archi.mcp.handlers.MutationHandler;
+import net.vheerden.archi.mcp.handlers.ImageHandler;
 import net.vheerden.archi.mcp.handlers.RenderHandler;
 import net.vheerden.archi.mcp.handlers.ResourceHandler;
 import net.vheerden.archi.mcp.handlers.SearchHandler;
@@ -463,6 +464,10 @@ public class McpServerManager implements ModelChangeListener {
         RenderHandler renderHandler = new RenderHandler(
                 modelAccessor, formatter, commandRegistry);
         renderHandler.registerTools();
+
+        ImageHandler imageHandler = new ImageHandler(
+                modelAccessor, formatter, commandRegistry, sm);
+        imageHandler.registerTools();
 
         DeletionHandler deletionHandler = new DeletionHandler(
                 modelAccessor, formatter, commandRegistry, sm);

@@ -89,7 +89,7 @@ public class ToolDiscoveryIntegrationTest {
     @Test
     public void shouldDiscoverAllRegisteredTools() {
         List<McpServerFeatures.SyncToolSpecification> tools = registry.getToolSpecifications();
-        assertEquals("Expected exactly 51 tools (2 ModelQuery + 3 View + 1 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 3 Creation + 1 Update + 2 Discovery + 3 Approval + 17 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 51, tools.size());
+        assertEquals("Expected exactly 54 tools (2 ModelQuery + 3 View + 2 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 3 Creation + 1 Update + 2 Discovery + 3 Approval + 19 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 54, tools.size());
     }
 
     @Test
@@ -103,6 +103,7 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing get-views", toolNames.contains("get-views"));
         assertTrue("Missing get-view-contents", toolNames.contains("get-view-contents"));
         assertTrue("Missing search-elements", toolNames.contains("search-elements"));
+        assertTrue("Missing search-relationships", toolNames.contains("search-relationships"));
         assertTrue("Missing get-relationships", toolNames.contains("get-relationships"));
         assertTrue("Missing set-session-filter", toolNames.contains("set-session-filter"));
         assertTrue("Missing get-session-filters", toolNames.contains("get-session-filters"));
@@ -167,6 +168,10 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing arrange-groups", toolNames.contains("arrange-groups"));
         // Story 11-25: Element order optimization tool
         assertTrue("Missing optimize-group-order", toolNames.contains("optimize-group-order"));
+        // Story 13-2: Hub element detection tool
+        assertTrue("Missing detect-hub-elements", toolNames.contains("detect-hub-elements"));
+        // Story 13-6: Flat view layout tool
+        assertTrue("Missing layout-flat-view", toolNames.contains("layout-flat-view"));
     }
 
     @SuppressWarnings("unchecked")
@@ -227,6 +232,28 @@ public class ToolDiscoveryIntegrationTest {
                 searchSchema.required().contains("type"));
         assertFalse("search-elements 'layer' should be optional",
                 searchSchema.required().contains("layer"));
+
+        // search-relationships: requires "query", optional "type", "sourceLayer", "targetLayer"
+        McpSchema.JsonSchema searchRelSchema = findTool("search-relationships").inputSchema();
+        assertNotNull(searchRelSchema);
+        assertTrue("search-relationships should have 'query' property",
+                searchRelSchema.properties().containsKey("query"));
+        assertTrue("search-relationships should have 'type' property",
+                searchRelSchema.properties().containsKey("type"));
+        assertTrue("search-relationships should have 'sourceLayer' property",
+                searchRelSchema.properties().containsKey("sourceLayer"));
+        assertTrue("search-relationships should have 'targetLayer' property",
+                searchRelSchema.properties().containsKey("targetLayer"));
+        assertNotNull("search-relationships should have required list",
+                searchRelSchema.required());
+        assertTrue("search-relationships should require 'query'",
+                searchRelSchema.required().contains("query"));
+        assertFalse("search-relationships 'type' should be optional",
+                searchRelSchema.required().contains("type"));
+        assertFalse("search-relationships 'sourceLayer' should be optional",
+                searchRelSchema.required().contains("sourceLayer"));
+        assertFalse("search-relationships 'targetLayer' should be optional",
+                searchRelSchema.required().contains("targetLayer"));
 
         // get-relationships: requires "elementId", optional "depth", "traverse", "maxDepth", "direction"
         McpSchema.JsonSchema relSchema = findTool("get-relationships").inputSchema();
@@ -309,6 +336,7 @@ public class ToolDiscoveryIntegrationTest {
 
         // Story 5.2: Field selection parameters on all query commands
         assertFieldSelectionParams("search-elements", searchSchema);
+        assertFieldSelectionParams("search-relationships", searchRelSchema);
         assertFieldSelectionParams("get-element", elementSchema);
         assertFieldSelectionParams("get-views", viewsSchema);
         assertFieldSelectionParams("get-view-contents", viewContentsSchema);

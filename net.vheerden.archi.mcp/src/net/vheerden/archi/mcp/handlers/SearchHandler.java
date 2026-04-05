@@ -29,10 +29,11 @@ import net.vheerden.archi.mcp.response.ResponseFormat;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.SummaryFormatter;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
- * Handler for search tools: search-elements (Story 3.1).
+ * Handler for search tools: search-elements (Story 3.1), search-relationships (Story C1).
  *
  * <p>This handler follows the same pattern established by
  * {@link ModelQueryHandler} in Stories 2.2/2.3 and
@@ -119,10 +120,11 @@ public class SearchHandler {
 
     /**
      * Registers all tools provided by this handler with the command registry.
-     * Registers: search-elements (Story 3.1).
+     * Registers: search-elements (Story 3.1), search-relationships (Story C1).
      */
     public void registerTools() {
         registry.registerTool(buildSearchElementsSpec());
+        registry.registerTool(buildSearchRelationshipsSpec());
     }
 
     private McpServerFeatures.SyncToolSpecification buildSearchElementsSpec() {
@@ -680,6 +682,597 @@ public class SearchHandler {
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.INTERNAL_ERROR,
                     "An unexpected error occurred while searching elements");
+            return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        }
+    }
+
+    // ---- search-relationships (Story C1) ----
+
+    private McpServerFeatures.SyncToolSpecification buildSearchRelationshipsSpec() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+
+        Map<String, Object> queryProp = new LinkedHashMap<>();
+        queryProp.put("type", "string");
+        queryProp.put("description",
+                "Text to search for across relationship names, documentation, "
+                + "and property values (case-insensitive substring match). "
+                + "Use an empty string to return all relationships "
+                + "(subject to pagination and session filters).");
+        properties.put("query", queryProp);
+
+        Map<String, Object> typeProp = new LinkedHashMap<>();
+        typeProp.put("type", "string");
+        typeProp.put("description",
+                "Optional ArchiMate relationship type filter (e.g., "
+                + "'FlowRelationship', 'ServingRelationship', 'AccessRelationship'). "
+                + "Only relationships of this type are returned.");
+        properties.put("type", typeProp);
+
+        Map<String, Object> sourceLayerProp = new LinkedHashMap<>();
+        sourceLayerProp.put("type", "string");
+        sourceLayerProp.put("description",
+                "Optional filter by ArchiMate layer of the SOURCE element "
+                + "(e.g., 'Business', 'Application'). "
+                + "Only relationships where the source element is in this layer are returned.");
+        properties.put("sourceLayer", sourceLayerProp);
+
+        Map<String, Object> targetLayerProp = new LinkedHashMap<>();
+        targetLayerProp.put("type", "string");
+        targetLayerProp.put("description",
+                "Optional filter by ArchiMate layer of the TARGET element "
+                + "(e.g., 'Technology', 'Application'). "
+                + "Only relationships where the target element is in this layer are returned. "
+                + "Combine with sourceLayer to find cross-layer relationships "
+                + "(e.g., sourceLayer='Business', targetLayer='Application').");
+        properties.put("targetLayer", targetLayerProp);
+
+        Map<String, Object> fieldsProp = new LinkedHashMap<>();
+        fieldsProp.put("type", "string");
+        fieldsProp.put("description", "Field verbosity preset for relationship data. "
+                + "'minimal' returns only id and name. "
+                + "'standard' (default) returns id, name, type, sourceId, targetId. "
+                + "'full' returns all fields including documentation, properties, sourceName, targetName.");
+        fieldsProp.put("enum", List.of("minimal", "standard", "full"));
+        properties.put("fields", fieldsProp);
+
+        Map<String, Object> excludeProp = new LinkedHashMap<>();
+        excludeProp.put("type", "array");
+        Map<String, Object> excludeItems = new LinkedHashMap<>();
+        excludeItems.put("type", "string");
+        excludeProp.put("items", excludeItems);
+        excludeProp.put("description", "Fields to exclude from relationship data. "
+                + "Applied after fields preset. "
+                + "Valid values: documentation, properties, type. "
+                + "Note: id and name cannot be excluded.");
+        properties.put("exclude", excludeProp);
+
+        Map<String, Object> limitProp = new LinkedHashMap<>();
+        limitProp.put("type", "integer");
+        limitProp.put("description", "Maximum number of results per page (1-"
+                + PaginationCursor.MAX_PAGE_SIZE + "). Default: " + DEFAULT_SEARCH_LIMIT
+                + ". Use with cursor for pagination.");
+        properties.put("limit", limitProp);
+
+        Map<String, Object> cursorProp = new LinkedHashMap<>();
+        cursorProp.put("type", "string");
+        cursorProp.put("description", "Pagination cursor from a previous response's "
+                + "_meta.cursor. When provided, retrieves the next page of results. "
+                + "Cursor parameters override query/type/layer parameters.");
+        properties.put("cursor", cursorProp);
+
+        Map<String, Object> dryRunProp = new LinkedHashMap<>();
+        dryRunProp.put("type", "boolean");
+        dryRunProp.put("description", "Set to true to get a cost estimate without returning results. "
+                + "Returns estimated result count, token size, and recommended field preset.");
+        properties.put("dryRun", dryRunProp);
+
+        Map<String, Object> formatProp = new LinkedHashMap<>();
+        formatProp.put("type", "string");
+        formatProp.put("description", "Response format. 'json' (default) returns standard result array. "
+                + "'graph' returns nodes/edges structure (relationships as edges, "
+                + "source/target elements as nodes). "
+                + "'summary' returns condensed natural language overview with type distributions.");
+        formatProp.put("enum", List.of("json", "graph", "summary"));
+        properties.put("format", formatProp);
+
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", properties, List.of("query"), null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("search-relationships")
+                .description("[Search] Search across ALL ArchiMate relationships in the model by text, "
+                        + "type, and source/target element layer. No element ID needed. "
+                        + "Matches against relationship names, documentation, and property values "
+                        + "(case-insensitive substring match). "
+                        + "Use query='' to list all relationships. "
+                        + "Use type filter to find specific relationship types (e.g., type='FlowRelationship'). "
+                        + "Use sourceLayer/targetLayer to find cross-layer relationships "
+                        + "(e.g., sourceLayer='Business', targetLayer='Application'). "
+                        + "Results are paginated if they exceed the limit. "
+                        + "Use fields='full' to include documentation, properties, and resolved source/target names. "
+                        + "WHEN TO USE: Find relationships by text/type/layer across the entire model. "
+                        + "USE INSTEAD: get-relationships when you have a specific element ID and want its connections.")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleSearchRelationships)
+                .build();
+    }
+
+    private McpSchema.CallToolResult handleSearchRelationships(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling search-relationships request");
+        try {
+            // Extract and validate required query parameter
+            Object queryObj = (request.arguments() != null) ? request.arguments().get("query") : null;
+            if (!(queryObj instanceof String query)) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "The 'query' parameter is required and must be a string",
+                        null,
+                        "Provide a search term (e.g. query: 'data transfer') or use an empty string (query: '') to list all relationships",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Extract optional type filter
+            String typeFilter = null;
+            if (request.arguments() != null) {
+                Object typeObj = request.arguments().get("type");
+                if (typeObj instanceof String t && !t.isBlank()) {
+                    typeFilter = t;
+                }
+            }
+
+            // Validate type if provided
+            if (typeFilter != null && !TraversalHandler.VALID_RELATIONSHIP_TYPES.contains(typeFilter)) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "Invalid relationship type: '" + typeFilter + "'",
+                        "The 'type' parameter must be a valid ArchiMate relationship type name",
+                        "Valid types: AccessRelationship, AggregationRelationship, "
+                        + "AssignmentRelationship, AssociationRelationship, CompositionRelationship, "
+                        + "FlowRelationship, InfluenceRelationship, RealizationRelationship, "
+                        + "ServingRelationship, SpecializationRelationship, TriggeringRelationship",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Extract optional source layer filter
+            String sourceLayerFilter = null;
+            if (request.arguments() != null) {
+                Object layerObj = request.arguments().get("sourceLayer");
+                if (layerObj instanceof String l && !l.isBlank()) {
+                    sourceLayerFilter = l;
+                }
+            }
+
+            // Validate source layer if provided
+            if (sourceLayerFilter != null && !VALID_LAYERS.contains(sourceLayerFilter)) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "Invalid sourceLayer: '" + sourceLayerFilter + "'",
+                        "The 'sourceLayer' parameter must be a valid ArchiMate layer name",
+                        "Valid layers: Business, Application, Technology, Physical, "
+                        + "Strategy, Motivation, Implementation & Migration",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Extract optional target layer filter
+            String targetLayerFilter = null;
+            if (request.arguments() != null) {
+                Object layerObj = request.arguments().get("targetLayer");
+                if (layerObj instanceof String l && !l.isBlank()) {
+                    targetLayerFilter = l;
+                }
+            }
+
+            // Validate target layer if provided
+            if (targetLayerFilter != null && !VALID_LAYERS.contains(targetLayerFilter)) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "Invalid targetLayer: '" + targetLayerFilter + "'",
+                        "The 'targetLayer' parameter must be a valid ArchiMate layer name",
+                        "Valid layers: Business, Application, Technology, Physical, "
+                        + "Strategy, Motivation, Implementation & Migration",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Extract field selection parameters
+            String fieldsParam = null;
+            List<String> excludeParam = null;
+            if (request.arguments() != null) {
+                Object fieldsObj = request.arguments().get("fields");
+                if (fieldsObj instanceof String f && !f.isBlank()) {
+                    fieldsParam = f;
+                }
+                Object excludeObj = request.arguments().get("exclude");
+                if (excludeObj instanceof List<?> el && !el.isEmpty()) {
+                    excludeParam = new ArrayList<>();
+                    for (Object item : el) {
+                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                    }
+                    if (excludeParam.isEmpty()) excludeParam = null;
+                }
+            }
+
+            // Validate exclude field names
+            if (excludeParam != null) {
+                for (String field : excludeParam) {
+                    if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
+                        ErrorResponse error = new ErrorResponse(
+                                ErrorCode.INVALID_PARAMETER,
+                                "Invalid exclude field: '" + field + "'",
+                                null,
+                                "Valid exclude fields: documentation, properties, type",
+                                null);
+                        return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                    }
+                }
+            }
+
+            // Extract dryRun parameter
+            boolean dryRun = false;
+            if (request.arguments() != null) {
+                Object dryRunObj = request.arguments().get("dryRun");
+                if (dryRunObj instanceof Boolean b) {
+                    dryRun = b;
+                }
+            }
+
+            // Extract and validate format parameter
+            ResponseFormat format = ResponseFormat.JSON;
+            if (request.arguments() != null) {
+                Object formatObj = request.arguments().get("format");
+                if (formatObj instanceof String f && !f.isBlank()) {
+                    ResponseFormat parsed = ResponseFormat.fromString(f);
+                    if (parsed == null) {
+                        ErrorResponse error = new ErrorResponse(
+                                ErrorCode.INVALID_PARAMETER,
+                                "Invalid format: '" + f + "'",
+                                null,
+                                "Valid formats: json, graph, summary",
+                                null);
+                        return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                    }
+                    format = parsed;
+                }
+            }
+
+            // Extract pagination parameters
+            String cursorParam = null;
+            Integer limitParam = null;
+            if (request.arguments() != null) {
+                Object cursorObj = request.arguments().get("cursor");
+                if (cursorObj instanceof String c && !c.isBlank()) {
+                    cursorParam = c;
+                }
+                Object limitObj = request.arguments().get("limit");
+                if (limitObj instanceof Number n) {
+                    limitParam = n.intValue();
+                }
+            }
+
+            // Validate limit parameter
+            if (limitParam != null && (limitParam < 1 || limitParam > PaginationCursor.MAX_PAGE_SIZE)) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "The 'limit' parameter must be between 1 and " + PaginationCursor.MAX_PAGE_SIZE,
+                        null,
+                        "Provide a limit between 1 and " + PaginationCursor.MAX_PAGE_SIZE
+                                + ", or omit for default (" + DEFAULT_SEARCH_LIMIT + ")",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Cursor mode: decode and validate cursor
+            int offset = 0;
+            int limit = (limitParam != null) ? limitParam : DEFAULT_SEARCH_LIMIT;
+            String effectiveQuery = query;
+            String effectiveType = typeFilter;
+            String effectiveSourceLayer = sourceLayerFilter;
+            String effectiveTargetLayer = targetLayerFilter;
+
+            if (cursorParam != null && !dryRun) {
+                PaginationCursor.CursorData cursorData;
+                try {
+                    cursorData = PaginationCursor.decode(cursorParam);
+                } catch (PaginationCursor.InvalidCursorException e) {
+                    ErrorResponse error = new ErrorResponse(
+                            ErrorCode.INVALID_CURSOR,
+                            e.getMessage(),
+                            null,
+                            "Re-run the original query without a cursor parameter",
+                            null);
+                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                }
+
+                // Validate model version
+                String currentModelVersion = accessor.getModelVersion();
+                if (!cursorData.modelVersion().equals(currentModelVersion)) {
+                    ErrorResponse error = new ErrorResponse(
+                            ErrorCode.INVALID_CURSOR,
+                            "The model has been modified since this cursor was created",
+                            null,
+                            "Re-run the original query without a cursor parameter to get fresh results",
+                            null);
+                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                }
+
+                offset = cursorData.offset();
+                limit = cursorData.limit();
+                effectiveQuery = cursorData.params().getOrDefault("query", query);
+                effectiveType = cursorData.params().get("type");
+                effectiveSourceLayer = cursorData.params().get("sourceLayer");
+                effectiveTargetLayer = cursorData.params().get("targetLayer");
+                logger.debug("Decoded pagination cursor: offset={}, limit={}, modelVersion={}",
+                        offset, limit, cursorData.modelVersion());
+            }
+
+            // Extract session context
+            String sessionId = (sessionManager != null)
+                    ? SessionManager.extractSessionId(exchange) : null;
+
+            // Merge session filters (only for fresh queries, not cursor)
+            String effectiveFieldsPreset = fieldsParam;
+            Set<String> effectiveExclude = excludeParam != null ? Set.copyOf(excludeParam) : null;
+            if (sessionManager != null && cursorParam == null) {
+                // Skip session type merging: session type stores element types (e.g., ApplicationComponent)
+                // which are not valid relationship types — applying them would silently return 0 results
+                // Note: session layer filter applies to sourceLayer (closest semantic match)
+                if (sourceLayerFilter == null) {
+                    String sessionLayer = sessionManager.getEffectiveLayer(sessionId, null);
+                    if (sessionLayer != null) {
+                        effectiveSourceLayer = sessionLayer;
+                    }
+                }
+                effectiveFieldsPreset = sessionManager.getEffectiveFieldsPreset(sessionId, fieldsParam);
+                effectiveExclude = sessionManager.getEffectiveExcludeFields(sessionId, excludeParam);
+            } else if (sessionManager != null) {
+                effectiveFieldsPreset = sessionManager.getEffectiveFieldsPreset(sessionId, fieldsParam);
+                effectiveExclude = sessionManager.getEffectiveExcludeFields(sessionId, excludeParam);
+            }
+
+            // Parse preset with fallback
+            FieldSelector.FieldPreset preset = FieldSelector.FieldPreset.STANDARD;
+            String warningMessage = null;
+            if (effectiveFieldsPreset != null) {
+                Optional<FieldSelector.FieldPreset> parsed = FieldSelector.FieldPreset.fromString(effectiveFieldsPreset);
+                if (parsed.isPresent()) {
+                    preset = parsed.get();
+                } else {
+                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
+                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                }
+            }
+
+            String modelVersion = accessor.getModelVersion();
+
+            // Model version change detection
+            boolean modelChanged = false;
+            if (sessionManager != null && sessionId != null) {
+                modelChanged = sessionManager.checkModelVersionChanged(sessionId, modelVersion);
+                if (modelChanged) {
+                    sessionManager.invalidateSessionCache(sessionId);
+                }
+            }
+
+            // Cache check
+            String cacheKey = CacheKeyBuilder.buildCacheKey("search-rel", effectiveQuery,
+                    "type", effectiveType,
+                    "sourceLayer", effectiveSourceLayer, "targetLayer", effectiveTargetLayer,
+                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
+                    "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
+                    "format", format.value());
+            if (sessionManager != null && sessionId != null && !modelChanged && !dryRun) {
+                try {
+                    String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
+                    if (cachedJson != null) {
+                        logger.debug("Cache hit for key: {}", cacheKey);
+                        Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
+                        ResponseFormatter.addCacheHitFlag(cachedEnvelope);
+                        return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
+                    }
+                } catch (Exception e) {
+                    logger.debug("Cache read failed, proceeding with fresh query", e);
+                }
+            }
+
+            // Execute query (full result set)
+            logger.debug("Search relationships query: '{}', type: {}, sourceLayer: {}, targetLayer: {}",
+                    effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer);
+            List<RelationshipDto> allMatches = accessor.searchRelationships(
+                    effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer);
+            int totalCount = allMatches.size();
+
+            // Dry-run early return
+            if (dryRun) {
+                logger.info("Handling search-relationships with dryRun=true");
+                int estimatedTokens = CostEstimator.estimateTokens(totalCount, preset, CostEstimator.ItemType.RELATIONSHIP);
+                int tokensAtStandard = CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.STANDARD,
+                        CostEstimator.ItemType.RELATIONSHIP);
+                String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
+                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset);
+
+                List<String> dryRunNextSteps = new ArrayList<>();
+                if (totalCount > 50) {
+                    dryRunNextSteps.add("Add type or layer filters to narrow results (e.g., type=FlowRelationship)");
+                }
+                if (estimatedTokens > CostEstimator.THRESHOLD_COMFORTABLE) {
+                    dryRunNextSteps.add("Use fields=minimal to reduce token usage");
+                }
+                if (totalCount > limit) {
+                    dryRunNextSteps.add("Use limit parameter for paginated retrieval (e.g., limit=50)");
+                }
+                if (dryRunNextSteps.isEmpty()) {
+                    dryRunNextSteps.add("Execute the query without dryRun to retrieve results");
+                }
+
+                Map<String, Object> dryRunEnvelope = formatter.formatDryRun(
+                        totalCount, estimatedTokens, recommendedPreset,
+                        recommendation, dryRunNextSteps, modelVersion);
+                if (modelChanged) {
+                    ResponseFormatter.addModelChangedFlag(dryRunEnvelope);
+                }
+                return buildResult(formatter.toJsonString(dryRunEnvelope), false);
+            }
+
+            // Summary format: skip pagination, summarize full result set
+            if (format == ResponseFormat.SUMMARY) {
+                logger.info("Returning search-relationships summary: total={}", totalCount);
+                String summaryText = SummaryFormatter.summarizeRelationshipSearch(allMatches, effectiveQuery);
+
+                List<String> summaryNextSteps;
+                if (totalCount == 0) {
+                    summaryNextSteps = List.of(
+                            "Try broader search terms or partial words",
+                            "Use search-elements to find elements, then get-relationships for their connections");
+                } else {
+                    summaryNextSteps = List.of(
+                            "Re-run with format=json for full relationship data",
+                            "Add type or sourceLayer/targetLayer filters to narrow results",
+                            "Use get-relationships with a specific elementId for traversal and depth expansion");
+                }
+
+                Map<String, Object> envelope = formatter.formatSummary(
+                        summaryText, summaryNextSteps, modelVersion, totalCount, totalCount);
+
+                if (warningMessage != null) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+                    meta.put("warning", warningMessage);
+                }
+                if (modelChanged) {
+                    ResponseFormatter.addModelChangedFlag(envelope);
+                }
+
+                String jsonResult = formatter.toJsonString(envelope);
+                if (sessionManager != null && sessionId != null && !modelChanged) {
+                    sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
+                }
+                return buildResult(jsonResult, false);
+            }
+
+            // Validate cursor offset against actual results
+            if (cursorParam != null && offset >= totalCount && totalCount > 0) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_CURSOR,
+                        "The cursor position exceeds the current result count",
+                        null,
+                        "Re-run the original query without a cursor parameter",
+                        null);
+                return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // Slice results for current page
+            int endIndex = Math.min(offset + limit, totalCount);
+            List<RelationshipDto> pageResults = (offset < totalCount)
+                    ? allMatches.subList(offset, endIndex)
+                    : List.of();
+            boolean hasMore = endIndex < totalCount;
+
+            logger.info("Returning search-relationships page: offset={}, limit={}, pageSize={}, total={}, format={}",
+                    offset, limit, pageResults.size(), totalCount, format.value());
+
+            // Apply field selection (per-page, after slicing)
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> filteredResult =
+                    (List<Map<String, Object>>) FieldSelector.applyFieldSelection(pageResults, preset, effectiveExclude);
+
+            Map<String, Object> envelope;
+            List<String> nextSteps;
+
+            if (format == ResponseFormat.GRAPH) {
+                // Graph format: relationships as edges, source/target elements as nodes
+                Map<String, Object> graphData = GraphFormatter.formatRelationshipsAsGraph(filteredResult);
+                int graphNodeCount = ((List<?>) graphData.get("nodes")).size();
+
+                if (pageResults.isEmpty()) {
+                    nextSteps = List.of(
+                            "Try broader search terms or partial words",
+                            "Use search-elements to find elements first");
+                } else if (hasMore) {
+                    nextSteps = List.of(
+                            "Use cursor parameter to retrieve next page",
+                            "Use get-element to get full details of connected elements");
+                } else {
+                    nextSteps = List.of(
+                            "Use get-element to get full details of connected elements",
+                            "Use get-relationships with a specific elementId for traversal");
+                }
+
+                envelope = formatter.formatGraph(graphData, nextSteps, modelVersion,
+                        graphNodeCount, pageResults.size(), totalCount, hasMore);
+            } else {
+                // JSON format (default)
+                if (pageResults.isEmpty()) {
+                    nextSteps = List.of(
+                            "Try broader search terms or partial words",
+                            "Use search-elements to find elements, then get-relationships for their connections");
+                } else if (hasMore) {
+                    nextSteps = List.of(
+                            "Use cursor parameter to retrieve next page",
+                            "Use get-element to get full details of source/target elements",
+                            "Use get-relationships with elementId for traversal and depth expansion");
+                } else {
+                    nextSteps = List.of(
+                            "Use get-element to get full details of source/target elements",
+                            "Use get-relationships with elementId for traversal and depth expansion");
+                }
+
+                envelope = formatter.formatSuccess(
+                        filteredResult, nextSteps, modelVersion,
+                        pageResults.size(), totalCount, hasMore);
+            }
+
+            // Add cursor token if more pages available
+            if (hasMore) {
+                Map<String, String> cursorParams = new LinkedHashMap<>();
+                cursorParams.put("query", effectiveQuery);
+                cursorParams.put("type", effectiveType);
+                cursorParams.put("sourceLayer", effectiveSourceLayer);
+                cursorParams.put("targetLayer", effectiveTargetLayer);
+                String nextCursor = PaginationCursor.encode(
+                        modelVersion, offset + limit, limit, totalCount, cursorParams);
+                ResponseFormatter.addCursorToken(envelope, nextCursor);
+            }
+
+            if (warningMessage != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+                meta.put("warning", warningMessage);
+            }
+            if (modelChanged) {
+                ResponseFormatter.addModelChangedFlag(envelope);
+            }
+
+            String jsonResult = formatter.toJsonString(envelope);
+
+            if (sessionManager != null && sessionId != null && !modelChanged) {
+                sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
+            }
+
+            return buildResult(jsonResult, false);
+
+        } catch (NoModelLoadedException e) {
+            ErrorResponse error = new ErrorResponse(
+                    ErrorCode.MODEL_NOT_LOADED,
+                    e.getMessage(),
+                    null,
+                    "Open an ArchiMate model in ArchimateTool",
+                    null);
+            return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+
+        } catch (Exception e) {
+            logger.error("Unexpected error handling search-relationships", e);
+            ErrorResponse error = new ErrorResponse(
+                    ErrorCode.INTERNAL_ERROR,
+                    "An unexpected error occurred while searching relationships");
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
         }
     }

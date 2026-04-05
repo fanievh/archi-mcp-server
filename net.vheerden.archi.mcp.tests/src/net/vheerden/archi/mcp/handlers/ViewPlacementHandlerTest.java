@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -22,6 +23,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.BaseTestAccessor;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
+import net.vheerden.archi.mcp.model.ImageParams;
 import net.vheerden.archi.mcp.model.StylingParams;
 import net.vheerden.archi.mcp.model.ProposalContext;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
@@ -38,7 +40,11 @@ import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
+import net.vheerden.archi.mcp.response.dto.NudgedElementDto;
 import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
+import net.vheerden.archi.mcp.response.dto.DetectHubElementsResultDto;
+import net.vheerden.archi.mcp.response.dto.HubElementEntryDto;
+import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
@@ -78,8 +84,8 @@ public class ViewPlacementHandlerTest {
     // ---- Tool registration ----
 
     @Test
-    public void shouldRegisterSeventeenTools() {
-        assertEquals(17, registry.getToolSpecifications().size());
+    public void shouldRegisterTwentyTools() {
+        assertEquals(19, registry.getToolSpecifications().size());
     }
 
     @Test
@@ -121,6 +127,7 @@ public class ViewPlacementHandlerTest {
     public void shouldHaveMutationPrefix_inMutationToolDescriptions() {
         registry.getToolSpecifications().stream()
                 .filter(spec -> !"assess-layout".equals(spec.tool().name()))
+                .filter(spec -> !"detect-hub-elements".equals(spec.tool().name()))
                 .forEach(spec -> {
                     assertTrue(spec.tool().name() + " description should start with [Mutation]",
                             spec.tool().description().startsWith("[Mutation]"));
@@ -503,7 +510,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void shouldReturnNotFound_whenViewMissing_forAddNote() throws Exception {
-        accessor.setAddNoteToViewBehavior((sid, vId, content, x, y, w, h, pvoId) -> {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap, x, y, w, h, pvoId) -> {
             throw new ModelAccessException("View not found", ErrorCode.VIEW_NOT_FOUND);
         });
 
@@ -535,7 +542,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void shouldReturnProposal_forAddNote_whenApprovalActive() throws Exception {
-        accessor.setAddNoteToViewBehavior((sid, vId, content, x, y, w, h, pvoId) -> {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap, x, y, w, h, pvoId) -> {
             ViewNoteDto dto = new ViewNoteDto("vn-1", content, 50, 50, 185, 80, null);
             ProposalContext ctx = new ProposalContext("p-1", "Add note to view", Instant.now());
             return new MutationResult<>(dto, null, ctx);
@@ -552,7 +559,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void shouldReturnBatchSeq_forAddNote_whenBatchActive() throws Exception {
-        accessor.setAddNoteToViewBehavior((sid, vId, content, x, y, w, h, pvoId) -> {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap, x, y, w, h, pvoId) -> {
             ViewNoteDto dto = new ViewNoteDto("vn-1", content, 50, 50, 185, 80, null);
             return new MutationResult<>(dto, 5);
         });
@@ -1044,6 +1051,19 @@ public class ViewPlacementHandlerTest {
         Map<String, Object> proposal = (Map<String, Object>) entity.get("proposal");
         assertNotNull(proposal);
         assertEquals("prop-4", proposal.get("proposalId"));
+    }
+
+    @Test
+    public void shouldReturnError_whenInvalidLabelPosition() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewConnectionId", "vc-1");
+        args.put("labelPosition", "bogus");
+
+        McpSchema.CallToolResult result = callTool("update-view-connection", args);
+        assertTrue("Should be error for invalid labelPosition", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue("Error should mention invalid labelPosition",
+                content.contains("Invalid labelPosition"));
     }
 
     // ---- absolute bendpoints tests (Story 8-0d) ----
@@ -1637,6 +1657,535 @@ public class ViewPlacementHandlerTest {
         assertNotNull("Should have batch info", entity.get("batch"));
     }
 
+    // ---- detect-hub-elements (Story 13-3) ----
+
+    @Test
+    public void shouldRegisterDetectHubElementsTool() {
+        boolean found = registry.getToolSpecifications().stream()
+                .anyMatch(spec -> "detect-hub-elements".equals(spec.tool().name()));
+        assertTrue("detect-hub-elements tool should be registered", found);
+    }
+
+    @Test
+    public void detectHubElements_shouldReturnSortedElements() throws Exception {
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        assertNotNull(entity);
+        assertEquals("v-1", entity.get("viewId"));
+        assertEquals(5, entity.get("totalElements"));
+        assertEquals(8, entity.get("totalConnections"));
+        assertEquals(3.2, entity.get("averageConnectionCount"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) entity.get("elements");
+        assertNotNull(elements);
+        assertEquals(3, elements.size());
+
+        // Verify sorted descending by connectionCount
+        assertEquals(8, elements.get(0).get("connectionCount"));
+        assertEquals(4, elements.get(1).get("connectionCount"));
+        assertEquals(2, elements.get(2).get("connectionCount"));
+
+        // Verify first element fields
+        assertEquals("vo-1", elements.get(0).get("viewObjectId"));
+        assertEquals("e-1", elements.get(0).get("elementId"));
+        assertEquals("API Gateway", elements.get(0).get("elementName"));
+        assertEquals("ApplicationComponent", elements.get(0).get("elementType"));
+        assertEquals(120, elements.get(0).get("width"));
+        assertEquals(55, elements.get(0).get("height"));
+    }
+
+    @Test
+    public void detectHubElements_shouldIncludeSuggestionsForHubs() throws Exception {
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+
+        @SuppressWarnings("unchecked")
+        List<String> suggestions = (List<String>) entity.get("suggestions");
+        assertNotNull("Should have suggestions for hub element", suggestions);
+        assertEquals(1, suggestions.size());
+        assertTrue(suggestions.get(0).contains("API Gateway"));
+        assertTrue(suggestions.get(0).contains("8 connections"));
+    }
+
+    @Test
+    public void detectHubElements_shouldRequireViewId() throws Exception {
+        McpSchema.CallToolResult result = callTool("detect-hub-elements",
+                new HashMap<>());
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+    }
+
+    @Test
+    public void detectHubElements_shouldIncludeNextStepsWithHubs() throws Exception {
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertTrue(nextSteps.stream().anyMatch(s -> s.contains("update-view-object")));
+        assertTrue(nextSteps.stream().anyMatch(s -> s.contains("auto-route-connections")));
+    }
+
+    @Test
+    public void detectHubElements_shouldReturnEmptyForEmptyView() throws Exception {
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 0, 0, 0.0, List.of(), null));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        assertEquals(0, entity.get("totalElements"));
+        assertEquals(0, entity.get("totalConnections"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) entity.get("elements");
+        assertNotNull(elements);
+        assertTrue(elements.isEmpty());
+    }
+
+    @Test
+    public void detectHubElements_shouldOmitSuggestionsWhenNoHubs() throws Exception {
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 3, 4, 2.0,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "Comp A",
+                                "ApplicationComponent", 3, 120, 55, 0)),
+                        null));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        assertNull("suggestions should be null when no hubs", entity.get("suggestions"));
+    }
+
+    @Test
+    public void detectHubElements_shouldReturnNextStepsForNoHubs() throws Exception {
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 3, 4, 2.0,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "Comp A",
+                                "ApplicationComponent", 3, 120, 55, 0)),
+                        null));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertTrue(nextSteps.stream().anyMatch(s -> s.contains("No hub elements detected")));
+    }
+
+    @Test
+    public void detectHubElements_shouldHandleNoModelLoaded() throws Exception {
+        StubViewPlacementAccessor noModel = new StubViewPlacementAccessor(false);
+        ViewPlacementHandler noModelHandler = new ViewPlacementHandler(
+                noModel, formatter, new CommandRegistry(), null);
+        noModelHandler.registerTools();
+
+        McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
+                .name("detect-hub-elements")
+                .arguments(Map.of("viewId", "v-1"))
+                .build();
+        McpSchema.CallToolResult result = noModelHandler.handleDetectHubElements(null, request);
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("MODEL_NOT_LOADED"));
+    }
+
+    // ---- detect-hub-elements label-aware sizing (Story B23) ----
+
+    @Test
+    public void detectHubElements_shouldOmitMaxLabelWidthWhenZero() throws Exception {
+        // Default stub has maxLabelWidth=0 for all entries
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) entity.get("elements");
+        assertNotNull(elements);
+        // maxLabelWidth should be omitted when 0 (NON_DEFAULT serialization)
+        assertNull("maxLabelWidth should be omitted when 0",
+                elements.get(0).get("maxLabelWidth"));
+    }
+
+    @Test
+    public void detectHubElements_shouldIncludeMaxLabelWidthWhenNonZero() throws Exception {
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 2, 5, 2.5,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "API Gateway",
+                                "ApplicationComponent", 8, 120, 55, 154)),
+                        List.of("test suggestion")));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) entity.get("elements");
+        assertEquals(154, elements.get(0).get("maxLabelWidth"));
+    }
+
+    @Test
+    public void detectHubElements_shouldIncludeLabelAwareSuggestion() throws Exception {
+        // maxLabelWidth=250 + currentWidth=120 = 370 > connectionBasedWidth(120 + 15*2 = 150)
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 2, 10, 5.0,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "Hub Element",
+                                "ApplicationComponent", 8, 120, 55, 250)),
+                        List.of("Element 'Hub Element' has 8 connections (hub threshold: 6). "
+                                + "Consider increasing height to 85px (55 + 15 \u00d7 2) for horizontal layouts, "
+                                + "or width to 370px (120 + 15 \u00d7 2) for vertical layouts. "
+                                + "Label-adjusted width: 370px (longest label: 250px).")));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<String> suggestions = (List<String>) entity.get("suggestions");
+        assertNotNull(suggestions);
+        assertTrue("Should contain label-adjusted text",
+                suggestions.get(0).contains("Label-adjusted width"));
+        assertTrue("Should contain longest label info",
+                suggestions.get(0).contains("longest label: 250px"));
+    }
+
+    @Test
+    public void detectHubElements_shouldPreferConnectionBasedWidthWhenLarger() throws Exception {
+        // maxLabelWidth=10 + currentWidth=120 = 130 < connectionBasedWidth(120 + 15*4 = 180)
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 2, 12, 6.0,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "Small Label Hub",
+                                "ApplicationComponent", 10, 120, 55, 10)),
+                        List.of("Element 'Small Label Hub' has 10 connections (hub threshold: 6). "
+                                + "Consider increasing height to 115px (55 + 15 \u00d7 4) for horizontal layouts, "
+                                + "or width to 180px (120 + 15 \u00d7 4) for vertical layouts.")));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<String> suggestions = (List<String>) entity.get("suggestions");
+        assertNotNull(suggestions);
+        assertFalse("Should NOT contain label-adjusted text when connection-based is larger",
+                suggestions.get(0).contains("Label-adjusted width"));
+    }
+
+    @Test
+    public void detectHubElements_shouldHandleNullRelationshipNames() throws Exception {
+        // Entry with maxLabelWidth=0 means no labels contributed
+        accessor.setDetectHubElementsBehavior(vId ->
+                new DetectHubElementsResultDto(vId, 1, 8, 8.0,
+                        List.of(new HubElementEntryDto("vo-1", "e-1", "No Labels Hub",
+                                "ApplicationComponent", 8, 120, 55, 0)),
+                        List.of("Element 'No Labels Hub' has 8 connections (hub threshold: 6). "
+                                + "Consider increasing height to 85px (55 + 15 \u00d7 2) for horizontal layouts, "
+                                + "or width to 150px (120 + 15 \u00d7 2) for vertical layouts.")));
+
+        Map<String, Object> result = callAndParse("detect-hub-elements",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> entity = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) entity.get("elements");
+        assertNull("maxLabelWidth should be omitted when 0",
+                elements.get(0).get("maxLabelWidth"));
+    }
+
+    // ---- layout-flat-view (Story 13-6) ----
+
+    @Test
+    public void shouldRegisterLayoutFlatViewTool() {
+        boolean found = registry.getToolSpecifications().stream()
+                .anyMatch(spec -> "layout-flat-view".equals(spec.tool().name()));
+        assertTrue("layout-flat-view tool should be registered", found);
+    }
+
+    @Test
+    public void layoutFlatView_shouldParseRowArrangementAndCallAccessor() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row"));
+
+        Map<String, Object> data = getResult(result);
+        assertNotNull(data);
+        assertEquals("v-1", data.get("viewId"));
+        assertEquals("row", data.get("arrangement"));
+        assertEquals(6, ((Number) data.get("elementsRepositioned")).intValue());
+    }
+
+    @Test
+    public void layoutFlatView_shouldParseColumnArrangement() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "column"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("column", data.get("arrangement"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldParseGridArrangementWithColumns() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "grid", "columns", 4));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("grid", data.get("arrangement"));
+        assertEquals(4, ((Number) data.get("columnsUsed")).intValue());
+    }
+
+    @Test
+    public void layoutFlatView_shouldParseSortByParameter() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row", "sortBy", "name"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("name", data.get("sortBy"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldParseCategoryFieldParameter() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row", "categoryField", "layer"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("layer", data.get("categoryField"));
+        assertNotNull("categories should be present when categoryField is set",
+                data.get("categories"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldRequireViewId() throws Exception {
+        McpSchema.CallToolResult result = callTool("layout-flat-view",
+                Map.of("arrangement", "row"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("viewId"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldRequireArrangement() throws Exception {
+        McpSchema.CallToolResult result = callTool("layout-flat-view",
+                Map.of("viewId", "v-1"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("arrangement"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldRejectInvalidArrangement() throws Exception {
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            throw new ModelAccessException(
+                    "Invalid arrangement: 'bogus'. Valid values: row, column, grid.",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        McpSchema.CallToolResult result = callTool("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "bogus"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("Invalid arrangement"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldIncludeNextSteps() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "grid"));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertFalse(nextSteps.isEmpty());
+        assertTrue("Should suggest auto-route-connections",
+                nextSteps.stream().anyMatch(s -> s.contains("auto-route-connections")));
+    }
+
+    @Test
+    public void layoutFlatView_shouldHandleNoModelLoaded() throws Exception {
+        StubViewPlacementAccessor noModel = new StubViewPlacementAccessor(false);
+        ViewPlacementHandler noModelHandler = new ViewPlacementHandler(
+                noModel, formatter, new CommandRegistry(), null);
+        noModelHandler.registerTools();
+
+        McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
+                .name("layout-flat-view")
+                .arguments(Map.of("viewId", "v-1", "arrangement", "row"))
+                .build();
+        McpSchema.CallToolResult result = noModelHandler.handleLayoutFlatView(null, request);
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("MODEL_NOT_LOADED"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldForwardSpacingAndPadding() throws Exception {
+        int[] capturedSpacing = {-1};
+        int[] capturedPadding = {-1};
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedSpacing[0] = sp;
+            capturedPadding[0] = pad;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 0, sb, cf, null, null), null);
+        });
+
+        callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "column",
+                        "spacing", 80, "padding", 30));
+
+        assertEquals("spacing should be forwarded", 80, capturedSpacing[0]);
+        assertEquals("padding should be forwarded", 30, capturedPadding[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldForwardSortByAndCategoryField() throws Exception {
+        String[] capturedSortBy = {null};
+        String[] capturedCategoryField = {null};
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedSortBy[0] = sb;
+            capturedCategoryField[0] = cf;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 0, sb, cf,
+                    cf != null ? List.of("Application") : null, null), null);
+        });
+
+        callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "grid",
+                        "sortBy", "type", "categoryField", "type"));
+
+        assertEquals("sortBy should be forwarded", "type", capturedSortBy[0]);
+        assertEquals("categoryField should be forwarded", "type", capturedCategoryField[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldForwardSortByLayer() throws Exception {
+        String[] capturedSortBy = {null};
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedSortBy[0] = sb;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 0, sb, cf, null, null), null);
+        });
+
+        callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row", "sortBy", "layer"));
+
+        assertEquals("sortBy layer should be forwarded", "layer", capturedSortBy[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldHandleEmptyViewError() throws Exception {
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            throw new ModelAccessException(
+                    "View has no top-level elements to layout",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        McpSchema.CallToolResult result = callTool("layout-flat-view",
+                Map.of("viewId", "v-empty", "arrangement", "row"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("no top-level elements"));
+    }
+
+    @Test
+    public void layoutFlatView_shouldHandleMutationException() throws Exception {
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            throw new MutationException("Mutation failed");
+        });
+
+        McpSchema.CallToolResult result = callTool("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row"));
+
+        assertTrue("Should be error", result.isError());
+    }
+
+    // ---- layout-flat-view autoLayoutChildren (B20) ----
+
+    @Test
+    public void layoutFlatView_shouldForwardAutoLayoutChildrenTrue() throws Exception {
+        boolean[] capturedAutoLayoutChildren = {false};
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedAutoLayoutChildren[0] = alc;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 3, sb, cf, null, null), null);
+        });
+        Map<String, Object> args = new java.util.LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("arrangement", "column");
+        args.put("autoLayoutChildren", true);
+        callAndParse("layout-flat-view", args);
+        assertTrue("autoLayoutChildren should be forwarded as true",
+                capturedAutoLayoutChildren[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldForwardAutoLayoutChildrenFalse() throws Exception {
+        boolean[] capturedAutoLayoutChildren = {true};
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedAutoLayoutChildren[0] = alc;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 0, sb, cf, null, null), null);
+        });
+        Map<String, Object> args = new java.util.LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("arrangement", "row");
+        args.put("autoLayoutChildren", false);
+        callAndParse("layout-flat-view", args);
+        assertFalse("autoLayoutChildren should be forwarded as false",
+                capturedAutoLayoutChildren[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldDefaultAutoLayoutChildrenToTrue() throws Exception {
+        boolean[] capturedAutoLayoutChildren = {false}; // sentinel
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) -> {
+            capturedAutoLayoutChildren[0] = alc;
+            return new MutationResult<>(new LayoutFlatViewResultDto(
+                    vId, arr, 6, 0, sb, cf, null, null), null);
+        });
+        callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row"));
+        assertTrue("autoLayoutChildren should default to true when not provided",
+                capturedAutoLayoutChildren[0]);
+    }
+
+    @Test
+    public void layoutFlatView_shouldIncludeChildrenRepositionedInResponse() throws Exception {
+        accessor.setLayoutFlatViewBehavior((sid, vId, arr, sp, pad, sb, cf, cols, alc) ->
+                new MutationResult<>(new LayoutFlatViewResultDto(
+                        vId, arr, 6, 12, sb, cf, null, null), null));
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "column"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultData = (Map<String, Object>) result.get("result");
+        assertEquals("childrenRepositioned should be 12", 12,
+                ((Number) resultData.get("childrenRepositioned")).intValue());
+    }
+
+    @Test
+    public void layoutFlatView_shouldIncludeZeroChildrenRepositionedWhenNoChildren() throws Exception {
+        Map<String, Object> result = callAndParse("layout-flat-view",
+                Map.of("viewId", "v-1", "arrangement", "row"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> resultData = (Map<String, Object>) result.get("result");
+        assertEquals("childrenRepositioned should be 0", 0,
+                ((Number) resultData.get("childrenRepositioned")).intValue());
+    }
+
     // ---- Helpers ----
 
     private McpSchema.CallToolResult callTool(String toolName, Map<String, Object> args)
@@ -1664,6 +2213,8 @@ public class ViewPlacementHandlerTest {
             case "auto-layout-and-route" -> handler.handleAutoLayoutAndRoute(null, request);
             case "arrange-groups" -> handler.handleArrangeGroups(null, request);
             case "optimize-group-order" -> handler.handleOptimizeGroupOrder(null, request);
+            case "detect-hub-elements" -> handler.handleDetectHubElements(null, request);
+            case "layout-flat-view" -> handler.handleLayoutFlatView(null, request);
             default -> throw new IllegalArgumentException("Unknown tool: " + toolName);
         };
     }
@@ -1725,7 +2276,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 10, 5, 4, 0, 15, 3.0, 8.0, 20, "poor", null,
                 List.of("Element 'a' overlaps with element 'b'"),
-                null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Found 4 overlapping element pairs — use auto-layout-and-route")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1755,7 +2306,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_shouldIncludeContainmentOverlapsInResponse() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 2, 0, 5, 1, 0.5, 40.0, 65, "good", null,
-                null, null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1780,7 +2331,7 @@ public class ViewPlacementHandlerTest {
         breakdown.put("overall", "good");
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 12, 3.0, 45.0, 70, "good", breakdown,
-                null, null, null, null, 0, null, 0, null, 0, null, true, 0, null,
+                null, null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1820,7 +2371,7 @@ public class ViewPlacementHandlerTest {
                 vId, 5, 3, 0, 0, 0, 0.0, 50.0, 80, "good", null,
                 null, null, null, null, 0, null, 2,
                 List.of("Connection 'c-1' references missing view object(s): source=obj-x target=obj-y"),
-                0, null, false, 0, null,
+                0, null, false, 0, 0, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1856,7 +2407,7 @@ public class ViewPlacementHandlerTest {
                 vId, 5, 3, 0, 0, 0, 0.0, 50.0, 80, "good", null,
                 null, null, null, null, 0, null, 3,
                 List.of("Connection 'c-1' references missing view object(s)"),
-                0, null, false, 0, null,
+                0, null, false, 0, 0, null,
                 List.of("Layout quality is good.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1875,7 +2426,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_excellentRating_shouldOnlyRecommendExportView() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "excellent", null,
-                null, null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("No issues detected.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1892,7 +2443,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_goodWithEdgeCrossings_shouldRecommendAutoRoute() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 5, 1.25, 60.0, 80, "good", null,
-                null, null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Some crossings.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1912,7 +2463,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 10, 3, 2, 0, 0, 0.0, 25.0, 60, "good", null,
                 List.of("overlap1", "overlap2"),
-                null, null, null, 0, null, 0, null, 0, null, true, 0, null,
+                null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
                 List.of("Use layout-within-group.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1931,7 +2482,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_fairRating_shouldRecommendAutoLayoutAndRoute() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
-                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Multiple issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1952,7 +2503,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_poorRating_shouldRecommendAutoLayoutNoLayoutView() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 15, 8, 6, 0, 20, 2.5, 15.0, 30, "poor", null,
-                List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Major issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1971,7 +2522,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_poorWithGroups_shouldNotRecommendLayoutView() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 15, 8, 6, 0, 20, 2.5, 15.0, 30, "poor", null,
-                List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, true, 0, null,
+                List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
                 List.of("Major issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -1991,7 +2542,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "excellent", null,
                 null, null, null, null, 0, null, 2,
-                List.of("orphan1"), 0, null, false, 0, null,
+                List.of("orphan1"), 0, null, false, 0, 0, null,
                 List.of("No issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2009,7 +2560,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 10, 3, 2, 0, 0, 0.0, 25.0, 60, "good", null,
                 List.of("overlap1", "overlap2"),
-                null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Spacing is tight.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2028,7 +2579,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_goodWithNoIssues_shouldOnlyRecommendExportView() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "good", null,
-                null, null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("No issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2045,7 +2596,7 @@ public class ViewPlacementHandlerTest {
     public void assessLayout_fairWithGroups_shouldNotRecommendLayoutView() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
-                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, true, 0, null,
+                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
                 List.of("Multiple issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2065,7 +2616,7 @@ public class ViewPlacementHandlerTest {
         // Test with fair rating (has multiple steps)
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
-                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                 List.of("Issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2104,7 +2655,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldUseClearStrategy() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 3, "clear", false), null));
 
         Map<String, Object> result = callAndParse("auto-route-connections",
@@ -2117,7 +2668,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldPassConnectionIdsFilter() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             int count = (connIds != null) ? connIds.size() : 0;
             return new MutationResult<>(new AutoRouteResultDto(vId, count, "orthogonal", false), null);
         });
@@ -2131,7 +2682,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldReturnErrorOnInvalidStrategy() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             throw new ModelAccessException("Invalid strategy: 'bogus'. Valid: orthogonal, clear",
                     ErrorCode.INVALID_PARAMETER);
         });
@@ -2146,7 +2697,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldReturnProposalInApprovalMode() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(null, null, new ProposalContext("p-99",
                         "Auto-route connections on view " + vId,
                         Instant.parse("2026-03-04T00:00:00Z"))));
@@ -2165,7 +2716,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldIncludeRouterTypeSwitchedTrue() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 10, "orthogonal", true), null));
 
         Map<String, Object> result = callAndParse("auto-route-connections",
@@ -2184,7 +2735,7 @@ public class ViewPlacementHandlerTest {
     public void autoRoute_shouldIncludeRouterTypeSwitchedFalse() throws Exception {
         // Explicitly set up a scenario where routerTypeSwitched is false
         // (view already in bendpoint mode — no switch needed)
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null));
 
         Map<String, Object> result = callAndParse("auto-route-connections",
@@ -2196,7 +2747,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_clearStrategy_shouldNotSwitchRouterType() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 3, "clear", false), null));
 
         Map<String, Object> result = callAndParse("auto-route-connections",
@@ -2212,7 +2763,7 @@ public class ViewPlacementHandlerTest {
     public void autoRoute_shouldRouteOnlySpecifiedConnections_preservingOthers() throws Exception {
         // When connectionIds are specified, only those connections should be routed
         // The count should reflect only the specified connections
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             assertNotNull("connectionIds should be passed through", connIds);
             assertEquals(2, connIds.size());
             assertEquals("c-1", connIds.get(0));
@@ -2230,7 +2781,7 @@ public class ViewPlacementHandlerTest {
     @Test
     public void autoRoute_shouldRouteAllConnections_whenConnectionIdsOmitted() throws Exception {
         // When connectionIds is omitted, all connections should be routed (backward compat)
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             assertNull("connectionIds should be null when omitted", connIds);
             return new MutationResult<>(new AutoRouteResultDto(vId, 20, "orthogonal", false), null);
         });
@@ -2248,7 +2799,7 @@ public class ViewPlacementHandlerTest {
         List<String> testWarnings = List.of(
                 "Connection not found on view: bad-id-1",
                 "Connection not found on view: bad-id-2");
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(
                         vId, 1, "orthogonal", false, testWarnings), null));
 
@@ -2268,7 +2819,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldReturnError_whenAllConnectionIdsInvalid() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             throw new ModelAccessException(
                     "None of the specified connection IDs were found on the view",
                     ErrorCode.ELEMENT_NOT_FOUND);
@@ -2286,7 +2837,7 @@ public class ViewPlacementHandlerTest {
     @Test
     public void autoRoute_shouldOmitWarningsWhenEmpty() throws Exception {
         // When no warnings, the field should be absent from JSON (NON_EMPTY)
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null));
 
         Map<String, Object> result = callAndParse("auto-route-connections",
@@ -2299,7 +2850,7 @@ public class ViewPlacementHandlerTest {
     @Test
     public void autoRoute_shouldIncludeWarningsNextStep() throws Exception {
         List<String> testWarnings = List.of("Connection not found on view: bad-id");
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(
                         vId, 2, "orthogonal", false, testWarnings), null));
 
@@ -2327,7 +2878,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldDefaultForceToFalse() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             assertFalse("force should default to false", force);
             return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
         });
@@ -2336,7 +2887,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldPassForceTrueToAccessor() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) -> {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
             assertTrue("force should be true", force);
             return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
         });
@@ -2350,7 +2901,7 @@ public class ViewPlacementHandlerTest {
     public void autoRoute_shouldIncludeViolationsInForceMode() throws Exception {
         List<RoutingViolationDto> violations = List.of(
                 new RoutingViolationDto("c-1", "Src", "Tgt", "element_crossing", "warning"));
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(
                         vId, 5, 0, "orthogonal", false,
                         List.of(), List.of(), List.of(), violations), null));
@@ -2371,7 +2922,7 @@ public class ViewPlacementHandlerTest {
     public void autoRoute_shouldIncludeViolationNextSteps_whenForceMode() throws Exception {
         List<RoutingViolationDto> violations = List.of(
                 new RoutingViolationDto("c-1", "Src", "Tgt", "element_crossing", "warning"));
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(
                         vId, 5, 0, "orthogonal", false,
                         List.of(), List.of(), List.of(), violations), null));
@@ -2387,12 +2938,127 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoRoute_shouldOmitViolationsInDefaultMode() throws Exception {
-        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force) ->
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
                 new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null));
         Map<String, Object> result = callAndParse("auto-route-connections",
                 Map.of("viewId", "v-1"));
         Map<String, Object> data = getResult(result);
         assertNull("violations should be absent in default mode", data.get("violations"));
+    }
+
+    // ---- auto-route-connections autoNudge tests (Story 13-7) ----
+
+    @Test
+    public void autoRoute_shouldPassAutoNudgeToAccessor() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
+            assertTrue("autoNudge should be true when passed", autoNudge);
+            return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
+        });
+
+        callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "autoNudge", true));
+    }
+
+    @Test
+    public void autoRoute_shouldDefaultAutoNudgeToFalse() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
+            assertFalse("autoNudge should default to false", autoNudge);
+            return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
+        });
+
+        callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1"));
+    }
+
+    @Test
+    public void autoRoute_shouldPassSnapThresholdToAccessor() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
+            assertEquals("snapThreshold should be 35 when passed", 35, snapThreshold);
+            return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
+        });
+
+        callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "snapThreshold", 35));
+    }
+
+    @Test
+    public void autoRoute_shouldDefaultSnapThresholdTo20() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
+            assertEquals("snapThreshold should default to 20", 20, snapThreshold);
+            return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
+        });
+
+        callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1"));
+    }
+
+    @Test
+    public void autoRoute_shouldReturnNudgedElements_whenAutoNudgeApplied() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
+                new MutationResult<>(new AutoRouteResultDto(
+                        vId, 8, 0, "orthogonal", false, 0,
+                        List.of(), List.of(), List.of(), List.of(),
+                        List.of(new NudgedElementDto("vo-1", "Element A", 50, 0),
+                                new NudgedElementDto("vo-2", "Element B", 0, -40))), null));
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "autoNudge", true));
+
+        Map<String, Object> data = getResult(result);
+        assertNotNull(data);
+        assertEquals(8, ((Number) data.get("connectionsRouted")).intValue());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> nudged = (List<Map<String, Object>>) data.get("nudgedElements");
+        assertNotNull("nudgedElements should be present", nudged);
+        assertEquals(2, nudged.size());
+        assertEquals("vo-1", nudged.get(0).get("viewObjectId"));
+        assertEquals("Element A", nudged.get(0).get("elementName"));
+        assertEquals(50, ((Number) nudged.get(0).get("deltaX")).intValue());
+        assertEquals(0, ((Number) nudged.get(0).get("deltaY")).intValue());
+    }
+
+    @Test
+    public void autoRoute_shouldOmitNudgedElements_whenEmpty() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
+                new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null));
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "autoNudge", true));
+
+        Map<String, Object> data = getResult(result);
+        assertNull("nudgedElements should be omitted when empty", data.get("nudgedElements"));
+    }
+
+    @Test
+    public void autoRoute_shouldIncludeNudgeInfoInNextSteps() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) ->
+                new MutationResult<>(new AutoRouteResultDto(
+                        vId, 8, 0, "orthogonal", false, 0,
+                        List.of(), List.of(), List.of(), List.of(),
+                        List.of(new NudgedElementDto("vo-1", "El A", 50, 0))), null));
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "autoNudge", true));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        boolean hasNudgeStep = nextSteps.stream().anyMatch(s -> s.contains("nudge"));
+        assertTrue("nextSteps should mention nudged elements", hasNudgeStep);
+    }
+
+    @Test
+    public void autoRoute_shouldIgnoreAutoNudge_whenForceIsTrue() throws Exception {
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
+            assertTrue("force should be true", force);
+            assertTrue("autoNudge should be passed as true", autoNudge);
+            // Implementation ignores autoNudge when force=true (effectiveAutoNudge = autoNudge && !force)
+            return new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null);
+        });
+
+        callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1", "force", true, "autoNudge", true));
     }
 
     // ---- auto-layout-and-route (Story 10-29, targetRating Story 11-16) ----
@@ -2437,7 +3103,7 @@ public class ViewPlacementHandlerTest {
     @Test
     @SuppressWarnings("unchecked")
     public void autoLayoutAndRoute_shouldIncludeQualityFieldsWhenTargetRatingUsed() throws Exception {
-        accessor.setAutoLayoutAndRouteBehavior((sid, vId, dir, sp, tr) ->
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
                 new MutationResult<>(new AutoLayoutAndRouteResultDto(
                         vId, "DOWN", sp, 5, 3, false, 8,
                         tr, "good", 2,
@@ -2460,7 +3126,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoLayoutAndRoute_shouldOmitAssessLayoutFromNextStepsWhenTargetRatingUsed() throws Exception {
-        accessor.setAutoLayoutAndRouteBehavior((sid, vId, dir, sp, tr) ->
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
                 new MutationResult<>(new AutoLayoutAndRouteResultDto(
                         vId, "DOWN", sp, 5, 3, false, 8,
                         tr, "good", 1,
@@ -2481,7 +3147,7 @@ public class ViewPlacementHandlerTest {
     @Test
     @SuppressWarnings("unchecked")
     public void autoLayoutAndRoute_shouldIncludeTargetMissGuidanceInNextSteps() throws Exception {
-        accessor.setAutoLayoutAndRouteBehavior((sid, vId, dir, sp, tr) ->
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
                 new MutationResult<>(new AutoLayoutAndRouteResultDto(
                         vId, "DOWN", sp, 5, 3, false, 8,
                         tr, "fair", 5,
@@ -2502,7 +3168,7 @@ public class ViewPlacementHandlerTest {
     @Test
     @SuppressWarnings("unchecked")
     public void autoLayoutAndRoute_shouldReturnResultWithTargetMetOnFirstIteration() throws Exception {
-        accessor.setAutoLayoutAndRouteBehavior((sid, vId, dir, sp, tr) ->
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
                 new MutationResult<>(new AutoLayoutAndRouteResultDto(
                         vId, "DOWN", sp, 5, 3, false, 8,
                         tr, "good", 1,
@@ -2527,6 +3193,251 @@ public class ViewPlacementHandlerTest {
         boolean hasAssessLayout = nextSteps.stream()
                 .anyMatch(s -> s.contains("assess-layout"));
         assertFalse("Should NOT suggest assess-layout when targetRating used", hasAssessLayout);
+    }
+
+    // ---- auto-layout-and-route limiting factor (backlog-b13) ----
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoLayoutAndRoute_shouldIncludeLimitingFactorWhenTargetMissed() throws Exception {
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
+                new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                        vId, "DOWN", sp, 5, 3, false, 8, 0, 0,
+                        tr, "fair", 5,
+                        new AutoLayoutAssessmentSummaryDto(
+                                1, 15, 30.0, 50, "fair",
+                                List.of("Increase spacing.")),
+                        "edgeCrossings",
+                        "Run optimize-group-order to reduce inter-group crossings, "
+                                + "or reposition hub elements manually"), null));
+
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "targetRating", "good"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("edgeCrossings", data.get("limitingFactor"));
+        assertNotNull("suggestedRemediation should be present", data.get("suggestedRemediation"));
+        assertTrue(((String) data.get("suggestedRemediation")).contains("optimize-group-order"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldOmitLimitingFactorWhenTargetMet() throws Exception {
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
+                new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                        vId, "DOWN", sp, 5, 3, false, 8, 0, 0,
+                        tr, "good", 1,
+                        new AutoLayoutAssessmentSummaryDto(
+                                0, 2, 50.0, 80, "good", null),
+                        null, null), null));
+
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "targetRating", "good"));
+
+        Map<String, Object> data = getResult(result);
+        assertNull("limitingFactor should be absent when target met", data.get("limitingFactor"));
+        assertNull("suggestedRemediation should be absent when target met", data.get("suggestedRemediation"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldOmitLimitingFactorWithoutTargetRating() throws Exception {
+        // Default behavior (no targetRating) — uses the 7-arg constructor
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        assertNull("limitingFactor should be absent without targetRating", data.get("limitingFactor"));
+        assertNull("suggestedRemediation should be absent without targetRating", data.get("suggestedRemediation"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoLayoutAndRoute_shouldSelectWorstMetricAsLimitingFactor() throws Exception {
+        // labelOverlaps=fair, edgeCrossings=good → labelOverlaps is worse
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
+                new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                        vId, "DOWN", sp, 5, 3, false, 8, 0, 0,
+                        tr, "fair", 3,
+                        new AutoLayoutAssessmentSummaryDto(
+                                0, 5, 45.0, 70, "fair",
+                                List.of("Fix label overlaps.")),
+                        "labelOverlaps",
+                        "Use update-view-connection to set labelPosition "
+                                + "(source/middle/target) on overlapping labels, "
+                                + "or suppress labels with showLabel=false"), null));
+
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "targetRating", "good"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("labelOverlaps", data.get("limitingFactor"));
+        assertTrue(((String) data.get("suggestedRemediation")).contains("labelPosition"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_backwardCompatibleConstructorsStillWork() {
+        // 7-arg (single pass, no quality target)
+        AutoLayoutAndRouteResultDto dto7 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8);
+        assertNull(dto7.limitingFactor());
+        assertNull(dto7.suggestedRemediation());
+        assertNull(dto7.targetRating());
+
+        // 11-arg (quality target, no labels)
+        AutoLayoutAndRouteResultDto dto11 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8,
+                "good", "good", 1,
+                null);
+        assertNull(dto11.limitingFactor());
+        assertNull(dto11.suggestedRemediation());
+
+        // 12-arg (quality target + labels, no fallback)
+        AutoLayoutAndRouteResultDto dto12 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8, 2,
+                "good", "fair", 3,
+                null);
+        assertNull(dto12.limitingFactor());
+        assertNull(dto12.suggestedRemediation());
+
+        // 13-arg (quality target + labels + fallback, no limiting factor)
+        AutoLayoutAndRouteResultDto dto13 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8, 2, 1,
+                "good", "fair", 3,
+                null);
+        assertNull(dto13.limitingFactor());
+        assertNull(dto13.suggestedRemediation());
+
+        // 15-arg (full constructor with limiting factor)
+        AutoLayoutAndRouteResultDto dto15 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8, 2, 1,
+                "good", "fair", 3,
+                null, "overlaps", "Increase spacing");
+        assertEquals("overlaps", dto15.limitingFactor());
+        assertEquals("Increase spacing", dto15.suggestedRemediation());
+    }
+
+    // ---- auto-layout-and-route mode parameter (backlog-b24) ----
+
+    @Test
+    public void autoLayoutAndRoute_shouldDefaultToAutoModeWhenOmitted() throws Exception {
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("auto", data.get("mode"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldAcceptExplicitAutoMode() throws Exception {
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "mode", "auto"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("auto", data.get("mode"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldRejectInvalidMode() throws Exception {
+        McpSchema.CallToolResult result = callTool("auto-layout-and-route",
+                Map.of("viewId", "v-1", "mode", "invalid"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+        assertTrue(content.contains("mode"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldReturnErrorForGroupedModeOnFlatView() throws Exception {
+        // AC-5: flat-view guard — accessor throws INVALID_PARAMETER when no groups exist
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) -> {
+            if ("grouped".equals(m)) {
+                throw new ModelAccessException(
+                        "mode='grouped' requires a view with groups. "
+                        + "Use mode='auto' (default) for flat views.",
+                        ErrorCode.INVALID_PARAMETER);
+            }
+            return new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                    vId, "DOWN", sp, 5, 3, false, 8), null);
+        });
+
+        McpSchema.CallToolResult result = callTool("auto-layout-and-route",
+                Map.of("viewId", "v-1", "mode", "grouped"));
+
+        assertTrue("Should be error for grouped mode on flat view", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+        assertTrue(content.contains("mode='grouped' requires a view with groups"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldPassModeToAccessor() throws Exception {
+        final String[] capturedMode = {null};
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) -> {
+            capturedMode[0] = m;
+            return new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                    vId, "DOWN", sp, 5, 3, false, 8), null);
+        });
+
+        callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "mode", "grouped"));
+
+        assertEquals("grouped", capturedMode[0]);
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldPassNullModeWhenOmitted() throws Exception {
+        final String[] capturedMode = {"NOT_NULL"};
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) -> {
+            capturedMode[0] = m;
+            return new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                    vId, "DOWN", sp, 5, 3, false, 8), null);
+        });
+
+        callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1"));
+
+        assertNull("mode should be null when omitted", capturedMode[0]);
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldIncludeGroupsArrangedInGroupedMode() throws Exception {
+        accessor.setAutoLayoutAndRouteBehavior((sid, vId, m, dir, sp, tr) ->
+                new MutationResult<>(new AutoLayoutAndRouteResultDto(
+                        vId, "grouped", "DOWN", sp, 5, 3, true, 12,
+                        4, 0, 0, null, null, null, null, null, null), null));
+
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1", "mode", "grouped"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals("grouped", data.get("mode"));
+        assertEquals(4, ((Number) data.get("groupsArranged")).intValue());
+    }
+
+    @Test
+    public void autoLayoutAndRoute_shouldOmitGroupsArrangedWhenZero() throws Exception {
+        Map<String, Object> result = callAndParse("auto-layout-and-route",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        // groupsArranged=0 should be omitted by @JsonInclude(NON_DEFAULT)
+        assertNull("groupsArranged should be omitted when 0", data.get("groupsArranged"));
+    }
+
+    @Test
+    public void autoLayoutAndRoute_backwardCompatConstructorsIncludeAutoMode() {
+        // All backward-compatible constructors should set mode="auto"
+        AutoLayoutAndRouteResultDto dto7 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8);
+        assertEquals("auto", dto7.mode());
+        assertEquals(0, dto7.groupsArranged());
+
+        AutoLayoutAndRouteResultDto dto15 = new AutoLayoutAndRouteResultDto(
+                "v-1", "DOWN", 50, 5, 3, false, 8, 2, 1,
+                "good", "fair", 3,
+                null, "overlaps", "Increase spacing");
+        assertEquals("auto", dto15.mode());
+        assertEquals(0, dto15.groupsArranged());
     }
 
     // ---- auto-connect-view (Story 9-6) ----
@@ -2565,7 +3476,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassElementIdsFilter() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
             int count = (elemIds != null) ? elemIds.size() : 0;
             return new MutationResult<>(new AutoConnectResultDto(
                     vId, count, 0, List.of("r-1")), null);
@@ -2580,7 +3491,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassRelationshipTypesFilter() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
             int count = (relTypes != null) ? relTypes.size() : 0;
             return new MutationResult<>(new AutoConnectResultDto(
                     vId, count, 0, List.of("r-1")), null);
@@ -2596,7 +3507,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnZeroWhenNoConnections() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes) ->
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) ->
                 new MutationResult<>(new AutoConnectResultDto(
                         vId, 0, 0, List.of()), null));
 
@@ -2610,7 +3521,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnProposalInApprovalMode() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes) ->
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) ->
                 new MutationResult<>(null, null, new ProposalContext("p-42",
                         "Auto-connect view " + vId,
                         Instant.parse("2026-03-04T00:00:00Z"))));
@@ -2627,7 +3538,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnErrorOnInvalidRelationshipType() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
             throw new ModelAccessException(
                     "Invalid ArchiMate relationship type: BogusRelationship",
                     ErrorCode.INVALID_PARAMETER);
@@ -2640,6 +3551,55 @@ public class ViewPlacementHandlerTest {
         assertTrue("Should be error", result.isError());
         String content = ((McpSchema.TextContent) result.content().get(0)).text();
         assertTrue(content.contains("INVALID_PARAMETER"));
+    }
+
+    // ---- auto-connect-view showLabel (Story 13-5) ----
+
+    @Test
+    public void autoConnect_shouldPassShowLabelFalseToAccessor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+            assertNotNull("showLabel should be passed", (Object) sl);
+            assertFalse("showLabel should be false", sl.booleanValue());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> result = callAndParse("auto-connect-view",
+                Map.of("viewId", "v-1", "showLabel", false));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldPassShowLabelTrueToAccessor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+            assertNotNull("showLabel should be passed", (Object) sl);
+            assertTrue("showLabel should be true", sl.booleanValue());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> result = callAndParse("auto-connect-view",
+                Map.of("viewId", "v-1", "showLabel", true));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldPassNullShowLabelWhenOmitted() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+            assertNull("showLabel should be null when omitted", (Object) sl);
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> result = callAndParse("auto-connect-view",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
     }
 
     // ---- layout-within-group (Story 9-9) ----
@@ -3040,7 +4000,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void shouldAddNoteToView_withElementParent() throws Exception {
-        accessor.setAddNoteToViewBehavior((sid, vId, content, x, y, w, h, pvoId) -> {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
             assertEquals("vo-element-parent", pvoId);
             ViewNoteDto dto = new ViewNoteDto(
                     "vn-1", content, 30, 30, 185, 80, "vo-element-parent");
@@ -3058,6 +4018,115 @@ public class ViewPlacementHandlerTest {
         Map<String, Object> entity = getResult(result);
         assertNotNull(entity);
         assertEquals("vo-element-parent", entity.get("parentViewObjectId"));
+    }
+
+    // ---- add-note-to-view position tests (Story B16) ----
+
+    @Test
+    public void addNote_positionAboveContent_shouldPassPositionToAccessor() throws Exception {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
+            assertEquals("above-content", pos);
+            assertNull(gap2);
+            assertNull(x);
+            assertNull(y);
+            ViewNoteDto dto = new ViewNoteDto("vn-1", content, 100, 50, 185, 80, null);
+            return new MutationResult<>(dto, null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("content", "Title");
+        args.put("position", "above-content");
+        Map<String, Object> result = callAndParse("add-note-to-view", args);
+
+        Map<String, Object> entity = getResult(result);
+        assertNotNull(entity);
+        assertEquals("vn-1", entity.get("viewObjectId"));
+    }
+
+    @Test
+    public void addNote_positionBelowContent_shouldPassPositionAndGap() throws Exception {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
+            assertEquals("below-content", pos);
+            assertEquals(Integer.valueOf(20), gap2);
+            ViewNoteDto dto = new ViewNoteDto("vn-1", content, 100, 500, 185, 80, null);
+            return new MutationResult<>(dto, null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("content", "Footer");
+        args.put("position", "below-content");
+        args.put("gap", 20);
+        Map<String, Object> result = callAndParse("add-note-to-view", args);
+
+        Map<String, Object> entity = getResult(result);
+        assertNotNull(entity);
+    }
+
+    @Test
+    public void addNote_positionWithExplicitXY_shouldPassBothToAccessor() throws Exception {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
+            assertEquals("above-content", pos);
+            // Handler passes both — accessor decides precedence
+            assertEquals(Integer.valueOf(50), x);
+            assertEquals(Integer.valueOf(60), y);
+            ViewNoteDto dto = new ViewNoteDto("vn-1", content, 100, 10, 185, 80, null,
+                    null, null, null, null, null,
+                    "position='above-content' takes precedence over explicit x/y coordinates");
+            return new MutationResult<>(dto, null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("content", "Title");
+        args.put("position", "above-content");
+        args.put("x", 50);
+        args.put("y", 60);
+        Map<String, Object> result = callAndParse("add-note-to-view", args);
+
+        Map<String, Object> entity = getResult(result);
+        assertNotNull(entity);
+        assertNotNull("Should have position note", entity.get("note"));
+    }
+
+    @Test
+    public void addNote_positionWithParentViewObjectId_shouldReturnError() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("content", "Title");
+        args.put("position", "above-content");
+        args.put("parentViewObjectId", "vg-1");
+
+        McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
+                .name("add-note-to-view")
+                .arguments(args)
+                .build();
+
+        McpSchema.CallToolResult result = handler.handleAddNoteToView(null, request);
+        assertTrue("Should be error", result.isError());
+        String text = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(text.contains("INVALID_PARAMETER"));
+    }
+
+    @Test
+    public void addNote_gapParameter_shouldPassToAccessor() throws Exception {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
+            assertEquals("above-content", pos);
+            assertEquals(Integer.valueOf(25), gap2);
+            ViewNoteDto dto = new ViewNoteDto("vn-1", content, 100, 15, 185, 80, null);
+            return new MutationResult<>(dto, null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("content", "Title");
+        args.put("position", "above-content");
+        args.put("gap", 25);
+        Map<String, Object> result = callAndParse("add-note-to-view", args);
+
+        Map<String, Object> entity = getResult(result);
+        assertNotNull(entity);
     }
 
     // ---- arrange-groups tests (Story 11-20) ----
@@ -3090,7 +4159,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void arrangeGroups_viewNotFound_shouldReturnError() throws Exception {
-        accessor.setArrangeGroupsBehavior((sid, vId, arr, cols, sp, gids) -> {
+        accessor.setArrangeGroupsBehavior((sid, vId, arr, cols, sp, gids, dir) -> {
             throw new ModelAccessException("View not found: " + vId, ErrorCode.VIEW_NOT_FOUND);
         });
 
@@ -3140,6 +4209,43 @@ public class ViewPlacementHandlerTest {
         assertTrue(content.contains("INVALID_PARAMETER"));
     }
 
+    @Test
+    public void arrangeGroups_shouldPassDirectionToAccessor() throws Exception {
+        final String[] capturedDirection = {null};
+        accessor.setArrangeGroupsBehavior((sid, vId, arr, cols, sp, gids, dir) -> {
+            capturedDirection[0] = dir;
+            return new MutationResult<>(new ArrangeGroupsResultDto(
+                    vId, 3, 800, 200, null, arr), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("arrangement", "topology");
+        args.put("direction", "horizontal");
+        Map<String, Object> result = callAndParse("arrange-groups", args);
+
+        assertNotNull(result);
+        assertEquals("horizontal", capturedDirection[0]);
+    }
+
+    @Test
+    public void arrangeGroups_shouldPassNullDirectionWhenOmitted() throws Exception {
+        final String[] capturedDirection = {"sentinel"};
+        accessor.setArrangeGroupsBehavior((sid, vId, arr, cols, sp, gids, dir) -> {
+            capturedDirection[0] = dir;
+            return new MutationResult<>(new ArrangeGroupsResultDto(
+                    vId, 3, 800, 200, null, arr), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("arrangement", "topology");
+        Map<String, Object> result = callAndParse("arrange-groups", args);
+
+        assertNotNull(result);
+        assertNull(capturedDirection[0]);
+    }
+
     // ---- optimize-group-order (Story 11-25) ----
 
     @Test
@@ -3175,18 +4281,18 @@ public class ViewPlacementHandlerTest {
     }
 
     @Test
-    public void optimizeGroupOrder_shouldRequireArrangement() throws Exception {
+    public void optimizeGroupOrder_shouldWorkWithoutArrangement() throws Exception {
         Map<String, Object> args = new HashMap<>();
         args.put("viewId", "v-1");
-        McpSchema.CallToolResult result = callTool("optimize-group-order", args);
-        assertTrue("Should be error for missing arrangement", result.isError());
-        String content = ((McpSchema.TextContent) result.content().get(0)).text();
-        assertTrue(content.contains("INVALID_PARAMETER"));
+        // arrangement is now optional — auto-detection applies
+        Map<String, Object> result = callAndParse("optimize-group-order", args);
+        Map<String, Object> entity = getResult(result);
+        assertEquals("v-1", entity.get("viewId"));
     }
 
     @Test
     public void optimizeGroupOrder_viewNotFound_shouldReturnError() throws Exception {
-        accessor.setOptimizeGroupOrderBehavior((sid, vId, arr, sp, pad, ew, eh, aw, cols) -> {
+        accessor.setOptimizeGroupOrderBehavior((sid, vId, arr, sp, pad, ew, eh, aw, cols, ga) -> {
             throw new ModelAccessException("View not found: " + vId, ErrorCode.VIEW_NOT_FOUND);
         });
 
@@ -3214,19 +4320,88 @@ public class ViewPlacementHandlerTest {
                 nextSteps.stream().anyMatch(s -> s.contains("auto-route-connections")));
     }
 
+    @Test
+    public void optimizeGroupOrder_shouldIncludeArrangementFieldsInResponse() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("arrangement", "row");
+
+        Map<String, Object> result = callAndParse("optimize-group-order", args);
+        Map<String, Object> entity = getResult(result);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> groups = (List<Map<String, Object>>) entity.get("groupDetails");
+        assertNotNull("groupDetails should not be null", groups);
+        assertFalse("groupDetails should not be empty", groups.isEmpty());
+
+        Map<String, Object> firstGroup = groups.get(0);
+        assertNotNull("arrangementUsed should be present", firstGroup.get("arrangementUsed"));
+        assertNotNull("arrangementSource should be present", firstGroup.get("arrangementSource"));
+    }
+
+    @Test
+    public void optimizeGroupOrder_shouldPassGroupArrangementsToAccessor() throws Exception {
+        final Map<String, String> capturedGA = new HashMap<>();
+        accessor.setOptimizeGroupOrderBehavior((sid, vId, arr, sp, pad, ew, eh, aw, cols, ga) -> {
+            if (ga != null) capturedGA.putAll(ga);
+            return new MutationResult<>(new OptimizeGroupOrderResultDto(
+                    vId, 5, 2, 60.0, 2, 4, List.of(
+                            new OptimizeGroupOrderResultDto.GroupDetail(
+                                    "g-1", "Group 1", 3, true, "row", "override"),
+                            new OptimizeGroupOrderResultDto.GroupDetail(
+                                    "g-2", "Group 2", 2, true, "grid", "detected")
+                    )), null);
+        });
+
+        Map<String, Object> gaMap = new LinkedHashMap<>();
+        gaMap.put("g-1", "row");
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("groupArrangements", gaMap);
+
+        Map<String, Object> result = callAndParse("optimize-group-order", args);
+        Map<String, Object> entity = getResult(result);
+        assertEquals("v-1", entity.get("viewId"));
+        assertEquals("row", capturedGA.get("g-1"));
+    }
+
+    @Test
+    public void optimizeGroupOrder_shouldRejectInvalidGroupArrangementValue() throws Exception {
+        accessor.setOptimizeGroupOrderBehavior((sid, vId, arr, sp, pad, ew, eh, aw, cols, ga) -> {
+            throw new ModelAccessException(
+                    "Invalid arrangement 'diagonal' for group 'g-1'. Must be 'row', 'column', or 'grid'.",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        Map<String, Object> gaMap = new LinkedHashMap<>();
+        gaMap.put("g-1", "diagonal");
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("groupArrangements", gaMap);
+
+        McpSchema.CallToolResult result = callTool("optimize-group-order", args);
+        assertTrue("Should be error for invalid groupArrangement value", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+    }
+
     // ---- Stubs ----
 
     @FunctionalInterface
     interface ArrangeGroupsBehavior {
         MutationResult<ArrangeGroupsResultDto> apply(String sessionId, String viewId,
-                String arrangement, Integer columns, Integer spacing, List<String> groupIds);
+                String arrangement, Integer columns, Integer spacing, List<String> groupIds,
+                String direction);
     }
 
     @FunctionalInterface
     interface OptimizeGroupOrderBehavior {
         MutationResult<OptimizeGroupOrderResultDto> apply(String sessionId, String viewId,
                 String arrangement, Integer spacing, Integer padding,
-                Integer elementWidth, Integer elementHeight, boolean autoWidth, Integer columns);
+                Integer elementWidth, Integer elementHeight, boolean autoWidth, Integer columns,
+                Map<String, String> groupArrangements);
     }
 
     interface LayoutWithinGroupBehavior {
@@ -3239,19 +4414,34 @@ public class ViewPlacementHandlerTest {
     @FunctionalInterface
     interface AutoConnectViewBehavior {
         MutationResult<AutoConnectResultDto> apply(String sessionId, String viewId,
-                List<String> elementIds, List<String> relationshipTypes);
+                List<String> elementIds, List<String> relationshipTypes,
+                Boolean showLabel);
     }
 
     @FunctionalInterface
     interface AutoLayoutAndRouteBehavior {
         MutationResult<AutoLayoutAndRouteResultDto> apply(String sessionId, String viewId,
-                String direction, int spacing, String targetRating);
+                String mode, String direction, int spacing, String targetRating);
     }
 
     @FunctionalInterface
     interface AutoRouteConnectionsBehavior {
         MutationResult<AutoRouteResultDto> apply(String sessionId, String viewId,
-                List<String> connectionIds, String strategy, boolean force);
+                List<String> connectionIds, String strategy, boolean force,
+                boolean autoNudge, int snapThreshold, int perimeterMargin);
+    }
+
+    @FunctionalInterface
+    interface DetectHubElementsBehavior {
+        DetectHubElementsResultDto apply(String viewId);
+    }
+
+    @FunctionalInterface
+    interface LayoutFlatViewBehavior {
+        MutationResult<LayoutFlatViewResultDto> apply(String sessionId, String viewId,
+                String arrangement, Integer spacing, Integer padding,
+                String sortBy, String categoryField, Integer columns,
+                boolean autoLayoutChildren);
     }
 
     @FunctionalInterface
@@ -3282,7 +4472,8 @@ public class ViewPlacementHandlerTest {
     @FunctionalInterface
     interface AddNoteToViewBehavior {
         MutationResult<ViewNoteDto> apply(String sessionId, String viewId,
-                String content, Integer x, Integer y, Integer width, Integer height,
+                String content, String position, Integer gap,
+                Integer x, Integer y, Integer width, Integer height,
                 String parentViewObjectId);
     }
 
@@ -3342,6 +4533,8 @@ public class ViewPlacementHandlerTest {
         private LayoutWithinGroupBehavior layoutWithinGroupBehavior;
         private ArrangeGroupsBehavior arrangeGroupsBehavior;
         private OptimizeGroupOrderBehavior optimizeGroupOrderBehavior;
+        private DetectHubElementsBehavior detectHubElementsBehavior;
+        private LayoutFlatViewBehavior layoutFlatViewBehavior;
 
         // Capture last styling params passed to each method (for assertion in tests)
         StylingParams lastUpdateViewObjectStyling;
@@ -3428,6 +4621,14 @@ public class ViewPlacementHandlerTest {
             this.optimizeGroupOrderBehavior = behavior;
         }
 
+        void setDetectHubElementsBehavior(DetectHubElementsBehavior behavior) {
+            this.detectHubElementsBehavior = behavior;
+        }
+
+        void setLayoutFlatViewBehavior(LayoutFlatViewBehavior behavior) {
+            this.layoutFlatViewBehavior = behavior;
+        }
+
         private void resetBehaviors() {
             this.addToViewBehavior = (sid, vId, eId, x, y, w, h, ac, pvoId) -> {
                 int rx = (x != null) ? x : 50;
@@ -3446,7 +4647,7 @@ public class ViewPlacementHandlerTest {
                 ViewGroupDto dto = new ViewGroupDto("vg-1", label, rx, ry, rw, rh, null, null);
                 return new MutationResult<>(dto, null);
             };
-            this.addNoteToViewBehavior = (sid, vId, content, x, y, w, h, pvoId) -> {
+            this.addNoteToViewBehavior = (sid, vId, content, pos, gap, x, y, w, h, pvoId) -> {
                 int rx = (x != null) ? x : 50;
                 int ry = (y != null) ? y : 50;
                 int rw = (w != null) ? w : 185;
@@ -3498,38 +4699,62 @@ public class ViewPlacementHandlerTest {
             };
             this.assessLayoutBehavior = (vId) -> new AssessLayoutResultDto(
                     vId, 5, 3, 0, 0, 2, 0.67, 45.5, 70, "good", null,
-                    null, null, null, null, 0, null, 0, null, 0, null, false, 0, null,
+                    null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
                     List.of("Layout quality is good — no immediate improvements needed."));
-            this.autoLayoutAndRouteBehavior = (sid, vId, dir, sp, tr) -> {
+            this.autoLayoutAndRouteBehavior = (sid, vId, m, dir, sp, tr) -> {
                 String d = (dir != null) ? dir.toUpperCase() : "DOWN";
                 int s = sp > 0 ? sp : 50;
                 return new MutationResult<>(new AutoLayoutAndRouteResultDto(
                         vId, d, s, 5, 3, false, 8), null);
             };
-            this.autoRouteConnectionsBehavior = (sid, vId, connIds, strategy, force) -> {
+            this.autoRouteConnectionsBehavior = (sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin) -> {
                 String s = (strategy != null) ? strategy : "orthogonal";
                 return new MutationResult<>(new AutoRouteResultDto(vId, 5, s, false), null);
             };
-            this.autoConnectViewBehavior = (sid, vId, elemIds, relTypes) ->
+            this.autoConnectViewBehavior = (sid, vId, elemIds, relTypes, sl) ->
                     new MutationResult<>(new AutoConnectResultDto(
                             vId, 3, 1, List.of("r-1", "r-2", "r-3")), null);
             this.layoutWithinGroupBehavior = (sid, vId, gvoId, arr, sp, pad, ew, eh, ar, aw, cols, rec) ->
                     new MutationResult<>(new LayoutWithinGroupResultDto(
                             vId, gvoId, arr, 4, ar, ar ? 300 : null, ar ? 200 : null, false, aw, null, 0), null);
-            this.arrangeGroupsBehavior = (sid, vId, arr, cols, sp, gids) ->
+            this.arrangeGroupsBehavior = (sid, vId, arr, cols, sp, gids, dir) ->
                     new MutationResult<>(new ArrangeGroupsResultDto(
                             vId, 6, 800, 600,
                             "grid".equals(arr) ? (cols != null ? cols : 3) : null,
                             arr), null);
-            this.optimizeGroupOrderBehavior = (sid, vId, arr, sp, pad, ew, eh, aw, cols) ->
+            this.optimizeGroupOrderBehavior = (sid, vId, arr, sp, pad, ew, eh, aw, cols, ga) ->
                     new MutationResult<>(new OptimizeGroupOrderResultDto(
-                            vId, 5, 2, 60.0, 2, 4, List.of()), null);
+                            vId, 5, 2, 60.0, 2, 4, List.of(
+                                    new OptimizeGroupOrderResultDto.GroupDetail(
+                                            "g-1", "Group 1", 3, true,
+                                            arr != null ? arr : "column", arr != null ? "fallback" : "detected"),
+                                    new OptimizeGroupOrderResultDto.GroupDetail(
+                                            "g-2", "Group 2", 2, true,
+                                            arr != null ? arr : "row", arr != null ? "fallback" : "detected")
+                            )), null);
+            this.layoutFlatViewBehavior = (sid, vId, arr, sp, pad, sb, cf, cols, alc) ->
+                    new MutationResult<>(new LayoutFlatViewResultDto(
+                            vId, arr, 6, 0, sb, cf,
+                            cf != null ? List.of("Application", "Business") : null,
+                            "grid".equals(arr) ? (cols != null ? cols : 3) : null), null);
+            this.detectHubElementsBehavior = (vId) -> new DetectHubElementsResultDto(
+                    vId, 5, 8, 3.2,
+                    List.of(
+                            new HubElementEntryDto("vo-1", "e-1", "API Gateway",
+                                    "ApplicationComponent", 8, 120, 55, 0),
+                            new HubElementEntryDto("vo-2", "e-2", "ESB",
+                                    "ApplicationComponent", 4, 120, 55, 0),
+                            new HubElementEntryDto("vo-3", "e-3", "Database",
+                                    "ApplicationComponent", 2, 120, 55, 0)),
+                    List.of("Element 'API Gateway' has 8 connections (hub threshold: 6). "
+                            + "Consider increasing height to 85px (55 + 15 \u00d7 2) for horizontal layouts, "
+                            + "or width to 150px (120 + 15 \u00d7 2) for vertical layouts."));
         }
 
         @Override
         public MutationResult<AddToViewResultDto> addToView(String sessionId, String viewId,
                 String elementId, Integer x, Integer y, Integer width, Integer height,
-                boolean autoConnect, String parentViewObjectId, StylingParams styling) {
+                boolean autoConnect, String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
             this.lastAddToViewStyling = styling;
             return addToViewBehavior.apply(sessionId, viewId, elementId, x, y, width, height,
                     autoConnect, parentViewObjectId);
@@ -3538,7 +4763,7 @@ public class ViewPlacementHandlerTest {
         @Override
         public MutationResult<ViewGroupDto> addGroupToView(String sessionId, String viewId,
                 String label, Integer x, Integer y, Integer width, Integer height,
-                String parentViewObjectId, StylingParams styling) {
+                String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
             this.lastAddGroupToViewStyling = styling;
             return addGroupToViewBehavior.apply(sessionId, viewId, label, x, y, width, height,
                     parentViewObjectId);
@@ -3546,18 +4771,20 @@ public class ViewPlacementHandlerTest {
 
         @Override
         public MutationResult<ViewNoteDto> addNoteToView(String sessionId, String viewId,
-                String content, Integer x, Integer y, Integer width, Integer height,
-                String parentViewObjectId, StylingParams styling) {
+                String content, String position, Integer gap, Integer x, Integer y,
+                Integer width, Integer height,
+                String parentViewObjectId, StylingParams styling, ImageParams imageParams) {
             this.lastAddNoteToViewStyling = styling;
-            return addNoteToViewBehavior.apply(sessionId, viewId, content, x, y, width, height,
-                    parentViewObjectId);
+            return addNoteToViewBehavior.apply(sessionId, viewId, content, position, gap,
+                    x, y, width, height, parentViewObjectId);
         }
 
         @Override
         public MutationResult<ViewConnectionDto> addConnectionToView(String sessionId,
                 String viewId, String relationshipId, String sourceViewObjectId,
                 String targetViewObjectId, List<BendpointDto> bendpoints,
-                List<AbsoluteBendpointDto> absoluteBendpoints) {
+                List<AbsoluteBendpointDto> absoluteBendpoints,
+                StylingParams styling, Boolean showLabel, Integer textPosition) {
             return addConnectionBehavior.apply(sessionId, viewId, relationshipId,
                     sourceViewObjectId, targetViewObjectId, bendpoints, absoluteBendpoints);
         }
@@ -3565,7 +4792,7 @@ public class ViewPlacementHandlerTest {
         @Override
         public MutationResult<ViewObjectDto> updateViewObject(String sessionId,
                 String viewObjectId, Integer x, Integer y, Integer width, Integer height,
-                String text, StylingParams styling) {
+                String text, StylingParams styling, ImageParams imageParams) {
             this.lastUpdateViewObjectStyling = styling;
             return updateViewObjectBehavior.apply(sessionId, viewObjectId, x, y, width, height,
                     text);
@@ -3574,7 +4801,8 @@ public class ViewPlacementHandlerTest {
         @Override
         public MutationResult<ViewConnectionDto> updateViewConnection(String sessionId,
                 String viewConnectionId, List<BendpointDto> bendpoints,
-                List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling) {
+                List<AbsoluteBendpointDto> absoluteBendpoints, StylingParams styling,
+                Boolean showLabel, Integer textPosition) {
             this.lastUpdateViewConnectionStyling = styling;
             return updateViewConnectionBehavior.apply(sessionId, viewConnectionId,
                     bendpoints, absoluteBendpoints);
@@ -3612,24 +4840,32 @@ public class ViewPlacementHandlerTest {
         }
 
         @Override
+        public DetectHubElementsResultDto detectHubElements(String viewId) {
+            return detectHubElementsBehavior.apply(viewId);
+        }
+
+        @Override
         public MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
-                String sessionId, String viewId,
+                String sessionId, String viewId, String mode,
                 String direction, int spacing, String targetRating) {
-            return autoLayoutAndRouteBehavior.apply(sessionId, viewId, direction, spacing, targetRating);
+            return autoLayoutAndRouteBehavior.apply(sessionId, viewId, mode, direction, spacing, targetRating);
         }
 
         @Override
         public MutationResult<AutoRouteResultDto> autoRouteConnections(
                 String sessionId, String viewId,
-                List<String> connectionIds, String strategy, boolean force) {
-            return autoRouteConnectionsBehavior.apply(sessionId, viewId, connectionIds, strategy, force);
+                List<String> connectionIds, String strategy, boolean force,
+                boolean autoNudge, int snapThreshold, int perimeterMargin) {
+            return autoRouteConnectionsBehavior.apply(sessionId, viewId, connectionIds, strategy, force, autoNudge, snapThreshold, perimeterMargin);
         }
 
         @Override
         public MutationResult<AutoConnectResultDto> autoConnectView(
                 String sessionId, String viewId,
-                List<String> elementIds, List<String> relationshipTypes) {
-            return autoConnectViewBehavior.apply(sessionId, viewId, elementIds, relationshipTypes);
+                List<String> elementIds, List<String> relationshipTypes,
+                Boolean showLabel) {
+            return autoConnectViewBehavior.apply(sessionId, viewId, elementIds,
+                    relationshipTypes, showLabel);
         }
 
         @Override
@@ -3646,18 +4882,31 @@ public class ViewPlacementHandlerTest {
         @Override
         public MutationResult<ArrangeGroupsResultDto> arrangeGroups(
                 String sessionId, String viewId, String arrangement,
-                Integer columns, Integer spacing, List<String> groupIds) {
+                Integer columns, Integer spacing, List<String> groupIds,
+                String direction) {
             return arrangeGroupsBehavior.apply(sessionId, viewId, arrangement,
-                    columns, spacing, groupIds);
+                    columns, spacing, groupIds, direction);
+        }
+
+        @Override
+        public MutationResult<LayoutFlatViewResultDto> layoutFlatView(
+                String sessionId, String viewId, String arrangement,
+                Integer spacing, Integer padding, String sortBy,
+                String categoryField, Integer columns,
+                boolean autoLayoutChildren) {
+            return layoutFlatViewBehavior.apply(sessionId, viewId, arrangement,
+                    spacing, padding, sortBy, categoryField, columns, autoLayoutChildren);
         }
 
         @Override
         public MutationResult<OptimizeGroupOrderResultDto> optimizeGroupOrder(
                 String sessionId, String viewId, String arrangement,
                 Integer spacing, Integer padding, Integer elementWidth,
-                Integer elementHeight, boolean autoWidth, Integer columns) {
+                Integer elementHeight, boolean autoWidth, Integer columns,
+                Map<String, String> groupArrangements) {
             return optimizeGroupOrderBehavior.apply(sessionId, viewId, arrangement,
-                    spacing, padding, elementWidth, elementHeight, autoWidth, columns);
+                    spacing, padding, elementWidth, elementHeight, autoWidth, columns,
+                    groupArrangements);
         }
     }
 }

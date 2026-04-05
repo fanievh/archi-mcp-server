@@ -155,13 +155,42 @@ class OverlapResolver {
 	}
 
 	/**
+	 * AABB overlap test — strict interior overlap (touching edges excluded).
+	 * Shared by all overlap checks in this class.
+	 */
+	static boolean rectsOverlap(double x1, double y1, double w1, double h1,
+			double x2, double y2, double w2, double h2) {
+		return x1 < x2 + w2 && x1 + w1 > x2
+				&& y1 < y2 + h2 && y1 + h1 > y2;
+	}
+
+	/**
 	 * AABB overlap test — consistent with {@code LayoutQualityAssessor.rectanglesOverlap()}.
 	 */
 	private boolean rectanglesOverlap(MutableRect a, MutableRect b) {
-		return a.x < b.x + b.width
-				&& a.x + a.width > b.x
-				&& a.y < b.y + b.height
-				&& a.y + a.height > b.y;
+		return rectsOverlap(a.x, a.y, a.width, a.height, b.x, b.y, b.width, b.height);
+	}
+
+	/**
+	 * Checks if any non-group, non-note elements have overlapping bounding boxes (Story 13-9).
+	 * Used to skip autoNudge when degenerate geometry would crash the routing pipeline.
+	 * Pure geometry — no EMF dependencies.
+	 */
+	static boolean hasOverlappingElements(List<AssessmentNode> nodes) {
+		int size = nodes.size();
+		for (int i = 0; i < size; i++) {
+			AssessmentNode a = nodes.get(i);
+			if (a.isGroup() || a.isNote()) continue;
+			for (int j = i + 1; j < size; j++) {
+				AssessmentNode b = nodes.get(j);
+				if (b.isGroup() || b.isNote()) continue;
+				if (rectsOverlap(a.x(), a.y(), a.width(), a.height(),
+						b.x(), b.y(), b.width(), b.height())) {
+					return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	private int countOverlaps(List<MutableRect> group) {

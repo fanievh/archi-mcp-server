@@ -1186,20 +1186,22 @@ public class LayoutQualityAssessorTest {
         assertEquals("2.0 crossings/connection with clean metrics should be fair",
                 "fair", ratingDense);
 
-        // 150 crossings / 30 connections = 5.0 ratio (high) → poor
+        // 150 crossings / 30 connections = 5.0 ratio (high) → crossing "poor"
+        // B38: crossings are Tier 2, capped at "fair" overall (never "poor" from crossings alone)
         String ratingVeryDense = assessor.computeOverallRating(
                 0, 150, 50.0, 50, 0, 0, 30);
-        assertEquals("5.0 crossings/connection should be poor",
-                "poor", ratingVeryDense);
+        assertEquals("5.0 crossings/connection should be fair (B38: Tier 2 cap)",
+                "fair", ratingVeryDense);
     }
 
     @Test
     public void rating_zeroConnectionsWithManyCrossings_shouldUseLegacyThreshold() {
         // No connections → use absolute threshold (backward compatibility)
+        // B38: crossings are Tier 2, capped at "fair" overall (never "poor" from crossings alone)
         String rating = assessor.computeOverallRating(
                 0, 50, 50.0, 50, 0, 0, 0);
-        assertEquals("50 crossings with 0 connections should be poor (legacy threshold)",
-                "poor", rating);
+        assertEquals("50 crossings with 0 connections should be fair (B38: Tier 2 cap)",
+                "fair", rating);
     }
 
     // ---- Story 11-12: Deep nesting overlap false positive tests ----
@@ -1563,6 +1565,8 @@ public class LayoutQualityAssessorTest {
         assertTrue("breakdown should contain alignment", result.ratingBreakdown().containsKey("alignment"));
         assertTrue("breakdown should contain labelOverlaps", result.ratingBreakdown().containsKey("labelOverlaps"));
         assertTrue("breakdown should contain passThroughs", result.ratingBreakdown().containsKey("passThroughs"));
+        assertTrue("breakdown should contain coincidentSegments", result.ratingBreakdown().containsKey("coincidentSegments"));
+        assertTrue("breakdown should contain nonOrthogonalTerminals", result.ratingBreakdown().containsKey("nonOrthogonalTerminals"));
         assertTrue("breakdown should contain overall", result.ratingBreakdown().containsKey("overall"));
     }
 
@@ -1570,7 +1574,7 @@ public class LayoutQualityAssessorTest {
     public void ratingBreakdown_excellentView_shouldHaveAllPass() {
         // All metrics excellent: 0 overlaps, 0 crossings, good spacing/alignment, 0 labels, 0 pass-throughs
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 0, 50.0, 80, 0, 0, 0, false);
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
 
         assertEquals("excellent", result.rating());
         assertEquals("pass", result.breakdown().get("overlaps"));
@@ -1579,6 +1583,8 @@ public class LayoutQualityAssessorTest {
         assertEquals("pass", result.breakdown().get("alignment"));
         assertEquals("pass", result.breakdown().get("labelOverlaps"));
         assertEquals("pass", result.breakdown().get("passThroughs"));
+        assertEquals("pass", result.breakdown().get("coincidentSegments"));
+        assertEquals("pass", result.breakdown().get("nonOrthogonalTerminals"));
         assertEquals("excellent", result.breakdown().get("overall"));
     }
 
@@ -1586,7 +1592,7 @@ public class LayoutQualityAssessorTest {
     public void ratingBreakdown_crossingsOnly_shouldShowCrossingsFair() {
         // Only crossings are bad (25 crossings, 10 connections = 2.5 ratio)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 25, 50.0, 80, 0, 0, 10, false);
+                0, 25, 50.0, 80, 0, 0, 0, 0, 10, false);
 
         assertEquals("fair", result.rating());
         assertEquals("pass", result.breakdown().get("overlaps"));
@@ -1601,7 +1607,7 @@ public class LayoutQualityAssessorTest {
         // AC2: Grouped view where crossings are the ONLY issue → "good" not "fair"
         // 25 crossings, 10 connections — would be "fair" on flat view
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 25, 50.0, 80, 0, 0, 10, true);
+                0, 25, 50.0, 80, 0, 0, 0, 0, 10, true);
 
         assertEquals("good", result.rating());
         assertEquals("good", result.breakdown().get("edgeCrossings"));
@@ -1614,7 +1620,7 @@ public class LayoutQualityAssessorTest {
     public void ratingBreakdown_flatView_crossingsOnly_shouldStayFair() {
         // AC2: Same crossings on flat view should stay "fair"
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 25, 50.0, 80, 0, 0, 10, false);
+                0, 25, 50.0, 80, 0, 0, 0, 0, 10, false);
 
         assertEquals("fair", result.rating());
         assertEquals("fair", result.breakdown().get("edgeCrossings"));
@@ -1624,7 +1630,7 @@ public class LayoutQualityAssessorTest {
     public void ratingBreakdown_groupedView_withOverlaps_shouldNotGetBonus() {
         // Grouped view but has overlaps too — crossing leniency should NOT apply
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                2, 25, 50.0, 80, 0, 0, 10, true);
+                2, 25, 50.0, 80, 0, 0, 0, 0, 10, true);
 
         // Overlaps are "fair", crossings are "fair" (no leniency because overlaps exist)
         assertEquals("fair", result.rating());
@@ -1633,20 +1639,21 @@ public class LayoutQualityAssessorTest {
     }
 
     @Test
-    public void ratingBreakdown_groupedView_withPassThroughs_shouldNotGetBonus() {
-        // Grouped view but has pass-throughs — crossing leniency should NOT apply
+    public void ratingBreakdown_groupedView_withFewPassThroughs_shouldStillGetBonus() {
+        // B38: Grouped view with PT<=3 — crossing leniency STILL applies (relaxed gate)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 25, 50.0, 80, 0, 2, 10, true);
+                0, 25, 50.0, 80, 0, 2, 0, 0, 10, true);
 
+        // Crossings boosted to "good" by leniency, but PT=2 is Tier 1 "fair" → overall "fair"
         assertEquals("fair", result.rating());
-        assertEquals("fair", result.breakdown().get("edgeCrossings"));
+        assertEquals("good", result.breakdown().get("edgeCrossings"));
     }
 
     @Test
     public void ratingBreakdown_groupedView_manyCrossingsNoOtherIssues_shouldBeGood() {
         // AC2: 100 crossings, 28 connections (3.57 per conn) — grouped view, no other issues
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 100, 50.0, 80, 0, 0, 28, true);
+                0, 100, 50.0, 80, 0, 0, 0, 0, 28, true);
 
         assertEquals("good", result.rating());
         assertEquals("good", result.breakdown().get("edgeCrossings"));
@@ -1654,9 +1661,9 @@ public class LayoutQualityAssessorTest {
 
     @Test
     public void ratingBreakdown_overlapsPoor_shouldShowPoor() {
-        // More than FAIR_MAX_OVERLAPS (3) → poor
+        // More than FAIR_MAX_OVERLAPS (3) → poor (Tier 1 — can produce "poor")
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                5, 0, 50.0, 80, 0, 0, 0, false);
+                5, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
 
         assertEquals("poor", result.rating());
         assertEquals("poor", result.breakdown().get("overlaps"));
@@ -1677,15 +1684,15 @@ public class LayoutQualityAssessorTest {
 
         assertTrue("Should detect groups", result.hasGroups());
         assertNotNull("ratingBreakdown should be present", result.ratingBreakdown());
-        assertEquals(7, result.ratingBreakdown().size());
+        assertEquals(9, result.ratingBreakdown().size());
         assertEquals(result.overallRating(), result.ratingBreakdown().get("overall"));
     }
 
     @Test
     public void ratingBreakdown_noRegression_overlapsStillProducePoor() {
-        // AC4: Overlaps should still produce poor
+        // AC4: Overlaps should still produce poor (Tier 1)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                10, 0, 50.0, 80, 0, 0, 0, false);
+                10, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
 
         assertEquals("poor", result.rating());
         assertEquals("poor", result.breakdown().get("overlaps"));
@@ -1693,9 +1700,9 @@ public class LayoutQualityAssessorTest {
 
     @Test
     public void ratingBreakdown_noRegression_passThroughsStillDowngrade() {
-        // AC4: Pass-throughs should still downgrade appropriately
+        // AC4: Pass-throughs should still downgrade appropriately (Tier 1)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 0, 50.0, 80, 0, 4, 0, false);
+                0, 0, 50.0, 80, 0, 4, 0, 0, 0, false);
 
         assertEquals("poor", result.rating());
         assertEquals("poor", result.breakdown().get("passThroughs"));
@@ -1708,7 +1715,7 @@ public class LayoutQualityAssessorTest {
         // AC1: flat view with ~0.72 crossings/conn should rate "good"
         // 20 crossings / 28 connections = 0.71 ratio — below CROSSING_RATIO_GOOD (1.5)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 20, 50.0, 80, 0, 0, 28, false);
+                0, 20, 50.0, 80, 0, 0, 0, 0, 28, false);
 
         assertEquals("0.71 crossings/conn should rate good",
                 "good", result.breakdown().get("edgeCrossings"));
@@ -1720,7 +1727,7 @@ public class LayoutQualityAssessorTest {
         // AC1: flat view with 3.5+ crossings/conn should rate "fair" or below
         // 105 crossings / 30 connections = 3.5 ratio
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 105, 50.0, 80, 0, 0, 30, false);
+                0, 105, 50.0, 80, 0, 0, 0, 0, 30, false);
 
         String crossingRating = result.breakdown().get("edgeCrossings");
         assertTrue("3.5 crossings/conn should be fair or poor",
@@ -1732,7 +1739,7 @@ public class LayoutQualityAssessorTest {
         // M2 review fix: boundary test at exactly CROSSING_RATIO_GOOD (1.5)
         // 30 crossings / 20 connections = 1.5 ratio — exactly at boundary (<=)
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 30, 50.0, 80, 0, 0, 20, false);
+                0, 30, 50.0, 80, 0, 0, 0, 0, 20, false);
 
         assertEquals("Exactly 1.5 crossings/conn should rate good (boundary <=)",
                 "good", result.breakdown().get("edgeCrossings"));
@@ -1743,7 +1750,7 @@ public class LayoutQualityAssessorTest {
         // M2 review fix: just above CROSSING_RATIO_GOOD — should be "fair" not "good"
         // 31 crossings / 20 connections = 1.55 ratio — just above 1.5
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 31, 50.0, 80, 0, 0, 20, false);
+                0, 31, 50.0, 80, 0, 0, 0, 0, 20, false);
 
         String crossingRating = result.breakdown().get("edgeCrossings");
         assertNotEquals("1.55 crossings/conn should NOT rate good",
@@ -1755,7 +1762,7 @@ public class LayoutQualityAssessorTest {
         // AC2: grouped view with very high crossing density — one-tier boost, not floor at "good"
         // 150 crossings / 28 connections = 5.36 ratio → base "poor", boost → "fair" (not "good")
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 150, 50.0, 80, 0, 0, 28, true);
+                0, 150, 50.0, 80, 0, 0, 0, 0, 28, true);
 
         assertEquals("Very high density grouped view should get one-tier boost to fair, not good",
                 "fair", result.breakdown().get("edgeCrossings"));
@@ -1766,7 +1773,7 @@ public class LayoutQualityAssessorTest {
         // AC2: grouped view with moderate crossings benefits from one-tier boost
         // 25 crossings / 10 connections = 2.5 ratio → base "fair", boost → "good"
         LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
-                0, 25, 50.0, 80, 0, 0, 10, true);
+                0, 25, 50.0, 80, 0, 0, 0, 0, 10, true);
 
         assertEquals("Moderate crossings grouped view should boost to good",
                 "good", result.breakdown().get("edgeCrossings"));
@@ -2206,6 +2213,162 @@ public class LayoutQualityAssessorTest {
         assertEquals(300.0, result.contentBounds().height(), 0.001);
     }
 
+    // ---- Story 13-4: Self-element pass-through detection tests ----
+
+    @Test
+    public void assess_connectionThroughOwnTarget_shouldDetect() {
+        // Connection from A to B where the path routes through B's body
+        // A at left, B at right, path goes horizontally through B
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 90, 50, 50),      // source: center (25, 115)
+                node("b", 300, 90, 100, 50));   // target: center (350, 115), x range 300-400
+
+        // Path: source center → through target body → target center
+        // Segment from (200, 115) to (350, 115) passes through target at x=300..400
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{25, 115}, new double[]{200, 115},
+                                new double[]{350, 115}), "", 1));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+
+        boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
+                .anyMatch(d -> d.contains("routes through its own target"));
+        assertTrue("Should detect self-element pass-through for target", hasSelfPassThrough);
+    }
+
+    @Test
+    public void assess_connectionThroughOwnSource_shouldDetect() {
+        // AC-B3: Connection path re-enters its own source element
+        // Source is large (200px wide), path leaves source, wraps around, and re-enters
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 90, 200, 50),     // source: x range 0-200, y range 90-140
+                node("b", 400, 90, 50, 50));    // target: center (425, 115)
+
+        // Path: source center (100,115) → exits right (210,115) → goes up (210,50)
+        // → goes left back through source body (50,50) → goes down (50,115) re-entering source
+        // → exits right again (425,115)
+        // Non-first segment (210,50)→(50,50) at y=50 is outside source (y=90..140) → OK
+        // Non-first segment (50,50)→(50,115) at x=50: y goes from 50 to 115, crosses y=90 → enters source!
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{100, 115}, new double[]{210, 115},
+                                new double[]{210, 50}, new double[]{50, 50},
+                                new double[]{50, 115}, new double[]{425, 115}), "", 1));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+
+        boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
+                .anyMatch(d -> d.contains("routes through its own source"));
+        assertTrue("Should detect self-element pass-through for source", hasSelfPassThrough);
+    }
+
+    @Test
+    public void nonTerminalPassesThroughNode_targetPassThrough_shouldDetect() {
+        // Direct test of the nonTerminalPassesThroughNode method
+        // Path: (0, 100) → (200, 100) → (350, 100) → (350, 115) [target edge]
+        // Target at (300, 90, 100, 50): x range 300-400, y range 90-140
+        // Segment (200,100)→(350,100) at y=100 passes through target (y=100 is inside 90-140)
+        // This is a non-terminal segment (not the last one), so it should be detected
+        AssessmentNode target = node("b", 300, 90, 100, 50);
+        List<double[]> path = List.of(
+                new double[]{0, 100},     // source edge
+                new double[]{200, 100},   // intermediate
+                new double[]{350, 100},   // intermediate — passes through target
+                new double[]{350, 115});  // target edge
+
+        boolean detected = assessor.nonTerminalPassesThroughNode(path, target, true);
+        assertTrue("Should detect non-terminal segment passing through target", detected);
+    }
+
+    @Test
+    public void nonTerminalPassesThroughNode_cleanApproach_shouldNotDetect() {
+        // Path approaches target cleanly from outside — only last segment enters target
+        // Target at (300, 90, 100, 50)
+        // Path: (0, 115) → (290, 115) → (350, 115) [target edge at x=300]
+        // Segment (0,115)→(290,115) does NOT cross target (x=290 < 300)
+        // Last segment (290,115)→(350,115) enters target but is excluded (isTarget=true, last segment)
+        AssessmentNode target = node("b", 300, 90, 100, 50);
+        List<double[]> path = List.of(
+                new double[]{0, 115},     // source edge
+                new double[]{290, 115},   // intermediate — outside target
+                new double[]{350, 115});  // target edge
+
+        boolean detected = assessor.nonTerminalPassesThroughNode(path, target, true);
+        assertFalse("Clean approach to target should NOT be flagged", detected);
+    }
+
+    @Test
+    public void nonTerminalPassesThroughNode_sourcePassThrough_shouldDetect() {
+        // Path re-enters source body on a non-terminal segment
+        // Source at (0, 90, 100, 50): x range 0-100, y range 90-140
+        // Path: (50, 90) [source edge] → (50, 50) → (150, 50) → (150, 115) → (50, 115) → (300, 115)
+        // Segment (150,115)→(50,115) at y=115 re-enters source (x=50 inside 0-100, y=115 inside 90-140)
+        // This is a non-first segment, so it should be detected
+        AssessmentNode source = node("a", 0, 90, 100, 50);
+        List<double[]> path = List.of(
+                new double[]{50, 90},     // source edge
+                new double[]{50, 50},     // exit upward
+                new double[]{150, 50},    // go right
+                new double[]{150, 115},   // go down
+                new double[]{50, 115},    // re-enters source body! (x=50 inside 0-100)
+                new double[]{300, 115});  // target edge
+
+        boolean detected = assessor.nonTerminalPassesThroughNode(path, source, false);
+        assertTrue("Should detect non-terminal segment re-entering source", detected);
+    }
+
+    @Test
+    public void nonTerminalPassesThroughNode_cleanDeparture_shouldNotDetect() {
+        // Path departs source cleanly — only first segment exits source
+        // Source at (0, 90, 100, 50)
+        // Path: (100, 115) [source edge] → (200, 115) → (350, 115) [target edge]
+        // First segment (100,115)→(200,115) exits source but is excluded (isTarget=false)
+        // Second segment (200,115)→(350,115) is outside source
+        AssessmentNode source = node("a", 0, 90, 100, 50);
+        List<double[]> path = List.of(
+                new double[]{100, 115},   // source edge
+                new double[]{200, 115},   // outside source
+                new double[]{350, 115});  // target edge
+
+        boolean detected = assessor.nonTerminalPassesThroughNode(path, source, false);
+        assertFalse("Clean departure from source should NOT be flagged", detected);
+    }
+
+    @Test
+    public void assess_connectionCleanlyConnected_shouldNotDetectSelfPassThrough() {
+        // AC-B2: Clean connection should NOT be reported
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 90, 50, 50),
+                node("b", 300, 90, 50, 50));
+
+        // Path goes straight from source to target edge, no intermediate crossing
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{25, 115}, new double[]{300, 115}), "", 1));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+
+        boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
+                .anyMatch(d -> d.contains("routes through its own"));
+        assertFalse("Clean connection should NOT be flagged as self-pass-through",
+                hasSelfPassThrough);
+    }
+
+    @Test
+    public void nonTerminalPassesThroughNode_smallElement_shouldNotDetect() {
+        // AC-B4: Element too small after inset → no detection (avoids false positives)
+        // Element 8x8 with SELF_ELEMENT_INSET=5 → (8-10)=-2 after inset → skip
+        AssessmentNode smallNode = node("small", 100, 100, 8, 8);
+        List<double[]> path = List.of(
+                new double[]{0, 104},
+                new double[]{104, 104},
+                new double[]{200, 104});
+
+        boolean detected = assessor.nonTerminalPassesThroughNode(path, smallNode, true);
+        assertFalse("Small element after inset should not be flagged", detected);
+    }
+
     // ---- Short-segment detection tests (Story 11-31) ----
 
     @Test
@@ -2283,5 +2446,250 @@ public class LayoutQualityAssessorTest {
         boolean hasShortSegmentSuggestion = result.suggestions().stream()
                 .anyMatch(s -> s.contains("exceed available segment length"));
         assertTrue("Should include short-segment suggestion", hasShortSegmentSuggestion);
+    }
+
+    // ---- countPathCrossings tests (backlog-b14) ----
+
+    @Test
+    public void countPathCrossings_crossingPaths_shouldReturnCorrectCount() {
+        // Two paths forming an X — one crossing
+        List<double[]> path1 = List.of(new double[]{0, 0}, new double[]{100, 100});
+        List<double[]> path2 = List.of(new double[]{100, 0}, new double[]{0, 100});
+
+        int crossings = LayoutQualityAssessor.countPathCrossings(List.of(path1, path2));
+        assertEquals(1, crossings);
+    }
+
+    @Test
+    public void countPathCrossings_parallelPaths_shouldReturnZero() {
+        // Two horizontal parallel paths — no crossing
+        List<double[]> path1 = List.of(new double[]{0, 0}, new double[]{100, 0});
+        List<double[]> path2 = List.of(new double[]{0, 50}, new double[]{100, 50});
+
+        int crossings = LayoutQualityAssessor.countPathCrossings(List.of(path1, path2));
+        assertEquals(0, crossings);
+    }
+
+    @Test
+    public void countPathCrossings_emptyList_shouldReturnZero() {
+        assertEquals(0, LayoutQualityAssessor.countPathCrossings(List.of()));
+    }
+
+    @Test
+    public void countPathCrossings_singlePath_shouldReturnZero() {
+        List<double[]> path = List.of(new double[]{0, 0}, new double[]{100, 100});
+        assertEquals(0, LayoutQualityAssessor.countPathCrossings(List.of(path)));
+    }
+
+    @Test
+    public void countPathCrossings_multiSegmentPaths_shouldCountAllCrossings() {
+        // Path 1: horizontal at y=50
+        List<double[]> path1 = List.of(new double[]{0, 50}, new double[]{200, 50});
+        // Path 2: zigzag that crosses path1 twice (up-down-up)
+        List<double[]> path2 = List.of(
+                new double[]{50, 0}, new double[]{50, 100},
+                new double[]{150, 100}, new double[]{150, 0});
+
+        int crossings = LayoutQualityAssessor.countPathCrossings(List.of(path1, path2));
+        assertEquals(2, crossings);
+    }
+
+    @Test
+    public void countPathCrossings_threePaths_shouldCountAllPairCrossings() {
+        // Three paths that all cross each other at different points
+        List<double[]> path1 = List.of(new double[]{0, 0}, new double[]{100, 100});
+        List<double[]> path2 = List.of(new double[]{100, 0}, new double[]{0, 100});
+        List<double[]> path3 = List.of(new double[]{50, 0}, new double[]{50, 100});
+
+        int crossings = LayoutQualityAssessor.countPathCrossings(List.of(path1, path2, path3));
+        // path1 x path2 = 1, path1 x path3 = 1, path2 x path3 = 1
+        assertEquals(3, crossings);
+    }
+
+    // ---- B38: Coincident segment rating tests ----
+
+    @Test
+    public void b38_coincidentSegments_zeroShouldRatePass() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+        assertEquals("pass", result.breakdown().get("coincidentSegments"));
+    }
+
+    @Test
+    public void b38_coincidentSegments_threeShouldRateGood() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 3, 0, 0, false);
+        assertEquals("good", result.breakdown().get("coincidentSegments"));
+    }
+
+    @Test
+    public void b38_coincidentSegments_eightShouldRateFair() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 8, 0, 0, false);
+        assertEquals("fair", result.breakdown().get("coincidentSegments"));
+    }
+
+    @Test
+    public void b38_coincidentSegments_nineShouldRatePoor() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 9, 0, 0, false);
+        assertEquals("poor", result.breakdown().get("coincidentSegments"));
+        assertEquals("Coincident segments (Tier 1) should drive overall to poor",
+                "poor", result.rating());
+    }
+
+    // ---- B38: Relaxed leniency gate tests ----
+
+    @Test
+    public void b38_groupedViewLeniency_withOnePassThrough_shouldStillApply() {
+        // PT=1 <= 3, grouped, no other blockers → leniency applies
+        // 25 crossings / 10 conns = 2.5 ratio → base "fair", boost → "good"
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 25, 50.0, 80, 0, 1, 0, 0, 10, true);
+        assertEquals("good", result.breakdown().get("edgeCrossings"));
+    }
+
+    @Test
+    public void b38_groupedViewLeniency_withThreePassThroughs_shouldStillApply() {
+        // PT=3 <= 3, grouped → leniency applies
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 25, 50.0, 80, 0, 3, 0, 0, 10, true);
+        assertEquals("good", result.breakdown().get("edgeCrossings"));
+    }
+
+    @Test
+    public void b38_groupedViewLeniency_withFourPassThroughs_shouldNotApply() {
+        // PT=4 > 3, grouped → leniency does NOT apply
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 25, 50.0, 80, 0, 4, 0, 0, 10, true);
+        assertEquals("fair", result.breakdown().get("edgeCrossings"));
+    }
+
+    // ---- B38: Non-orthogonal terminal tests ----
+
+    @Test
+    public void b38_nonOrthogonalTerminals_zeroShouldRatePass() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+        assertEquals("pass", result.breakdown().get("nonOrthogonalTerminals"));
+    }
+
+    @Test
+    public void b38_nonOrthogonalTerminals_threeShouldRateFair() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 3, 0, false);
+        assertEquals("fair", result.breakdown().get("nonOrthogonalTerminals"));
+    }
+
+    @Test
+    public void b38_nonOrthogonalTerminals_fourShouldRatePoor() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 4, 0, false);
+        assertEquals("poor", result.breakdown().get("nonOrthogonalTerminals"));
+    }
+
+    // ---- B38: Severity-tiered rating tests ----
+
+    @Test
+    public void b38_tieredRating_tier1Poor_shouldProduceOverallPoor() {
+        // Overlaps "poor" (Tier 1) → overall "poor"
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                5, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+        assertEquals("poor", result.rating());
+    }
+
+    @Test
+    public void b38_tieredRating_tier2PoorAlone_shouldCapOverallAtFair() {
+        // Crossings "poor" (Tier 2) → overall capped at "fair", NOT "poor"
+        // 150/28 = 5.36 ratio, no leniency (not grouped)
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 150, 50.0, 80, 0, 0, 0, 0, 28, false);
+        assertEquals("poor", result.breakdown().get("edgeCrossings"));
+        assertEquals("fair", result.rating());
+    }
+
+    @Test
+    public void b38_tieredRating_tier3PoorAlone_shouldCapOverallAtGood() {
+        // Spacing "fair" and alignment "fair" (Tier 3) → overall capped at "good"
+        // Tier 3 metrics can only produce up to "fair" in their individual rating,
+        // but Tier 3 contribution to overall caps at "good" (level 1)
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 10.0, 20, 0, 0, 0, 0, 0, false);
+        assertEquals("fair", result.breakdown().get("spacing"));
+        assertEquals("fair", result.breakdown().get("alignment"));
+        assertEquals("good", result.rating());
+    }
+
+    @Test
+    public void b38_tieredRating_mixedTier2PoorTier1Fair_shouldProduceOverallFair() {
+        // PT=2 → "fair" (Tier 1), crossings "poor" (Tier 2)
+        // Tier 1 drives to "fair", Tier 2 caps at "fair" → overall "fair"
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 150, 50.0, 80, 0, 2, 0, 0, 28, false);
+        assertEquals("fair", result.breakdown().get("passThroughs"));
+        assertEquals("poor", result.breakdown().get("edgeCrossings"));
+        assertEquals("fair", result.rating());
+    }
+
+    @Test
+    public void b38_tieredRating_allMetricsPass_shouldProduceExcellent() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+        assertEquals("excellent", result.rating());
+    }
+
+    // ---- B38: Non-orthogonal terminal detection tests ----
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_orthogonalPath_shouldReturnZero() {
+        // All segments horizontal/vertical
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(
+                        new double[]{0, 50}, new double[]{100, 50}, new double[]{100, 150}), "", 0));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
+    }
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_diagonalSource_shouldCountOne() {
+        // First segment is diagonal (dx=30, dy=40 — both > tolerance)
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(
+                        new double[]{0, 0}, new double[]{30, 40}, new double[]{30, 100}), "", 0));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+    }
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_diagonalTarget_shouldCountOne() {
+        // Last segment is diagonal
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(
+                        new double[]{0, 0}, new double[]{0, 50}, new double[]{30, 90}), "", 0));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+    }
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_bothDiagonal_shouldCountOnePerConnection() {
+        // Both terminals diagonal — still counts as 1 (per-connection, not per-segment)
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(
+                        new double[]{0, 0}, new double[]{30, 40}, new double[]{60, 80}), "", 0));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+    }
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_withinTolerance_shouldNotCount() {
+        // dx=3, dy=40 — dx within tolerance (5.0), so this is "nearly vertical" → orthogonal
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(
+                        new double[]{0, 0}, new double[]{3, 40}, new double[]{3, 100}), "", 0));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
+    }
+
+    @Test
+    public void b38_countNonOrthogonalTerminals_singlePointPath_shouldSkip() {
+        // Path with less than 2 points — should not crash
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c1", "a", "b", List.of(new double[]{0, 0}), "", 0));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
     }
 }

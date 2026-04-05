@@ -15,6 +15,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *
  * <p><strong>Story 11-2:</strong> Added optional styling fields (fillColor,
  * lineColor, fontColor, opacity, lineWidth). Omitted from JSON when null.</p>
+ *
+ * <p><strong>Story C4:</strong> Added optional image fields (imagePath,
+ * imagePosition, showIcon). Omitted from JSON when null.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ViewNodeDto(
@@ -29,10 +32,26 @@ public record ViewNodeDto(
     String lineColor,
     String fontColor,
     Integer opacity,
-    Integer lineWidth
+    Integer lineWidth,
+    String imagePath,
+    String imagePosition,
+    String showIcon
 ) {
     /**
-     * Convenience constructor without styling fields (backward compat).
+     * Convenience constructor without image fields (backward compat).
+     */
+    public ViewNodeDto(String viewObjectId, String elementId,
+            int x, int y, int width, int height,
+            String parentViewObjectId,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth) {
+        this(viewObjectId, elementId, x, y, width, height,
+                parentViewObjectId, fillColor, lineColor, fontColor,
+                opacity, lineWidth, null, null, null);
+    }
+
+    /**
+     * Convenience constructor without styling or image fields (backward compat).
      */
     public ViewNodeDto(String viewObjectId, String elementId,
             int x, int y, int width, int height,
@@ -42,7 +61,7 @@ public record ViewNodeDto(
     }
 
     /**
-     * Convenience constructor without parentViewObjectId or styling (top-level element).
+     * Convenience constructor without parentViewObjectId, styling, or image (top-level element).
      */
     public ViewNodeDto(String viewObjectId, String elementId,
             int x, int y, int width, int height) {

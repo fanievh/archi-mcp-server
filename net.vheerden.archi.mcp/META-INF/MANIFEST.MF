@@ -3,7 +3,7 @@ Bundle-ManifestVersion: 2
 Bundle-ActivationPolicy: lazy
 Bundle-Name: ArchiMate MCP Server
 Bundle-SymbolicName: net.vheerden.archi.mcp;singleton:=true
-Bundle-Version: 1.0.0.qualifier
+Bundle-Version: 1.1.0.qualifier
 Bundle-Activator: net.vheerden.archi.mcp.McpPlugin
 Bundle-Vendor: JS van Heerden & Claude Code
 Bundle-Localization: plugin

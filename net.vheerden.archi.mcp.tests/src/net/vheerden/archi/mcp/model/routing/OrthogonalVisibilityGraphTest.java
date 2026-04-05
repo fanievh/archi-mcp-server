@@ -221,7 +221,7 @@ public class OrthogonalVisibilityGraphTest {
     public void shouldBlockSegment_whenGrazingObstacleEdge_inclusiveMode() {
         // Obstacle at (100, 100, 80x60), expanded by 10px to (90, 90) - (190, 170)
         // Vertical segment at x=90 (exactly on expanded left boundary)
-        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
+        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
 
         List<RoutingRect> obstacles = List.of(
                 new RoutingRect(100, 100, 80, 60, "obs1"));
@@ -265,7 +265,7 @@ public class OrthogonalVisibilityGraphTest {
         // Expanded B: left = 182-10 = 172
         // Expanded rects OVERLAP horizontally (172 < 190), so ANY vertical segment
         // in the gap (x=172..190) should be blocked by at least one expanded rect.
-        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
+        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
 
         List<RoutingRect> obstacles = List.of(
                 new RoutingRect(100, 100, 80, 60, "obsA"),
@@ -306,7 +306,7 @@ public class OrthogonalVisibilityGraphTest {
         // Previously inclusive mode pruned corner nodes that sit ON expanded
         // obstacle boundaries, disconnecting the graph. Perimeter boundary nodes
         // (added in E2E 2026-03-12 fix) provide alternate routing paths.
-        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
+        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
 
         List<RoutingRect> obstacles = List.of(
                 new RoutingRect(150, 150, 100, 100, "obs1"));
@@ -322,7 +322,7 @@ public class OrthogonalVisibilityGraphTest {
     public void shouldFindPathAroundWall_withInclusiveMode_viaPerimeter() {
         // Previously inclusive mode broke wall-avoidance routing due to
         // corner-pruning. Perimeter boundary nodes now provide alternate paths.
-        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
+        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
 
         List<RoutingRect> obstacles = List.of(
                 new RoutingRect(180, 50, 100, 300, "wall"));
@@ -339,7 +339,7 @@ public class OrthogonalVisibilityGraphTest {
     public void shouldHandleDenseLayout_withInclusiveMode() {
         // Dense grid with 150px spacing still works — corners aren't shared
         // between expanded obstacles at this spacing.
-        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
+        OrthogonalVisibilityGraph inclusiveGraph = new OrthogonalVisibilityGraph(OrthogonalVisibilityGraph.DEFAULT_MARGIN, OrthogonalVisibilityGraph.DEFAULT_MARGIN, true);
 
         List<RoutingRect> obstacles = new ArrayList<>();
         for (int i = 0; i < 6; i++) {
@@ -557,5 +557,121 @@ public class OrthogonalVisibilityGraphTest {
             }
         }
         return false;
+    }
+
+    // --- B36: Split margin (clearance vs perimeterMargin) ---
+
+    @Test
+    public void shouldUseDefaultPerimeterMarginEqualToMargin_whenSingleArgConstructor() {
+        // Single-arg constructor: perimeterMargin = margin (backward compat)
+        OrthogonalVisibilityGraph g = new OrthogonalVisibilityGraph(10);
+        // Obstacle at (100, 100, 80x60)
+        // Expanded corners: (90,90), (190,90), (90,170), (190,170)
+        // Perimeter should extend by margin=10 beyond expanded obstacles:
+        //   perimLeft=90-10=80, perimTop=90-10=80, perimRight=190+10=200, perimBottom=170+10=180
+        List<RoutingRect> obstacles = List.of(new RoutingRect(100, 100, 80, 60, "obs1"));
+        g.build(obstacles);
+        Set<VisNode> nodes = g.getNodes();
+        assertTrue("Perimeter corner at (80, 80) with margin=perimeterMargin=10",
+                containsNodeAt(nodes, 80, 80));
+        assertTrue("Perimeter corner at (200, 180) with margin=perimeterMargin=10",
+                containsNodeAt(nodes, 200, 180));
+    }
+
+    @Test
+    public void shouldUseSeparatePerimeterMargin_whenTwoIntConstructor() {
+        // clearance=10, perimeterMargin=50
+        OrthogonalVisibilityGraph g = new OrthogonalVisibilityGraph(10, 50);
+        // Obstacle at (100, 100, 80x60)
+        // Expanded corners use clearance=10: (90,90), (190,90), (90,170), (190,170)
+        // Perimeter uses perimeterMargin=50:
+        //   perimLeft=90-50=40, perimTop=90-50=40, perimRight=190+50=240, perimBottom=170+50=220
+        List<RoutingRect> obstacles = List.of(new RoutingRect(100, 100, 80, 60, "obs1"));
+        g.build(obstacles);
+        Set<VisNode> nodes = g.getNodes();
+        assertTrue("Perimeter corner at (40, 40) with perimeterMargin=50",
+                containsNodeAt(nodes, 40, 40));
+        assertTrue("Perimeter corner at (240, 220) with perimeterMargin=50",
+                containsNodeAt(nodes, 240, 220));
+    }
+
+    @Test
+    public void shouldUseMarginForObstacleExpansion_notPerimeterMargin() {
+        // clearance=10, perimeterMargin=50 — obstacle expansion must use clearance=10
+        OrthogonalVisibilityGraph g = new OrthogonalVisibilityGraph(10, 50);
+        List<RoutingRect> obstacles = List.of(new RoutingRect(100, 100, 80, 60, "obs1"));
+        g.build(obstacles);
+        Set<VisNode> nodes = g.getNodes();
+        // Expanded obstacle corners should be at clearance=10 offsets
+        assertTrue("Obstacle corner at (90, 90) using clearance=10",
+                containsNodeAt(nodes, 90, 90));
+        assertTrue("Obstacle corner at (190, 170) using clearance=10",
+                containsNodeAt(nodes, 190, 170));
+        // Should NOT have obstacle corners at perimeterMargin=50 offsets
+        assertFalse("No obstacle corner at (50, 50) — perimeterMargin must not affect obstacle expansion",
+                containsNodeAt(nodes, 50, 50));
+    }
+
+    @Test
+    public void shouldProduceIdenticalBehavior_defaultConstructorVsSingleArg() {
+        // Default constructor and single-arg(10) should produce identical graphs
+        OrthogonalVisibilityGraph gDefault = new OrthogonalVisibilityGraph();
+        OrthogonalVisibilityGraph gExplicit = new OrthogonalVisibilityGraph(10);
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(100, 100, 80, 60, "obs1"),
+                new RoutingRect(300, 200, 60, 40, "obs2"));
+        gDefault.build(obstacles);
+        gExplicit.build(obstacles);
+        assertEquals("Default and explicit(10) should produce same node count",
+                gDefault.getNodes().size(), gExplicit.getNodes().size());
+    }
+
+    @Test
+    public void shouldProduceWiderPerimeter_withLargerPerimeterMargin() {
+        // Two obstacles forming a dense row
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(100, 100, 80, 60, "obs1"),
+                new RoutingRect(200, 100, 80, 60, "obs2"));
+
+        // Default: perimeterMargin=margin=10
+        OrthogonalVisibilityGraph gNarrow = new OrthogonalVisibilityGraph(10);
+        gNarrow.build(obstacles);
+
+        // Wide: perimeterMargin=50
+        OrthogonalVisibilityGraph gWide = new OrthogonalVisibilityGraph(10, 50);
+        gWide.build(obstacles);
+
+        // Narrow perimeter top: min expanded top (90) - 10 = 80
+        assertTrue("Narrow perimeter top at y=80", containsNodeAt(gNarrow.getNodes(), 80, 80));
+        // Wide perimeter top-left: min expanded left (90) - 50 = 40, min expanded top (90) - 50 = 40
+        assertTrue("Wide perimeter corner at (40, 40)", containsNodeAt(gWide.getNodes(), 40, 40));
+    }
+
+    @Test
+    public void shouldRouteAroundDenseWall_withLargerPerimeterMargin() {
+        // Dense horizontal wall of elements — mimics Business Architecture View
+        List<RoutingRect> obstacles = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            obstacles.add(new RoutingRect(50 + i * 100, 100, 80, 60, "obs" + i));
+        }
+        // Source below wall, target above wall
+        int srcX = 90, srcY = 250;
+        int tgtX = 450, tgtY = 50;
+
+        // Narrow perimeter (margin=10) — may fail to find exterior path
+        OrthogonalVisibilityGraph gNarrow = new OrthogonalVisibilityGraph(10);
+        gNarrow.build(obstacles);
+        VisNode[] narrowPorts = gNarrow.addPortNodes(srcX, srcY, tgtX, tgtY);
+        List<VisNode> narrowPath = findPath(narrowPorts[0], narrowPorts[1]);
+
+        // Wide perimeter (perimeterMargin=50) — should find exterior path
+        OrthogonalVisibilityGraph gWide = new OrthogonalVisibilityGraph(10, 50);
+        gWide.build(obstacles);
+        VisNode[] widePorts = gWide.addPortNodes(srcX, srcY, tgtX, tgtY);
+        List<VisNode> widePath = findPath(widePorts[0], widePorts[1]);
+
+        assertNotNull("Wide perimeter should find a path around dense wall", widePath);
+        assertTrue("Wide perimeter path should have intermediate nodes",
+                widePath.size() > 2);
     }
 }

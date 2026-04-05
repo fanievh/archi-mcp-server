@@ -16,7 +16,7 @@ Absolute vs relative coordinate systems, nested element coordinate conversion, b
 
 ### [Routing Pipeline](routing-pipeline.md)
 
-The multi-stage orthogonal connection routing system: visibility graph construction, A* path search with direction tracking, path ordering, edge nudging, coincident segment detection, label clearance, terminal edge attachment, and the recommendation engine.
+The multi-stage orthogonal connection routing system: visibility graph construction, A* path search with clearance weighting and corridor directionality, path ordering, edge nudging, coincident segment detection, label clearance, terminal edge attachment, center-termination and interior BP correction, orthogonality enforcement, and the recommendation engine.
 
 ### [Layout Engine](layout-engine.md)
 

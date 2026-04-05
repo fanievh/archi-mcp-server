@@ -86,7 +86,7 @@ public final class FieldSelector {
     public static final Set<String> VALID_EXCLUDE_FIELDS = Set.of(
             "documentation", "properties", "layer", "type",
             "viewpointType", "connectionRouterType", "folderPath",
-            "visualMetadata", "connections");
+            "visualMetadata", "connections", "groups", "notes");
 
     // ---- Preset field sets per DTO type ----
 
@@ -107,9 +107,15 @@ public final class FieldSelector {
             "id", "name", "type", "path", "elementCount", "subfolderCount");
     private static final Set<String> FOLDER_FULL = FOLDER_STANDARD; // no extra fields yet
 
-    // Relationships: all fields always included (no optional fields currently)
-    private static final Set<String> RELATIONSHIP_ALL = Set.of(
+    // Relationship field presets (Story C1: search-relationships)
+    private static final Set<String> RELATIONSHIP_MINIMAL = Set.of("id", "name");
+    private static final Set<String> RELATIONSHIP_STANDARD = Set.of(
             "id", "name", "type", "sourceId", "targetId");
+    private static final Set<String> RELATIONSHIP_FULL = Set.of(
+            "id", "name", "type", "sourceId", "targetId",
+            "documentation", "properties", "sourceName", "targetName");
+    // Alias for backward compatibility (used by applyToRelationship for non-search contexts)
+    private static final Set<String> RELATIONSHIP_ALL = RELATIONSHIP_STANDARD;
 
     // ---- DTO to Map conversions ----
 
@@ -143,6 +149,10 @@ public final class FieldSelector {
         if (dto.type() != null) map.put("type", dto.type());
         if (dto.sourceId() != null) map.put("sourceId", dto.sourceId());
         if (dto.targetId() != null) map.put("targetId", dto.targetId());
+        if (dto.documentation() != null) map.put("documentation", dto.documentation());
+        if (dto.properties() != null && !dto.properties().isEmpty()) map.put("properties", dto.properties());
+        if (dto.sourceName() != null) map.put("sourceName", dto.sourceName());
+        if (dto.targetName() != null) map.put("targetName", dto.targetName());
         return map;
     }
 
@@ -285,7 +295,7 @@ public final class FieldSelector {
             return applyToElement(dto, effectivePreset, excludeFields);
         }
         if (dtoOrList instanceof RelationshipDto dto) {
-            return applyToRelationship(dto, excludeFields);
+            return applyToRelationship(dto, effectivePreset, excludeFields);
         }
         if (dtoOrList instanceof ViewDto dto) {
             return applyToView(dto, effectivePreset, excludeFields);
@@ -326,10 +336,19 @@ public final class FieldSelector {
     }
 
     private static Map<String, Object> applyToRelationship(RelationshipDto dto,
+                                                              FieldPreset preset,
                                                               Set<String> excludeFields) {
         Map<String, Object> map = relationshipDtoToMap(dto);
-        // Relationships always include all fields; only exclude applies (future-proof)
-        return filterMap(map, RELATIONSHIP_ALL, excludeFields);
+        Set<String> includeFields = relationshipFieldsForPreset(preset);
+        return filterMap(map, includeFields, excludeFields);
+    }
+
+    private static Set<String> relationshipFieldsForPreset(FieldPreset preset) {
+        return switch (preset) {
+            case MINIMAL -> RELATIONSHIP_MINIMAL;
+            case STANDARD -> RELATIONSHIP_STANDARD;
+            case FULL -> RELATIONSHIP_FULL;
+        };
     }
 
     private static Map<String, Object> applyToView(ViewDto dto, FieldPreset preset,
@@ -373,6 +392,20 @@ public final class FieldSelector {
         if (dto.connections() != null) {
             if (excludeFields == null || !excludeFields.contains("connections")) {
                 map.put("connections", dto.connections());
+            }
+        }
+
+        // groups: include unless excluded
+        if (dto.groups() != null) {
+            if (excludeFields == null || !excludeFields.contains("groups")) {
+                map.put("groups", dto.groups());
+            }
+        }
+
+        // notes: include unless excluded
+        if (dto.notes() != null) {
+            if (excludeFields == null || !excludeFields.contains("notes")) {
+                map.put("notes", dto.notes());
             }
         }
 

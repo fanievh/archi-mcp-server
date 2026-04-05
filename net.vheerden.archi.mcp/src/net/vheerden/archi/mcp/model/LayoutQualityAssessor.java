@@ -62,6 +62,20 @@ class LayoutQualityAssessor {
      */
     static final double PASS_THROUGH_INSET = 10.0;
 
+    /**
+     * Inset for self-element pass-through detection (Story 13-4).
+     * Smaller than PASS_THROUGH_INSET to match the router's 5px tolerance,
+     * ensuring the assessor safety net catches everything the router detects.
+     */
+    static final double SELF_ELEMENT_INSET = 5.0;
+
+    // Coincident segment thresholds (Story B38)
+    static final int GOOD_MAX_COINCIDENT = 3;
+    static final int FAIR_MAX_COINCIDENT = 8;
+
+    // Non-orthogonal terminal thresholds (Story B38)
+    static final int FAIR_MAX_NON_ORTHOGONAL = 3;
+
     /** Above this element count, add a performance warning to suggestions. */
     static final int LARGE_VIEW_WARNING_THRESHOLD = 500;
 
@@ -110,12 +124,15 @@ class LayoutQualityAssessor {
         }
         // Story 11-23: Coincident segment detection
         int coincidentSegmentCount = coincidentDetector.countCoincidentSegments(connections);
+        // B38: Non-orthogonal terminal detection
+        int nonOrthogonalTerminalCount = countNonOrthogonalTerminals(connections);
 
         // Rating and suggestions use sibling overlaps only (Story 9-0d)
-        // Story 11-19: use breakdown-aware rating with grouped-view leniency
+        // Story 11-19, B38: use breakdown-aware rating with grouped-view leniency and tiered model
         RatingResult ratingResult = computeRatingWithBreakdown(
                 overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
-                labelResult.count(), passThroughs.size(), connections.size(), hasGroups);
+                labelResult.count(), passThroughs.size(), coincidentSegmentCount,
+                nonOrthogonalTerminalCount, connections.size(), hasGroups);
         String rating = ratingResult.rating();
         Map<String, String> ratingBreakdown = ratingResult.breakdown();
         List<String> offCanvas = detectOffCanvas(layoutNodes);
@@ -123,7 +140,7 @@ class LayoutQualityAssessor {
                 overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
                 boundaryViolations.size(), offCanvas.size(), layoutNodes.size(),
                 labelResult.count(), hasGroups, connections.size(), coincidentSegmentCount,
-                labelResult.shortSegmentCount());
+                nonOrthogonalTerminalCount, labelResult.shortSegmentCount());
 
         // Story 11-12: density-aware crossing metric
         double crossingsPerConnection = connections.size() > 0
@@ -144,7 +161,8 @@ class LayoutQualityAssessor {
                 offCanvas, labelResult.count(), labelResult.descriptions(),
                 0, List.of(), connections.size(), crossingsPerConnection,
                 noteOverlapResult.count(), noteOverlapResult.descriptions(),
-                hasGroups, coincidentSegmentCount, contentBounds, suggestions);
+                hasGroups, coincidentSegmentCount, nonOrthogonalTerminalCount,
+                contentBounds, suggestions);
     }
 
     // ---- Containment relationship helpers (Story 9-0d: transitive closure) ----
@@ -267,22 +285,29 @@ class LayoutQualityAssessor {
     // ---- Edge Crossing Detection (Finding #8: remove sharesEndpoint skip) ----
 
     int countEdgeCrossings(List<AssessmentConnection> connections) {
+        List<List<double[]>> paths = new ArrayList<>(connections.size());
+        for (AssessmentConnection conn : connections) {
+            paths.add(conn.pathPoints());
+        }
+        return countPathCrossings(paths);
+    }
+
+    /**
+     * Counts edge crossings among a list of raw path point lists.
+     * Each path is a list of [x, y] points (source center → bendpoints → target center).
+     * Package-visible for use by autoRouteConnections crossing delta (backlog-b14).
+     */
+    static int countPathCrossings(List<List<double[]>> paths) {
         int count = 0;
-        for (int i = 0; i < connections.size(); i++) {
-            for (int j = i + 1; j < connections.size(); j++) {
-                // No sharesEndpoint skip — segmentsIntersect already returns false
-                // for segments sharing an endpoint vertex (cross-product = 0).
-                // Removing the skip allows detection of real crossings between
-                // connections that share a source/target but cross elsewhere.
-                count += countSegmentCrossings(
-                        connections.get(i).pathPoints(),
-                        connections.get(j).pathPoints());
+        for (int i = 0; i < paths.size(); i++) {
+            for (int j = i + 1; j < paths.size(); j++) {
+                count += countSegmentCrossings(paths.get(i), paths.get(j));
             }
         }
         return count;
     }
 
-    private int countSegmentCrossings(List<double[]> path1, List<double[]> path2) {
+    static int countSegmentCrossings(List<double[]> path1, List<double[]> path2) {
         int count = 0;
         for (int i = 0; i < path1.size() - 1; i++) {
             for (int j = 0; j < path2.size() - 1; j++) {
@@ -469,22 +494,23 @@ class LayoutQualityAssessor {
                                  int connectionCount) {
         return computeRatingWithBreakdown(overlaps, crossings, avgSpacing,
                 alignmentScore, labelOverlapCount, passThroughCount,
-                connectionCount, false).rating();
+                0, 0, connectionCount, false).rating();
     }
 
     /**
-     * Computes the overall quality rating with per-metric breakdown (Story 11-19).
+     * Computes the overall quality rating with per-metric breakdown (Story 11-19, B38).
      *
      * <p>Each metric contributes an individual rating: "pass" (no issue),
-     * "excellent", "good", "fair", or "poor". The overall rating is the
-     * worst individual rating, with a grouped-view bonus for edge crossings.</p>
+     * "excellent", "good", "fair", or "poor". The overall rating uses severity-tiered
+     * logic (B38): Tier 1 (critical) can produce "poor", Tier 2 (moderate) caps at "fair",
+     * Tier 3 (cosmetic) caps at "good".</p>
      *
-     * @param hasGroups when true and edge crossings are the ONLY quality issue,
-     *                  the crossing contribution is capped at "good" (not "fair")
+     * @param hasGroups when true, crossing leniency applies if passThroughs &lt;= FAIR_MAX_PASS_THROUGHS
      */
     RatingResult computeRatingWithBreakdown(int overlaps, int crossings,
                                              double avgSpacing, int alignmentScore,
                                              int labelOverlapCount, int passThroughCount,
+                                             int coincidentSegments, int nonOrthogonalTerminals,
                                              int connectionCount, boolean hasGroups) {
         Map<String, String> breakdown = new LinkedHashMap<>();
 
@@ -516,9 +542,10 @@ class LayoutQualityAssessor {
         } else {
             crossingRating = "poor";
         }
-        // Story 11-22: grouped-view leniency — one-tier boost (not unconditional floor).
+        // Story 11-22, B38: grouped-view leniency — one-tier boost (not unconditional floor).
         // Cross-group connections produce topologically unavoidable crossings.
-        if (hasGroups && overlaps == 0 && passThroughCount == 0
+        // B38: relaxed gate from passThroughCount == 0 to passThroughCount <= FAIR_MAX_PASS_THROUGHS
+        if (hasGroups && overlaps == 0 && passThroughCount <= FAIR_MAX_PASS_THROUGHS
                 && labelOverlapCount == 0 && alignmentScore > GOOD_MIN_ALIGNMENT
                 && avgSpacing > GOOD_MIN_SPACING
                 && ("fair".equals(crossingRating) || "poor".equals(crossingRating))) {
@@ -554,7 +581,6 @@ class LayoutQualityAssessor {
         }
 
         // 6. Pass-throughs rating
-        // Any pass-throughs block excellent/good — they indicate connections crossing elements
         if (passThroughCount == 0) {
             breakdown.put("passThroughs", "pass");
         } else if (passThroughCount <= FAIR_MAX_PASS_THROUGHS) {
@@ -563,24 +589,67 @@ class LayoutQualityAssessor {
             breakdown.put("passThroughs", "poor");
         }
 
-        // Compute overall rating as worst individual contribution
-        String overall = computeWorstRating(breakdown);
+        // 7. Coincident segments rating (B38)
+        if (coincidentSegments == 0) {
+            breakdown.put("coincidentSegments", "pass");
+        } else if (coincidentSegments <= GOOD_MAX_COINCIDENT) {
+            breakdown.put("coincidentSegments", "good");
+        } else if (coincidentSegments <= FAIR_MAX_COINCIDENT) {
+            breakdown.put("coincidentSegments", "fair");
+        } else {
+            breakdown.put("coincidentSegments", "poor");
+        }
+
+        // 8. Non-orthogonal terminals rating (B38)
+        if (nonOrthogonalTerminals == 0) {
+            breakdown.put("nonOrthogonalTerminals", "pass");
+        } else if (nonOrthogonalTerminals <= FAIR_MAX_NON_ORTHOGONAL) {
+            breakdown.put("nonOrthogonalTerminals", "fair");
+        } else {
+            breakdown.put("nonOrthogonalTerminals", "poor");
+        }
+
+        // Compute overall rating using severity-tiered model (B38)
+        String overall = computeTieredRating(breakdown);
         breakdown.put("overall", overall);
 
         return new RatingResult(overall, breakdown);
     }
 
-    /** Returns the worst rating from a breakdown map (ignoring the "overall" key). */
-    private String computeWorstRating(Map<String, String> breakdown) {
-        int worstLevel = 0; // 0=excellent/pass, 1=good, 2=fair, 3=poor
-        for (Map.Entry<String, String> entry : breakdown.entrySet()) {
-            if ("overall".equals(entry.getKey())) continue;
-            int level = ratingLevel(entry.getValue());
-            if (level > worstLevel) {
-                worstLevel = level;
-            }
-        }
-        return switch (worstLevel) {
+    /**
+     * Severity-tiered overall rating (B38). Replaces pure worst-wins.
+     * <ul>
+     *   <li>Tier 1 (critical): overlaps, passThroughs, coincidentSegments — can produce "poor"</li>
+     *   <li>Tier 2 (moderate): edgeCrossings, nonOrthogonalTerminals — caps at "fair"</li>
+     *   <li>Tier 3 (cosmetic): spacing, alignment, labelOverlaps — caps at "good"</li>
+     * </ul>
+     */
+    private String computeTieredRating(Map<String, String> breakdown) {
+        // Tier 1: overlaps, passThroughs, coincidentSegments — drives overall directly
+        int worstTier1 = Math.max(Math.max(
+                ratingLevel(breakdown.getOrDefault("overlaps", "pass")),
+                ratingLevel(breakdown.getOrDefault("passThroughs", "pass"))),
+                ratingLevel(breakdown.getOrDefault("coincidentSegments", "pass")));
+
+        // Tier 2: edgeCrossings, nonOrthogonalTerminals — cap contribution at "fair" (level 2)
+        int worstTier2 = Math.max(
+                ratingLevel(breakdown.getOrDefault("edgeCrossings", "pass")),
+                ratingLevel(breakdown.getOrDefault("nonOrthogonalTerminals", "pass")));
+
+        // Tier 3: spacing, alignment, labelOverlaps — cap contribution at "good" (level 1)
+        int worstTier3 = Math.max(Math.max(
+                ratingLevel(breakdown.getOrDefault("spacing", "pass")),
+                ratingLevel(breakdown.getOrDefault("alignment", "pass"))),
+                ratingLevel(breakdown.getOrDefault("labelOverlaps", "pass")));
+
+        // Tier 1 drives overall directly (can produce any rating including "poor")
+        int overall = worstTier1;
+        // Tier 2 can raise to at most "fair" (level 2)
+        overall = Math.max(overall, Math.min(worstTier2, 2));
+        // Tier 3 can raise to at most "good" (level 1)
+        overall = Math.max(overall, Math.min(worstTier3, 1));
+
+        return switch (overall) {
             case 0 -> "excellent";
             case 1 -> "good";
             case 2 -> "fair";
@@ -596,6 +665,39 @@ class LayoutQualityAssessor {
             case "poor" -> 3;
             default -> 2; // unknown ratings treated conservatively as "fair"
         };
+    }
+
+    // ---- Non-Orthogonal Terminal Detection (B38) ----
+
+    /**
+     * Counts connections with at least one non-orthogonal terminal segment.
+     * A terminal segment is non-orthogonal if the angle between the first two
+     * (or last two) path points is neither horizontal nor vertical (within tolerance).
+     * Counts per-connection, not per-segment, to avoid over-counting.
+     */
+    int countNonOrthogonalTerminals(List<AssessmentConnection> connections) {
+        int count = 0;
+        for (AssessmentConnection conn : connections) {
+            List<double[]> path = conn.pathPoints();
+            if (path.size() < 2) continue;
+            // Check source terminal (first two points)
+            if (isNonOrthogonal(path.get(0), path.get(1))) {
+                count++;
+                continue;
+            }
+            // Check target terminal (last two points)
+            if (isNonOrthogonal(path.get(path.size() - 2), path.get(path.size() - 1))) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private boolean isNonOrthogonal(double[] p1, double[] p2) {
+        double dx = Math.abs(p1[0] - p2[0]);
+        double dy = Math.abs(p1[1] - p2[1]);
+        // Orthogonal = one of dx or dy is ~0
+        return dx > ALIGNMENT_TOLERANCE && dy > ALIGNMENT_TOLERANCE;
     }
 
     // ---- Boundary Violation Detection ----
@@ -674,8 +776,66 @@ class LayoutQualityAssessor {
                     break; // Only report each connection once per element
                 }
             }
+
+            // Story 13-4 Feature B: Self-element pass-through detection.
+            // Check if any non-terminal segment of the clipped path passes through
+            // the connection's own source or target element. Terminal segments naturally
+            // touch the endpoints, but intermediate segments should not cross them.
+            if (descriptions.size() < MAX_DESCRIPTIONS && clippedPath.size() >= 3) {
+                AssessmentNode tgtNode = nodeMap.get(conn.targetNodeId());
+                if (tgtNode != null && !tgtNode.isGroup()) {
+                    if (nonTerminalPassesThroughNode(clippedPath, tgtNode, true)) {
+                        descriptions.add("Connection '" + conn.id()
+                                + "' routes through its own target element '" + tgtNode.id() + "'");
+                    }
+                }
+
+                AssessmentNode srcNode = nodeMap.get(conn.sourceNodeId());
+                if (srcNode != null && !srcNode.isGroup()
+                        && descriptions.size() < MAX_DESCRIPTIONS) {
+                    if (nonTerminalPassesThroughNode(clippedPath, srcNode, false)) {
+                        descriptions.add("Connection '" + conn.id()
+                                + "' routes through its own source element '" + srcNode.id() + "'");
+                    }
+                }
+            }
         }
         return descriptions;
+    }
+
+    /**
+     * Checks if non-terminal segments of a path pass through a node (Story 13-4).
+     * For target elements, skips the last segment (which naturally enters the target).
+     * For source elements, skips the first segment (which naturally exits the source).
+     *
+     * @param path     clipped path points
+     * @param node     the source or target element to check
+     * @param isTarget true if checking target element (skip last segment),
+     *                 false if checking source element (skip first segment)
+     * @return true if a non-terminal segment passes through the node
+     */
+    boolean nonTerminalPassesThroughNode(List<double[]> path, AssessmentNode node,
+                                          boolean isTarget) {
+        double insetX = node.x() + SELF_ELEMENT_INSET;
+        double insetY = node.y() + SELF_ELEMENT_INSET;
+        double insetW = node.width() - 2 * SELF_ELEMENT_INSET;
+        double insetH = node.height() - 2 * SELF_ELEMENT_INSET;
+        if (insetW <= 0 || insetH <= 0) return false;
+
+        // For target: check segments 0..n-3 (skip last segment n-2..n-1)
+        // For source: check segments 1..n-2 (skip first segment 0..1)
+        int start = isTarget ? 0 : 1;
+        int end = isTarget ? path.size() - 2 : path.size() - 1;
+
+        for (int i = start; i < end; i++) {
+            if (lineSegmentIntersectsRect(
+                    path.get(i)[0], path.get(i)[1],
+                    path.get(i + 1)[0], path.get(i + 1)[1],
+                    insetX, insetY, insetW, insetH)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean pathPassesThroughNode(List<double[]> path, AssessmentNode node) {
@@ -854,7 +1014,7 @@ class LayoutQualityAssessor {
     // Keep in sync with LabelClearance.CHAR_WIDTH etc.
     // (duplicated due to architecture boundary: model vs model.routing)
     /** Estimated character width in pixels (Archi's default ~11pt font). */
-    static final double LABEL_CHAR_WIDTH = 7.0;
+    static final double LABEL_CHAR_WIDTH = 8.0;
     /** Estimated character height in pixels. */
     static final double LABEL_CHAR_HEIGHT = 14.0;
     /** Horizontal padding around label text. */
@@ -1222,6 +1382,7 @@ class LayoutQualityAssessor {
                                               int nodeCount, int labelOverlapCount,
                                               boolean hasGroups, int connectionCount,
                                               int coincidentSegmentCount,
+                                              int nonOrthogonalTerminalCount,
                                               int shortSegmentCount) {
         List<String> suggestions = new ArrayList<>();
 
@@ -1256,21 +1417,26 @@ class LayoutQualityAssessor {
                         + " for more breathing room, then re-run auto-route-connections");
             }
         } else {
-            // Flat or containment view: suggest auto-route / auto-layout-and-route
+            // Flat or containment view: suggest layout-flat-view / auto-route / auto-layout-and-route
             if (overlaps > 0) {
                 suggestions.add("Found " + overlaps
-                        + " overlapping element pairs — use auto-layout-and-route"
-                        + " to reposition elements and fix routing");
+                        + " overlapping element pairs — use layout-flat-view to"
+                        + " reposition elements with proper spacing, then"
+                        + " auto-route-connections. Or use auto-layout-and-route"
+                        + " for fully algorithmic positioning");
             }
             if (crossings > CROSSING_SUGGESTION_THRESHOLD) {
                 suggestions.add("Found " + crossings
                         + " edge crossings — try auto-route-connections first"
-                        + " (preserves positions), then auto-layout-and-route"
-                        + " with targetRating if crossings persist");
+                        + " (preserves positions). If crossings persist, use"
+                        + " layout-flat-view with increased spacing to reposition"
+                        + " elements, then re-route. Use auto-layout-and-route"
+                        + " with targetRating as a last resort");
             }
             if (avgSpacing < SPACING_SUGGESTION_THRESHOLD && overlaps == 0) {
                 suggestions.add("Average spacing is only " + Math.round(avgSpacing)
-                        + "px — use auto-layout-and-route for better element spacing");
+                        + "px — use layout-flat-view with increased spacing"
+                        + " to reposition elements, then auto-route-connections");
             }
         }
         if (alignmentScore < ALIGNMENT_SUGGESTION_THRESHOLD) {
@@ -1307,6 +1473,12 @@ class LayoutQualityAssessor {
         if (shortSegmentCount > 0) {
             suggestions.add(shortSegmentCount + " connection labels exceed available segment length"
                     + " — increase element spacing");
+        }
+
+        // B38: non-orthogonal terminal suggestion
+        if (nonOrthogonalTerminalCount > 0) {
+            suggestions.add(nonOrthogonalTerminalCount + " connections have diagonal terminal segments"
+                    + " — re-run auto-route-connections to improve orthogonality");
         }
 
         // Story 11-23: coincident segment suggestion

@@ -1,8 +1,8 @@
 package net.vheerden.archi.mcp.model.routing;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +38,12 @@ public class CoincidentSegmentDetector {
 
     /** Minimum parallel overlap length to consider segments coincident (px). */
     static final int MIN_OVERLAP_LENGTH = 5;
+
+    /** Minimum pixel separation between proportionally distributed segments. */
+    static final int MIN_SEPARATION = 8;
+
+    /** Maximum gap extent when unbounded on one side (prevents extreme drift). */
+    static final int MAX_UNBOUNDED_EXTENT = 100;
 
     private final int coordinateTolerance;
     private final int offsetDelta;
@@ -180,9 +186,116 @@ public class CoincidentSegmentDetector {
     }
 
     /**
+     * Computes the available perpendicular gap for a corridor by scanning obstacles.
+     *
+     * <p>For a corridor at shared coordinate C with parallel range [overlapStart, overlapEnd],
+     * finds the nearest obstacle boundary on each perpendicular side. Only considers
+     * obstacles whose parallel extent overlaps the corridor's parallel range.</p>
+     *
+     * @param sharedCoordinate the corridor's shared coordinate (y for horizontal, x for vertical)
+     * @param horizontal       true if horizontal corridor, false if vertical
+     * @param overlapStart     start of the corridor's parallel range
+     * @param overlapEnd       end of the corridor's parallel range
+     * @param obstacles        all element rectangles on the view
+     * @return gap bounds as [minBound, maxBound], or null if corridor lies inside an obstacle
+     */
+    int[] computeCorridorGap(int sharedCoordinate, boolean horizontal,
+                             int overlapStart, int overlapEnd,
+                             List<RoutingRect> obstacles) {
+        int nearBound = sharedCoordinate - MAX_UNBOUNDED_EXTENT; // default if no obstacle found
+        int farBound = sharedCoordinate + MAX_UNBOUNDED_EXTENT;
+        boolean nearFound = false;
+        boolean farFound = false;
+
+        for (RoutingRect obs : obstacles) {
+            int obsParallelStart, obsParallelEnd, obsPerpStart, obsPerpEnd;
+            if (horizontal) {
+                // Horizontal corridor: parallel = x-axis, perpendicular = y-axis
+                obsParallelStart = obs.x();
+                obsParallelEnd = obs.x() + obs.width();
+                obsPerpStart = obs.y();
+                obsPerpEnd = obs.y() + obs.height();
+            } else {
+                // Vertical corridor: parallel = y-axis, perpendicular = x-axis
+                obsParallelStart = obs.y();
+                obsParallelEnd = obs.y() + obs.height();
+                obsPerpStart = obs.x();
+                obsPerpEnd = obs.x() + obs.width();
+            }
+
+            // Skip obstacles whose parallel range doesn't overlap the corridor
+            if (obsParallelEnd <= overlapStart || obsParallelStart >= overlapEnd) {
+                continue;
+            }
+
+            // Check if corridor lies inside this obstacle (gap = 0)
+            if (obsPerpStart <= sharedCoordinate && obsPerpEnd >= sharedCoordinate) {
+                return null;
+            }
+
+            // Obstacle is on the "near" side (lower perpendicular values)
+            if (obsPerpEnd <= sharedCoordinate) {
+                if (!nearFound || obsPerpEnd > nearBound) {
+                    nearBound = obsPerpEnd;
+                    nearFound = true;
+                }
+            }
+
+            // Obstacle is on the "far" side (higher perpendicular values)
+            if (obsPerpStart >= sharedCoordinate) {
+                if (!farFound || obsPerpStart < farBound) {
+                    farBound = obsPerpStart;
+                    farFound = true;
+                }
+            }
+        }
+
+        return new int[]{nearBound, farBound};
+    }
+
+    /**
+     * Computes evenly distributed absolute target coordinates for N segments
+     * within a gap of width W, centered on the corridor midpoint.
+     *
+     * <p>Positions are computed as: gapStart + gapWidth * (i+1) / (N+1) for i in [0, N).
+     * If the spacing between segments would be less than {@link #MIN_SEPARATION},
+     * returns null to signal that the caller should fall back to fixed-delta stacking.</p>
+     *
+     * @param gapStart     lower bound of the available gap
+     * @param gapEnd       upper bound of the available gap
+     * @param segmentCount number of segments to distribute (N)
+     * @return array of N absolute target coordinates, or null if gap too narrow
+     */
+    int[] computeProportionalOffsets(int gapStart, int gapEnd, int segmentCount) {
+        int gapWidth = gapEnd - gapStart;
+        if (segmentCount <= 0 || gapWidth <= 0) {
+            return null;
+        }
+
+        // Check minimum separation constraint
+        int spacing = gapWidth / (segmentCount + 1);
+        if (spacing < MIN_SEPARATION) {
+            return null;
+        }
+
+        int[] positions = new int[segmentCount];
+        for (int i = 0; i < segmentCount; i++) {
+            positions[i] = gapStart + gapWidth * (i + 1) / (segmentCount + 1);
+        }
+        return positions;
+    }
+
+    /**
      * Applies perpendicular offsets to coincident segments to make them visually
-     * distinguishable. For each coincident pair, shifts one segment by the offset
-     * delta. Checks for obstacle collisions and skips offset if blocked.
+     * distinguishable. Uses corridor-group-first processing with proportional
+     * spacing when sufficient gap exists between obstacles.
+     *
+     * <p>Algorithm:
+     * <ol>
+     *   <li>First pass: Collect all unique segments per corridor using tolerance-aware grouping</li>
+     *   <li>Second pass: For each corridor group, compute gap and proportional positions</li>
+     *   <li>Third pass: Apply offsets with obstacle validation, falling back to fixed-delta per-segment</li>
+     * </ol>
      *
      * @param coincidentPairs detected coincident pairs
      * @param bendpointLists  mutable bendpoint lists per connection (modified in place)
@@ -196,50 +309,65 @@ public class CoincidentSegmentDetector {
             return 0;
         }
 
-        // Track which connection+segment pairs have been offset, and per-corridor
-        // ordinal counters so multi-way coincidence (3+ connections) gets stacked offsets
-        Set<String> alreadyOffset = new HashSet<>();
-        Map<String, Integer> corridorOrdinals = new HashMap<>();
-        int offsetCount = 0;
+        // --- First pass: Collect unique segments per corridor (tolerance-aware) ---
+        Map<String, List<PathOrderer.Segment>> corridorGroups = new LinkedHashMap<>();
+        Set<String> seenSegments = new HashSet<>();
 
         for (CoincidentPair pair : coincidentPairs) {
-            PathOrderer.Segment segB = pair.segB();
-            String key = segB.connectionIndex() + ":" + segB.segmentIndex();
+            addToCorridorGroup(corridorGroups, seenSegments, pair.segA());
+            addToCorridorGroup(corridorGroups, seenSegments, pair.segB());
+        }
 
-            if (alreadyOffset.contains(key)) {
+        // --- Second & third pass: For each corridor, compute gap and apply offsets ---
+        Set<String> alreadyOffset = new HashSet<>();
+        int offsetCount = 0;
+
+        for (Map.Entry<String, List<PathOrderer.Segment>> entry : corridorGroups.entrySet()) {
+            List<PathOrderer.Segment> segments = entry.getValue();
+            if (segments.size() < 2) {
                 continue;
             }
 
-            boolean horizontal = segB.horizontal();
-            List<AbsoluteBendpointDto> path = bendpointLists.get(segB.connectionIndex());
-            int bpIdx1 = segB.segmentIndex();
-            int bpIdx2 = segB.segmentIndex() + 1;
+            boolean horizontal = segments.get(0).horizontal();
 
-            if (bpIdx1 < 0 || bpIdx2 >= path.size()) {
-                continue;
+            // Compute overlap range across all segments in this corridor
+            int overlapStart = Integer.MAX_VALUE;
+            int overlapEnd = Integer.MIN_VALUE;
+            int avgSharedCoord = 0;
+            for (PathOrderer.Segment seg : segments) {
+                int min, max;
+                if (horizontal) {
+                    min = Math.min(seg.x1(), seg.x2());
+                    max = Math.max(seg.x1(), seg.x2());
+                } else {
+                    min = Math.min(seg.y1(), seg.y2());
+                    max = Math.max(seg.y1(), seg.y2());
+                }
+                overlapStart = Math.min(overlapStart, min);
+                overlapEnd = Math.max(overlapEnd, max);
+                avgSharedCoord += seg.sharedCoordinate();
             }
+            avgSharedCoord /= segments.size();
 
-            // Stacking ordinal: increment per corridor so 3+ connections get 1*delta, 2*delta, etc.
-            String corridorKey = horizontal + ":" + segB.sharedCoordinate();
-            int ordinal = corridorOrdinals.merge(corridorKey, 1, Integer::sum);
+            // Try proportional spacing
+            int[] gap = computeCorridorGap(avgSharedCoord, horizontal,
+                    overlapStart, overlapEnd, allObstacles);
+            int[] proportionalPositions = (gap != null)
+                    ? computeProportionalOffsets(gap[0], gap[1], segments.size())
+                    : null;
 
-            int delta = offsetDelta * ordinal;
-            boolean applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, delta, allObstacles);
-            if (!applied) {
-                applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, -delta, allObstacles);
-            }
-
-            if (applied) {
-                alreadyOffset.add(key);
-                offsetCount++;
-                logger.debug("Offset coincident segment: conn[{}] seg[{}] by {}px (ordinal {}) {}",
-                        segB.connectionIndex(), segB.segmentIndex(), delta, ordinal,
-                        horizontal ? "vertically" : "horizontally");
+            if (proportionalPositions != null) {
+                // Proportional mode: distribute all segments across the gap
+                offsetCount += applyProportionalOffsets(segments, proportionalPositions,
+                        horizontal, bendpointLists, allObstacles, alreadyOffset);
+                logger.debug("Proportional spacing for corridor {}: {} segments across gap [{}, {}]",
+                        entry.getKey(), segments.size(), gap[0], gap[1]);
             } else {
-                // Roll back ordinal if offset wasn't applied
-                corridorOrdinals.merge(corridorKey, -1, Integer::sum);
-                logger.debug("Skipped offset for conn[{}] seg[{}] — both directions blocked",
-                        segB.connectionIndex(), segB.segmentIndex());
+                // Fixed-delta fallback: original stacking behavior
+                offsetCount += applyFixedDeltaOffsets(segments, horizontal,
+                        bendpointLists, allObstacles, alreadyOffset);
+                logger.debug("Fixed-delta fallback for corridor {}: {} segments",
+                        entry.getKey(), segments.size());
             }
         }
 
@@ -247,6 +375,136 @@ public class CoincidentSegmentDetector {
             logger.info("Applied {} coincident segment offsets", offsetCount);
         }
         return offsetCount;
+    }
+
+    /**
+     * Adds a segment to the appropriate corridor group using tolerance-aware key matching,
+     * consistent with {@link PathOrderer#groupSegments}.
+     */
+    private void addToCorridorGroup(Map<String, List<PathOrderer.Segment>> corridorGroups,
+                                     Set<String> seenSegments, PathOrderer.Segment seg) {
+        String segKey = seg.connectionIndex() + ":" + seg.segmentIndex();
+        if (!seenSegments.add(segKey)) {
+            return; // Already added
+        }
+
+        String prefix = seg.horizontal() ? "H:" : "V:";
+        int coord = seg.sharedCoordinate();
+
+        // Tolerance-aware key matching (mirrors PathOrderer.findOrCreateGroupKey)
+        String matchedKey = null;
+        for (String key : corridorGroups.keySet()) {
+            if (!key.startsWith(prefix)) continue;
+            int groupCoord = Integer.parseInt(key.substring(2));
+            if (Math.abs(coord - groupCoord) <= coordinateTolerance) {
+                matchedKey = key;
+                break;
+            }
+        }
+
+        String key = (matchedKey != null) ? matchedKey : prefix + coord;
+        corridorGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(seg);
+    }
+
+    /**
+     * Applies proportional spacing: moves each segment to its computed target position.
+     * Falls back to fixed-delta for individual segments if proportional position is blocked.
+     */
+    private int applyProportionalOffsets(List<PathOrderer.Segment> segments,
+                                          int[] targetPositions, boolean horizontal,
+                                          List<List<AbsoluteBendpointDto>> bendpointLists,
+                                          List<RoutingRect> allObstacles,
+                                          Set<String> alreadyOffset) {
+        int count = 0;
+        for (int i = 0; i < segments.size(); i++) {
+            PathOrderer.Segment seg = segments.get(i);
+            String segKey = seg.connectionIndex() + ":" + seg.segmentIndex();
+            if (alreadyOffset.contains(segKey)) {
+                continue;
+            }
+
+            List<AbsoluteBendpointDto> path = bendpointLists.get(seg.connectionIndex());
+            int bpIdx1 = seg.segmentIndex();
+            int bpIdx2 = seg.segmentIndex() + 1;
+            if (bpIdx1 < 0 || bpIdx2 >= path.size()) {
+                continue;
+            }
+
+            int currentCoord = seg.sharedCoordinate();
+            int targetCoord = targetPositions[i];
+            int delta = targetCoord - currentCoord;
+
+            if (delta == 0) {
+                continue; // Already at target position
+            }
+
+            boolean applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, delta, allObstacles);
+            boolean usedFallback = false;
+            if (!applied) {
+                // Proportional position blocked — try fixed-delta fallback for this segment
+                int fixedDelta = offsetDelta * (i + 1);
+                applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, fixedDelta, allObstacles);
+                if (!applied) {
+                    applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, -fixedDelta, allObstacles);
+                }
+                usedFallback = applied;
+            }
+
+            if (applied) {
+                alreadyOffset.add(segKey);
+                count++;
+                if (usedFallback) {
+                    logger.debug("Offset coincident segment (proportional blocked, fixed fallback): conn[{}] seg[{}] {}",
+                            seg.connectionIndex(), seg.segmentIndex(),
+                            horizontal ? "vertically" : "horizontally");
+                } else {
+                    logger.debug("Offset coincident segment: conn[{}] seg[{}] to proportional target {}px {}",
+                            seg.connectionIndex(), seg.segmentIndex(), targetCoord,
+                            horizontal ? "vertically" : "horizontally");
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Applies fixed-delta stacking offsets (original behavior, used as fallback).
+     * Skips the first segment in the group (anchor) and offsets remaining segments.
+     */
+    private int applyFixedDeltaOffsets(List<PathOrderer.Segment> segments, boolean horizontal,
+                                        List<List<AbsoluteBendpointDto>> bendpointLists,
+                                        List<RoutingRect> allObstacles,
+                                        Set<String> alreadyOffset) {
+        int count = 0;
+        for (int i = 1; i < segments.size(); i++) {
+            PathOrderer.Segment seg = segments.get(i);
+            String segKey = seg.connectionIndex() + ":" + seg.segmentIndex();
+            if (alreadyOffset.contains(segKey)) {
+                continue;
+            }
+
+            List<AbsoluteBendpointDto> path = bendpointLists.get(seg.connectionIndex());
+            int bpIdx1 = seg.segmentIndex();
+            int bpIdx2 = seg.segmentIndex() + 1;
+            if (bpIdx1 < 0 || bpIdx2 >= path.size()) {
+                continue;
+            }
+
+            int delta = offsetDelta * i;
+            boolean applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, delta, allObstacles);
+            if (!applied) {
+                applied = tryOffset(path, bpIdx1, bpIdx2, horizontal, -delta, allObstacles);
+            }
+
+            if (applied) {
+                alreadyOffset.add(segKey);
+                count++;
+                logger.debug("Offset coincident segment (fixed): conn[{}] seg[{}] by {}px {}",
+                        seg.connectionIndex(), seg.segmentIndex(), delta,
+                        horizontal ? "vertically" : "horizontally");
+            }
+        }
+        return count;
     }
 
     /**

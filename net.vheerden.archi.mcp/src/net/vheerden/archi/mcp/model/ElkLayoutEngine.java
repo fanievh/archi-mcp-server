@@ -187,6 +187,9 @@ class ElkLayoutEngine {
 					ErrorCode.INTERNAL_ERROR);
 		}
 
+		// Post-ELK correction: separate overlapping sibling groups
+		separateOverlappingGroups(rootGraph, parentIds, dir, effectiveSpacing);
+
 		// Extract computed positions
 		List<ViewPositionSpec> positions = new ArrayList<>();
 		for (LayoutNode node : nodes) {
@@ -314,6 +317,106 @@ class ElkLayoutEngine {
 		for (ElkNode child : container.getChildren()) {
 			extractBendpoints(child, result);
 		}
+	}
+
+	/**
+	 * Detects and corrects overlapping sibling groups after ELK layout.
+	 * Groups are top-level ElkNodes that have children (exist in parentIds).
+	 * Separation is applied along the primary axis first (determined by layout
+	 * direction), then along the secondary axis if overlaps remain.
+	 */
+	void separateOverlappingGroups(ElkNode rootGraph, Set<String> parentIds,
+			Direction dir, double effectiveSpacing) {
+		// Collect sibling groups: top-level children of root that are parents
+		List<ElkNode> siblingGroups = new ArrayList<>();
+		for (ElkNode child : rootGraph.getChildren()) {
+			if (parentIds.contains(child.getIdentifier())) {
+				siblingGroups.add(child);
+			}
+		}
+
+		if (siblingGroups.size() < 2) {
+			return; // Nothing to separate
+		}
+
+		double minGap = effectiveSpacing / 2;
+
+		// Determine primary axis: DOWN/UP → X (horizontal separation), RIGHT/LEFT → Y (vertical)
+		boolean primaryIsX = (dir == Direction.DOWN || dir == Direction.UP);
+
+		// Primary axis sweep
+		int corrected = sweepAndSeparate(siblingGroups, primaryIsX, minGap);
+
+		// Secondary axis sweep for any remaining overlaps
+		corrected += sweepAndSeparate(siblingGroups, !primaryIsX, minGap);
+
+		if (corrected > 0) {
+			logger.info("ELK post-layout: separated {} overlapping group pair(s)", corrected);
+		}
+	}
+
+	/**
+	 * Sorts groups along the given axis and pushes overlapping groups apart.
+	 * Returns the number of corrections applied.
+	 */
+	private int sweepAndSeparate(List<ElkNode> groups, boolean alongX, double minGap) {
+		// Sort by position on the sweep axis
+		groups.sort((a, b) -> {
+			double posA = alongX ? a.getX() : a.getY();
+			double posB = alongX ? b.getX() : b.getY();
+			return Double.compare(posA, posB);
+		});
+
+		int corrections = 0;
+		for (int i = 1; i < groups.size(); i++) {
+			ElkNode prev = groups.get(i - 1);
+			ElkNode curr = groups.get(i);
+
+			// Check AABB overlap on BOTH axes (must overlap on both to truly intersect)
+			if (!aabbOverlap(prev, curr, minGap)) {
+				continue;
+			}
+
+			// Push current group along the sweep axis to eliminate overlap
+			if (alongX) {
+				double requiredX = prev.getX() + prev.getWidth() + minGap;
+				if (curr.getX() < requiredX) {
+					curr.setX(requiredX);
+					corrections++;
+				}
+			} else {
+				double requiredY = prev.getY() + prev.getHeight() + minGap;
+				if (curr.getY() < requiredY) {
+					curr.setY(requiredY);
+					corrections++;
+				}
+			}
+		}
+		return corrections;
+	}
+
+	/**
+	 * Checks if node {@code b} is within {@code margin} of node {@code a}'s bounding box.
+	 * <p>Margin is applied only to {@code a} (asymmetric by design): the sweep algorithm
+	 * always passes the earlier-positioned node as {@code a}, so the margin acts as a
+	 * keep-out zone around the predecessor. This method is non-commutative —
+	 * {@code aabbOverlap(a, b, m)} may differ from {@code aabbOverlap(b, a, m)}.</p>
+	 */
+	private boolean aabbOverlap(ElkNode a, ElkNode b, double margin) {
+		double aLeft = a.getX() - margin;
+		double aRight = a.getX() + a.getWidth() + margin;
+		double aTop = a.getY() - margin;
+		double aBottom = a.getY() + a.getHeight() + margin;
+
+		double bLeft = b.getX();
+		double bRight = b.getX() + b.getWidth();
+		double bTop = b.getY();
+		double bBottom = b.getY() + b.getHeight();
+
+		// Overlap requires intersection on BOTH axes
+		boolean xOverlap = aLeft < bRight && bLeft < aRight;
+		boolean yOverlap = aTop < bBottom && bTop < aBottom;
+		return xOverlap && yOverlap;
 	}
 
 	private Direction resolveDirection(String direction) {

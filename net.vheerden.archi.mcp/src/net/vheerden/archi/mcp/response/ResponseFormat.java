@@ -8,13 +8,15 @@ package net.vheerden.archi.mcp.response;
  *   <li>{@link #JSON} — Standard {@code result} key (default, backward compatible)</li>
  *   <li>{@link #GRAPH} — {@code graph} key with {@code nodes}/{@code edges} structure</li>
  *   <li>{@link #SUMMARY} — {@code summary} key with natural language text</li>
+ *   <li>{@link #TREE} — {@code result} key with compact containment hierarchy for group discovery</li>
  * </ul>
  */
 public enum ResponseFormat {
 
     JSON("json"),
     GRAPH("graph"),
-    SUMMARY("summary");
+    SUMMARY("summary"),
+    TREE("tree");
 
     private final String value;
 

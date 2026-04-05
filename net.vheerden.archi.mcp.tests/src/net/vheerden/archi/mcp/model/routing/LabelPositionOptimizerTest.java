@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 
 import org.junit.Test;
@@ -262,5 +263,174 @@ public class LabelPositionOptimizerTest {
 
         assertFalse("Far apart labels should not be proximity",
                 LabelPositionOptimizer.isWithinProximity(a, b));
+    }
+
+    // ====================================================================
+    // Multi-trial optimization tests (Story backlog-b12)
+    // ====================================================================
+
+    // --- Test: Single trial produces same result as optimize() (AC3) ---
+
+    @Test
+    public void multiTrial_singleTrialShouldMatchOptimize() {
+        // Same scenario as shouldSelectSourcePosition_whenItClearsOverlap
+        RoutingRect obstacle = new RoutingRect(270, 5, 60, 40, "obs1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Accesses", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        Map<String, Integer> singleResult = optimizer.optimize(
+                connections, paths, List.of(obstacle), Map.of());
+
+        LabelPositionOptimizer.MultiTrialResult multiResult = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(obstacle), Map.of(), 1, new Random(42));
+
+        assertEquals("Single trial should match optimize()",
+                singleResult, multiResult.changedPositions());
+    }
+
+    // --- Test: Multi-trial with known seed produces deterministic results ---
+
+    @Test
+    public void multiTrial_knownSeedProducesDeterministicResults() {
+        // Two overlapping labels on same path — ordering matters
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 100, 50, 50, 400, 100, 50, 50, "Label1", 1),
+                conn("c2", 0, 100, 50, 50, 400, 100, 50, 50, "Label2", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 125, 400),
+                straightHorizontalPath(50, 125, 400));
+
+        LabelPositionOptimizer.MultiTrialResult result1 = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 5, new Random(42));
+        LabelPositionOptimizer.MultiTrialResult result2 = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 5, new Random(42));
+
+        assertEquals("Same seed should produce same results",
+                result1.changedPositions(), result2.changedPositions());
+        assertEquals("Same seed should produce same total score",
+                result1.totalScore(), result2.totalScore(), 0.001);
+    }
+
+    // --- Test: All positions clear → no changes regardless of trial count ---
+
+    @Test
+    public void multiTrial_nothingToOptimize_whenAllPositionsClear() {
+        // Single connection with no obstacles — all positions score 0
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 500, 0, 50, 50, "Label", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 500));
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 10, new Random(42));
+
+        assertTrue("No changes when all positions are clear",
+                result.changedPositions().isEmpty());
+        assertEquals("Total score should be 0", 0.0, result.totalScore(), 0.001);
+    }
+
+    // --- Test: Tie-breaking prefers fewer position changes ---
+
+    @Test
+    public void multiTrial_tieBreakingPrefsFewerChanges() {
+        // Connection with label at position 0, no obstacles
+        // Every trial scores 0 → trial with fewer changes wins
+        // Since all score 0 and current position is kept → no changes
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 500, 0, 50, 50, "Label", 0));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 500));
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 5, new Random(42));
+
+        assertTrue("Tie-breaking should prefer no changes (current positions)",
+                result.changedPositions().isEmpty());
+    }
+
+    // --- Test: totalScore reflects sum of all labeled connection scores ---
+
+    @Test
+    public void multiTrial_totalScoreReflectsAllLabeledConnections() {
+        // Two connections with labels on same path, overlapping at same position
+        // Both have non-zero scores → totalScore should be > 0
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 100, 50, 50, 400, 100, 50, 50, "OverlapLabel1", 1),
+                conn("c2", 0, 100, 50, 50, 400, 100, 50, 50, "OverlapLabel2", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 125, 400),
+                straightHorizontalPath(50, 125, 400));
+
+        // Add obstacle at middle to ensure non-zero scores
+        RoutingRect obstacle = new RoutingRect(200, 100, 50, 50, "obs1");
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(obstacle), Map.of(), 5, new Random(42));
+
+        // allPositions should contain entries for both connections
+        assertEquals("allPositions should contain all labeled connections",
+                2, result.allPositions().size());
+        assertTrue("allPositions should contain c1", result.allPositions().containsKey("c1"));
+        assertTrue("allPositions should contain c2", result.allPositions().containsKey("c2"));
+    }
+
+    // --- Test: Multi-trial can find better result than single trial ---
+
+    @Test
+    public void multiTrial_canFindBetterResultThanSingleTrial() {
+        // Three connections with labels on overlapping paths where ordering affects quality
+        // With enough trials, the optimizer should find at least as good a result
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 100, 50, 50, 400, 100, 50, 50, "Alpha", 1),
+                conn("c2", 0, 100, 50, 50, 400, 100, 50, 50, "Beta", 1),
+                conn("c3", 0, 100, 50, 50, 400, 100, 50, 50, "Gamma", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 125, 400),
+                straightHorizontalPath(50, 125, 400),
+                straightHorizontalPath(50, 125, 400));
+
+        LabelPositionOptimizer.MultiTrialResult singleResult = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 1, new Random(42));
+        LabelPositionOptimizer.MultiTrialResult multiResult = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 20, new Random(42));
+
+        // Multi-trial should find result at least as good as single trial
+        assertTrue("Multi-trial should be at least as good as single trial",
+                multiResult.totalScore() <= singleResult.totalScore());
+    }
+
+    // --- Test: computeTotalScore returns zero when no obstacles ---
+
+    @Test
+    public void computeTotalScore_shouldReturnZero_whenNoObstacles() {
+        // Single connection, no obstacles — totalScore should be 0
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 500, 0, 50, 50, "Label", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 500));
+
+        double totalScore = optimizer.computeTotalScore(
+                Map.of("c1", 1), connections, paths, List.of(), Map.of());
+
+        assertEquals("No obstacles → totalScore should be 0", 0.0, totalScore, 0.001);
+    }
+
+    // --- Test: No labeled connections → empty multi-trial result ---
+
+    @Test
+    public void multiTrial_emptyConnections_shouldReturnEmptyResult() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 100, 50, 400, 0, 100, 50, "", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(100, 25, 400));
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 5, new Random(42));
+
+        assertTrue("No labeled connections → empty result", result.changedPositions().isEmpty());
+        assertTrue("No labeled connections → empty allPositions", result.allPositions().isEmpty());
+        assertEquals("No labeled connections → zero score", 0.0, result.totalScore(), 0.001);
     }
 }

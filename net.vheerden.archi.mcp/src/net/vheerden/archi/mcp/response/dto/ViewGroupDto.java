@@ -28,12 +28,32 @@ public record ViewGroupDto(
     String lineColor,
     String fontColor,
     Integer opacity,
-    Integer lineWidth
+    Integer lineWidth,
+    String imagePath,
+    String imagePosition,
+    String showIcon
 ) {
 
     /**
-     * Convenience constructor without styling fields (backward compat).
-     * Styling fields default to null (omitted from JSON via NON_NULL).
+     * Constructor with styling but no image fields (backward compat).
+     */
+    public ViewGroupDto(
+            String viewObjectId,
+            String label,
+            int x, int y, int width, int height,
+            String parentViewObjectId,
+            List<String> childViewObjectIds,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth) {
+        this(viewObjectId, label, x, y, width, height,
+                parentViewObjectId, childViewObjectIds,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                null, null, null);
+    }
+
+    /**
+     * Convenience constructor without styling or image fields (backward compat).
+     * All optional fields default to null (omitted from JSON via NON_NULL).
      */
     public ViewGroupDto(
             String viewObjectId,

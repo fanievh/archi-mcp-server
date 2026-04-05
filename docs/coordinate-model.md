@@ -233,7 +233,7 @@ The `collectViewContents()` method recursively collects all view objects:
 - **Elements:** viewObjectId, elementId, x, y, width, height, parentViewObjectId, styling
 - **Groups:** id, name, x, y, width, height, parentViewObjectId, childIds, styling
 - **Notes:** id, content, x, y, width, height, parentViewObjectId, styling
-- **Connections:** viewConnectionId, relationshipId, sourceViewObjectId, targetViewObjectId, bendpoints, absoluteBendpoints, sourceAnchor, targetAnchor, textPosition, styling
+- **Connections:** viewConnectionId, relationshipId, sourceViewObjectId, targetViewObjectId, bendpoints, absoluteBendpoints, sourceAnchor, targetAnchor, textPosition, styling, nameVisible (false when label hidden, omitted when visible)
 
 ### Parent Container Resolution
 

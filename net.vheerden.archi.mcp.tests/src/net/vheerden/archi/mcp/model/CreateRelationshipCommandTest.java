@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Before;
@@ -16,10 +17,13 @@ import com.archimatetool.model.IBusinessProcess;
 import com.archimatetool.model.IFolder;
 
 /**
- * Tests for {@link CreateRelationshipCommand} (Story 7-2).
+ * Tests for {@link CreateRelationshipCommand} (Story 7-2, B19).
  *
  * <p>Uses real EMF objects via {@link IArchimateFactory#eINSTANCE} to test
- * execute (add to folder) and undo (remove + disconnect) behavior.</p>
+ * execute (connect + add to folder) and undo (remove + disconnect) behavior.</p>
+ *
+ * <p><strong>B19:</strong> Tests verify that connect() is deferred to execute(),
+ * not called during preparation. The relationship is NOT connected in setUp().</p>
  */
 public class CreateRelationshipCommandTest {
 
@@ -45,26 +49,43 @@ public class CreateRelationshipCommandTest {
         target.setName("Order Processing");
         model.getFolder(FolderType.BUSINESS).getElements().add(target);
 
+        // B19: relationship is NOT connected — connect() happens inside execute()
         relationship = factory.createServingRelationship();
         relationship.setName("serves");
-        relationship.connect(source, target);
     }
 
     @Test
-    public void shouldAddRelationshipToFolder_whenExecuted() {
+    public void shouldConnectAndAddRelationshipToFolder_whenExecuted() {
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
 
         cmd.execute();
 
         assertTrue("Relationship should be in folder",
                 relationsFolder.getElements().contains(relationship));
+        assertEquals("Source should be connected",
+                source, relationship.getSource());
+        assertEquals("Target should be connected",
+                target, relationship.getTarget());
+    }
+
+    @Test
+    public void shouldNotBeConnected_beforeExecute() {
+        // B19: verify deferred connect — relationship has no cross-refs before execute
+        new CreateRelationshipCommand(relationship, relationsFolder, source, target);
+
+        assertNull("Source should be null before execute",
+                relationship.getSource());
+        assertNull("Target should be null before execute",
+                relationship.getTarget());
+        assertTrue("Should not appear in source's relationships",
+                source.getSourceRelationships().isEmpty());
     }
 
     @Test
     public void shouldRemoveRelationshipFromFolder_whenUndone() {
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
         cmd.execute();
 
         cmd.undo();
@@ -82,7 +103,7 @@ public class CreateRelationshipCommandTest {
         int initialCount = relationsFolder.getElements().size();
 
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
         cmd.execute();
         cmd.undo();
 
@@ -97,7 +118,7 @@ public class CreateRelationshipCommandTest {
     @Test
     public void shouldHaveDescriptiveLabel() {
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
 
         String label = cmd.getLabel();
 
@@ -108,7 +129,7 @@ public class CreateRelationshipCommandTest {
     @Test
     public void shouldReconnectAndAddToFolder_whenRedoneAfterUndo() {
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
         cmd.execute();
         cmd.undo();
 
@@ -131,7 +152,7 @@ public class CreateRelationshipCommandTest {
         int initialCount = relationsFolder.getElements().size();
 
         CreateRelationshipCommand cmd = new CreateRelationshipCommand(
-                relationship, relationsFolder);
+                relationship, relationsFolder, source, target);
         cmd.execute();
 
         assertEquals("Should have one more relationship",

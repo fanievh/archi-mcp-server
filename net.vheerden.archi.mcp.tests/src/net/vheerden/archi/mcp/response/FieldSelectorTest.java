@@ -531,7 +531,7 @@ public class FieldSelectorTest {
     public void shouldContainAllValidExcludeFields() {
         Set<String> expected = Set.of("documentation", "properties", "layer", "type",
                 "viewpointType", "connectionRouterType", "folderPath",
-                "visualMetadata", "connections");
+                "visualMetadata", "connections", "groups", "notes");
         assertEquals(expected, FieldSelector.VALID_EXCLUDE_FIELDS);
     }
 

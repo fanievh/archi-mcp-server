@@ -14,6 +14,7 @@ import java.util.Map;
  * {@code hasGroups} indicates whether the view contains group containers (Story 11-17).
  * {@code ratingBreakdown} shows per-metric contributions to the overall rating (Story 11-19).
  * {@code coincidentSegmentCount} tracks overlapping connection route segments (Story 11-23).
+ * {@code nonOrthogonalTerminalCount} tracks connections with diagonal terminal segments (B38).
  * {@code contentBounds} is the axis-aligned bounding box of all visual content (Story 11-29).</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -41,6 +42,7 @@ public record AssessLayoutResultDto(
         List<String> noteOverlapDescriptions,
         boolean hasGroups,
         int coincidentSegmentCount,
+        int nonOrthogonalTerminalCount,
         ContentBoundsDto contentBounds,
         List<String> suggestions) {
 

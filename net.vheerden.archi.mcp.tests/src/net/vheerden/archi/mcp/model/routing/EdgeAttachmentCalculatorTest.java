@@ -3,7 +3,9 @@ package net.vheerden.archi.mcp.model.routing;
 import static org.junit.Assert.*;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -662,12 +664,12 @@ public class EdgeAttachmentCalculatorTest {
     }
 
     @Test
-    public void shouldSkipAlignment_whenAllAlternativeOffsetsBlocked() {
-        // Large obstacle blocks all alternative offsets (±8 through ±32)
-        // Verify fallback to skip behavior
+    public void shouldForceAlignment_whenAllAlternativeOffsetsBlocked() {
+        // B28: Large obstacle blocks all alternative offsets (±8 through ±96)
+        // Verify forced fallback inserts alignment at offset=0 instead of skipping
         RoutingRect source = new RoutingRect(0, 170, 100, 60, "src");
         RoutingRect target = new RoutingRect(400, 170, 100, 60, "tgt");
-        // Very large obstacle covering Y=160-240 — blocks original (Y=200) and all ±32 offsets
+        // Very large obstacle covering Y=160-240 — blocks original (Y=200) and all offsets
         // Also wide enough (x=120-180) that diagonal terminal→alignment segments cross it
         RoutingRect obstacle = new RoutingRect(120, 160, 60, 80, "obs");
 
@@ -684,9 +686,14 @@ public class EdgeAttachmentCalculatorTest {
         calculator.applyEdgeAttachments(ids, bendpointLists, connections);
 
         List<AbsoluteBendpointDto> result = bendpointLists.get(0);
-        // Source alignment skipped (all offsets blocked), target alignment inserted
-        // Without source alignment: src terminal, bp1, bp2, tgt alignment, tgt terminal = 5
-        assertEquals("Source alignment should be skipped when all offsets blocked", 5, result.size());
+        // B28: Source alignment now force-inserted (not skipped)
+        // With both alignments: src terminal, src alignment, bp1, bp2, tgt alignment, tgt terminal = 6
+        assertEquals("Source alignment should be force-inserted when all offsets blocked", 6, result.size());
+
+        // Source alignment should create perpendicular segment (same Y as terminal)
+        AbsoluteBendpointDto srcTerminal = result.get(0);
+        AbsoluteBendpointDto srcAlignment = result.get(1);
+        assertEquals("Source exit should be horizontal (same Y)", srcTerminal.y(), srcAlignment.y());
 
         // Target alignment should still be perpendicular (obstacle is far from target)
         AbsoluteBendpointDto tgtTerminal = result.get(result.size() - 1);
@@ -822,6 +829,348 @@ public class EdgeAttachmentCalculatorTest {
     }
 
     // =============================================
+    // Hub port distribution tests (Story backlog-b9)
+    // =============================================
+
+    @Test
+    public void shouldRedistributeToAdjacentFaces_whenHubElementHasOverloadedFace() {
+        // Hub element at center with 8 connections all approaching from below (BOTTOM face)
+        // After redistribution, some should move to LEFT/RIGHT faces
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+
+        // 8 source elements below the hub, all approaching from roughly below
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        for (int i = 0; i < 8; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            // Sources spread below hub, some to the left and some to the right
+            int srcX = 100 + i * 40;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            // Bendpoints approaching from below
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(), "", 1));
+        }
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // Count which faces the target terminals ended up on
+        Map<String, Integer> faceCounts = new HashMap<>();
+        for (int i = 0; i < 8; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            String face = classifyFace(terminal, hub);
+            faceCounts.merge(face, 1, Integer::sum);
+        }
+
+        // Should have connections on more than just BOTTOM face
+        assertTrue("Hub redistribution should spread connections to multiple faces, got: " + faceCounts,
+                faceCounts.size() > 1);
+
+        // No single face should have more than ceil(8/2) = 4 connections
+        for (Map.Entry<String, Integer> e : faceCounts.entrySet()) {
+            assertTrue("Face " + e.getKey() + " has " + e.getValue() +
+                    " connections, expected <= 4", e.getValue() <= 4);
+        }
+    }
+
+    @Test
+    public void shouldNotRedistribute_whenNonHubElement() {
+        // Element with only 4 connections (below threshold of 6) — no redistribution
+        RoutingRect element = new RoutingRect(200, 200, 120, 80, "elem");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        // 4 connections all from below (BOTTOM face)
+        for (int i = 0; i < 4; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            int srcX = 180 + i * 40;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, element, List.of(), "", 1));
+        }
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // All terminals should be on BOTTOM face (no redistribution)
+        for (int i = 0; i < 4; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            assertEquals("Non-hub element should keep all connections on BOTTOM",
+                    "BOTTOM", classifyFace(terminal, element));
+        }
+    }
+
+    @Test
+    public void shouldNotRedistribute_whenHubElementIsBalanced() {
+        // Hub element with 12 connections already balanced (3 per face) — no redistribution needed
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        // 3 from above (TOP), 3 from below (BOTTOM), 3 from left (LEFT), 3 from right (RIGHT)
+        int[][] approaches = {
+                {260, 50}, {240, 50}, {280, 50},       // TOP
+                {260, 450}, {240, 450}, {280, 450},     // BOTTOM
+                {50, 240}, {50, 220}, {50, 260},        // LEFT
+                {450, 240}, {450, 220}, {450, 260}      // RIGHT
+        };
+
+        for (int i = 0; i < 12; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            RoutingRect src = new RoutingRect(
+                    approaches[i][0] - 30, approaches[i][1] - 20, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(approaches[i][0], approaches[i][1]))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(), "", 1));
+        }
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // Count faces — should remain balanced (3 per face, no redistribution)
+        Map<String, Integer> faceCounts = new HashMap<>();
+        for (int i = 0; i < 12; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            String face = classifyFace(terminal, hub);
+            faceCounts.merge(face, 1, Integer::sum);
+        }
+
+        assertEquals("Should have connections on all 4 faces", 4, faceCounts.size());
+        for (int count : faceCounts.values()) {
+            assertEquals("Each face should have 3 connections when balanced", 3, count);
+        }
+    }
+
+    @Test
+    public void shouldProducePerpendicularTerminal_whenConnectionRedistributed() {
+        // Hub with 8 connections from below, verify redistributed ones have perpendicular terminals
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        for (int i = 0; i < 8; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            int srcX = 100 + i * 40;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(), "", 1));
+        }
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // Verify every connection's last segment is perpendicular to its terminal face
+        for (int i = 0; i < 8; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            AbsoluteBendpointDto penultimate = bps.get(bps.size() - 2);
+            String face = classifyFace(terminal, hub);
+
+            if ("LEFT".equals(face) || "RIGHT".equals(face)) {
+                // Horizontal face → last segment should be horizontal (same Y)
+                assertEquals("Last segment to " + face + " face should be horizontal (conn " + i + ")",
+                        terminal.y(), penultimate.y());
+            } else {
+                // Vertical face → last segment should be vertical (same X)
+                assertEquals("Last segment to " + face + " face should be vertical (conn " + i + ")",
+                        terminal.x(), penultimate.x());
+            }
+        }
+    }
+
+    @Test
+    public void shouldRedistributeFollowingQuadrantLogic_whenBottomOverloaded() {
+        // Hub with connections from bottom-left and bottom-right quadrants
+        // Bottom-left should go to LEFT, bottom-right should go to RIGHT
+        EdgeAttachmentCalculator calc = new EdgeAttachmentCalculator(5, 8, 6);
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        // 6 connections from below — 3 from bottom-left, 3 from bottom-right
+        int[][] srcPositions = {
+                {100, 400}, {120, 400}, {140, 400},  // bottom-left quadrant
+                {320, 400}, {340, 400}, {360, 400}   // bottom-right quadrant
+        };
+
+        for (int i = 0; i < 6; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            RoutingRect src = new RoutingRect(srcPositions[i][0], srcPositions[i][1], 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcPositions[i][0] + 30, 370))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(), "", 1));
+        }
+
+        calc.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // Check that redistribution happened and respects quadrant logic
+        Map<String, Integer> faceCounts = new HashMap<>();
+        for (int i = 0; i < 6; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            faceCounts.merge(classifyFace(terminal, hub), 1, Integer::sum);
+        }
+
+        // Should have redistribution to LEFT and/or RIGHT
+        assertTrue("Should redistribute to multiple faces, got: " + faceCounts,
+                faceCounts.size() > 1);
+    }
+
+    @Test
+    public void shouldParticipateAtExactThreshold_whenElementHasSixConnections() {
+        // Element with exactly 6 connections on BOTTOM face — should participate
+        EdgeAttachmentCalculator calc = new EdgeAttachmentCalculator(5, 8, 6);
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        for (int i = 0; i < 6; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            int srcX = 120 + i * 40;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(), "", 1));
+        }
+
+        calc.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        Map<String, Integer> faceCounts = new HashMap<>();
+        for (int i = 0; i < 6; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            faceCounts.merge(classifyFace(terminal, hub), 1, Integer::sum);
+        }
+
+        // Should redistribute (6 >= threshold of 6, and all 6 on one face > 60%)
+        assertTrue("Element at threshold should participate in redistribution, got: " + faceCounts,
+                faceCounts.size() > 1);
+    }
+
+    @Test
+    public void shouldNotParticipate_whenElementHasFiveConnections() {
+        // Element with 5 connections (below threshold) — no redistribution
+        EdgeAttachmentCalculator calc = new EdgeAttachmentCalculator(5, 8, 6);
+        RoutingRect element = new RoutingRect(200, 200, 120, 80, "elem");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        for (int i = 0; i < 5; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            int srcX = 160 + i * 30;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, element, List.of(), "", 1));
+        }
+
+        calc.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // All should stay on BOTTOM
+        for (int i = 0; i < 5; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            AbsoluteBendpointDto terminal = bps.get(bps.size() - 1);
+            assertEquals("Below-threshold element should not redistribute",
+                    "BOTTOM", classifyFace(terminal, element));
+        }
+    }
+
+    @Test
+    public void shouldNotIntroduceObstacleViolations_whenRedistributing() {
+        // Hub with obstacles — redistributed connections should not clip through them
+        RoutingRect hub = new RoutingRect(200, 200, 120, 80, "hub");
+        RoutingRect obstacle = new RoutingRect(150, 150, 30, 30, "obs");
+
+        List<String> ids = new ArrayList<>();
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+
+        for (int i = 0; i < 8; i++) {
+            String id = "c" + i;
+            ids.add(id);
+            int srcX = 100 + i * 40;
+            RoutingRect src = new RoutingRect(srcX, 400, 60, 40, "src" + i);
+            bendpointLists.add(new ArrayList<>(List.of(
+                    new AbsoluteBendpointDto(srcX + 30, 350))));
+            connections.add(new RoutingPipeline.ConnectionEndpoints(
+                    id, src, hub, List.of(obstacle), "", 1));
+        }
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        // Verify all connections have valid bendpoints and no segments clip through the obstacle
+        for (int i = 0; i < 8; i++) {
+            List<AbsoluteBendpointDto> bps = bendpointLists.get(i);
+            assertTrue("Connection " + i + " should have bendpoints", bps.size() >= 2);
+            for (int j = 0; j < bps.size() - 1; j++) {
+                AbsoluteBendpointDto a = bps.get(j);
+                AbsoluteBendpointDto b = bps.get(j + 1);
+                assertFalse("Connection " + i + " segment " + j +
+                        " (" + a.x() + "," + a.y() + ")->(" + b.x() + "," + b.y() +
+                        ") should not intersect obstacle",
+                        segmentIntersectsRect(a.x(), a.y(), b.x(), b.y(),
+                                obstacle.x(), obstacle.y(), obstacle.width(), obstacle.height()));
+            }
+        }
+    }
+
+    /**
+     * Classifies which face a terminal bendpoint is on, based on its position
+     * relative to the element (1px outside logic).
+     */
+    private String classifyFace(AbsoluteBendpointDto terminal, RoutingRect element) {
+        int x = terminal.x(), y = terminal.y();
+        int left = element.x(), top = element.y();
+        int right = left + element.width(), bottom = top + element.height();
+
+        if (y == bottom + 1) return "BOTTOM";
+        if (y == top - 1) return "TOP";
+        if (x == left - 1) return "LEFT";
+        if (x == right + 1) return "RIGHT";
+
+        // Fallback: closest face
+        int dTop = Math.abs(y - (top - 1));
+        int dBottom = Math.abs(y - (bottom + 1));
+        int dLeft = Math.abs(x - (left - 1));
+        int dRight = Math.abs(x - (right + 1));
+        int min = Math.min(Math.min(dTop, dBottom), Math.min(dLeft, dRight));
+        if (min == dBottom) return "BOTTOM";
+        if (min == dTop) return "TOP";
+        if (min == dLeft) return "LEFT";
+        return "RIGHT";
+    }
+
+    // =============================================
     // Helpers
     // =============================================
 
@@ -848,5 +1197,676 @@ public class EdgeAttachmentCalculatorTest {
         boolean onRightEdge = x == right + 1 && y >= top && y <= bottom;
 
         return onTopEdge || onBottomEdge || onLeftEdge || onRightEdge;
+    }
+
+    // =============================================
+    // B28: Extended offset and forced fallback tests
+    // =============================================
+
+    @Test
+    public void shouldUseExtendedOffset_whenStandardOffsetsBlocked() {
+        // B28: Obstacle blocks ±32 offsets but ±48 clears it (extended range)
+        // Source exits RIGHT face. Terminal at (101, 200). Alignment at (200, 200+offset).
+        // Obstacle at x=140-190, y=183-217:
+        //   - ±32: terminal→alignment diagonal crosses obstacle at x=140 where y≈187-213. BLOCKED.
+        //   - ±48: terminal→alignment passes entirely above/below obstacle. CLEAR.
+        RoutingRect source = new RoutingRect(0, 170, 100, 60, "src");
+        RoutingRect target = new RoutingRect(400, 170, 100, 60, "tgt");
+        RoutingRect obstacle = new RoutingRect(140, 183, 50, 34, "obs");
+
+        List<String> ids = List.of("c1");
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(200, 100),
+                new AbsoluteBendpointDto(300, 100))));
+
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target,
+                        List.of(obstacle), "", 1));
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        List<AbsoluteBendpointDto> result = bendpointLists.get(0);
+        // Both alignments should be inserted: src terminal, src alignment, bp1, bp2, tgt alignment, tgt terminal = 6
+        assertEquals("Both alignments should be inserted", 6, result.size());
+
+        // Source alignment should use an extended offset (not at original Y=200)
+        AbsoluteBendpointDto srcAlignment = result.get(1);
+        assertNotEquals("Source alignment should use extended offset, not original Y=200",
+                200, srcAlignment.y());
+    }
+
+    // =============================================
+    // B32: Natural approach direction correction tests
+    // =============================================
+
+    @Test
+    public void shouldCorrectTargetFaceToTop_whenSourceNearlyAboveTarget() {
+        // B32 AC-2: Source nearly above target (84px horizontal offset, 200px vertical separation)
+        // Treasury Operations → Foreign Exchange Service scenario
+        // determineFace() from a side-approach BP would pick LEFT/RIGHT,
+        // but natural direction is TOP entry on target
+        RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
+        RoutingRect target = new RoutingRect(16, 200, 120, 80, "tgt");  // center (76, 240)
+        // dx=84, dy=200 → dy > 2*dx → nearly vertical
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};  // simulating bad bendpoint-derived face
+        Face[] targetFaces = new Face[]{Face.RIGHT};   // simulating edge-hugging approach
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Target should enter from TOP (source is above)", Face.TOP, targetFaces[0]);
+        assertEquals("Source should exit from BOTTOM (target is below)", Face.BOTTOM, sourceFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrectToHorizontalApproach_whenNearlyHorizontallyAligned() {
+        // B32 AC-2: Source nearly to the left of target (large dx, small dy)
+        RoutingRect source = new RoutingRect(0, 100, 120, 80, "src");   // center (60, 140)
+        RoutingRect target = new RoutingRect(300, 60, 120, 80, "tgt");  // center (360, 100)
+        // dx=300, dy=40 → dx > 2*dy → nearly horizontal
+
+        Face[] sourceFaces = new Face[]{Face.TOP};    // wrong: should be RIGHT
+        Face[] targetFaces = new Face[]{Face.BOTTOM}; // wrong: should be LEFT
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Source should exit RIGHT (target is to the right)", Face.RIGHT, sourceFaces[0]);
+        assertEquals("Target should enter LEFT (source is to the left)", Face.LEFT, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrect_whenDiagonalAlignmentWithMatchingFaces() {
+        // B32/B46: ratio 1.25:1 → B46 classifies as "nearly horizontal" but faces
+        // already match natural direction (RIGHT/LEFT), so no correction needed
+        RoutingRect source = new RoutingRect(0, 0, 120, 80, "src");     // center (60, 40)
+        RoutingRect target = new RoutingRect(200, 160, 120, 80, "tgt"); // center (260, 200)
+        // dx=200, dy=160 → 5*200=1000 > 6*160=960 → nearly horizontal
+        // Natural: source RIGHT, target LEFT — already correct
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Source face should be unchanged (already matches natural)", Face.RIGHT, sourceFaces[0]);
+        assertEquals("Target face should be unchanged (already matches natural)", Face.LEFT, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrect_whenLargeHorizontalOffset() {
+        // B32 AC-7 test 4: Large horizontal offset → no false correction to vertical
+        RoutingRect source = new RoutingRect(0, 0, 120, 80, "src");     // center (60, 40)
+        RoutingRect target = new RoutingRect(400, 80, 120, 80, "tgt");  // center (460, 120)
+        // dx=400, dy=80 → dx > 2*dy → nearly horizontal, not vertical
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        // Faces already match natural horizontal alignment — should remain unchanged
+        assertEquals("Source face should remain RIGHT", Face.RIGHT, sourceFaces[0]);
+        assertEquals("Target face should remain LEFT", Face.LEFT, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrect_whenFaceAlreadyMatchesNaturalDirection() {
+        // B32 AC-4: If face already correct, no change
+        RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
+        RoutingRect target = new RoutingRect(50, 200, 120, 80, "tgt");  // center (110, 240)
+        // dx=50, dy=200 → dy > 2*dx → nearly vertical
+
+        Face[] sourceFaces = new Face[]{Face.BOTTOM}; // already correct
+        Face[] targetFaces = new Face[]{Face.TOP};     // already correct
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Source face should remain BOTTOM", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("Target face should remain TOP", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrectHubElement_whenStrongAlignment() {
+        // B46: Hub elements ARE corrected when alignment is strong (2:1+)
+        RoutingRect hub = new RoutingRect(100, 0, 120, 80, "hub");     // center (160, 40)
+        RoutingRect target = new RoutingRect(50, 200, 120, 80, "tgt"); // center (110, 240)
+        // dx=50, dy=200 → ratio 4:1 → strong vertical alignment
+
+        // Create 6 connections to/from hub to make it a hub element
+        List<String> ids = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+        Face[] sourceFaces = new Face[6];
+        Face[] targetFaces = new Face[6];
+
+        // First connection: hub → target with "wrong" face
+        ids.add("c0");
+        connections.add(new RoutingPipeline.ConnectionEndpoints("c0", hub, target, List.of(), "", 1));
+        sourceFaces[0] = Face.RIGHT; // contradicts natural (should be BOTTOM)
+        targetFaces[0] = Face.RIGHT; // contradicts natural (should be TOP)
+
+        // 5 more connections from hub to various elements
+        for (int i = 1; i <= 5; i++) {
+            RoutingRect other = new RoutingRect(300 + i * 50, 0, 60, 40, "o" + i);
+            ids.add("c" + i);
+            connections.add(new RoutingPipeline.ConnectionEndpoints("c" + i, hub, other, List.of(), "", 1));
+            sourceFaces[i] = Face.RIGHT;
+            targetFaces[i] = Face.LEFT;
+        }
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        // B46: Hub source SHOULD be corrected for strong alignment (4:1 ratio)
+        assertEquals("Hub source face SHOULD be corrected for strong alignment", Face.BOTTOM, sourceFaces[0]);
+        // Target is NOT a hub (only 1 connection) — should be corrected
+        assertEquals("Non-hub target face SHOULD be corrected", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrectBothSourceAndTarget_whenBothContradict() {
+        // B32: Both source and target faces contradict natural vertical alignment
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(30, 300, 100, 60, "tgt");  // center (80, 330)
+        // dx=30, dy=300 → dy > 2*dx → nearly vertical, source above
+
+        Face[] sourceFaces = new Face[]{Face.LEFT};   // contradicts: should be BOTTOM
+        Face[] targetFaces = new Face[]{Face.RIGHT};  // contradicts: should be TOP
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Source should exit BOTTOM", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("Target should enter TOP", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrectToBottom_whenSourceBelowTarget() {
+        // B32: Source below target → target enters from BOTTOM
+        RoutingRect source = new RoutingRect(50, 300, 100, 60, "src");  // center (100, 330)
+        RoutingRect target = new RoutingRect(30, 0, 100, 60, "tgt");   // center (80, 30)
+        // dx=20, dy=300 → dy > 2*dx → nearly vertical, source below
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};  // contradicts: should be TOP
+        Face[] targetFaces = new Face[]{Face.LEFT};   // contradicts: should be BOTTOM
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Source should exit TOP (target is above)", Face.TOP, sourceFaces[0]);
+        assertEquals("Target should enter BOTTOM (source is below)", Face.BOTTOM, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldIntegrateWithApplyEdgeAttachments_whenEdgeHuggingPath() {
+        // B32 AC-3: Full integration test — edge-hugging path corrected to natural direction
+        // Source nearly above target, A* path approaches from the side
+        RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
+        RoutingRect target = new RoutingRect(16, 200, 120, 80, "tgt");  // center (76, 240)
+        // dx=84, dy=200 → nearly vertical
+
+        // A* path that approaches target from the right side (edge-hugging)
+        List<String> ids = List.of("c1");
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(160, 120),  // below source, directly beneath
+                new AbsoluteBendpointDto(200, 240)   // to the RIGHT of target center (76,240)
+        )));
+        // Without B32, determineFace(target, 200, 240) → dx=124, dy=0 → RIGHT face (edge-hugging)
+        // With B32, should be corrected to TOP face (natural vertical alignment)
+
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        List<AbsoluteBendpointDto> result = bendpointLists.get(0);
+
+        // Target terminal should be on TOP face (y = target.y - 1 = 199)
+        AbsoluteBendpointDto targetTerminal = result.get(result.size() - 1);
+        assertEquals("Target terminal should be on TOP face (y = target.y - 1)",
+                199, targetTerminal.y());
+        // Target terminal X should be within target's horizontal bounds
+        assertTrue("Target terminal X should be within target bounds",
+                targetTerminal.x() >= target.x() && targetTerminal.x() <= target.x() + target.width());
+    }
+
+    @Test
+    public void shouldCorrect_whenRatioJustAboveTwoToOne() {
+        // B32: Boundary condition — dy = 2*dx + 1 → strictly greater, triggers correction
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(50, 101, 100, 60, "tgt");  // center (100, 131)
+        // dx=50, dy=101 → dy=101 > 2*50=100 → triggers
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Should correct source to BOTTOM at just above 2:1", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("Should correct target to TOP at just above 2:1", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrect_whenRatioExactlyTwoToOne() {
+        // B46: 2:1 ratio now triggers correction (threshold relaxed from 2:1 to 1.2:1)
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(50, 100, 100, 60, "tgt");  // center (100, 130)
+        // dx=50, dy=100 → 5*100=500 > 6*50=300 → nearly vertical, triggers B46
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Should correct source to BOTTOM at 2:1 (above B46 threshold)", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("Should correct target to TOP at 2:1 (above B46 threshold)", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldProduceCenterAlignedTerminal_afterFaceCorrection_forChopboxAnchorCompatibility() {
+        // B32 AC-7 / Task 3.6: Verify B29 ChopboxAnchor alignment compatibility.
+        // After B32 corrects face from RIGHT to TOP, the terminal BP must be center-aligned
+        // on the corrected face — this is the precondition for alignTerminalsWithCenter() (B29).
+        RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
+        RoutingRect target = new RoutingRect(16, 200, 120, 80, "tgt");  // center (76, 240)
+        // dx=84, dy=200 → nearly vertical, B32 will correct target to TOP face
+
+        // A* path approaching from the side (triggers B32 correction)
+        List<String> ids = List.of("c1");
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(160, 120),
+                new AbsoluteBendpointDto(200, 240)
+        )));
+
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.applyEdgeAttachments(ids, bendpointLists, connections);
+
+        List<AbsoluteBendpointDto> result = bendpointLists.get(0);
+        AbsoluteBendpointDto targetTerminal = result.get(result.size() - 1);
+
+        // Terminal must be on TOP face (y = target.y - 1 = 199)
+        assertEquals("Target terminal on TOP face", 199, targetTerminal.y());
+        // Terminal X must be at target center (76) for ChopboxAnchor compatibility.
+        // With a single connection on the face, computeAttachmentPoint places it at center.
+        assertEquals("Target terminal X at center for ChopboxAnchor alignment",
+                target.centerX(), targetTerminal.x());
+    }
+
+    // =============================================
+    // B46: Diagonal-gap approach direction tests (1.2:1 to 2:1 range)
+    // =============================================
+
+    @Test
+    public void shouldCorrectApproachDirection_whenDiagonalAlignment() {
+        // B46 AC-1: Elements at ~1.5:1 ratio (was skipped by B32's 2:1 threshold)
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(80, 120, 100, 60, "tgt");  // center (130, 150)
+        // dx=80, dy=120 → ratio 1.5:1. 5*120=600 > 6*80=480 → nearly vertical
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};  // contradicts: should be BOTTOM
+        Face[] targetFaces = new Face[]{Face.LEFT};   // contradicts: should be TOP
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("B46 should correct source to BOTTOM at 1.5:1 ratio", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("B46 should correct target to TOP at 1.5:1 ratio", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldCorrectApproachDirection_whenNearDiagonalAlignment() {
+        // B46 AC-1: Elements at ~1.25:1 ratio (just above 1.2:1 threshold)
+        // Note: 1:1 ratio (dx=100, dy=100) would NOT trigger — need >1.2:1
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");       // center (50, 30)
+        RoutingRect target = new RoutingRect(100, 125, 100, 60, "tgt");   // center (150, 155)
+        // dx=100, dy=125 → ratio 1.25:1. 5*125=625 > 6*100=600 → nearly vertical
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("B46 should correct source at 1.25:1 ratio", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("B46 should correct target at 1.25:1 ratio", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrect_whenRatioBelowB46Threshold() {
+        // B46: Elements at exactly 1.2:1 ratio (boundary — NOT triggered, need strictly greater)
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(100, 120, 100, 60, "tgt"); // center (150, 150)
+        // dx=100, dy=120 → 5*120=600, 6*100=600 → NOT strictly greater → skip
+        // Also: 5*100=500, 6*120=720 → NOT strictly greater → skip
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Should NOT correct at exact 1.2:1 boundary", Face.RIGHT, sourceFaces[0]);
+        assertEquals("Should NOT correct at exact 1.2:1 boundary", Face.LEFT, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrectHubElement_whenDiagonalAlignmentWithHub() {
+        // B46 AC-3: Hub elements still skipped even in the B46 diagonal range
+        RoutingRect hub = new RoutingRect(0, 0, 100, 60, "hub");       // center (50, 30)
+        RoutingRect target = new RoutingRect(80, 120, 100, 60, "tgt"); // center (130, 150)
+        // dx=80, dy=120 → ratio 1.5:1 → B46 range
+
+        List<String> ids = new ArrayList<>();
+        List<RoutingPipeline.ConnectionEndpoints> connections = new ArrayList<>();
+        Face[] sourceFaces = new Face[6];
+        Face[] targetFaces = new Face[6];
+
+        // First connection: hub → target with contradicting face
+        ids.add("c0");
+        connections.add(new RoutingPipeline.ConnectionEndpoints("c0", hub, target, List.of(), "", 1));
+        sourceFaces[0] = Face.RIGHT;  // contradicts: should be BOTTOM
+        targetFaces[0] = Face.LEFT;   // contradicts: should be TOP
+
+        // 5 more connections to make hub a hub element (≥6 total)
+        for (int i = 1; i <= 5; i++) {
+            RoutingRect other = new RoutingRect(300 + i * 50, 0, 60, 40, "o" + i);
+            ids.add("c" + i);
+            connections.add(new RoutingPipeline.ConnectionEndpoints("c" + i, hub, other, List.of(), "", 1));
+            sourceFaces[i] = Face.RIGHT;
+            targetFaces[i] = Face.LEFT;
+        }
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        // Hub source should NOT be corrected
+        assertEquals("Hub source face should NOT be corrected in B46 range", Face.RIGHT, sourceFaces[0]);
+        // Non-hub target SHOULD be corrected
+        assertEquals("Non-hub target face SHOULD be corrected in B46 range", Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldNotCorrect_whenPerfectDiagonal() {
+        // B46: Elements at exactly 1:1 ratio (perfect diagonal) — no correction
+        RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
+        RoutingRect target = new RoutingRect(150, 150, 100, 60, "tgt"); // center (200, 180)
+        // dx=150, dy=150 → 5*150=750, 6*150=900 → 750 > 900? No. Neither axis dominates.
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.LEFT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("Should NOT correct at 1:1 (perfect diagonal)", Face.RIGHT, sourceFaces[0]);
+        assertEquals("Should NOT correct at 1:1 (perfect diagonal)", Face.LEFT, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldPreserveB32Behavior_whenStrongAlignment() {
+        // B46 AC-2: Existing 2:1+ cases corrected identically to B32
+        RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
+        RoutingRect target = new RoutingRect(16, 200, 120, 80, "tgt");  // center (76, 240)
+        // dx=84, dy=200 → ratio 2.38:1 → well above 2:1, B32 range
+
+        Face[] sourceFaces = new Face[]{Face.RIGHT};
+        Face[] targetFaces = new Face[]{Face.RIGHT};
+
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
+
+        assertEquals("B32 strong alignment: source corrected to BOTTOM", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("B32 strong alignment: target corrected to TOP", Face.TOP, targetFaces[0]);
+    }
+
+    // =============================================
+    // B35 Phase A: Self-element pass-through face validation
+    // =============================================
+
+    @Test
+    public void shouldDetectSelfSourcePassThrough_whenFaceCausesPathThroughElement() {
+        // Source at (200,200,120,80), center (260,240), inset (205,205,110,70)
+        // Target at (400,200,120,80) directly to the right
+        // Single BP at (260,350) — directly below source
+        // TOP face forces terminal at (260,199) → vertical segment down through source to BP
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(400, 200, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = List.of(new AbsoluteBendpointDto(260, 350));
+
+        boolean hasPT = calculator.hasSelfPassThrough(bps, source, target,
+                Face.TOP, Face.LEFT, true);
+        assertTrue("TOP face should cause source self-element pass-through", hasPT);
+    }
+
+    @Test
+    public void shouldDetectSelfTargetPassThrough_whenFaceCausesPathThroughElement() {
+        // Source at (200,200,120,80), target at (200,400,120,80)
+        // Target center (260,440), inset (205,405,110,70)
+        // BP at (260,350) — between source and target
+        // BOTTOM target face: terminal at (260,481) — segment from BP goes down through target
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(200, 400, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = List.of(new AbsoluteBendpointDto(260, 350));
+
+        boolean hasPT = calculator.hasSelfPassThrough(bps, source, target,
+                Face.BOTTOM, Face.BOTTOM, false);
+        assertTrue("BOTTOM target face should cause target self-element pass-through", hasPT);
+    }
+
+    @Test
+    public void shouldNotDetectPassThrough_whenFaceIsClean() {
+        // Same geometry as source PT test, but with BOTTOM source face
+        // BOTTOM terminal at (260,281) → segment goes down from 281 to 350, all below inset (275)
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(400, 200, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = List.of(new AbsoluteBendpointDto(260, 350));
+
+        boolean hasPT = calculator.hasSelfPassThrough(bps, source, target,
+                Face.BOTTOM, Face.LEFT, true);
+        assertFalse("BOTTOM face should not cause source self-element pass-through", hasPT);
+    }
+
+    @Test
+    public void shouldNotDetectPassThrough_whenElementTooSmallForInset() {
+        // Element so small (8x8) that inset rect has zero/negative dimensions
+        RoutingRect source = new RoutingRect(200, 200, 8, 8, "s1");
+        RoutingRect target = new RoutingRect(400, 200, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = List.of(new AbsoluteBendpointDto(260, 350));
+
+        boolean hasPT = calculator.hasSelfPassThrough(bps, source, target,
+                Face.TOP, Face.LEFT, true);
+        assertFalse("Small element with zero inset rect should return false", hasPT);
+    }
+
+    @Test
+    public void shouldTryAlternativeFacesInAngularProximityOrder() {
+        // Source center (260,240), other center (460,240) — other is directly RIGHT
+        // Current face: TOP
+        // Expected order: RIGHT (nearest to 0°), then BOTTOM/LEFT (further away)
+        RoutingRect element = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect other = new RoutingRect(400, 200, 120, 80, "t1");
+
+        Face[] alternatives = calculator.getAlternativeFacesInAngularOrder(element, other, Face.TOP);
+
+        assertEquals("Should return 3 alternatives", 3, alternatives.length);
+        assertEquals("First alternative should be RIGHT (closest to target direction)",
+                Face.RIGHT, alternatives[0]);
+        // BOTTOM and LEFT are further — BOTTOM at π/2 from 0°, LEFT at π from 0°
+        assertEquals("Second alternative should be BOTTOM", Face.BOTTOM, alternatives[1]);
+        assertEquals("Third alternative should be LEFT (opposite direction)", Face.LEFT, alternatives[2]);
+    }
+
+    @Test
+    public void shouldOrderAlternatives_whenTargetIsBelow() {
+        // Other is directly below — target angle = π/2 (BOTTOM direction)
+        // Current face: RIGHT
+        // Expected order: BOTTOM (0 diff), then TOP/LEFT
+        RoutingRect element = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect other = new RoutingRect(200, 400, 120, 80, "t1");
+
+        Face[] alternatives = calculator.getAlternativeFacesInAngularOrder(element, other, Face.RIGHT);
+
+        assertEquals(Face.BOTTOM, alternatives[0]);
+        // TOP and LEFT are both π from BOTTOM direction — order depends on exact angles
+        // TOP at -π/2 → diff from π/2 = π
+        // LEFT at π → diff from π/2 = π/2
+        assertEquals("LEFT should be second (π/2 from BOTTOM)", Face.LEFT, alternatives[1]);
+        assertEquals("TOP should be third (π from BOTTOM)", Face.TOP, alternatives[2]);
+    }
+
+    @Test
+    public void shouldReassignSourceFace_whenInitialFaceCausesSelfPassThrough() {
+        // Source at (200,200,120,80), target at (400,200,120,80)
+        // BP at (260,350) — below source
+        // Face determination from BP: dx=0, dy=110 → BOTTOM. But we test Phase A by
+        // artificially using applyEdgeAttachments where the face detection naturally
+        // gives TOP (by placing first BP above-right at a tie-break point)
+        //
+        // Direct test of validateFacesForSelfPassThrough:
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(400, 200, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(260, 350)));
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(bps);
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        Face[] sourceFaces = {Face.TOP};
+        Face[] targetFaces = {Face.LEFT};
+
+        calculator.validateFacesForSelfPassThrough(ids, bendpointLists, connections,
+                sourceFaces, targetFaces);
+
+        // TOP causes PT, RIGHT causes PT, BOTTOM is clean
+        assertNotEquals("Source face should be changed from TOP", Face.TOP, sourceFaces[0]);
+        assertEquals("Source face should be changed to BOTTOM (first clean alternative)",
+                Face.BOTTOM, sourceFaces[0]);
+    }
+
+    @Test
+    public void shouldReassignTargetFace_whenInitialFaceCausesSelfPassThrough() {
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(200, 400, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(260, 350)));
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(bps);
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        Face[] sourceFaces = {Face.BOTTOM};
+        Face[] targetFaces = {Face.BOTTOM};
+
+        calculator.validateFacesForSelfPassThrough(ids, bendpointLists, connections,
+                sourceFaces, targetFaces);
+
+        // BOTTOM target face causes PT (segment from BP to terminal crosses target)
+        // TOP target face is clean (terminal at 399, segment from 350→399 all above inset)
+        assertEquals("Target face should be changed to TOP (first clean alternative)",
+                Face.TOP, targetFaces[0]);
+    }
+
+    @Test
+    public void shouldKeepOriginalFace_whenAllAlternativesCausePassThrough() {
+        // Geometry where ALL faces cause source PT:
+        // Source at (200,200,120,80), intermediate segments form a diagonal through source
+        // BPs: (350,210) and (100,280) — long diagonal from right to left through source area
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(50, 400, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(350, 210),
+                new AbsoluteBendpointDto(100, 280)));
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(bps);
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        Face[] sourceFaces = {Face.RIGHT};
+        Face[] targetFaces = {Face.TOP};
+
+        calculator.validateFacesForSelfPassThrough(ids, bendpointLists, connections,
+                sourceFaces, targetFaces);
+
+        // All faces should cause PT due to the diagonal BP→BP segment through source
+        assertEquals("Source face should remain RIGHT when no alternative is clean",
+                Face.RIGHT, sourceFaces[0]);
+    }
+
+    @Test
+    public void shouldNotChangeFace_whenNoPassThroughExists() {
+        // Clean geometry: source exits BOTTOM, BP directly below, no PT
+        RoutingRect source = new RoutingRect(200, 200, 120, 80, "s1");
+        RoutingRect target = new RoutingRect(200, 500, 120, 80, "t1");
+        List<AbsoluteBendpointDto> bps = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(260, 400)));
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
+        bendpointLists.add(bps);
+        List<String> ids = List.of("c1");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), "", 1));
+
+        Face[] sourceFaces = {Face.BOTTOM};
+        Face[] targetFaces = {Face.TOP};
+
+        calculator.validateFacesForSelfPassThrough(ids, bendpointLists, connections,
+                sourceFaces, targetFaces);
+
+        assertEquals("Source face should remain BOTTOM", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("Target face should remain TOP", Face.TOP, targetFaces[0]);
     }
 }

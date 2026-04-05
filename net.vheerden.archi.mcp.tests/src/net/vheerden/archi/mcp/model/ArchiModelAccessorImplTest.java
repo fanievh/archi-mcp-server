@@ -48,9 +48,11 @@ import com.archimatetool.model.IProperty;
 import com.archimatetool.model.util.IModelContentListener;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
+import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
+import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
@@ -1082,6 +1084,218 @@ public class ArchiModelAccessorImplTest {
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
         accessor.createRelationship("default", "ServingRelationship", "s1", "t1", null);
+    }
+
+    // ---- duplicate relationship prevention tests (backlog-b11) ----
+
+    @Test
+    public void shouldReturnExistingRelationship_whenDuplicateCreated() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            // The test model already has a ServingRelationship from ac-001 to bp-001 (rel-001)
+            MutationResult<RelationshipDto> result = accessor.createRelationship(
+                    "default", "ServingRelationship", "ac-001", "bp-001", null);
+
+            assertNotNull(result);
+            assertNotNull(result.entity());
+            assertEquals("rel-001", result.entity().id());
+            assertEquals("ServingRelationship", result.entity().type());
+            assertEquals("ac-001", result.entity().sourceId());
+            assertEquals("bp-001", result.entity().targetId());
+            assertTrue("Should flag as already existed", result.entity().alreadyExisted());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldReturnExistingRelationship_whenDuplicateWithDifferentName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            // Same type, source, target as existing rel-001 but different name
+            MutationResult<RelationshipDto> result = accessor.createRelationship(
+                    "default", "ServingRelationship", "ac-001", "bp-001", "different name");
+
+            assertNotNull(result);
+            assertEquals("rel-001", result.entity().id());
+            assertTrue("Name differs but should still deduplicate", result.entity().alreadyExisted());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldCreateNewRelationship_whenDifferentType() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            // Existing is ServingRelationship from ac-001 to bp-001
+            // AssociationRelationship between same elements should create new
+            MutationResult<RelationshipDto> result = accessor.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "bp-001", null);
+
+            assertNotNull(result);
+            assertNotEquals("Should be new relationship, not existing rel-001",
+                    "rel-001", result.entity().id());
+            assertEquals("AssociationRelationship", result.entity().type());
+            assertFalse("Should not flag as already existed", result.entity().alreadyExisted());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldCreateNewRelationship_whenDifferentTarget() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            // Existing is ServingRelationship from ac-001 to bp-001
+            // Same type from ac-001 to ba-001 (different target) should create new
+            MutationResult<RelationshipDto> result = accessor.createRelationship(
+                    "default", "ServingRelationship", "ac-001", "ba-001", null);
+
+            assertNotNull(result);
+            assertNotEquals("Should be new relationship, not existing rel-001",
+                    "rel-001", result.entity().id());
+            assertFalse("Should not flag as already existed", result.entity().alreadyExisted());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldCreateBothRelationships_whenDuplicateInSameBatch() {
+        // B19: within-batch dedup no longer works (connect() deferred to command execution).
+        // Each create-relationship in the same batch creates a separate object.
+        // Cross-batch dedup still works correctly.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> operations = List.of(
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001")),
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001"))
+            );
+
+            BulkMutationResult result = accessor.executeBulk("default", operations, null, false);
+
+            assertNotNull(result);
+            assertEquals(2, result.operations().size());
+            // B19: both create independently (no within-batch dedup)
+            String firstId = result.operations().get(0).entityId();
+            String secondId = result.operations().get(1).entityId();
+            assertNotEquals("B19: within-batch creates separate objects", firstId, secondId);
+            assertEquals("created", result.operations().get(0).action());
+            assertEquals("created", result.operations().get(1).action());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldCreateIndependentBackReferences_forDuplicateRelationshipsInBatch() {
+        // B19: within-batch dedup no longer works. Each relationship gets its own ID.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> operations = List.of(
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001")),
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001"))
+            );
+
+            BulkMutationResult result = accessor.executeBulk("default", operations, null, false);
+
+            assertNotNull(result);
+            assertEquals(2, result.operations().size());
+            // B19: both have distinct entity IDs (no within-batch dedup)
+            assertNotNull("First op should have entity ID", result.operations().get(0).entityId());
+            assertNotNull("Second op should have entity ID", result.operations().get(1).entityId());
+            assertNotEquals("B19: separate relationship objects",
+                    result.operations().get(0).entityId(),
+                    result.operations().get(1).entityId());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldReportCreatedAction_forBothDuplicateRelationshipsInBatch() {
+        // B19: within-batch dedup no longer works — both report "created"
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> operations = List.of(
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001")),
+                    new BulkOperation("create-relationship", Map.of(
+                            "type", "AssociationRelationship",
+                            "sourceId", "ac-001",
+                            "targetId", "ba-001"))
+            );
+
+            BulkMutationResult result = accessor.executeBulk("default", operations, null, false);
+
+            assertNotNull(result);
+            assertEquals(2, result.operations().size());
+            // B19: both report "created" (no within-batch dedup)
+            assertEquals("created", result.operations().get(0).action());
+            assertEquals("created", result.operations().get(1).action());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldBypassApprovalGate_whenDuplicateRelationshipDetected() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            // Enable approval mode
+            accessor.getMutationDispatcher().setApprovalRequired("default", true);
+
+            // The test model already has a ServingRelationship from ac-001 to bp-001 (rel-001)
+            MutationResult<RelationshipDto> result = accessor.createRelationship(
+                    "default", "ServingRelationship", "ac-001", "bp-001", null);
+
+            assertNotNull(result);
+            assertEquals("rel-001", result.entity().id());
+            assertTrue("Should flag as already existed", result.entity().alreadyExisted());
+            // Dedup should short-circuit BEFORE approval gate — no proposal context
+            assertNull("Dedup should bypass approval gate", result.proposalContext());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
     }
 
     // ---- createView tests (Story 7-2) ----
@@ -2505,7 +2719,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-001", "ba-001", 100, 200, 150, 60, false, null, null);
+                "default", "view-001", "ba-001", 100, 200, 150, 60, false, null, null, null);
 
         assertNotNull(result);
         assertNotNull(result.entity());
@@ -2527,7 +2741,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-001", "ba-001", null, null, null, null, false, null, null);
+                "default", "view-001", "ba-001", null, null, null, null, false, null, null, null);
 
         assertNotNull(result);
         // Empty view → START_X=50, START_Y=50
@@ -2545,11 +2759,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         // Place first element
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
 
         // Place second element — should go to the right of the first
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-001", "bp-001", null, null, null, null, false, null, null);
+                "default", "view-001", "bp-001", null, null, null, null, false, null, null, null);
 
         assertNotNull(result);
         // Should be placed right of first: 50 + 120 + 30 = 200
@@ -2564,7 +2778,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-001", "ba-001", 100, 200, null, null, false, null, null);
+                "default", "view-001", "ba-001", 100, 200, null, null, false, null, null, null);
 
         assertEquals(120, result.entity().viewObject().width());
         assertEquals(55, result.entity().viewObject().height());
@@ -2577,11 +2791,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         // Place ac-001 (Order System) first
-        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
 
         // Place bp-001 (Order Processing) with autoConnect — has serving relationship from ac-001
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, true, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, true, null, null, null);
 
         assertNotNull(result.entity().autoConnections());
         assertEquals(1, result.entity().autoConnections().size());
@@ -2596,11 +2810,11 @@ public class ArchiModelAccessorImplTest {
 
         // Place element first
         MutationResult<AddToViewResultDto> first = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
 
         // Place same element again at different position — should succeed
         MutationResult<AddToViewResultDto> second = accessor.addToView(
-                "default", "view-001", "ba-001", 100, 100, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 100, 100, 120, 55, false, null, null, null);
 
         // Both should return distinct view object IDs
         String firstId = first.entity().viewObject().viewObjectId();
@@ -2617,7 +2831,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.addToView("default", "nonexistent", "ba-001", 50, 50, 120, 55, false, null, null);
+            accessor.addToView("default", "nonexistent", "ba-001", 50, 50, 120, 55, false, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_NOT_FOUND, e.getErrorCode());
@@ -2631,7 +2845,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.addToView("default", "view-001", "nonexistent", 50, 50, 120, 55, false, null, null);
+            accessor.addToView("default", "view-001", "nonexistent", 50, 50, 120, 55, false, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.ELEMENT_NOT_FOUND, e.getErrorCode());
@@ -2645,7 +2859,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.addToView("default", "view-001", "ba-001", 50, null, 120, 55, false, null, null);
+            accessor.addToView("default", "view-001", "ba-001", 50, null, 120, 55, false, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -2662,7 +2876,7 @@ public class ArchiModelAccessorImplTest {
         // Fill row: place elements at x=50, 200, 350, 500, 650 (width=120, gap=30)
         // Next auto-placed at 650+120+30=800 > MAX_ROW_WIDTH → wraps
         MutationResult<AddToViewResultDto> result = accessor.addToView(
-                "default", "view-ap", "elem-ap-6", null, null, null, null, false, null, null);
+                "default", "view-ap", "elem-ap-6", null, null, null, null, false, null, null, null);
 
         assertNotNull(result);
         assertEquals(50, result.entity().viewObject().x());
@@ -2680,15 +2894,15 @@ public class ArchiModelAccessorImplTest {
 
         // Place both elements
         MutationResult<AddToViewResultDto> sourceResult = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> targetResult = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
 
         String sourceVoId = sourceResult.entity().viewObject().viewObjectId();
         String targetVoId = targetResult.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> result = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", sourceVoId, targetVoId, null, null);
+                "default", "view-001", "rel-001", sourceVoId, targetVoId, null, null, null, null, null);
 
         assertNotNull(result);
         assertNotNull(result.entity());
@@ -2706,9 +2920,9 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> sourceResult = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> targetResult = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
 
         List<BendpointDto> bps = List.of(
                 new BendpointDto(10, 20, 30, 40),
@@ -2717,7 +2931,7 @@ public class ArchiModelAccessorImplTest {
         MutationResult<ViewConnectionDto> result = accessor.addConnectionToView(
                 "default", "view-001", "rel-001",
                 sourceResult.entity().viewObject().viewObjectId(),
-                targetResult.entity().viewObject().viewObjectId(), bps, null);
+                targetResult.entity().viewObject().viewObjectId(), bps, null, null, null, null);
 
         assertNotNull(result.entity().bendpoints());
         assertEquals(2, result.entity().bendpoints().size());
@@ -2732,15 +2946,15 @@ public class ArchiModelAccessorImplTest {
         // Place elements — relationship goes ac-001 → bp-001
         // But we pass them in reversed order (bp-001 as source, ac-001 as target)
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "bp-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "ac-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 250, 50, 120, 55, false, null, null, null);
 
         // Reversed direction should be allowed
         MutationResult<ViewConnectionDto> result = accessor.addConnectionToView(
                 "default", "view-001", "rel-001",
                 r1.entity().viewObject().viewObjectId(),
-                r2.entity().viewObject().viewObjectId(), null, null);
+                r2.entity().viewObject().viewObjectId(), null, null, null, null, null);
 
         assertNotNull(result);
         assertEquals("rel-001", result.entity().relationshipId());
@@ -2753,14 +2967,14 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
 
         try {
             accessor.addConnectionToView("default", "view-001", "nonexistent",
                     r1.entity().viewObject().viewObjectId(),
-                    r2.entity().viewObject().viewObjectId(), null, null);
+                    r2.entity().viewObject().viewObjectId(), null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.RELATIONSHIP_NOT_FOUND, e.getErrorCode());
@@ -2774,11 +2988,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
 
         try {
             accessor.addConnectionToView("default", "view-001", "rel-001",
-                    r1.entity().viewObject().viewObjectId(), "nonexistent", null, null);
+                    r1.entity().viewObject().viewObjectId(), "nonexistent", null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_OBJECT_NOT_FOUND, e.getErrorCode());
@@ -2800,15 +3014,15 @@ public class ArchiModelAccessorImplTest {
 
         // Place ba-001 and extra-001 on view
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "extra-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "extra-001", 250, 50, 120, 55, false, null, null, null);
 
         // rel-001 connects ac-001→bp-001, but we reference ba-001 and extra-001
         try {
             accessor.addConnectionToView("default", "view-001", "rel-001",
                     r1.entity().viewObject().viewObjectId(),
-                    r2.entity().viewObject().viewObjectId(), null, null);
+                    r2.entity().viewObject().viewObjectId(), null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.RELATIONSHIP_MISMATCH, e.getErrorCode());
@@ -2822,19 +3036,19 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
 
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         // First connection succeeds
-        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
 
         // Second connection for same relationship should fail
         try {
-            accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+            accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.CONNECTION_ALREADY_ON_VIEW, e.getErrorCode());
@@ -2851,12 +3065,12 @@ public class ArchiModelAccessorImplTest {
 
         // Place element on view first
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
 
         // Update all bounds
         MutationResult<ViewObjectDto> result = accessor.updateViewObject(
-                "default", viewObjectId, 200, 300, 180, 80, null, null);
+                "default", viewObjectId, 200, 300, 180, 80, null, null, null);
 
         assertNotNull(result);
         assertEquals(200, result.entity().x());
@@ -2872,12 +3086,12 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 60, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 60, 120, 55, false, null, null, null);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
 
         // Update only x and height, leave y and width unchanged
         MutationResult<ViewObjectDto> result = accessor.updateViewObject(
-                "default", viewObjectId, 200, null, null, 80, null, null);
+                "default", viewObjectId, 200, null, null, 80, null, null, null);
 
         assertNotNull(result);
         assertEquals(200, result.entity().x());
@@ -2893,11 +3107,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
 
         try {
-            accessor.updateViewObject("default", viewObjectId, null, null, null, null, null, null);
+            accessor.updateViewObject("default", viewObjectId, null, null, null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -2911,7 +3125,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.updateViewObject("default", "nonexistent", 100, 100, null, null, null, null);
+            accessor.updateViewObject("default", "nonexistent", 100, 100, null, null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_OBJECT_NOT_FOUND, e.getErrorCode());
@@ -2928,20 +3142,20 @@ public class ArchiModelAccessorImplTest {
 
         // Place two elements and create connection
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Update bendpoints
         List<BendpointDto> newBendpoints = List.of(new BendpointDto(30, 0, -30, 0));
         MutationResult<ViewConnectionDto> result = accessor.updateViewConnection(
-                "default", connId, newBendpoints, null, null);
+                "default", connId, newBendpoints, null, null, null, null);
 
         assertNotNull(result);
         assertEquals(1, result.entity().bendpoints().size());
@@ -2955,21 +3169,21 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         // Create with bendpoints
         List<BendpointDto> bps = List.of(new BendpointDto(30, 0, -30, 0));
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, bps, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, bps, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Clear bendpoints with empty list
         MutationResult<ViewConnectionDto> result = accessor.updateViewConnection(
-                "default", connId, List.of(), null, null);
+                "default", connId, List.of(), null, null, null, null);
 
         assertNotNull(result);
         // Empty bendpoints are represented as null (omitted from JSON via @JsonInclude NON_NULL)
@@ -2983,7 +3197,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.updateViewConnection("default", "nonexistent", List.of(), null, null);
+            accessor.updateViewConnection("default", "nonexistent", List.of(), null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_OBJECT_NOT_FOUND, e.getErrorCode());
@@ -2999,7 +3213,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
 
         MutationResult<RemoveFromViewResultDto> result = accessor.removeFromView(
@@ -3018,14 +3232,14 @@ public class ArchiModelAccessorImplTest {
 
         // Place two elements and connect them
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Remove source element — should cascade-remove the connection
@@ -3046,14 +3260,14 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Remove connection — elements should remain
@@ -3104,12 +3318,12 @@ public class ArchiModelAccessorImplTest {
 
         // Place two elements and a connection
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
-        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
 
         // Clear the view
         MutationResult<ClearViewResultDto> result = accessor.clearView("default", "view-001");
@@ -3157,7 +3371,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         // Place an element first
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
 
         // Clear via bulk-mutate
         List<BulkOperation> ops = List.of(
@@ -3179,7 +3393,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         // Place an element, clear, then try to back-reference $0.id
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
 
         // clear-view produces a viewId in entityId, not a new entity ID
         // So $0.id would resolve to the viewId itself — test that bulk works
@@ -3382,11 +3596,11 @@ public class ArchiModelAccessorImplTest {
 
         // Place 3 elements on view
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r3 = accessor.addToView(
-                "default", "view-001", "ac-001", 350, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 350, 50, 120, 55, false, null, null, null);
 
         String vo1 = r1.entity().viewObject().viewObjectId();
         String vo2 = r2.entity().viewObject().viewObjectId();
@@ -3416,14 +3630,14 @@ public class ArchiModelAccessorImplTest {
 
         // Place elements and create connection
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, null, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, null, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Apply layout with connection bendpoints using absolute coordinates
@@ -3448,14 +3662,14 @@ public class ArchiModelAccessorImplTest {
 
         // Place elements and create connection
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String vo1 = r1.entity().viewObject().viewObjectId();
         String vo2 = r2.entity().viewObject().viewObjectId();
 
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", vo1, vo2, null, null);
+                "default", "view-001", "rel-001", vo1, vo2, null, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Apply layout with both positions and connections
@@ -3485,11 +3699,11 @@ public class ArchiModelAccessorImplTest {
 
         // Place all 3 available elements
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r3 = accessor.addToView(
-                "default", "view-001", "ac-001", 350, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 350, 50, 120, 55, false, null, null, null);
         String vo1 = r1.entity().viewObject().viewObjectId();
         String vo2 = r2.entity().viewObject().viewObjectId();
         String vo3 = r3.entity().viewObject().viewObjectId();
@@ -3518,7 +3732,7 @@ public class ArchiModelAccessorImplTest {
         // Build positions array exceeding MAX_LAYOUT_OPERATIONS
         // Use a valid viewObjectId so the error is about count, not invalid ID
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         String voId = r1.entity().viewObject().viewObjectId();
 
         List<ViewPositionSpec> positions = new ArrayList<>();
@@ -3611,16 +3825,16 @@ public class ArchiModelAccessorImplTest {
 
         // Place elements and create connection with initial bendpoints
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
         String srcVo = r1.entity().viewObject().viewObjectId();
         String tgtVo = r2.entity().viewObject().viewObjectId();
 
         // Create connection with bendpoints
         List<BendpointDto> initialBps = List.of(new BendpointDto(0, -50, 0, -50));
         MutationResult<ViewConnectionDto> connResult = accessor.addConnectionToView(
-                "default", "view-001", "rel-001", srcVo, tgtVo, initialBps, null);
+                "default", "view-001", "rel-001", srcVo, tgtVo, initialBps, null, null, null, null);
         String connId = connResult.entity().viewConnectionId();
 
         // Apply layout with neither bendpoints nor absoluteBendpoints → clear
@@ -3657,7 +3871,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewNoteDto> result = accessor.addNoteToView(
-                "default", "view-001", "Line 1\\nLine 2", 50, 50, null, null, null, null);
+                "default", "view-001", "Line 1\\nLine 2", null, null, 50, 50, null, null, null, null, null);
 
         assertNotNull(result);
         assertEquals("Line 1\nLine 2", result.entity().content());
@@ -3671,10 +3885,74 @@ public class ArchiModelAccessorImplTest {
 
         // Real newline (U+000A) should pass through unchanged — no double conversion
         MutationResult<ViewNoteDto> result = accessor.addNoteToView(
-                "default", "view-001", "Line 1\nLine 2", 50, 50, null, null, null, null);
+                "default", "view-001", "Line 1\nLine 2", null, null, 50, 50, null, null, null, null, null);
 
         assertNotNull(result);
         assertEquals("Line 1\nLine 2", result.entity().content());
+    }
+
+    // ---- getContentBounds tests (Story B16) ----
+
+    @Test
+    public void getContentBounds_shouldReturnBoundsForPopulatedView() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add an element to the view to give it content
+        accessor.addToView("default", "view-001", "ba-001", 100, 200, 120, 55,
+                false, null, null, null);
+
+        ContentBounds bounds = accessor.getContentBounds("view-001");
+        assertNotNull("Content bounds should not be null for populated view", bounds);
+        assertTrue("Width should be positive", bounds.width() > 0);
+        assertTrue("Height should be positive", bounds.height() > 0);
+    }
+
+    @Test
+    public void getContentBounds_shouldReturnNullForEmptyView() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create a fresh empty view
+        MutationResult<ViewDto> viewResult = accessor.createView(
+                "default", "Empty View", "EmptyViewpoint", null, null);
+        String emptyViewId = viewResult.entity().id();
+
+        ContentBounds bounds = accessor.getContentBounds(emptyViewId);
+        assertNull("Content bounds should be null for empty view", bounds);
+    }
+
+    @Test
+    public void getContentBounds_shouldExcludeNotesFromBounds() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add an element at known coordinates
+        accessor.addToView("default", "view-001", "ba-001", 100, 200, 120, 55,
+                false, null, null, null);
+
+        ContentBounds boundsBeforeNote = accessor.getContentBounds("view-001");
+        assertNotNull(boundsBeforeNote);
+
+        // Add a note far away from the element
+        accessor.addNoteToView("default", "view-001", "Far away note",
+                null, null, 1000, 1000, null, null, null, null, null);
+
+        ContentBounds boundsAfterNote = accessor.getContentBounds("view-001");
+        assertNotNull(boundsAfterNote);
+
+        // Bounds should be the same — notes are excluded
+        assertEquals("X should be unchanged after adding note",
+                boundsBeforeNote.x(), boundsAfterNote.x(), 0.001);
+        assertEquals("Y should be unchanged after adding note",
+                boundsBeforeNote.y(), boundsAfterNote.y(), 0.001);
+        assertEquals("Width should be unchanged after adding note",
+                boundsBeforeNote.width(), boundsAfterNote.width(), 0.001);
+        assertEquals("Height should be unchanged after adding note",
+                boundsBeforeNote.height(), boundsAfterNote.height(), 0.001);
     }
 
     @Test
@@ -3684,7 +3962,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> result = accessor.addGroupToView(
-                "default", "view-001", "Group\\nLabel", 50, 50, null, null, null, null);
+                "default", "view-001", "Group\\nLabel", 50, 50, null, null, null, null, null);
 
         assertNotNull(result);
         assertEquals("Group\nLabel", result.entity().label());
@@ -3698,12 +3976,12 @@ public class ArchiModelAccessorImplTest {
 
         // Create a note first
         MutationResult<ViewNoteDto> noteResult = accessor.addNoteToView(
-                "default", "view-001", "Original", 50, 50, null, null, null, null);
+                "default", "view-001", "Original", null, null, 50, 50, null, null, null, null, null);
         String noteVoId = noteResult.entity().viewObjectId();
 
         // Update note text with escaped newlines
         MutationResult<ViewObjectDto> result = accessor.updateViewObject(
-                "default", noteVoId, null, null, null, null, "Updated\\nContent", null);
+                "default", noteVoId, null, null, null, null, "Updated\\nContent", null, null);
 
         assertNotNull(result);
 
@@ -4032,9 +4310,9 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         // Place 3 elements on view
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
-        accessor.addToView("default", "view-001", "bp-001", 50, 50, 120, 55, false, null, null);
-        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 50, 50, 120, 55, false, null, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
 
         MutationResult<LayoutViewResultDto> result =
                 accessor.layoutView("default", "view-001", "tree", null, null);
@@ -4052,8 +4330,8 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
-        accessor.addToView("default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null, null);
 
         MutationResult<LayoutViewResultDto> result =
                 accessor.layoutView("default", "view-001", null, "compact", null);
@@ -4072,15 +4350,15 @@ public class ArchiModelAccessorImplTest {
 
         // Place elements and create connection
         MutationResult<AddToViewResultDto> r1 = accessor.addToView(
-                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null);
+                "default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
         MutationResult<AddToViewResultDto> r2 = accessor.addToView(
-                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null);
+                "default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
 
         String vo1 = r1.entity().viewObject().viewObjectId();
         String vo2 = r2.entity().viewObject().viewObjectId();
 
         accessor.addConnectionToView("default", "view-001", "rel-001",
-                vo1, vo2, null, null);
+                vo1, vo2, null, null, null, null, null);
 
         MutationResult<LayoutViewResultDto> result =
                 accessor.layoutView("default", "view-001", "tree", null, null);
@@ -4105,7 +4383,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         accessor.layoutView("default", "view-001", "tree", "compact", null);
     }
 
@@ -4115,7 +4393,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         accessor.layoutView("default", "view-001", null, null, null);
     }
 
@@ -4135,7 +4413,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
         try {
             accessor.layoutView("default", "view-001", "banana", null, null);
             fail("Should have thrown ModelAccessException");
@@ -4151,8 +4429,8 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
-        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null);
-        accessor.addToView("default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 200, 50, 120, 55, false, null, null, null);
 
         MutationResult<LayoutViewResultDto> result =
                 accessor.layoutView("default", "view-001", "grid", null,
@@ -4172,12 +4450,12 @@ public class ArchiModelAccessorImplTest {
 
         // Create group, then add elements inside it
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4200,11 +4478,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 400, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4222,12 +4500,12 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 400, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4245,11 +4523,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4290,10 +4568,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "circular", null, null, null, null, false, false, null, false);
@@ -4306,7 +4584,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Empty Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Empty Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4320,11 +4598,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4341,11 +4619,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 300, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 300, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4363,10 +4641,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "row", null, null, -10, null, false, false, null, false);
@@ -4379,10 +4657,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "row", null, null, null, -10, false, false, null, false);
@@ -4395,11 +4673,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4416,10 +4694,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "row", -5, null, null, null, false, false, null, false);
@@ -4432,10 +4710,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "row", null, -5, null, null, false, false, null, false);
@@ -4451,13 +4729,13 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
         // "Customer" (8 chars) -> 8*7+30 = 86px
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
         // "Order Processing" (16 chars) -> 16*7+30 = 142px
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4476,11 +4754,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 400, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4499,11 +4777,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4522,13 +4800,13 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 400, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
         // "Customer" (8 chars) and "Order Processing" (16 chars)
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4547,11 +4825,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 200, 100, null, null);
+                "default", "view-001", "Test Group", 50, 50, 200, 100, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4567,23 +4845,23 @@ public class ArchiModelAccessorImplTest {
 
     @Test
     public void computeAutoWidth_shouldComputeCorrectWidthFromName() {
-        // Direct test of the character-count heuristic: (charCount * 7) + 30
+        // Direct test of the character-count heuristic: (charCount * 8) + 30
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-001", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         IDiagramModelGroup group = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, groupVoId);
         IDiagramModelObject child = group.getChildren().get(0);
 
-        // "Customer" = 8 chars → (8 * 7) + 30 = 86px
+        // "Customer" = 8 chars → (8 * 8) + 30 = 94px
         int width = accessor.computeAutoWidth(child);
-        assertEquals("Customer (8 chars) should be (8*7)+30=86", 86, width);
+        assertEquals("Customer (8 chars) should be (8*8)+30=94", 94, width);
     }
 
     @Test
@@ -4609,9 +4887,9 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-floor", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-floor", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
-        accessor.addToView("default", "view-floor", "short-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-floor", "short-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         IDiagramModelGroup group = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, groupVoId);
@@ -4646,9 +4924,9 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-null", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-null", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
-        accessor.addToView("default", "view-null", "null-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-null", "null-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         IDiagramModelGroup group = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, groupVoId);
@@ -4682,9 +4960,9 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-empty", "Test Group", 50, 50, 600, 200, null, null);
+                "default", "view-empty", "Test Group", 50, 50, 600, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
-        accessor.addToView("default", "view-empty", "empty-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-empty", "empty-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         IDiagramModelGroup group = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, groupVoId);
@@ -4705,12 +4983,12 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Grid Group", 50, 50, 600, 400, null, null);
+                "default", "view-001", "Grid Group", 50, 50, 600, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4729,12 +5007,12 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Cap Group", 50, 50, 600, 400, null, null);
+                "default", "view-001", "Cap Group", 50, 50, 600, 400, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4753,12 +5031,12 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Auto Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Auto Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "ac-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4776,10 +5054,10 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Zero Group", 50, 50, 400, 200, null, null);
+                "default", "view-001", "Zero Group", 50, 50, 400, 200, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
                 "grid", null, null, null, null, false, false, 0, false);
@@ -4796,17 +5074,17 @@ public class ArchiModelAccessorImplTest {
 
         // Create outer group
         MutationResult<ViewGroupDto> outerResult = accessor.addGroupToView(
-                "default", "view-001", "Outer Group", 50, 50, 200, 100, null, null);
+                "default", "view-001", "Outer Group", 50, 50, 200, 100, null, null, null);
         String outerVoId = outerResult.entity().viewObjectId();
 
         // Create inner group nested inside outer
         MutationResult<ViewGroupDto> innerResult = accessor.addGroupToView(
-                "default", "view-001", "Inner Group", 10, 34, 150, 60, outerVoId, null);
+                "default", "view-001", "Inner Group", 10, 34, 150, 60, outerVoId, null, null);
         String innerVoId = innerResult.entity().viewObjectId();
 
         // Add elements to inner group
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, innerVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, innerVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, innerVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, innerVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", innerVoId,
@@ -4825,15 +5103,15 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> outerResult = accessor.addGroupToView(
-                "default", "view-001", "Outer Group", 50, 50, 200, 100, null, null);
+                "default", "view-001", "Outer Group", 50, 50, 200, 100, null, null, null);
         String outerVoId = outerResult.entity().viewObjectId();
 
         MutationResult<ViewGroupDto> innerResult = accessor.addGroupToView(
-                "default", "view-001", "Inner Group", 10, 34, 150, 60, outerVoId, null);
+                "default", "view-001", "Inner Group", 10, 34, 150, 60, outerVoId, null, null);
         String innerVoId = innerResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, innerVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, innerVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, innerVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, innerVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", innerVoId,
@@ -4852,11 +5130,11 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ViewGroupDto> groupResult = accessor.addGroupToView(
-                "default", "view-001", "Top Group", 50, 50, 200, 100, null, null);
+                "default", "view-001", "Top Group", 50, 50, 200, 100, null, null, null);
         String groupVoId = groupResult.entity().viewObjectId();
 
-        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null);
-        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null);
+        accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
@@ -4897,7 +5175,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
-                acc.arrangeGroups("default", "view-ag", "grid", 3, 40, null);
+                acc.arrangeGroups("default", "view-ag", "grid", 3, 40, null, null);
 
         assertNotNull(result);
         assertEquals(6, result.entity().groupsPositioned());
@@ -4928,7 +5206,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
-                acc.arrangeGroups("default", "view-ag", "row", null, 40, null);
+                acc.arrangeGroups("default", "view-ag", "row", null, 40, null, null);
 
         assertNotNull(result);
         assertEquals(4, result.entity().groupsPositioned());
@@ -4955,7 +5233,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
-                acc.arrangeGroups("default", "view-ag", "column", null, 40, null);
+                acc.arrangeGroups("default", "view-ag", "column", null, 40, null, null);
 
         assertNotNull(result);
         assertEquals(4, result.entity().groupsPositioned());
@@ -4989,7 +5267,7 @@ public class ArchiModelAccessorImplTest {
         // Arrange only first two groups
         List<String> groupIds = List.of(children.get(0).getId(), children.get(1).getId());
         MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
-                acc.arrangeGroups("default", "view-ag", "row", null, 40, groupIds);
+                acc.arrangeGroups("default", "view-ag", "row", null, 40, groupIds, null);
 
         assertEquals(2, result.entity().groupsPositioned());
 
@@ -5007,7 +5285,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         try {
-            acc.arrangeGroups("default", "view-ag", "diagonal", null, null, null);
+            acc.arrangeGroups("default", "view-ag", "diagonal", null, null, null, null);
             fail("Should throw ModelAccessException for invalid arrangement");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -5021,7 +5299,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         try {
-            acc.arrangeGroups("default", "view-ag", "row", null, -10, null);
+            acc.arrangeGroups("default", "view-ag", "row", null, -10, null, null);
             fail("Should throw ModelAccessException for negative spacing");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -5035,7 +5313,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         try {
-            acc.arrangeGroups("default", "nonexistent-view", "row", null, null, null);
+            acc.arrangeGroups("default", "nonexistent-view", "row", null, null, null, null);
             fail("Should throw ModelAccessException for missing view");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_NOT_FOUND, e.getErrorCode());
@@ -5049,7 +5327,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         try {
-            acc.arrangeGroups("default", "view-ag", "grid", 0, null, null);
+            acc.arrangeGroups("default", "view-ag", "grid", 0, null, null, null);
             fail("Should throw ModelAccessException for columns < 1");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -5074,7 +5352,7 @@ public class ArchiModelAccessorImplTest {
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
         try {
-            acc.arrangeGroups("default", "view-ng", "row", null, null, null);
+            acc.arrangeGroups("default", "view-ng", "row", null, null, null, null);
             fail("Should throw ModelAccessException for no groups");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -5090,7 +5368,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             acc.arrangeGroups("default", "view-ag", "row", null, null,
-                    List.of("nonexistent-group-id"));
+                    List.of("nonexistent-group-id"), null);
             fail("Should throw ModelAccessException for missing group ID");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_OBJECT_NOT_FOUND, e.getErrorCode());
@@ -5125,7 +5403,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             acc.arrangeGroups("default", "view-nest", "row", null, null,
-                    List.of(nestedGroup.getId()));
+                    List.of(nestedGroup.getId()), null);
             fail("Should throw ModelAccessException for nested group");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -5160,7 +5438,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(List.of(model));
         ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
 
-        acc.arrangeGroups("default", "view-vs", "row", null, 50, null);
+        acc.arrangeGroups("default", "view-vs", "row", null, 50, null, null);
 
         // Verify: x positions based on each group's actual width + spacing
         assertEquals(20, g1.getBounds().getX()); // origin
@@ -5171,6 +5449,246 @@ public class ArchiModelAccessorImplTest {
         assertEquals(100, g1.getBounds().getWidth());
         assertEquals(200, g2.getBounds().getWidth());
         assertEquals(300, g3.getBounds().getWidth());
+    }
+
+    // ---- arrange-groups direction tests (Story B18) ----
+
+    @Test
+    public void arrangeGroups_topologyHorizontal_shouldPositionInRow() {
+        // Create model with 3 groups and inter-group connections for topology ordering
+        IArchimateModel model = createTestModelWithGroups(3, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", null, 40, null, "horizontal");
+
+        assertNotNull(result);
+        assertEquals(3, result.entity().groupsPositioned());
+        assertEquals("topology", result.entity().arrangement());
+
+        // Verify horizontal layout: all groups on same row (y=20), different x positions
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals(20, child.getBounds().getY());
+        }
+        // X positions should be sequential: 20, 260, 500
+        assertEquals(20, children.get(0).getBounds().getX());
+        assertEquals(260, children.get(1).getBounds().getX());
+        assertEquals(500, children.get(2).getBounds().getX());
+    }
+
+    @Test
+    public void arrangeGroups_topologyVertical_shouldPositionInColumn() {
+        IArchimateModel model = createTestModelWithGroups(3, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", null, 40, null, "vertical");
+
+        assertNotNull(result);
+        assertEquals("topology", result.entity().arrangement());
+
+        // Verify vertical layout: all groups on same column (x=20), different y positions
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals(20, child.getBounds().getX());
+        }
+        assertEquals(20, children.get(0).getBounds().getY());
+        assertEquals(210, children.get(1).getBounds().getY());
+        assertEquals(400, children.get(2).getBounds().getY());
+    }
+
+    @Test
+    public void arrangeGroups_topologyHorizontalWithColumns_shouldIgnoreDirection() {
+        IArchimateModel model = createTestModelWithGroups(4, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", 2, 40, null, "horizontal");
+
+        assertNotNull(result);
+        assertEquals("topology", result.entity().arrangement());
+        assertEquals(Integer.valueOf(2), result.entity().columnsUsed());
+
+        // Should use grid (2 columns) regardless of direction=horizontal
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        // Row 0: y=20 for first two
+        assertEquals(20, children.get(0).getBounds().getY());
+        assertEquals(20, children.get(1).getBounds().getY());
+        // Row 1: y=210 for next two
+        assertEquals(210, children.get(2).getBounds().getY());
+        assertEquals(210, children.get(3).getBounds().getY());
+    }
+
+    @Test
+    public void arrangeGroups_nonTopologyWithDirection_shouldIgnoreDirection() {
+        IArchimateModel model = createTestModelWithGroups(3, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        // Use "column" arrangement with direction="horizontal" — direction should be ignored
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "column", null, 40, null, "horizontal");
+
+        assertNotNull(result);
+        assertEquals("column", result.entity().arrangement());
+
+        // Should still be column layout (vertical), direction ignored
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals(20, child.getBounds().getX());
+        }
+        assertEquals(20, children.get(0).getBounds().getY());
+        assertEquals(210, children.get(1).getBounds().getY());
+        assertEquals(400, children.get(2).getBounds().getY());
+    }
+
+    @Test
+    public void arrangeGroups_topologyDefaultDirection_shouldPositionInColumn() {
+        // Topology with null direction should default to column (vertical)
+        IArchimateModel model = createTestModelWithGroups(3, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", null, 40, null, null);
+
+        assertNotNull(result);
+        assertEquals("topology", result.entity().arrangement());
+
+        // Default direction = vertical = column layout
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals(20, child.getBounds().getX());
+        }
+    }
+
+    @Test
+    public void arrangeGroups_topologyHorizontalWithConnections_shouldPositionInRow() {
+        // Create model with 3 groups and inter-group connections for non-trivial topology ordering
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = factory.createArchimateModel();
+        model.setName("Topology Direction Test");
+        model.setId("model-td");
+        model.setDefaults();
+
+        IArchimateDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view-ag");
+        view.setName("Topology Direction View");
+
+        // Group A with one element
+        IDiagramModelGroup groupA = factory.createDiagramModelGroup();
+        groupA.setId("groupA"); groupA.setName("Group A");
+        groupA.setBounds(0, 0, 200, 150);
+        IArchimateElement elemA1 = factory.createBusinessActor();
+        elemA1.setId("eA1"); elemA1.setName("A1");
+        model.getFolder(FolderType.BUSINESS).getElements().add(elemA1);
+        IDiagramModelArchimateObject voA1 = factory.createDiagramModelArchimateObject();
+        voA1.setArchimateElement(elemA1);
+        voA1.setBounds(10, 34, 120, 55);
+        groupA.getChildren().add(voA1);
+
+        // Group B with one element
+        IDiagramModelGroup groupB = factory.createDiagramModelGroup();
+        groupB.setId("groupB"); groupB.setName("Group B");
+        groupB.setBounds(0, 0, 200, 150);
+        IArchimateElement elemB1 = factory.createBusinessProcess();
+        elemB1.setId("eB1"); elemB1.setName("B1");
+        model.getFolder(FolderType.BUSINESS).getElements().add(elemB1);
+        IDiagramModelArchimateObject voB1 = factory.createDiagramModelArchimateObject();
+        voB1.setArchimateElement(elemB1);
+        voB1.setBounds(10, 34, 120, 55);
+        groupB.getChildren().add(voB1);
+
+        // Group C with one element
+        IDiagramModelGroup groupC = factory.createDiagramModelGroup();
+        groupC.setId("groupC"); groupC.setName("Group C");
+        groupC.setBounds(0, 0, 200, 150);
+        IArchimateElement elemC1 = factory.createApplicationComponent();
+        elemC1.setId("eC1"); elemC1.setName("C1");
+        model.getFolder(FolderType.APPLICATION).getElements().add(elemC1);
+        IDiagramModelArchimateObject voC1 = factory.createDiagramModelArchimateObject();
+        voC1.setArchimateElement(elemC1);
+        voC1.setBounds(10, 34, 120, 55);
+        groupC.getChildren().add(voC1);
+
+        view.getChildren().add(groupA);
+        view.getChildren().add(groupB);
+        view.getChildren().add(groupC);
+
+        // Inter-group connections: A→B and B→C (chain topology)
+        IArchimateRelationship rel1 = factory.createServingRelationship();
+        rel1.setId("rel-ab"); rel1.setSource(elemA1); rel1.setTarget(elemB1);
+        model.getFolder(FolderType.RELATIONS).getElements().add(rel1);
+        var conn1 = factory.createDiagramModelArchimateConnection();
+        conn1.setArchimateRelationship(rel1);
+        conn1.connect(voA1, voB1);
+
+        IArchimateRelationship rel2 = factory.createServingRelationship();
+        rel2.setId("rel-bc"); rel2.setSource(elemB1); rel2.setTarget(elemC1);
+        model.getFolder(FolderType.RELATIONS).getElements().add(rel2);
+        var conn2 = factory.createDiagramModelArchimateConnection();
+        conn2.setArchimateRelationship(rel2);
+        conn2.connect(voB1, voC1);
+
+        model.getFolder(FolderType.DIAGRAMS).getElements().add(view);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", null, 40, null, "horizontal");
+
+        assertNotNull(result);
+        assertEquals(3, result.entity().groupsPositioned());
+        assertEquals("topology", result.entity().arrangement());
+
+        // Verify horizontal layout: all groups on same row (y=20), sequential x positions
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals("All groups should be on same row", 20, child.getBounds().getY());
+        }
+        // X positions should be sequential (exact values depend on topology ordering,
+        // but each group should be at a distinct x > previous)
+        int prevX = -1;
+        for (IDiagramModelObject child : children) {
+            assertTrue("Groups should be positioned left-to-right",
+                    child.getBounds().getX() > prevX);
+            prevX = child.getBounds().getX();
+        }
+    }
+
+    @Test
+    public void arrangeGroups_topologyInvalidDirection_shouldDefaultToColumn() {
+        // Invalid direction value should silently default to vertical (column) layout
+        IArchimateModel model = createTestModelWithGroups(3, 200, 150);
+        stubModelManager.setModels(List.of(model));
+        ArchiModelAccessorImpl acc = createAccessorWithTestDispatcher(model);
+
+        MutationResult<net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto> result =
+                acc.arrangeGroups("default", "view-ag", "topology", null, 40, null, "diagonal");
+
+        assertNotNull(result);
+        assertEquals("topology", result.entity().arrangement());
+
+        // Should default to column (vertical) layout — direction silently ignored
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        List<IDiagramModelObject> children = new ArrayList<>(view.getChildren());
+        for (IDiagramModelObject child : children) {
+            assertEquals("Invalid direction should default to vertical (same x)",
+                    20, child.getBounds().getX());
+        }
+        // Y positions should be sequential (column layout)
+        assertEquals(20, children.get(0).getBounds().getY());
+        assertEquals(210, children.get(1).getBounds().getY());
+        assertEquals(400, children.get(2).getBounds().getY());
     }
 
     // ---- Test model builders ----
@@ -5963,6 +6481,95 @@ public class ArchiModelAccessorImplTest {
         assertEquals("ELK", merged.getLabel());
     }
 
+    // ---- findLimitingFactor / getRemediation (backlog-b13 code review) ----
+
+    @Test
+    public void findLimitingFactor_shouldSelectWorstMetric() {
+        // overlaps=poor, edgeCrossings=fair, labelOverlaps=good → overlaps is worst
+        AssessLayoutResultDto assessment = buildAssessment(
+                Map.of("overlaps", "poor", "edgeCrossings", "fair",
+                        "labelOverlaps", "good", "overall", "poor"),
+                3, 5, 1);
+        assertEquals("overlaps", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+    }
+
+    @Test
+    public void findLimitingFactor_shouldBreakTieByCount() {
+        // overlaps=fair (count 2), edgeCrossings=fair (count 10) → edgeCrossings wins tie
+        AssessLayoutResultDto assessment = buildAssessment(
+                Map.of("overlaps", "fair", "edgeCrossings", "fair", "overall", "fair"),
+                2, 10, 0);
+        assertEquals("edgeCrossings", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+    }
+
+    @Test
+    public void findLimitingFactor_shouldSkipPassRatings() {
+        // overlaps=pass, edgeCrossings=fair → edgeCrossings (pass is skipped)
+        AssessLayoutResultDto assessment = buildAssessment(
+                Map.of("overlaps", "pass", "edgeCrossings", "fair", "overall", "fair"),
+                0, 5, 0);
+        assertEquals("edgeCrossings", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+    }
+
+    @Test
+    public void findLimitingFactor_shouldSkipOverallEntry() {
+        // Only "overall" has a bad rating — should return null (no metric to blame)
+        AssessLayoutResultDto assessment = buildAssessment(
+                Map.of("overlaps", "pass", "edgeCrossings", "pass",
+                        "labelOverlaps", "pass", "overall", "fair"),
+                0, 0, 0);
+        assertNull(ArchiModelAccessorImpl.findLimitingFactor(assessment));
+    }
+
+    @Test
+    public void getRemediation_shouldReturnSpecificTextForEachFactor() {
+        // Verify all 6 known factors produce non-null, distinct remediation texts
+        String[] factors = {"labelOverlaps", "overlaps", "edgeCrossings",
+                "passThroughs", "spacing", "alignment"};
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String factor : factors) {
+            String remediation = ArchiModelAccessorImpl.getRemediation(factor);
+            assertNotNull("Remediation for " + factor + " should not be null", remediation);
+            assertTrue("Remediation for " + factor + " should be unique",
+                    seen.add(remediation));
+        }
+    }
+
+    @Test
+    public void getRemediation_shouldReturnFallbackForUnknownFactor() {
+        String remediation = ArchiModelAccessorImpl.getRemediation("unknownMetric");
+        assertNotNull("Unknown factor should get a fallback remediation", remediation);
+        assertTrue(remediation.contains("assess-layout"));
+    }
+
+    @Test
+    public void getMetricCount_shouldMapMetricsToAssessmentFields() {
+        AssessLayoutResultDto assessment = buildAssessment(
+                Map.of("overlaps", "poor", "edgeCrossings", "fair",
+                        "labelOverlaps", "fair", "overall", "poor"),
+                4, 7, 2);
+        assertEquals(4, ArchiModelAccessorImpl.getMetricCount("overlaps", assessment));
+        assertEquals(7, ArchiModelAccessorImpl.getMetricCount("edgeCrossings", assessment));
+        assertEquals(2, ArchiModelAccessorImpl.getMetricCount("labelOverlaps", assessment));
+        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("spacing", assessment));
+        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("alignment", assessment));
+    }
+
+    /**
+     * Builds a minimal AssessLayoutResultDto for limiting factor tests.
+     */
+    private AssessLayoutResultDto buildAssessment(
+            Map<String, String> ratingBreakdown,
+            int overlapCount, int edgeCrossingCount, int labelOverlapCount) {
+        return new AssessLayoutResultDto(
+                "v-1", 5, 3,
+                overlapCount, 0, edgeCrossingCount, 0.0,
+                50.0, 80, "fair", ratingBreakdown,
+                List.of(), List.of(), List.of(), List.of(),
+                labelOverlapCount, List.of(), 0, List.of(),
+                0, List.of(), false, 0, 0, null, List.of());
+    }
+
     // ---- Test helpers ----
 
     /**
@@ -6152,5 +6759,143 @@ public class ArchiModelAccessorImplTest {
 
         // ---- IProperties ----
         @Override public EList<IProperty> getProperties() { return new BasicEList<>(); }
+    }
+
+    // ---- B19: Orphaned Relationship Structural Fix tests ----
+
+    @Test
+    public void shouldSkipOrphanedRelationship_whenAutoConnecting() {
+        // B19 AC-2: auto-connect containment guard
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create an orphaned relationship: connected but NOT in containment tree
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateRelationship orphan = factory.createAssociationRelationship();
+        orphan.setId("rel-orphan-001");
+        // connect() sets up EMF cross-references but we don't add to folder
+        IArchimateElement source = (IArchimateElement) model.getFolder(FolderType.APPLICATION)
+                .getElements().get(0); // ac-001
+        IArchimateElement target = (IArchimateElement) model.getFolder(FolderType.BUSINESS)
+                .getElements().get(1); // bp-001
+        orphan.connect(source, target);
+        // NOT added to Relations folder — orphan.eContainer() == null
+
+        // Place source element on view
+        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
+
+        // Place target with autoConnect — should only connect the contained rel-001,
+        // NOT the orphaned rel-orphan-001
+        MutationResult<AddToViewResultDto> result = accessor.addToView(
+                "default", "view-001", "bp-001", 250, 50, 120, 55, true, null, null, null);
+
+        assertNotNull(result.entity().autoConnections());
+        // Only the contained relationship (rel-001) should produce a connection
+        assertEquals(1, result.entity().autoConnections().size());
+        assertEquals("rel-001", result.entity().autoConnections().get(0).relationshipId());
+    }
+
+    @Test
+    public void shouldSkipOrphanedRelationship_whenAutoConnectViewCalled() {
+        // B19 AC-2: auto-connect-view tool containment guard (distinct from addToView autoConnect)
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create an orphaned relationship: connected but NOT in containment tree
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateRelationship orphan = factory.createAssociationRelationship();
+        orphan.setId("rel-orphan-003");
+        IArchimateElement source = (IArchimateElement) model.getFolder(FolderType.APPLICATION)
+                .getElements().get(0); // ac-001
+        IArchimateElement target = (IArchimateElement) model.getFolder(FolderType.BUSINESS)
+                .getElements().get(1); // bp-001
+        orphan.connect(source, target);
+        // NOT added to Relations folder — orphan.eContainer() == null
+
+        // Place both elements on view without autoConnect
+        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55, false, null, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 250, 50, 120, 55, false, null, null, null);
+
+        // Call auto-connect-view — should only connect the contained rel-001,
+        // NOT the orphaned rel-orphan-003
+        MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
+                "default", "view-001", null, null, null);
+
+        assertNotNull(result);
+        // Only the contained relationship (rel-001: ac-001 -> bp-001) should produce a connection
+        assertEquals(1, result.entity().connectionsCreated());
+    }
+
+    @Test
+    public void shouldHandleOrphanedRelationship_whenDeletingElement() {
+        // B19 AC-6: delete element NPE guard
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create an orphaned relationship referencing ba-001
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateRelationship orphan = factory.createAssociationRelationship();
+        orphan.setId("rel-orphan-002");
+        IArchimateElement ba001 = (IArchimateElement) model.getFolder(FolderType.BUSINESS)
+                .getElements().get(0); // ba-001 (Customer)
+        IArchimateElement bp001 = (IArchimateElement) model.getFolder(FolderType.BUSINESS)
+                .getElements().get(1); // bp-001 (Order Processing)
+        orphan.connect(ba001, bp001);
+        // NOT added to folder — orphan.eContainer() == null
+
+        // Delete ba-001 — should NOT NPE on orphaned relationship
+        try {
+            accessor.deleteElement("default", "ba-001");
+            // If we get here, the element was deleted without NPE — success
+        } catch (NullPointerException e) {
+            fail("B19: deleteElement should not NPE on orphaned relationships");
+        }
+    }
+
+    @Test
+    public void shouldNotConnectRelationship_beforeCommandExecution() {
+        // B19 AC-1: deferred connect — verify via createRelationship
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+
+        // Use a dispatcher that captures the command WITHOUT executing it
+        final Command[] capturedCommand = new Command[1];
+        MutationDispatcher captureDispatcher = new MutationDispatcher(() -> model) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                capturedCommand[0] = command;
+                // DO NOT execute — simulates preparation without execution
+            }
+            @Override
+            protected void dispatchCommand(Command command) {
+                capturedCommand[0] = command;
+            }
+        };
+        accessor = new ArchiModelAccessorImpl(stubModelManager, captureDispatcher);
+
+        try {
+            accessor.createRelationship("default", "AssociationRelationship",
+                    "ba-001", "bp-001", "test-assoc");
+
+            // The relationship should NOT appear in source's cross-references
+            // because connect() was deferred to command execution (which we skipped)
+            IArchimateElement ba001 = (IArchimateElement) model.getFolder(FolderType.BUSINESS)
+                    .getElements().get(0);
+            boolean foundOrphan = false;
+            for (IArchimateRelationship rel : ba001.getSourceRelationships()) {
+                if ("test-assoc".equals(rel.getName())
+                        && "AssociationRelationship".equals(rel.eClass().getName())) {
+                    foundOrphan = true;
+                    break;
+                }
+            }
+            assertFalse("B19: relationship should NOT be in cross-references before "
+                    + "command execution", foundOrphan);
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
     }
 }

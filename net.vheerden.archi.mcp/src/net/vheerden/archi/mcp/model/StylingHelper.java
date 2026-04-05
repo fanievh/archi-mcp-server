@@ -155,4 +155,13 @@ final class StylingHelper {
         int lw = conn.getLineWidth();
         return (lw != 1) ? lw : null;
     }
+
+    /**
+     * Reads the label visibility state of a connection (Story 13-1).
+     * Returns null when the label is visible (default), Boolean.FALSE when hidden.
+     * This keeps the DTO field omitted from JSON for the common case.
+     */
+    static Boolean readConnectionNameVisible(IDiagramModelArchimateConnection conn) {
+        return conn.isNameVisible() ? null : Boolean.FALSE;
+    }
 }

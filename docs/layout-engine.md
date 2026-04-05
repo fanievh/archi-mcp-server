@@ -7,7 +7,9 @@ This document describes the layout and quality assessment systems, including Zes
 - [Layout Algorithms (Zest)](#layout-algorithms-zest)
 - [ELK Layered Algorithm](#elk-layered-algorithm)
 - [Layout Presets](#layout-presets)
+- [Flat View Layout](#flat-view-layout)
 - [Group-Aware Layout](#group-aware-layout)
+- [Hub Element Detection](#hub-element-detection)
 - [Layout Quality Assessment](#layout-quality-assessment)
 - [Auto-Layout-and-Route with Target Rating](#auto-layout-and-route-with-target-rating)
 - [Configuration Constants](#configuration-constants)
@@ -111,6 +113,40 @@ Semantic mappings from preset names to algorithm + default spacing:
 
 **Source:** `model/LayoutPreset.java`
 
+## Flat View Layout
+
+The `layout-flat-view` tool positions all top-level elements and groups on a view using row, column, or grid arrangements. It eliminates manual x/y coordinate calculation for flat (non-grouped) views.
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `viewId` | required | View to layout |
+| `arrangement` | required | `"row"`, `"column"`, or `"grid"` |
+| `spacing` | 40 | Gap between elements (px) — same default as `layout-within-group` (40px) |
+| `padding` | 20 | Space from view origin (px) |
+| `sortBy` | *(none)* | Sort elements before positioning: `"name"`, `"type"`, or `"layer"` |
+| `categoryField` | *(none)* | Group elements into visual sections: `"type"` or `"layer"` — inserts 2x spacing between sections |
+| `columns` | *(auto)* | Column count for grid mode — auto-detected via `ceil(sqrt(n))` if omitted |
+
+### Behavior
+
+- Positions all top-level elements and groups (not elements inside groups)
+- Respects heterogeneous element sizes (elements with embedded children treated as larger boxes)
+- Does NOT route connections — run `auto-route-connections` after
+- Full command stack integration (undo/redo, batch mode, approval mode)
+
+### When to Use
+
+| Tool | Use Case |
+|------|----------|
+| `layout-flat-view` | Flat views with no groups — automatic positioning with sorting/categorization |
+| `layout-within-group` | Position children inside a specific group container |
+| `compute-layout` | Graph-aware layout using Zest algorithms (tree, spring, directed, etc.) |
+| `auto-layout-and-route` | Combined ELK layout + routing in one operation |
+
+**Source:** `model/ArchiModelAccessorImpl.java`, `handlers/ViewPlacementHandler.java`
+
 ## Group-Aware Layout
 
 ### layout-within-group
@@ -122,7 +158,7 @@ Arranges children within a single group container.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `arrangement` | required | `"row"`, `"column"`, or `"grid"` |
-| `spacing` | 20 | Gap between children (px) |
+| `spacing` | 40 | Gap between children (px) |
 | `padding` | 10 | Space from group edges (px) |
 | `columns` | *(auto)* | Column count for grid mode |
 | `elementWidth` | *(original)* | Uniform child width |
@@ -172,15 +208,97 @@ Reorders elements within groups to minimize inter-group edge crossings using the
 2. Add elements to groups  → add-to-view with parentViewObjectId
 3. Internal layout         → layout-within-group (per group)
 4. Group arrangement       → arrange-groups
-5. Crossing optimization   → optimize-group-order
-6. Route connections       → auto-route-connections
+5. Connect elements        → auto-connect-view (showLabel: false for cleaner routing)
+6. Crossing optimization   → optimize-group-order → arrange-groups
+7. Resize hub elements     → detect-hub-elements → update-view-object
+8. Route connections       → auto-route-connections (autoNudge: true for automatic fixing)
+9. Assess quality          → assess-layout → iterate if needed
 ```
+
+### Flat View Assembly Workflow
+
+```text
+1. Add elements            → add-to-view (positions don't matter)
+2. Automatic layout        → layout-flat-view (row/column/grid, optional sortBy/categoryField)
+3. Connect elements        → auto-connect-view
+4. Route connections       → auto-route-connections (autoNudge: true)
+5. Assess quality          → assess-layout → iterate if needed
+```
+
+## Hub Element Detection
+
+The `detect-hub-elements` tool identifies high-connectivity elements on a view — elements that act as hubs in hub-and-spoke topologies (e.g., API gateways, ESBs, shared databases). These hubs cause **port congestion** where many connections compete for attachment points on a small perimeter, producing bundled overlapping paths.
+
+### Connection Counting
+
+The tool traverses all visual elements and connections on a view, counting connections per `viewObjectId`:
+
+```text
+For each archimate connection on the view:
+  connectionCounts[sourceViewObjectId] += 1
+  connectionCounts[targetViewObjectId] += 1
+```
+
+A connection between A and B increments both counts. An element that is source of 3 connections and target of 4 has `connectionCount = 7`. Counts are per visual instance (`viewObjectId`), not per model element — the same element appearing multiple times on a view has independent counts per instance.
+
+Elements with zero connections are excluded from the result.
+
+### Hub Sizing Suggestions
+
+Elements exceeding the hub threshold (>6 connections) receive sizing suggestions based on the hub element formula:
+
+```text
+suggestedDimension = baseDimension + 15px × (connectionCount - 6)
+```
+
+Suggestions are flow-direction-aware:
+- **Horizontal layouts** (left-to-right groups): increase **height** for more vertical perimeter
+- **Vertical layouts** (top-to-bottom groups): increase **width** for more horizontal perimeter
+- **True hubs** (connections from all directions): increase **both**
+
+### Response Structure
+
+```json
+{
+  "result": {
+    "viewId": "abc-123",
+    "totalElements": 15,
+    "totalConnections": 22,
+    "averageConnectionCount": 3.1,
+    "elements": [
+      {
+        "viewObjectId": "vo-1", "elementId": "el-1",
+        "elementName": "API Gateway", "elementType": "ApplicationComponent",
+        "connectionCount": 12, "width": 120, "height": 55
+      }
+    ],
+    "suggestions": [
+      "Element 'API Gateway' has 12 connections (hub threshold: 6). Consider increasing height to 145px (55 + 15 × 6) for horizontal layouts, or width to 210px (120 + 15 × 6) for vertical layouts."
+    ]
+  },
+  "nextSteps": ["Use update-view-object to resize hub elements..."]
+}
+```
+
+### Workflow Position
+
+Hub detection slots between group optimization and connection routing:
+
+```text
+... → optimize-group-order → arrange-groups
+    → detect-hub-elements → update-view-object (resize hubs)
+    → auto-route-connections → assess-layout
+```
+
+**Source:** `model/ArchiModelAccessorImpl.java`, `handlers/ViewPlacementHandler.java`
 
 ## Layout Quality Assessment
 
 The `LayoutQualityAssessor` computes multi-dimensional layout quality metrics. All coordinates are in absolute canvas space. This is a pure-geometry class with no EMF dependencies.
 
 ### Metric Categories
+
+The assessor evaluates 8 metric categories, each producing an individual rating.
 
 #### Element Overlaps
 
@@ -203,11 +321,11 @@ crossing_ratio = edgeCrossingCount / connectionCount
 | crossings < 5 | "pass" |
 | 5-20 crossings | "good" |
 | crossings >= 20, ratio <= 1.5 | "good" |
-| ratio <= 2.0 | "fair" |
+| ratio <= 4.0 | "fair" |
 | crossings < 30 | "fair" |
 | crossings >= 30 | "poor" |
 
-**Grouped view leniency:** If a view has groups and no overlaps/pass-throughs/label-overlaps with good spacing/alignment, crossing ratings get a one-tier boost ("poor" to "fair", "fair" to "good"). This acknowledges that cross-group edge crossings are topologically unavoidable.
+**Grouped view leniency:** If a view has groups and overlaps == 0, passThroughs <= 3, labelOverlaps == 0, alignment > 30, and spacing > 15.0, crossing ratings get a one-tier boost ("poor" to "fair", "fair" to "good"). This acknowledges that cross-group edge crossings are topologically unavoidable.
 
 #### Element Spacing
 
@@ -233,21 +351,47 @@ alignment = (aligned_pair_count / max_possible_pairs) * 100
 
 Estimates label bounding boxes from text length and path position. Uses 10px inset on both label and element rectangles to absorb estimation error. Also detects near-miss proximity within 5px.
 
-**Rating:** 0 = "pass", 1-2 = "good", 3+ = "fair"
+**Rating:** 0 = "pass", > 0 = "fair"
 
 #### Pass-Throughs
 
-Detects connections that cross through element rectangles. Clips connection paths from element centers to perimeter (using Archi's OrthogonalAnchor model). Excludes source, target, ancestors, descendants, and groups (transparent containers). Uses 2px inset to absorb corner-arc imprecision.
+Detects connections that cross through element rectangles. Clips connection paths from element centers to perimeter (using Archi's OrthogonalAnchor model). Excludes ancestors, descendants, and groups (transparent containers). Uses 10px inset to absorb corner-arc imprecision.
+
+Also detects **self-element pass-throughs** — cases where non-terminal segments of a connection's route pass through the connection's own source or target element body (using 5px inset). This catches routes that enter endpoint elements through interior points rather than approaching cleanly from an edge.
 
 **Rating:** 0 = "pass", 1-3 = "fair", 4+ = "poor"
 
-### Overall Rating
+#### Coincident Segments
 
-The overall rating is the **worst individual metric rating**:
+Counts connection segments from different connections that share identical coordinates (within tolerance) and have overlapping parallel ranges.
+
+**Rating:** 0 = "pass", 1-3 = "good", 4-8 = "fair", 9+ = "poor"
+
+#### Non-Orthogonal Terminals
+
+Counts connections whose terminal segments (first two or last two points) form diagonal rather than perpendicular approaches to elements. Checked per-connection (not per-segment).
+
+**Rating:** 0 = "pass", 1-3 = "fair", 4+ = "poor"
+
+### Overall Rating (Severity-Tiered)
+
+The overall rating uses a **three-tier severity system** instead of simple worst-metric-wins. Each tier has a cap on how much it can degrade the overall rating:
+
+| Tier | Severity | Metrics | Cap |
+|------|----------|---------|-----|
+| **Tier 1** | Critical | overlaps, passThroughs, coincidentSegments | No cap — drives overall rating directly |
+| **Tier 2** | Moderate | edgeCrossings, nonOrthogonalTerminals | Capped at "fair" |
+| **Tier 3** | Cosmetic | spacing, alignment, labelOverlaps | Capped at "good" |
 
 ```text
-Levels (worst to best): "poor" > "fair" > "good" > "pass"/"excellent"
+Rating levels: pass/excellent = 0, good = 1, fair = 2, poor = 3
+
+overall = max(worstTier1, min(worstTier2, 2), min(worstTier3, 1))
+
+Map: 0 → "excellent", 1 → "good", 2 → "fair", 3+ → "poor"
 ```
+
+This prevents cosmetic issues (spacing, alignment) from masking structural quality. A view with perfect structure but poor alignment still achieves "good". Conversely, overlaps or excessive pass-throughs drive the rating to "poor" regardless of cosmetic scores.
 
 ### Suggestion Generation
 
@@ -270,15 +414,18 @@ The assessor generates actionable suggestions when thresholds are exceeded:
   "alignmentScore": 45,
   "labelOverlapCount": 1,
   "passThroughCount": 0,
-  "coincidentSegmentCount": 0,
+  "coincidentSegmentCount": 2,
+  "nonOrthogonalTerminalCount": 1,
   "overallRating": "good",
   "ratingBreakdown": {
     "overlaps": "pass",
     "edgeCrossings": "good",
     "spacing": "pass",
     "alignment": "good",
-    "labelOverlaps": "good",
-    "passThroughs": "pass"
+    "labelOverlaps": "pass",
+    "passThroughs": "pass",
+    "coincidentSegments": "good",
+    "nonOrthogonalTerminals": "fair"
   },
   "suggestions": ["..."],
   "contentBounds": {"x": 50, "y": 50, "width": 800, "height": 600},
@@ -290,11 +437,26 @@ The assessor generates actionable suggestions when thresholds are exceeded:
 
 ## Auto-Layout-and-Route with Target Rating
 
-The `auto-layout-and-route` tool combines ELK Layered layout with automatic quality iteration.
+The `auto-layout-and-route` tool supports two layout modes and optional quality iteration.
+
+### Mode: `auto` (default) — ELK Layered
+
+Uses the ELK Layered algorithm to compute both element positions and connection routes in a single operation. Best for flat views or when no specific structural intent is needed.
+
+### Mode: `grouped` — Orchestrated Grouped Workflow
+
+Orchestrates the full Branch 2 grouped-view workflow in a single atomic tool call:
+
+1. `layout-within-group` for each group (sizes groups to fit contents)
+2. `arrange-groups` with topology arrangement (orders groups by connection density)
+3. `optimize-group-order` (minimises inter-group edge crossings)
+4. `auto-route-connections` (obstacle-aware orthogonal routing)
+
+This replaces the manual 5-7 step grouped workflow with a single call. Requires the view to have groups with children. Produces obstacle-aware orthogonal routing between groups — best choice for views with ArchiMate groups (layered architecture, producer-consumer flows, etc.).
 
 ### Without targetRating
 
-Run ELK layout once, apply positions and routes, return result.
+Run layout once (ELK in `auto` mode, or the orchestrated workflow in `grouped` mode), apply positions and routes, return result.
 
 ### With targetRating
 
@@ -349,14 +511,19 @@ ELK does not see elements inside groups as obstacles for inter-group connections
 | `GOOD_MAX_CROSSINGS` | 20 | Crossing threshold for "good" |
 | `GOOD_MIN_SPACING` | 15.0px | Spacing threshold for "good" |
 | `GOOD_MIN_ALIGNMENT` | 30 | Alignment threshold for "good" |
+| `GOOD_MAX_COINCIDENT` | 3 | Coincident segment threshold for "good" |
 | `FAIR_MAX_OVERLAPS` | 3 | Overlap threshold for "fair" |
 | `FAIR_MAX_CROSSINGS` | 30 | Crossing threshold for "fair" |
+| `FAIR_MAX_COINCIDENT` | 8 | Coincident segment threshold for "fair" |
+| `FAIR_MAX_PASS_THROUGHS` | 3 | Pass-through threshold for "fair" (also leniency gate) |
+| `FAIR_MAX_NON_ORTHOGONAL` | 3 | Non-orthogonal terminal threshold for "fair" |
 | `CROSSING_RATIO_GOOD` | 1.5 | crossings/connections for "good" |
 | `CROSSING_RATIO_MODERATE` | 4.0 | crossings/connections for "fair" |
 | `ALIGNMENT_TOLERANCE` | 5.0px | Edge alignment detection tolerance |
 | `LABEL_OVERLAP_INSET` | 10.0px | Label bounding box inset |
 | `LABEL_PROXIMITY_THRESHOLD` | 5.0px | Near-miss detection threshold |
-| `PASS_THROUGH_INSET` | 10.0px | Obstacle inset for pass-through |
+| `PASS_THROUGH_INSET` | 10.0px | Obstacle inset for pass-through detection |
+| `SELF_ELEMENT_INSET` | 5.0px | Inset for self-element pass-through detection |
 
 ---
 

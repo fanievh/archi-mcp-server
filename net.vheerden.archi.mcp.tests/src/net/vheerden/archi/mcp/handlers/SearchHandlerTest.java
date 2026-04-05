@@ -22,6 +22,7 @@ import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
 import net.vheerden.archi.mcp.session.SessionManager;
@@ -54,7 +55,7 @@ public class SearchHandlerTest {
         SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
         handler.registerTools();
 
-        assertEquals(1, registry.getToolCount());
+        assertEquals(2, registry.getToolCount());
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("search-elements");
         assertEquals("search-elements", spec.tool().name());
     }
@@ -1836,6 +1837,359 @@ public class SearchHandlerTest {
         assertEquals("boolean", dryRunProp.get("type"));
     }
 
+    // ---- search-relationships Tests (Story C1) ----
+
+    @Test
+    public void shouldRegisterSearchRelationshipsTool() {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+        McpServerFeatures.SyncToolSpecification spec = findToolSpec("search-relationships");
+        assertEquals("search-relationships", spec.tool().name());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReturnAllRelationships_whenEmptyQuery() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of("query", "")));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(3, resultList.size());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterByTextQuery() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of("query", "data transfer")));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        assertEquals("rel-1", resultList.get(0).get("id"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterByDocumentation() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of("query", "flows from portal")));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        assertEquals("rel-1", resultList.get(0).get("id"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterByPropertyValue() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of("query", "daily")));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        assertEquals("rel-3", resultList.get(0).get("id"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterByRelationshipType() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("type", "FlowRelationship");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        assertEquals("FlowRelationship", resultList.get(0).get("type"));
+    }
+
+    @Test
+    public void shouldRejectInvalidRelationshipType() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("type", "InvalidType");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertTrue(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertTrue(((String) error.get("message")).contains("Invalid relationship type"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterBySourceLayer() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("sourceLayer", "Business");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        // Only rel-3 has source elem-3 which is Business layer
+        assertEquals(1, resultList.size());
+        assertEquals("rel-3", resultList.get(0).get("id"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldFilterByTargetLayer() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("targetLayer", "Business");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        // Only rel-2 has target elem-3 which is Business layer
+        assertEquals(1, resultList.size());
+        assertEquals("rel-2", resultList.get(0).get("id"));
+    }
+
+    @Test
+    public void shouldRejectInvalidSourceLayer() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("sourceLayer", "InvalidLayer");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertTrue(result.isError());
+    }
+
+    @Test
+    public void shouldRejectInvalidTargetLayer() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("targetLayer", "InvalidLayer");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertTrue(result.isError());
+    }
+
+    @Test
+    public void shouldRequireQueryParameter_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of()));
+        assertTrue(result.isError());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReturnMinimalFields_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "data transfer");
+        args.put("fields", "minimal");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        Map<String, Object> rel = resultList.get(0);
+        assertTrue(rel.containsKey("id"));
+        assertTrue(rel.containsKey("name"));
+        assertFalse("minimal should not include type", rel.containsKey("type"));
+        assertFalse("minimal should not include sourceId", rel.containsKey("sourceId"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReturnFullFields_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "data transfer");
+        args.put("fields", "full");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, resultList.size());
+        Map<String, Object> rel = resultList.get(0);
+        assertTrue(rel.containsKey("id"));
+        assertTrue(rel.containsKey("type"));
+        assertTrue(rel.containsKey("sourceId"));
+        assertTrue(rel.containsKey("targetId"));
+        assertTrue("full should include documentation", rel.containsKey("documentation"));
+        assertTrue("full should include sourceName", rel.containsKey("sourceName"));
+        assertTrue("full should include targetName", rel.containsKey("targetName"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReturnSummaryFormat_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("format", "summary");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        String summary = (String) envelope.get("summary");
+        assertNotNull("Summary format should use 'summary' key, not 'result'", summary);
+        assertTrue(summary.contains("3 relationships"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReturnGraphFormat_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("format", "graph");
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        Map<String, Object> graphResult = (Map<String, Object>) envelope.get("graph");
+        assertNotNull("Graph format should use 'graph' key, not 'result'", graphResult);
+        assertTrue(graphResult.containsKey("nodes"));
+        assertTrue(graphResult.containsKey("edges"));
+        List<?> edges = (List<?>) graphResult.get("edges");
+        assertEquals(3, edges.size());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldSupportDryRun_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("dryRun", true);
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        Map<String, Object> dryRunResult = (Map<String, Object>) envelope.get("dryRun");
+        assertNotNull("Dry-run format should use 'dryRun' key, not 'result'", dryRunResult);
+        assertTrue(dryRunResult.containsKey("estimatedResultCount"));
+        assertEquals(3, ((Number) dryRunResult.get("estimatedResultCount")).intValue());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldPaginateResults_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("limit", 2);
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", args));
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(2, resultList.size());
+        Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+        assertEquals(3, ((Number) meta.get("totalCount")).intValue());
+        assertTrue((Boolean) meta.get("isTruncated"));
+        assertNotNull("Should have cursor for next page", meta.get("cursor"));
+    }
+
+    @Test
+    public void shouldHandleNoModelLoaded_searchRelationships() throws Exception {
+        StubAccessor accessor = new StubAccessor(false);
+        SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = findToolSpec("search-relationships")
+                .callHandler().apply(null, new McpSchema.CallToolRequest(
+                        "search-relationships", Map.of("query", "")));
+        assertTrue(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertEquals("MODEL_NOT_LOADED", error.get("code"));
+    }
+
     // ---- Stub Implementations ----
 
     /**
@@ -1843,6 +2197,25 @@ public class SearchHandlerTest {
      * Returns elements matching by name, documentation, or property values.
      */
     private static class StubAccessor extends BaseTestAccessor {
+
+        private static final List<RelationshipDto> ALL_RELATIONSHIPS = List.of(
+                new RelationshipDto("rel-1", "data transfer", "FlowRelationship",
+                        "elem-1", "elem-2", false,
+                        "Data flows from portal to service", null,
+                        "Customer Portal", "Order Service"),
+                new RelationshipDto("rel-2", "uses api", "ServingRelationship",
+                        "elem-2", "elem-3", false,
+                        null, null,
+                        "Order Service", "Billing Process"),
+                new RelationshipDto("rel-3", "", "AccessRelationship",
+                        "elem-3", "elem-1", false,
+                        null, List.of(Map.of("key", "frequency", "value", "daily")),
+                        "Billing Process", "Customer Portal")
+        );
+
+        // Source layers for test: elem-1 = Application, elem-2 = Application, elem-3 = Business
+        private static final Map<String, String> ELEMENT_LAYERS = Map.of(
+                "elem-1", "Application", "elem-2", "Application", "elem-3", "Business");
 
         private static final List<ElementDto> ALL_ELEMENTS = List.of(
                 ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
@@ -1887,6 +2260,34 @@ public class SearchHandlerTest {
                     if (value != null && value.toLowerCase().contains(lowerQuery)) {
                         return true;
                     }
+                }
+            }
+            return false;
+        }
+
+        @Override
+        public List<RelationshipDto> searchRelationships(String query, String typeFilter,
+                                                          String sourceLayerFilter, String targetLayerFilter) {
+            if (!isModelLoaded()) throw new NoModelLoadedException();
+            String lowerQuery = query.toLowerCase();
+            return ALL_RELATIONSHIPS.stream()
+                    .filter(r -> typeFilter == null || typeFilter.equals(r.type()))
+                    .filter(r -> sourceLayerFilter == null
+                            || sourceLayerFilter.equals(ELEMENT_LAYERS.get(r.sourceId())))
+                    .filter(r -> targetLayerFilter == null
+                            || targetLayerFilter.equals(ELEMENT_LAYERS.get(r.targetId())))
+                    .filter(r -> matchesRelationship(r, lowerQuery))
+                    .toList();
+        }
+
+        private boolean matchesRelationship(RelationshipDto rel, String lowerQuery) {
+            if (lowerQuery.isEmpty()) return true;
+            if (rel.name() != null && rel.name().toLowerCase().contains(lowerQuery)) return true;
+            if (rel.documentation() != null && rel.documentation().toLowerCase().contains(lowerQuery)) return true;
+            if (rel.properties() != null) {
+                for (Map<String, String> prop : rel.properties()) {
+                    String value = prop.get("value");
+                    if (value != null && value.toLowerCase().contains(lowerQuery)) return true;
                 }
             }
             return false;
