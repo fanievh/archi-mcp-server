@@ -50,8 +50,42 @@ In your project's `.mcp.json` or `~/.claude.json`:
 {
   "mcpServers": {
     "archi": {
-      "type": "url",
+      "type": "http",
       "url": "http://127.0.0.1:18090/mcp"
+    }
+  }
+}
+```
+
+Or via the CLI:
+
+```bash
+claude mcp add --transport http archi http://127.0.0.1:18090/mcp
+```
+
+#### Claude Desktop
+
+Claude Desktop does not natively support Streamable HTTP, so a proxy is required. Install [uv](https://docs.astral.sh/uv/) (a single Rust binary), then add to your `claude_desktop_config.json`:
+
+**Windows:**
+```json
+{
+  "mcpServers": {
+    "archi": {
+      "command": "C:\\Users\\YOUR_USER\\.local\\bin\\uvx.exe",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://127.0.0.1:18090/mcp"]
+    }
+  }
+}
+```
+
+**macOS:**
+```json
+{
+  "mcpServers": {
+    "archi": {
+      "command": "uvx",
+      "args": ["mcp-proxy", "--transport", "streamablehttp", "http://127.0.0.1:18090/mcp"]
     }
   }
 }
