@@ -10,6 +10,7 @@ This document describes the layout and quality assessment systems, including Zes
 - [Flat View Layout](#flat-view-layout)
 - [Group-Aware Layout](#group-aware-layout)
 - [Hub Element Detection](#hub-element-detection)
+- [Element Auto-Sizing](#element-auto-sizing)
 - [Layout Quality Assessment](#layout-quality-assessment)
 - [Auto-Layout-and-Route with Target Rating](#auto-layout-and-route-with-target-rating)
 - [Configuration Constants](#configuration-constants)
@@ -289,6 +290,53 @@ Hub detection slots between group optimization and connection routing:
     → detect-hub-elements → update-view-object (resize hubs)
     → auto-route-connections → assess-layout
 ```
+
+**Source:** `model/ArchiModelAccessorImpl.java`, `handlers/ViewPlacementHandler.java`
+
+## Element Auto-Sizing
+
+Elements placed at the default size (120x55) may truncate long names. Two mechanisms ensure labels are fully visible.
+
+### Auto-Size at Placement (`autoSize` on `add-to-view`)
+
+When `autoSize: true` is passed to `add-to-view`, the server computes element dimensions from the label text using SWT font metrics before the element is placed on the view.
+
+**Algorithm:**
+
+1. Measure label text width and height using `GC.textExtent()` on the SWT UI thread
+2. Add horizontal padding (20px) and vertical padding (10px)
+3. Apply aspect-ratio-aware sizing with target ratio 1.5:1 (acceptable range [1.2:1, 2.5:1])
+4. If the computed width exceeds target ratio, increase height to bring the ratio within range
+5. Short names (≤15 characters) keep the default 120x55 — auto-sizing only activates for longer names
+6. Explicit `width`/`height` parameters take precedence over `autoSize`
+
+This is the recommended approach for flat views — it eliminates the need for a post-placement resize pass.
+
+### Resize Elements to Fit (`resize-elements-to-fit`)
+
+The `resize-elements-to-fit` tool resizes all (or selected) elements on an existing view to fit their labels. It handles nested containment with a two-pass algorithm:
+
+**Algorithm:**
+
+1. **Child pass:** Identify all elements with children. Process leaf elements first — compute dimensions from label text using SWT font metrics with the same aspect-ratio-aware algorithm as `autoSize`
+2. **Parent pass:** For each parent element, compute the bounding box of all children, add padding (horizontal: 20px, vertical: 30px to accommodate label above children), and set the parent's dimensions to contain both its own label and all children
+3. Apply all size changes as a single compound command (atomic undo)
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `viewId` | required | View to resize elements on |
+| `elementIds` | *(all)* | Specific elements to resize; null = all elements on the view |
+
+### When to Use Which
+
+| Scenario | Approach |
+|----------|----------|
+| Placing elements on flat view | `add-to-view` with `autoSize: true` |
+| Bulk-creating elements | `bulk-mutate` with `autoSize: true` per `add-to-view` operation |
+| Elements inside groups | `layout-within-group` with `autoWidth: true` (existing feature) |
+| Existing view with truncated labels | `resize-elements-to-fit` on the view |
 
 **Source:** `model/ArchiModelAccessorImpl.java`, `handlers/ViewPlacementHandler.java`
 

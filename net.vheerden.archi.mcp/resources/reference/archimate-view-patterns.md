@@ -2,7 +2,7 @@
 
 ## Recommended LLM Model Size
 
-This MCP server exposes 56 tools for ArchiMate model manipulation. Model size impacts reliability:
+This MCP server exposes 60 tools for ArchiMate model manipulation. Model size impacts reliability:
 
 - **8B+ parameters (minimum):** Handles basic queries (get-element, search-elements, get-views). May struggle with multi-step workflows or complex tool sequences.
 - **14B+ parameters (recommended):** Reliable tool calling, multi-tool workflows, view composition, and layout operations. Handles complex sequences like create-view → add elements → layout → assess → refine.
@@ -212,27 +212,27 @@ Is the view connected (showing relationships)?
 │
 ├── NO (catalogue/inventory view)
 │   ├── Will elements be in groups?
-│   │   ├── YES → create groups → add elements with parentViewObjectId
+│   │   ├── YES → create groups → add elements with parentViewObjectId (autoSize=true)
 │   │   │        → layout-within-group for each group (autoResize=true)
-│   │   └── NO  → add elements → layout-flat-view (grid/row/column) or compute-layout (tree/spring/directed)
+│   │   └── NO  → add elements (autoSize=true) → layout-flat-view (grid/row/column) or compute-layout (tree/spring/directed)
 │   └── export-view to verify
 │
 └── YES (relationship view)
     ├── Will elements be in groups?
     │   ├── No specific layout structure needed? (Branch 3 — ELK)
-    │   │   └── pre-layout analysis → create-view → add groups → nest elements
+    │   │   └── pre-layout analysis → create-view → add groups → nest elements (autoSize=true)
     │   │        → auto-connect-view (filtered) → auto-layout-and-route (ELK, target "good")
     │   │        → auto-route-connections (fixes inter-group routing)
     │   │        → assess-layout → iterate if needed
     │   │
     │   └── Specific layout structure needed? (Branch 2 — grouped workflow)
     │       ├── e.g., layered groups, specific group positioning, producer→middleware→consumer flow
-    │       ├── **RECOMMENDED:** pre-layout analysis → create-view → add groups → add elements
+    │       ├── **RECOMMENDED:** pre-layout analysis → create-view → add groups → add elements (autoSize=true)
     │       │    → auto-connect-view (filtered)
     │       │    → **auto-layout-and-route mode="grouped"** targetRating="good"
     │       │    → assess-layout → iterate if needed
     │       └── MANUAL alternative (same quality, more token-expensive):
-    │            pre-layout analysis → create-view → add groups → add elements
+    │            pre-layout analysis → create-view → add groups → add elements (autoSize=true)
     │            → **get-view-contents format=tree** (discover group viewObjectIds)
     │            → layout-within-group per group (spacing from heuristics)
     │            → arrange-groups topology (orders groups by connection density)
@@ -242,14 +242,14 @@ Is the view connected (showing relationships)?
     │            → IF poor: increase spacing → re-route → re-assess → iterate
     │
     ├── Flat view, LLM-managed positions? (Branch 2 flat — DEFAULT for flat connected views)
-    │   └── add elements → **layout-flat-view** (grid/row/column, sortBy, categoryField)
+    │   └── add elements (autoSize=true) → **layout-flat-view** (grid/row/column, sortBy, categoryField)
     │        → auto-connect-view → auto-route-connections (autoNudge: true)
     │        → assess-layout → iterate if needed
     │
     └── Algorithmic positions? (Branch 3 — ELK)
-        ├── Flat view: pre-layout analysis → add elements → resize hubs
+        ├── Flat view: pre-layout analysis → add elements (autoSize=true) → resize hubs
         │    → auto-connect-view (filtered) → auto-layout-and-route (ELK, target "good")
-        └── Grouped view: pre-layout analysis → create groups → nest elements
+        └── Grouped view: pre-layout analysis → create groups → nest elements (autoSize=true)
              → auto-connect-view (filtered) → auto-layout-and-route (ELK)
              → auto-route-connections (fixes inter-group routing)
              → assess-layout → iterate if needed
@@ -260,8 +260,8 @@ Is the view connected (showing relationships)?
 No relationships shown — focus on element organisation.
 
 1. `create-view` with name and optional viewpoint
-2. **If grouped:** `add-group-to-view` for each group → `add-to-view` with `parentViewObjectId` for each element → `layout-within-group` per group with `autoResize: true`
-3. **If flat:** `add-to-view` for each element → `layout-flat-view` with `arrangement: "grid"` (or `compute-layout` with `grid`/`tree` algorithm for graph-aware positioning)
+2. **If grouped:** `add-group-to-view` for each group → `add-to-view` with `parentViewObjectId` and `autoSize: true` for each element → `layout-within-group` per group with `autoResize: true`
+3. **If flat:** `add-to-view` with `autoSize: true` for each element → `layout-flat-view` with `arrangement: "grid"` (or `compute-layout` with `grid`/`tree` algorithm for graph-aware positioning)
 4. `export-view` to verify
 
 ### Branch 2: Connected View, LLM-Managed Positions (structural intent)
@@ -277,7 +277,7 @@ The LLM controls element/group placement. Use this when you need a **specific la
 1. **Pre-layout analysis:** count connections per element from the model, identify hubs (5+ connections), determine spacing from Pre-Layout Planning Checklist
 2. `create-view` with name (do NOT set `connectionRouterType: "manhattan"`)
 3. `add-group-to-view` for each group (topology-aware composition — see Pre-Layout Planning §3)
-4. `add-to-view` with `parentViewObjectId` to nest elements in groups
+4. `add-to-view` with `parentViewObjectId` and `autoSize: true` to nest elements in groups — ensures labels are not truncated before layout runs
 5. `auto-connect-view` with `relationshipTypes` filter (2-3 types max per view)
 6. **`auto-layout-and-route` with `mode: "grouped"`, `targetRating: "good"`** — orchestrates layout, arrangement, optimization, and routing with quality iteration
 7. `assess-layout` to verify, `export-view` to check visually
@@ -287,7 +287,7 @@ The LLM controls element/group placement. Use this when you need a **specific la
 1. **Pre-layout analysis:** count connections per element from the model, identify hubs (5+ connections), determine spacing from Pre-Layout Planning Checklist
 2. `create-view` with name (do NOT set `connectionRouterType: "manhattan"`)
 3. `add-group-to-view` for each group (topology-aware composition — see Pre-Layout Planning §3)
-4. `add-to-view` with `parentViewObjectId` to nest elements in groups
+4. `add-to-view` with `parentViewObjectId` and `autoSize: true` to nest elements in groups
 5. **`get-view-contents` with `format=tree`** to discover group viewObjectIds and their children — compact hierarchy ideal for the next steps
 6. `layout-within-group` per group with `autoResize: true` and spacing from heuristics table
 7. `arrange-groups` with `arrangement: "topology"` to position groups based on inter-group connection density (use `spacing` from heuristics table for routing corridors). For left-to-right flow patterns (e.g., producer→middleware→consumer), add `direction: "horizontal"`
@@ -305,7 +305,7 @@ The LLM controls element/group placement. Use this when you need a **specific la
 > **`layout-flat-view` is the preferred layout tool for flat (ungrouped) views.** It offers `sortBy` and `categoryField` options that organize elements by type or layer before positioning — something `auto-layout-and-route` (ELK) does not provide. Use ELK (Branch 3) only when you want the algorithm to also control connection routing in a single call.
 
 1. `create-view` with name
-2. Add elements with `add-to-view` (positions don't matter)
+2. Add elements with `add-to-view` and `autoSize: true` (positions don't matter — sizes do)
 3. **`layout-flat-view`** with `arrangement: "grid"` (or `"row"`/`"column"`) — auto-positions all elements. Optional: `sortBy: "type"` or `categoryField: "layer"` for organized grouping
 4. `auto-connect-view` to batch-create all connections
 5. `auto-route-connections` with `autoNudge: true` to compute clean orthogonal paths and automatically fix blocked routes
@@ -322,7 +322,7 @@ Let the ELK algorithm control element positioning. Use this when **no specific l
 
 1. **Pre-layout analysis:** identify hub elements from model relationships (use `get-relationships` or plan to use `detect-hub-elements` after adding elements)
 2. `create-view` with name
-3. `add-to-view` for each element (positions don't matter — ELK will override them)
+3. `add-to-view` with `autoSize: true` for each element (positions don't matter — ELK will override them, but sizes are preserved)
 4. **Resize hub elements** before ELK: wider elements = more attachment points for connections. Use sizing from Pre-Layout Planning §1
 5. `auto-connect-view` with `relationshipTypes` filter (2-3 types max)
 6. `auto-layout-and-route` with desired direction, spacing, and `targetRating: "good"` (not "excellent" — avoids wasted iterations on dense views)
@@ -334,7 +334,7 @@ Let the ELK algorithm control element positioning. Use this when **no specific l
 1. **Pre-layout analysis:** count connections per element, identify hubs, determine spacing from Pre-Layout Planning Checklist
 2. `create-view` with name
 3. `add-group-to-view` for each group (topology-aware composition — see Pre-Layout Planning §3)
-4. `add-to-view` with `parentViewObjectId` to nest elements in groups (ELK preserves containment — children stay inside their parents during layout)
+4. `add-to-view` with `parentViewObjectId` and `autoSize: true` to nest elements in groups (ELK preserves containment — children stay inside their parents during layout)
 5. `auto-connect-view` with `relationshipTypes` filter (2-3 types max)
 6. `auto-layout-and-route` with desired direction, spacing, and `targetRating: "good"` (recommended)
 7. **`auto-route-connections`** to re-route with obstacle-aware orthogonal paths (**critical for grouped views** — see note below)
@@ -354,6 +354,7 @@ Let the ELK algorithm control element positioning. Use this when **no specific l
 - Use `apply-positions` for fine-tuning individual element positions without re-running the full algorithm
 - When initial placement will be refined by routing iteration, use approximate coordinates — don't waste effort on precision that will be overridden
 - **Note placement:** Notes are excluded from layout algorithms (`compute-layout`, `auto-layout-and-route`, `layout-within-group`) and do not affect `assess-layout` quality scoring. Use `position: "above-content"` on `add-note-to-view` after layout is complete to place title notes automatically above diagram content. Note-element overlaps are reported informatively by `assess-layout` but do not penalize the rating
+- **View cloning for layout experiments:** Before trying a fundamentally different layout approach (switching algorithm, restructuring groups, changing direction), use `clone-view` to preserve the current state. Experiment on the clone — if the new approach is worse, delete the clone and keep the original. This is safer than relying on multiple `undo` operations across a complex layout sequence. Also useful for presenting alternative layouts to the user for comparison (e.g., clone a view, apply ELK to the clone, keep the original grouped layout — let the user choose)
 
 ## Images & Icons on Elements
 
@@ -365,6 +366,31 @@ When adding custom images (icons) to elements via `add-image-to-model` + `update
 - **To hide the type icon:** Set `showIcon: "never"` on the view object. This frees up top-right for custom images if needed.
 - **Icon size:** 16x16 icons may be barely visible on large elements (120+ px wide). Consider 32x32 or larger icons for better visibility, or use `fill` position to stretch the image.
 - **Workflow:** Import images with `add-image-to-model` first, then apply to view objects. Set `imagePosition` and `showIcon` in the same `update-view-object` call to avoid intermediate states where both icons overlap.
+
+## Auto-Sizing Elements to Fit Labels
+
+Elements placed at default size (120x55) may truncate long names. Use auto-sizing to ensure labels are fully visible. **All workflow branches above include `autoSize: true` at the element placement step — this avoids a costly resize-then-relayout cycle later.**
+
+**At placement time — `autoSize: true` on `add-to-view` (recommended):**
+- Pass `autoSize: true` when placing individual elements on flat views or via `bulk-mutate` with `add-to-view` operations
+- Computes dimensions using SWT font metrics with aspect-ratio-aware sizing (target 1.5:1, range [1.2:1, 2.5:1])
+- Short names (≤15 chars) keep default 120x55 — auto-sizing only activates for longer names
+- Explicit `width`/`height` take precedence over `autoSize`
+- **Not needed within `layout-within-group`** — that tool has its own `autoWidth` parameter
+
+**After placement — `resize-elements-to-fit`:**
+- Resizes all (or selected) elements on an existing view to fit their labels
+- Two-pass algorithm for nested containment: children sized first, then parents sized to contain children + own label + padding
+- Recommended after placing elements without `autoSize` or when element names change
+
+**When to use which:**
+
+| Scenario | Approach |
+|----------|----------|
+| Placing elements on flat view | `add-to-view` with `autoSize: true` |
+| Bulk-creating elements | `bulk-mutate` with `autoSize: true` per add-to-view op |
+| Elements inside groups | `layout-within-group` with `autoWidth: true` (existing feature) |
+| Existing view with truncated labels | `resize-elements-to-fit` on the view |
 
 ## Common Pitfalls
 

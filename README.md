@@ -6,7 +6,7 @@ An Eclipse PDE plugin for [Archi](https://www.archimatetool.com/) that exposes A
 
 Archi MCP Server embeds an HTTP server inside Archi that speaks MCP. Once running, any MCP-compatible LLM client (Claude, Cline, LM Studio, etc.) can connect and interact with the currently open ArchiMate model — asking questions, searching elements, traversing relationships, composing view diagrams, and even creating or modifying model content.
 
-The server provides **56 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, images, and more — plus **6 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
+The server provides **60 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, images, and more — plus **6 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
 
 **Example conversation:**
 
@@ -138,7 +138,7 @@ Clients must trust the self-signed certificate. For `curl` testing, use the `-k`
 
 ## Available Tools
 
-The server exposes **56 MCP tools** organised into functional categories.
+The server exposes **60 MCP tools** organised into functional categories.
 
 ### Query & Model Inspection (5 tools)
 
@@ -159,19 +159,21 @@ The server exposes **56 MCP tools** organised into functional categories.
 | `get-or-create-element` | Discovery-first — returns existing element if exact name+type match exists, otherwise creates new |
 | `search-and-create` | Combined search + conditional create with duplicate candidate display |
 
-### Element & Relationship Creation (3 tools)
+### Element & Relationship Creation (4 tools)
 
 | Tool | Description |
 |---|---|
 | `create-element` | Create an ArchiMate element with type validation and duplicate detection |
 | `create-relationship` | Create a relationship with ArchiMate specification rule enforcement |
 | `create-view` | Create a new diagram view with optional viewpoint and connection router type |
+| `clone-view` | Duplicate an existing view with all visual contents (elements, groups, notes, connections, bendpoints, styling). The clone references the same model objects |
 
-### Element & View Updates (2 tools)
+### Element, Relationship & View Updates (3 tools)
 
 | Tool | Description |
 |---|---|
 | `update-element` | Update element name, documentation, or properties |
+| `update-relationship` | Update relationship name, documentation, or properties (source, target, type are immutable) |
 | `update-view` | Update view name, viewpoint, documentation, properties, or connection router type |
 
 ### View Composition (7 tools)
@@ -193,17 +195,18 @@ The server exposes **56 MCP tools** organised into functional categories.
 | `remove-from-view` | Remove a visual element or connection from a view (model object preserved) |
 | `clear-view` | Remove all visual elements and connections from a view (model objects preserved) |
 
-### Layout & Routing (7 tools)
+### Layout & Routing (8 tools)
 
 | Tool | Description |
 |---|---|
 | `compute-layout` | Apply an automatic layout algorithm (tree, spring, directed, radial, grid) to a view |
-| `auto-route-connections` | Orthogonal connection routing using clearance-weighted visibility-graph A* pathfinding with corridor directionality, group-wall awareness, and post-routing path straightening. Optional `autoNudge` mode automatically moves blocking elements and re-routes failed connections in a single atomic operation |
+| `auto-route-connections` | Orthogonal connection routing using clearance-weighted visibility-graph A* pathfinding with corridor directionality, corridor diversity, group-wall awareness, and post-routing path straightening. Optional `autoNudge` mode automatically moves blocking elements and re-routes failed connections in a single atomic operation |
 | `auto-layout-and-route` | Two modes: `auto` (default) uses ELK Layered to compute positions AND routes in one operation; `grouped` orchestrates the full grouped-view workflow (layout-within-group + arrange-groups + optimize-group-order + auto-route-connections) atomically |
 | `layout-within-group` | Arrange child elements within a group using row, column, or grid patterns |
 | `layout-flat-view` | Automatic layout for flat (non-grouped) views — row, column, or grid arrangement with optional sorting by name/type/layer and category grouping |
 | `arrange-groups` | Position top-level groups relative to each other in grid, row, or column layout |
 | `optimize-group-order` | Reorder elements within groups to minimise inter-group edge crossings |
+| `resize-elements-to-fit` | Resize all (or selected) elements on a view to fit their labels using SWT font metrics. Two-pass algorithm for nested containment: children first, then parents |
 
 ### Layout Assessment & Analysis (2 tools)
 

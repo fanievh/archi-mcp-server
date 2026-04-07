@@ -38,10 +38,14 @@ public class VisibilityGraphRouter {
     /** Maximum effective clearance — corridors wider than this get no additional benefit (B43-a). */
     static final double MAX_EFFECTIVE_CLEARANCE = 60.0;
 
+    /** Default occupancy weight — multiplicative penalty for occupied corridors (B47). */
+    static final double DEFAULT_OCCUPANCY_WEIGHT = 0.75;
+
     private final int bendPenalty;
     private final double congestionWeight;
     private final double clearanceWeight;
     private final double directionalityWeight;
+    private final double occupancyWeight;
     private final List<RoutingRect> groupBoundaries;
 
     public VisibilityGraphRouter() {
@@ -100,6 +104,22 @@ public class VisibilityGraphRouter {
      */
     public VisibilityGraphRouter(int bendPenalty, double congestionWeight, double clearanceWeight,
             double directionalityWeight, List<RoutingRect> groupBoundaries) {
+        this(bendPenalty, congestionWeight, clearanceWeight, directionalityWeight, groupBoundaries,
+                DEFAULT_OCCUPANCY_WEIGHT);
+    }
+
+    /**
+     * Creates a router with all configurable weights, group boundaries, and occupancy weight (B47).
+     *
+     * @param bendPenalty          penalty in pixels for direction changes (bends)
+     * @param congestionWeight     multiplier for local obstacle density — 0.0 disables congestion awareness
+     * @param clearanceWeight      inverse clearance penalty weight — higher values penalize edges near obstacles more (B41)
+     * @param directionalityWeight cosine-based penalty for edges moving away from target (B43)
+     * @param groupBoundaries      group rectangles for group-wall clearance cost (B43-b)
+     * @param occupancyWeight      multiplicative penalty for occupied corridors (B47) — 0.0 disables
+     */
+    public VisibilityGraphRouter(int bendPenalty, double congestionWeight, double clearanceWeight,
+            double directionalityWeight, List<RoutingRect> groupBoundaries, double occupancyWeight) {
         if (bendPenalty < 0) {
             throw new IllegalArgumentException("bendPenalty must be non-negative: " + bendPenalty);
         }
@@ -112,10 +132,14 @@ public class VisibilityGraphRouter {
         if (directionalityWeight < 0) {
             throw new IllegalArgumentException("directionalityWeight must be non-negative: " + directionalityWeight);
         }
+        if (occupancyWeight < 0) {
+            throw new IllegalArgumentException("occupancyWeight must be non-negative: " + occupancyWeight);
+        }
         this.bendPenalty = bendPenalty;
         this.congestionWeight = congestionWeight;
         this.clearanceWeight = clearanceWeight;
         this.directionalityWeight = directionalityWeight;
+        this.occupancyWeight = occupancyWeight;
         this.groupBoundaries = groupBoundaries != null ? groupBoundaries : List.of();
     }
 
@@ -129,6 +153,23 @@ public class VisibilityGraphRouter {
      * @return ordered list of nodes from source to target, or empty list if no path exists
      */
     public List<VisNode> findPath(OrthogonalVisibilityGraph graph, VisNode source, VisNode target) {
+        return findPath(graph, source, target, null);
+    }
+
+    /**
+     * Finds the optimal path with occupancy-aware corridor cost (B47).
+     * When a non-null tracker is provided, corridors already used by prior
+     * connections receive a multiplicative distance penalty:
+     * {@code effectiveDistance = distance * (1 + occupancyWeight * occupancy)}.
+     *
+     * @param graph            the visibility graph (must be built and have ports added)
+     * @param source           the source node
+     * @param target           the target node
+     * @param occupancyTracker corridor occupancy tracker (nullable — null disables occupancy cost)
+     * @return ordered list of nodes from source to target, or empty list if no path exists
+     */
+    public List<VisNode> findPath(OrthogonalVisibilityGraph graph, VisNode source, VisNode target,
+            CorridorOccupancyTracker occupancyTracker) {
         if (source.equals(target)) {
             return List.of(source);
         }
@@ -175,7 +216,16 @@ public class VisibilityGraphRouter {
                         groupWallClearanceCost = clearanceWeight / Math.max(Math.min(groupClearance, MAX_EFFECTIVE_CLEARANCE), 1.0);
                     }
                 }
-                double newGCost = current.gCost + edge.distance() + bendCost + directionCost + congestionCost + clearanceCost + directionalityCost + groupWallClearanceCost;
+                // B47: Apply multiplicative occupancy cost to edge distance
+                double effectiveDistance = edge.distance();
+                if (occupancyTracker != null && occupancyWeight > 0) {
+                    int occupancy = occupancyTracker.getOccupancy(
+                            current.node.x(), current.node.y(), edge.target().x(), edge.target().y());
+                    if (occupancy > 0) {
+                        effectiveDistance *= (1.0 + occupancyWeight * occupancy);
+                    }
+                }
+                double newGCost = current.gCost + effectiveDistance + bendCost + directionCost + congestionCost + clearanceCost + directionalityCost + groupWallClearanceCost;
                 double hCost = manhattanDistance(edge.target(), target);
 
                 StateKey neighborKey = new StateKey(edge.target(), edge.direction());

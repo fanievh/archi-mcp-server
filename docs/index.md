@@ -16,11 +16,11 @@ Absolute vs relative coordinate systems, nested element coordinate conversion, b
 
 ### [Routing Pipeline](routing-pipeline.md)
 
-The multi-stage orthogonal connection routing system: visibility graph construction, A* path search with clearance weighting and corridor directionality, path ordering, edge nudging, coincident segment detection, label clearance, terminal edge attachment, center-termination and interior BP correction, orthogonality enforcement, and the recommendation engine.
+The multi-stage orthogonal connection routing system: visibility graph construction, A* path search with clearance weighting, corridor directionality, and corridor diversity (occupancy-aware routing), path ordering, edge nudging, coincident segment detection, label clearance, terminal edge attachment, center-termination and interior BP correction, orthogonality enforcement, and the recommendation engine.
 
 ### [Layout Engine](layout-engine.md)
 
-Zest-based layout algorithms, ELK Layered integration, layout presets, group-aware layout tools (layout-within-group, arrange-groups, optimize-group-order), the multi-metric quality assessment framework, and auto-layout-and-route with target rating iteration.
+Zest-based layout algorithms, ELK Layered integration, layout presets, group-aware layout tools (layout-within-group, arrange-groups, optimize-group-order), element auto-sizing (autoSize and resize-elements-to-fit), the multi-metric quality assessment framework, and auto-layout-and-route with target rating iteration.
 
 ### [Mutation Model](mutation-model.md)
 

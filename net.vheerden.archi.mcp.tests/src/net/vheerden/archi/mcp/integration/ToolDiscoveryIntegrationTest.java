@@ -89,7 +89,7 @@ public class ToolDiscoveryIntegrationTest {
     @Test
     public void shouldDiscoverAllRegisteredTools() {
         List<McpServerFeatures.SyncToolSpecification> tools = registry.getToolSpecifications();
-        assertEquals("Expected exactly 54 tools (2 ModelQuery + 3 View + 2 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 3 Creation + 1 Update + 2 Discovery + 3 Approval + 19 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 54, tools.size());
+        assertEquals("Expected exactly 56 tools (2 ModelQuery + 3 View + 2 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 4 Creation + 2 Update + 2 Discovery + 3 Approval + 19 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 56, tools.size());
     }
 
     @Test
@@ -116,6 +116,7 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing create-relationship", toolNames.contains("create-relationship"));
         assertTrue("Missing create-view", toolNames.contains("create-view"));
         assertTrue("Missing update-element", toolNames.contains("update-element"));
+        assertTrue("Missing update-relationship", toolNames.contains("update-relationship"));
         assertTrue("Missing get-or-create-element", toolNames.contains("get-or-create-element"));
         assertTrue("Missing search-and-create", toolNames.contains("search-and-create"));
         assertTrue("Missing bulk-mutate", toolNames.contains("bulk-mutate"));
@@ -484,6 +485,29 @@ public class ToolDiscoveryIntegrationTest {
                 updateElementSchema.required().contains("documentation"));
         assertFalse("update-element 'properties' should be optional",
                 updateElementSchema.required().contains("properties"));
+
+        // Story C10: Relationship update tool
+        // update-relationship: requires id; optional name, documentation, properties
+        McpSchema.JsonSchema updateRelSchema = findTool("update-relationship").inputSchema();
+        assertNotNull(updateRelSchema);
+        assertTrue("update-relationship should have 'id' property",
+                updateRelSchema.properties().containsKey("id"));
+        assertTrue("update-relationship should have 'name' property",
+                updateRelSchema.properties().containsKey("name"));
+        assertTrue("update-relationship should have 'documentation' property",
+                updateRelSchema.properties().containsKey("documentation"));
+        assertTrue("update-relationship should have 'properties' property",
+                updateRelSchema.properties().containsKey("properties"));
+        assertNotNull("update-relationship should have required list",
+                updateRelSchema.required());
+        assertTrue("update-relationship should require 'id'",
+                updateRelSchema.required().contains("id"));
+        assertFalse("update-relationship 'name' should be optional",
+                updateRelSchema.required().contains("name"));
+        assertFalse("update-relationship 'documentation' should be optional",
+                updateRelSchema.required().contains("documentation"));
+        assertFalse("update-relationship 'properties' should be optional",
+                updateRelSchema.required().contains("properties"));
 
         // Story 7-4: create-element force parameter
         assertTrue("create-element should have 'force' property",

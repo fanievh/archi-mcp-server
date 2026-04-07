@@ -61,8 +61,8 @@ public class ElementCreationHandlerTest {
     // ---- Tool registration tests ----
 
     @Test
-    public void shouldRegisterThreeTools_whenHandlerRegistered() {
-        assertEquals(3, registry.getToolSpecifications().size());
+    public void shouldRegisterFourTools_whenHandlerRegistered() {
+        assertEquals(4, registry.getToolSpecifications().size());
     }
 
     @Test
@@ -577,6 +577,119 @@ public class ElementCreationHandlerTest {
         assertTrue(nextSteps.stream().anyMatch(s -> s.contains("batch")));
     }
 
+    // ---- clone-view tests (Story C2) ----
+
+    @Test
+    public void shouldRegisterCloneViewTool() {
+        boolean found = registry.getToolSpecifications().stream()
+                .anyMatch(spec -> "clone-view".equals(spec.tool().name()));
+        assertTrue("clone-view tool should be registered", found);
+    }
+
+    @Test
+    public void shouldReturnViewDto_whenCloneViewCalled() throws Exception {
+        Map<String, Object> result = callAndParse("clone-view",
+                Map.of("sourceViewId", "view-src-1", "newName", "Cloned Diagram"));
+
+        Map<String, Object> entity = getResult(result);
+        assertEquals("view-cloned-1", entity.get("id"));
+        assertEquals("Cloned Diagram", entity.get("name"));
+    }
+
+    @Test
+    public void shouldReturnNextSteps_whenCloneViewSucceeds() throws Exception {
+        Map<String, Object> result = callAndParse("clone-view",
+                Map.of("sourceViewId", "view-src-1", "newName", "Cloned Diagram"));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertFalse(nextSteps.isEmpty());
+        assertTrue(nextSteps.stream().anyMatch(s -> s.contains("get-view-contents")));
+    }
+
+    @Test
+    public void shouldReturnInvalidParameterError_whenCloneViewSourceViewIdMissing() throws Exception {
+        McpSchema.CallToolResult result = callTool("clone-view",
+                Map.of("newName", "Missing Source"));
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnInvalidParameterError_whenCloneViewNewNameMissing() throws Exception {
+        McpSchema.CallToolResult result = callTool("clone-view",
+                Map.of("sourceViewId", "view-src-1"));
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnNotFoundError_whenCloneViewSourceInvalid() throws Exception {
+        accessor.setCloneViewBehavior((sessionId, sourceViewId, newName, folderId) -> {
+            throw new ModelAccessException("Source view not found: " + sourceViewId,
+                    ErrorCode.VIEW_NOT_FOUND);
+        });
+
+        McpSchema.CallToolResult result = callTool("clone-view",
+                Map.of("sourceViewId", "bad-view-id", "newName", "Cloned"));
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("VIEW_NOT_FOUND", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnModelNotLoaded_whenCloneViewWithNoModel() throws Exception {
+        StubCreationAccessor noModel = new StubCreationAccessor(false);
+        ElementCreationHandler noModelHandler = new ElementCreationHandler(
+                noModel, formatter, new CommandRegistry(), null);
+
+        McpSchema.CallToolResult result = noModelHandler.handleCloneView(null,
+                McpSchema.CallToolRequest.builder().name("clone-view")
+                        .arguments(Map.of("sourceViewId", "v1", "newName", "Clone")).build());
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("MODEL_NOT_LOADED", error.get("code"));
+    }
+
+    @Test
+    public void shouldHaveMutationPrefix_inCloneViewDescription() {
+        boolean found = registry.getToolSpecifications().stream()
+                .filter(spec -> "clone-view".equals(spec.tool().name()))
+                .anyMatch(spec -> spec.tool().description().startsWith("[Mutation]"));
+        assertTrue("clone-view description should start with [Mutation]", found);
+    }
+
+    @Test
+    public void shouldPassFolderId_whenCloneViewWithFolderId() throws Exception {
+        final String[] capturedFolderId = {null};
+        accessor.setCloneViewBehavior((sessionId, sourceViewId, newName, folderId) -> {
+            capturedFolderId[0] = folderId;
+            ViewDto dto = new ViewDto("view-cloned-folder", newName, null, "Custom/Folder");
+            return new MutationResult<>(dto, null);
+        });
+
+        callAndParse("clone-view",
+                Map.of("sourceViewId", "view-src-1", "newName", "Cloned",
+                        "folderId", "folder-42"));
+
+        assertEquals("folder-42", capturedFolderId[0]);
+    }
+
     // ---- create-view connectionRouterType tests (Story 9-0c) ----
 
     @Test
@@ -637,6 +750,7 @@ public class ElementCreationHandlerTest {
             case "create-element" -> handler.handleCreateElement(null, request);
             case "create-relationship" -> handler.handleCreateRelationship(null, request);
             case "create-view" -> handler.handleCreateView(null, request);
+            case "clone-view" -> handler.handleCloneView(null, request);
             default -> throw new IllegalArgumentException("Unknown tool: " + toolName);
         };
     }
@@ -677,6 +791,12 @@ public class ElementCreationHandlerTest {
                 String viewpoint, String folderId, String connectionRouterType);
     }
 
+    @FunctionalInterface
+    interface CloneViewBehavior {
+        MutationResult<ViewDto> apply(String sessionId, String sourceViewId,
+                String newName, String folderId);
+    }
+
     /**
      * StubCreationAccessor that returns canned DTOs for creation methods.
      * Behavior can be overridden per-test for error scenarios.
@@ -688,6 +808,7 @@ public class ElementCreationHandlerTest {
         private CreateElementBehavior createElementBehavior;
         private CreateRelationshipBehavior createRelationshipBehavior;
         private CreateViewBehavior createViewBehavior;
+        private CloneViewBehavior cloneViewBehavior;
         private List<DuplicateCandidate> findDuplicatesResult = List.of();
         boolean createElementCalled = false;
         Map<String, String> capturedSource;
@@ -720,6 +841,10 @@ public class ElementCreationHandlerTest {
             this.createViewBehavior = behavior;
         }
 
+        void setCloneViewBehavior(CloneViewBehavior behavior) {
+            this.cloneViewBehavior = behavior;
+        }
+
         void setFindDuplicatesResult(List<DuplicateCandidate> result) {
             this.findDuplicatesResult = result;
         }
@@ -739,6 +864,10 @@ public class ElementCreationHandlerTest {
             this.createViewBehavior = (sessionId, name, viewpoint, folderId,
                     connectionRouterType) -> {
                 ViewDto dto = new ViewDto("view-created-1", name, viewpoint, "Views");
+                return new MutationResult<>(dto, batchMode ? 1 : null);
+            };
+            this.cloneViewBehavior = (sessionId, sourceViewId, newName, folderId) -> {
+                ViewDto dto = new ViewDto("view-cloned-1", newName, null, "Views");
                 return new MutationResult<>(dto, batchMode ? 1 : null);
             };
         }
@@ -775,6 +904,12 @@ public class ElementCreationHandlerTest {
                 String viewpoint, String folderId, String connectionRouterType) {
             return createViewBehavior.apply(sessionId, name, viewpoint, folderId,
                     connectionRouterType);
+        }
+
+        @Override
+        public MutationResult<ViewDto> cloneView(String sessionId, String sourceViewId,
+                String newName, String folderId) {
+            return cloneViewBehavior.apply(sessionId, sourceViewId, newName, folderId);
         }
 
         @Override

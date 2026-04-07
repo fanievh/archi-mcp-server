@@ -159,6 +159,27 @@ final class ImageHelper {
         return null;
     }
 
+    // ---- Copy helpers (Story C2: clone-view) ----
+
+    /**
+     * Copies image properties from source to target view object.
+     * Handles imagePath, imagePosition, showIcon, and imageSource.
+     */
+    static void copyImageProperties(IDiagramModelObject source, IDiagramModelObject target) {
+        // Image path and position (IIconic)
+        if (source instanceof IIconic srcIconic && target instanceof IIconic tgtIconic) {
+            String imagePath = srcIconic.getImagePath();
+            if (imagePath != null && !imagePath.isEmpty()) {
+                tgtIconic.setImagePath(imagePath);
+                toggleImageSource(target, imagePath);
+            }
+            tgtIconic.setImagePosition(srcIconic.getImagePosition());
+        }
+
+        // Show icon state (available on all IDiagramModelObject)
+        target.setIconVisibleState(source.getIconVisibleState());
+    }
+
     // ---- Private helpers ----
 
     /**

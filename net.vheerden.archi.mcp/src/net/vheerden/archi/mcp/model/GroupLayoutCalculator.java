@@ -160,4 +160,34 @@ class GroupLayoutCalculator {
         int newHeight = maxBottom + padding;
         return new int[]{newWidth, newHeight};
     }
+
+    /**
+     * Validates that no groups overlap each other (AABB intersection test).
+     * Uses strict overlap semantics consistent with {@code LayoutQualityAssessor.computeOverlaps()}:
+     * exact edge touching is NOT an overlap.
+     *
+     * @param groupRects list of group rects [x, y, w, h]
+     * @return true if all gaps are sufficient (no overlaps), false if any overlap exists
+     */
+    static boolean validateGroupGaps(List<int[]> groupRects) {
+        for (int i = 0; i < groupRects.size(); i++) {
+            for (int j = i + 1; j < groupRects.size(); j++) {
+                if (rectanglesOverlap(groupRects.get(i), groupRects.get(j))) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * AABB overlap test: returns true if two rectangles strictly overlap.
+     * Exact edge touching (shared boundary) returns false (not an overlap).
+     */
+    private static boolean rectanglesOverlap(int[] a, int[] b) {
+        return a[0] < b[0] + b[2]       // a.left < b.right
+            && a[0] + a[2] > b[0]       // a.right > b.left
+            && a[1] < b[1] + b[3]       // a.top < b.bottom
+            && a[1] + a[3] > b[1];      // a.bottom > b.top
+    }
 }

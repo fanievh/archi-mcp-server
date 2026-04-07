@@ -5831,4 +5831,58 @@ public class RoutingPipelineTest {
         assertEquals(797, path.get(0).x());
         assertEquals(186, path.get(0).y());
     }
+
+    // --- B47: Connection ordering tests ---
+
+    @Test
+    public void buildConnectionRoutingOrder_shouldSortByDescendingManhattanDistance() {
+        // Short (Manhattan=100), medium (Manhattan=300), long (Manhattan=600)
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("c-short",
+                        new RoutingRect(0, 0, 50, 50, "s1"), new RoutingRect(100, 0, 50, 50, "t1"),
+                        List.of(), null, 0, List.of()),
+                new RoutingPipeline.ConnectionEndpoints("c-medium",
+                        new RoutingRect(0, 0, 50, 50, "s2"), new RoutingRect(300, 0, 50, 50, "t2"),
+                        List.of(), null, 0, List.of()),
+                new RoutingPipeline.ConnectionEndpoints("c-long",
+                        new RoutingRect(0, 0, 50, 50, "s3"), new RoutingRect(300, 300, 50, 50, "t3"),
+                        List.of(), null, 0, List.of()));
+
+        Integer[] order = RoutingPipeline.buildConnectionRoutingOrder(connections);
+
+        assertEquals("Longest first", Integer.valueOf(2), order[0]);
+        assertEquals("Medium second", Integer.valueOf(1), order[1]);
+        assertEquals("Shortest last", Integer.valueOf(0), order[2]);
+    }
+
+    @Test
+    public void buildConnectionRoutingOrder_shouldTieBreakByConnectionId() {
+        // Same Manhattan distance (100), different IDs
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("conn-zebra",
+                        new RoutingRect(0, 0, 50, 50, "s1"), new RoutingRect(100, 0, 50, 50, "t1"),
+                        List.of(), null, 0, List.of()),
+                new RoutingPipeline.ConnectionEndpoints("conn-alpha",
+                        new RoutingRect(0, 0, 50, 50, "s2"), new RoutingRect(100, 0, 50, 50, "t2"),
+                        List.of(), null, 0, List.of()));
+
+        Integer[] order = RoutingPipeline.buildConnectionRoutingOrder(connections);
+
+        // Alphabetical: "conn-alpha" (idx 1) before "conn-zebra" (idx 0)
+        assertEquals("Alpha first (alphabetical tie-break)", Integer.valueOf(1), order[0]);
+        assertEquals("Zebra second", Integer.valueOf(0), order[1]);
+    }
+
+    @Test
+    public void buildConnectionRoutingOrder_shouldHandleSingleConnection() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("only",
+                        new RoutingRect(0, 0, 50, 50, "s"), new RoutingRect(100, 0, 50, 50, "t"),
+                        List.of(), null, 0, List.of()));
+
+        Integer[] order = RoutingPipeline.buildConnectionRoutingOrder(connections);
+
+        assertEquals(1, order.length);
+        assertEquals(Integer.valueOf(0), order[0]);
+    }
 }

@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.model.routing;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -113,6 +114,22 @@ public class RoutingPipeline {
     public List<AbsoluteBendpointDto> routeConnection(
             RoutingRect source, RoutingRect target, List<RoutingRect> obstacles,
             List<RoutingRect> groupBoundaries) {
+        return routeConnection(source, target, obstacles, groupBoundaries, null);
+    }
+
+    /**
+     * Route a single connection with corridor occupancy awareness (B47).
+     *
+     * @param source            source element rectangle
+     * @param target            target element rectangle
+     * @param obstacles         list of obstacle rectangles (caller must exclude source/target/ancestors)
+     * @param groupBoundaries   group rectangles for group-wall clearance cost
+     * @param occupancyTracker  corridor occupancy tracker (nullable — null disables occupancy cost)
+     * @return list of absolute bendpoints (intermediate path nodes, excluding source/target centers)
+     */
+    List<AbsoluteBendpointDto> routeConnection(
+            RoutingRect source, RoutingRect target, List<RoutingRect> obstacles,
+            List<RoutingRect> groupBoundaries, CorridorOccupancyTracker occupancyTracker) {
         logger.debug("Routing connection: source={}, target={}, obstacles={}, groups={}",
                 source.id(), target.id(), obstacles.size(), groupBoundaries.size());
 
@@ -123,7 +140,8 @@ public class RoutingPipeline {
         }
 
         // Primary route: center-to-center with source/target NOT as obstacles
-        List<AbsoluteBendpointDto> bendpoints = routeFromCenters(source, target, obstacles, groupBoundaries);
+        // B47: Pass occupancy tracker for corridor diversity (null for single-connection routing)
+        List<AbsoluteBendpointDto> bendpoints = routeFromCenters(source, target, obstacles, groupBoundaries, occupancyTracker);
 
         // Story 13-4: Check if the route passes through source or target body.
         // If so, re-route with the offending element(s) as obstacles using edge ports.
@@ -223,13 +241,13 @@ public class RoutingPipeline {
      */
     private List<AbsoluteBendpointDto> routeFromCenters(
             RoutingRect source, RoutingRect target, List<RoutingRect> obstacles,
-            List<RoutingRect> groupBoundaries) {
+            List<RoutingRect> groupBoundaries, CorridorOccupancyTracker occupancyTracker) {
         OrthogonalVisibilityGraph graph = new OrthogonalVisibilityGraph(margin, perimeterMargin);
         graph.build(obstacles);
 
         VisNode[] ports = graph.addPortNodes(
                 source.centerX(), source.centerY(), target.centerX(), target.centerY());
-        List<VisNode> path = findPath(graph, ports[0], ports[1], groupBoundaries);
+        List<VisNode> path = findPath(graph, ports[0], ports[1], groupBoundaries, occupancyTracker);
 
         if (path.isEmpty()) {
             logger.warn("No path found from ({},{}) to ({},{}) — falling back to straight line",
@@ -497,18 +515,35 @@ public class RoutingPipeline {
         logger.info("Batch routing {} connections with path ordering and edge nudging",
                 connections.size());
 
-        // 1. Route each connection individually
-        List<String> connectionIds = new ArrayList<>();
-        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>();
-        List<int[]> sourceCenters = new ArrayList<>();
-        List<int[]> targetCenters = new ArrayList<>();
+        // B47: Sort connections by descending Manhattan distance (longest first).
+        // Most constrained connections route first, getting best corridor selection.
+        // Build index mapping to restore original order after routing.
+        Integer[] sortedIndices = buildConnectionRoutingOrder(connections);
 
-        for (ConnectionEndpoints conn : connections) {
-            connectionIds.add(conn.connectionId());
-            bendpointLists.add(routeConnection(conn.source(), conn.target(), conn.obstacles(), conn.groupBoundaries()));
-            sourceCenters.add(new int[]{conn.source().centerX(), conn.source().centerY()});
-            targetCenters.add(new int[]{conn.target().centerX(), conn.target().centerY()});
+        // 1. Route each connection individually with corridor occupancy tracking (B47)
+        List<String> connectionIds = new ArrayList<>(Collections.nCopies(connections.size(), null));
+        List<List<AbsoluteBendpointDto>> bendpointLists = new ArrayList<>(Collections.nCopies(connections.size(), null));
+        List<int[]> sourceCenters = new ArrayList<>(Collections.nCopies(connections.size(), null));
+        List<int[]> targetCenters = new ArrayList<>(Collections.nCopies(connections.size(), null));
+        CorridorOccupancyTracker occupancyTracker = new CorridorOccupancyTracker();
+
+        for (int si = 0; si < sortedIndices.length; si++) {
+            int origIdx = sortedIndices[si].intValue();
+            ConnectionEndpoints conn = connections.get(origIdx);
+            int[] srcCenter = new int[]{conn.source().centerX(), conn.source().centerY()};
+            int[] tgtCenter = new int[]{conn.target().centerX(), conn.target().centerY()};
+            List<AbsoluteBendpointDto> routed = routeConnection(
+                    conn.source(), conn.target(), conn.obstacles(), conn.groupBoundaries(), occupancyTracker);
+            // Record routed path for corridor occupancy (B47)
+            occupancyTracker.recordPath(routed, srcCenter, tgtCenter);
+            // Store in original order position
+            connectionIds.set(origIdx, conn.connectionId());
+            bendpointLists.set(origIdx, routed);
+            sourceCenters.set(origIdx, srcCenter);
+            targetCenters.set(origIdx, tgtCenter);
         }
+        logger.debug("B47: Routed {} connections with occupancy tracking ({} corridors occupied)",
+                connections.size(), occupancyTracker.getCorridorOccupancy().size());
 
         // 1.1. Straight-line crossing estimate (backlog-b22)
         // Uses only source/target centers (not routed paths), so placement after
@@ -2454,11 +2489,20 @@ public class RoutingPipeline {
      */
     List<VisNode> findPath(OrthogonalVisibilityGraph graph, VisNode sourcePort, VisNode targetPort,
             List<RoutingRect> groupBoundaries) {
+        return findPath(graph, sourcePort, targetPort, groupBoundaries, null);
+    }
+
+    /**
+     * Runs A* path search with corridor occupancy awareness (B47).
+     * Package-visible for test overriding.
+     */
+    List<VisNode> findPath(OrthogonalVisibilityGraph graph, VisNode sourcePort, VisNode targetPort,
+            List<RoutingRect> groupBoundaries, CorridorOccupancyTracker occupancyTracker) {
         VisibilityGraphRouter router = new VisibilityGraphRouter(bendPenalty, congestionWeight,
                 VisibilityGraphRouter.DEFAULT_CLEARANCE_WEIGHT,
                 VisibilityGraphRouter.DEFAULT_DIRECTIONALITY_WEIGHT,
                 groupBoundaries);
-        return router.findPath(graph, sourcePort, targetPort);
+        return router.findPath(graph, sourcePort, targetPort, occupancyTracker);
     }
 
     /**
@@ -2468,6 +2512,30 @@ public class RoutingPipeline {
      *
      * @param sourceCenters list of [x, y] source element centers
      * @param targetCenters list of [x, y] target element centers
+     * Builds the routing order for connections (B47): descending Manhattan distance,
+     * tie-break by connection ID (alphabetical). Returns indices into the original list.
+     * Package-visible for testing.
+     *
+     * @param connections the connections to order
+     * @return array of original-list indices in routing order (longest first)
+     */
+    static Integer[] buildConnectionRoutingOrder(List<ConnectionEndpoints> connections) {
+        Integer[] indices = new Integer[connections.size()];
+        for (int i = 0; i < indices.length; i++) indices[i] = i;
+        java.util.Arrays.sort(indices, (a, b) -> {
+            ConnectionEndpoints ca = connections.get(a);
+            ConnectionEndpoints cb = connections.get(b);
+            int distA = Math.abs(ca.source().centerX() - ca.target().centerX())
+                    + Math.abs(ca.source().centerY() - ca.target().centerY());
+            int distB = Math.abs(cb.source().centerX() - cb.target().centerX())
+                    + Math.abs(cb.source().centerY() - cb.target().centerY());
+            int cmp = Integer.compare(distB, distA); // descending
+            return cmp != 0 ? cmp : ca.connectionId().compareTo(cb.connectionId());
+        });
+        return indices;
+    }
+
+    /**
      * @return number of crossing pairs among the straight-line segments
      */
     static int computeStraightLineCrossings(List<int[]> sourceCenters, List<int[]> targetCenters) {

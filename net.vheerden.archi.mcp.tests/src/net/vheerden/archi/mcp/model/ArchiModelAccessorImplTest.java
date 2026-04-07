@@ -55,6 +55,7 @@ import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
@@ -6897,5 +6898,122 @@ public class ArchiModelAccessorImplTest {
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
         }
+    }
+
+    // ---- resizeElementsToFit tests (Story B48) ----
+
+    @Test
+    public void resizeElementsToFit_shouldResizeLongNameElements() {
+        IArchimateModel model = createTestModelForResize();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add elements to view first
+        accessor.addToView("default", "view-resize", "el-long", 50, 50, null, null, false, null, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize", null);
+
+        assertNotNull(result);
+        assertNotNull(result.entity());
+        // The long name element (>15 chars) should have been resized
+        assertTrue("Should have resized at least 1 element",
+                result.entity().resizedCount() >= 1);
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldNotResizeShortNames() {
+        IArchimateModel model = createTestModelForResize();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add short-name element to view
+        accessor.addToView("default", "view-resize", "el-short", 50, 50, null, null, false, null, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize", null);
+
+        assertNotNull(result);
+        // Short name ("Server") should keep defaults → unchanged
+        assertEquals(0, result.entity().resizedCount());
+        assertEquals(1, result.entity().unchangedCount());
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldHandleNestedContainment() {
+        IArchimateModel model = createTestModelForResize();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add parent element, then child inside it
+        MutationResult<AddToViewResultDto> parentResult =
+                accessor.addToView("default", "view-resize", "el-parent", 50, 50, 300, 200, false, null, null, null);
+        String parentVoId = parentResult.entity().viewObject().viewObjectId();
+
+        accessor.addToView("default", "view-resize", "el-long", 10, 30, null, null, false, parentVoId, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize", null);
+
+        assertNotNull(result);
+        // Both parent and child should be processed
+        assertTrue("Should process elements",
+                result.entity().resizedCount() + result.entity().unchangedCount() >= 2);
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldFilterByElementIds() {
+        IArchimateModel model = createTestModelForResize();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add two elements
+        MutationResult<AddToViewResultDto> r1 =
+                accessor.addToView("default", "view-resize", "el-long", 50, 50, null, null, false, null, null, null);
+        accessor.addToView("default", "view-resize", "el-short", 200, 50, null, null, false, null, null, null);
+
+        // Only resize the first one
+        String firstVoId = r1.entity().viewObject().viewObjectId();
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize", List.of(firstVoId));
+
+        assertNotNull(result);
+        // Should only process 1 element (the filtered one)
+        assertEquals(1, result.entity().resizedCount() + result.entity().unchangedCount());
+    }
+
+    private IArchimateModel createTestModelForResize() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+
+        IArchimateModel model = factory.createArchimateModel();
+        model.setName("Resize Test Model");
+        model.setId("model-resize");
+        model.setDefaults();
+
+        // Long name element (>15 chars — triggers auto-sizing)
+        IApplicationComponent longName = factory.createApplicationComponent();
+        longName.setId("el-long");
+        longName.setName("Transaction Monitoring System");
+        model.getFolder(FolderType.APPLICATION).getElements().add(longName);
+
+        // Short name element (<=15 chars — keeps defaults)
+        IApplicationComponent shortName = factory.createApplicationComponent();
+        shortName.setId("el-short");
+        shortName.setName("Server");
+        model.getFolder(FolderType.APPLICATION).getElements().add(shortName);
+
+        // Parent element for containment test
+        IApplicationComponent parent = factory.createApplicationComponent();
+        parent.setId("el-parent");
+        parent.setName("Integration Platform");
+        model.getFolder(FolderType.APPLICATION).getElements().add(parent);
+
+        // View
+        IArchimateDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view-resize");
+        view.setName("Resize Test View");
+        model.getFolder(FolderType.DIAGRAMS).getElements().add(view);
+
+        return model;
     }
 }

@@ -19,12 +19,13 @@ import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
  * Handler for the update-element tool (Story 7-3).
  *
- * <p>Updates existing ArchiMate element fields (name, documentation, properties).
+ * <p>Updates existing ArchiMate element and relationship fields (name, documentation, properties).
  * Supports both GUI-attached (immediate) and batch (queued) operational modes.</p>
  *
  * <p><strong>Architecture boundary:</strong> This class MUST NOT import
@@ -61,10 +62,11 @@ public class ElementUpdateHandler {
 
     /**
      * Registers all tools provided by this handler with the command registry.
-     * Registers: update-element.
+     * Registers: update-element, update-relationship.
      */
     public void registerTools() {
         registry.registerTool(buildUpdateElementSpec());
+        registry.registerTool(buildUpdateRelationshipSpec());
     }
 
     // ---- update-element ----
@@ -165,5 +167,104 @@ public class ElementUpdateHandler {
                 "Use get-element with id '" + id + "' to verify the updated element",
                 "Use get-relationships to check element connections",
                 "Use search-elements to find related elements");
+    }
+
+    // ---- update-relationship ----
+
+    private McpServerFeatures.SyncToolSpecification buildUpdateRelationshipSpec() {
+        Map<String, Object> idProp = new LinkedHashMap<>();
+        idProp.put("type", "string");
+        idProp.put("description", "ID of the relationship to update");
+
+        Map<String, Object> nameProp = new LinkedHashMap<>();
+        nameProp.put("type", "string");
+        nameProp.put("description",
+                "New display name for the relationship (omit to leave unchanged). "
+                + "Empty string clears the name (relationships can be unnamed in ArchiMate).");
+
+        Map<String, Object> documentationProp = new LinkedHashMap<>();
+        documentationProp.put("type", "string");
+        documentationProp.put("description",
+                "New documentation text for the relationship (omit to leave unchanged). "
+                + "Empty string clears documentation.");
+
+        Map<String, Object> propertiesValueSchema = new LinkedHashMap<>();
+        propertiesValueSchema.put("type", "string");
+        propertiesValueSchema.put("nullable", true);
+        Map<String, Object> propertiesProp = new LinkedHashMap<>();
+        propertiesProp.put("type", "object");
+        propertiesProp.put("description",
+                "Properties to add, update, or remove. Set value to a string to add/update, "
+                + "set value to null to remove the property key. Omit to leave properties unchanged.");
+        propertiesProp.put("additionalProperties", propertiesValueSchema);
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("id", idProp);
+        properties.put("name", nameProp);
+        properties.put("documentation", documentationProp);
+        properties.put("properties", propertiesProp);
+
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", properties, List.of("id"), null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("update-relationship")
+                .description("[Mutation] Update an existing ArchiMate relationship's name, "
+                        + "documentation, or properties. Requires id. Only provided fields are "
+                        + "modified; omitted fields remain unchanged. Source, target, and type "
+                        + "CANNOT be changed — to change these, delete and recreate the relationship. "
+                        + "Related: get-relationships (verify changes), search-relationships "
+                        + "(find relationship to update), get-view-contents (check visual representation).")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleUpdateRelationship)
+                .build();
+    }
+
+    McpSchema.CallToolResult handleUpdateRelationship(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling update-relationship request");
+        try {
+            HandlerUtils.requireModelLoaded(accessor);
+            String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
+
+            Map<String, Object> args = request.arguments();
+            String id = HandlerUtils.requireStringParam(args, "id");
+            String name = HandlerUtils.optionalStringParam(args, "name");
+            String documentation = HandlerUtils.optionalStringParam(args, "documentation");
+            Map<String, String> properties = HandlerUtils.optionalMapParamWithNulls(args, "properties");
+
+            MutationResult<RelationshipDto> result = accessor.updateRelationship(
+                    sessionId, id, name, documentation, properties);
+
+            return HandlerUtils.formatMutationResponse(result.entity(), result,
+                    buildUpdateRelationshipNextSteps(result), accessor, formatter);
+
+        } catch (NoModelLoadedException e) {
+            return HandlerUtils.buildModelNotLoadedError(formatter, e);
+        } catch (ModelAccessException e) {
+            return HandlerUtils.buildModelAccessError(formatter, e);
+        } catch (MutationException e) {
+            return HandlerUtils.buildMutationError(formatter, e);
+        } catch (Exception e) {
+            logger.error("Unexpected error handling update-relationship", e);
+            return HandlerUtils.buildInternalError(formatter,
+                    "An unexpected error occurred while updating relationship");
+        }
+    }
+
+    private List<String> buildUpdateRelationshipNextSteps(MutationResult<RelationshipDto> result) {
+        if (result.isBatched()) {
+            return List.of(
+                    "Mutation queued as operation #" + result.batchSequenceNumber() + " in current batch",
+                    "Use get-batch-status to check batch progress",
+                    "Use end-batch to commit all queued mutations");
+        }
+        return List.of(
+                "Use get-relationships to verify the updated relationship",
+                "Use get-view-contents to check visual representation of the relationship");
     }
 }

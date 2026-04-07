@@ -21,6 +21,7 @@ public record BulkOperation(String tool, Map<String, Object> params) {
             "create-relationship",
             "create-view",
             "update-element",
+            "update-relationship",
             "update-view",
             "add-to-view",
             "add-connection-to-view",

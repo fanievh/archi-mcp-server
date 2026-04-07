@@ -18,6 +18,7 @@ This document describes the obstacle-aware orthogonal connection routing system.
 - [Label Position Optimization](#label-position-optimization)
 - [Endpoint Pass-Through Correction](#endpoint-pass-through-correction)
 - [Corridor Re-Route](#corridor-re-route)
+- [Corridor Diversity](#corridor-diversity)
 - [Fallback Edge Port Strategy](#fallback-edge-port-strategy)
 - [Auto-Nudge on Route Failure](#auto-nudge-on-route-failure)
 - [Recommendation Engine](#recommendation-engine)
@@ -139,7 +140,9 @@ f(state) = g(state) + h(state)
 g = edgeCost + bendCost + directionCost + congestionCost + clearanceCost
     + directionalityCost + groupWallClearanceCost
 
-  edgeCost              = Euclidean distance to neighbor (axis-aligned = Manhattan)
+  edgeCost              = effectiveDistance to neighbor
+                          effectiveDistance = distance * (1 + occupancyWeight * occupancy)
+                          where occupancy = number of prior paths using this corridor (B47)
   bendCost              = bendPenalty (30px) if direction changes, 0 if same direction
   directionCost         = DIRECTION_PENALTY (15px) if moving away from target on dominant axis
   congestionCost        = congestionWeight (5.0) * edgeDensity (if density >= 2)
@@ -484,6 +487,29 @@ This stage catches connections that initially failed due to congestion but can s
 
 **Source:** `model/routing/RoutingPipeline.java`
 
+## Corridor Diversity
+
+The `CorridorOccupancyTracker` enables inter-connection awareness during sequential A* routing. After each connection is routed, its path is recorded. Later connections query corridor occupancy to discover which corridors are already carrying traffic.
+
+### How It Works
+
+1. **Path recording:** After each connection is routed, `recordPath()` extracts axis-aligned segments and increments a counter for each corridor key
+2. **Corridor keying:** Keys use the format `"H:y"` (horizontal corridors at y-coordinate) and `"V:x"` (vertical corridors at x-coordinate), with tolerance-aware grouping (2px tolerance) matching the `CoincidentSegmentDetector` and `PathOrderer` formats
+3. **Occupancy query:** During A* search, `getOccupancy(x1, y1, x2, y2)` returns the number of prior paths using the corridor containing the edge
+4. **Cost application:** The A* router multiplies edge distance by `(1 + occupancyWeight * occupancy)`, making occupied corridors progressively more expensive
+
+### Effect
+
+With default `occupancyWeight` of 0.75:
+- An unoccupied corridor has cost multiplier 1.0 (no penalty)
+- A corridor with 1 prior path has multiplier 1.75
+- A corridor with 2 prior paths has multiplier 2.5
+- A corridor with 4 prior paths has multiplier 4.0
+
+This encourages later connections to explore alternative corridors rather than stacking on top of earlier routes, reducing coincident segments without relying solely on post-processing resolution. The multiplicative (not additive) application ensures that shorter corridors remain preferred when alternatives would add significant distance.
+
+**Source:** `model/routing/CorridorOccupancyTracker.java`, `model/routing/VisibilityGraphRouter.java`
+
 ## Fallback Edge Port Strategy
 
 When the primary edge port choice leads to a failed route (e.g., the port points directly into an adjacent obstacle), the router tries alternative edge ports before giving up.
@@ -520,7 +546,7 @@ When `autoNudge: true` and routing failures exist with move recommendations:
 
 - `force: true` takes precedence over `autoNudge` (no point nudging when force-applying all routes)
 - `clear` strategy ignores autoNudge (straight lines have no pass-throughs)
-- Overlapping elements detected via `OverlapResolver.hasOverlappingElements()` — if overlaps exist, autoNudge is skipped and standard failure reporting is used (overlapping geometry creates degenerate routing conditions)
+- Overlapping sibling elements detected via `OverlapResolver.hasOverlappingElements()` — if sibling overlaps exist, autoNudge is skipped and standard failure reporting is used (overlapping geometry creates degenerate routing conditions). Containment overlaps (parent-child nesting, e.g., ApplicationFunction inside ApplicationComponent) are excluded from this check.
 
 ### Response
 
@@ -617,6 +643,7 @@ Returned in the `AutoRouteResultDto.nudgedElements` list when `autoNudge` is ena
 | `DEFAULT_CONGESTION_WEIGHT` | 5.0 | A* congestion cost multiplier (density >= 2) |
 | `DEFAULT_CLEARANCE_WEIGHT` | 75.0 | A* clearance cost multiplier (inversely proportional to perpendicular clearance) |
 | `DEFAULT_DIRECTIONALITY_WEIGHT` | 30.0 | A* corridor directionality cost (cosine-based penalty for edges not moving toward target) |
+| `DEFAULT_OCCUPANCY_WEIGHT` | 0.75 | A* corridor occupancy cost multiplier — multiplicative penalty for corridors already carrying traffic (B47) |
 | `MAX_EFFECTIVE_CLEARANCE` | 60.0px | Clearance cap — prevents exterior corridors from becoming artificially attractive |
 
 ### Visibility Graph (OrthogonalVisibilityGraph)

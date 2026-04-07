@@ -2,8 +2,10 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -172,11 +174,13 @@ class OverlapResolver {
 	}
 
 	/**
-	 * Checks if any non-group, non-note elements have overlapping bounding boxes (Story 13-9).
+	 * Checks if any non-group, non-note sibling elements have overlapping bounding boxes (Story 13-9).
 	 * Used to skip autoNudge when degenerate geometry would crash the routing pipeline.
+	 * Excludes containment overlaps (parent-child nesting) which are intentional, not degenerate.
 	 * Pure geometry — no EMF dependencies.
 	 */
 	static boolean hasOverlappingElements(List<AssessmentNode> nodes) {
+		Set<String> containmentPairs = buildContainmentPairs(nodes);
 		int size = nodes.size();
 		for (int i = 0; i < size; i++) {
 			AssessmentNode a = nodes.get(i);
@@ -184,6 +188,7 @@ class OverlapResolver {
 			for (int j = i + 1; j < size; j++) {
 				AssessmentNode b = nodes.get(j);
 				if (b.isGroup() || b.isNote()) continue;
+				if (isContainmentPair(a, b, containmentPairs)) continue;
 				if (rectsOverlap(a.x(), a.y(), a.width(), a.height(),
 						b.x(), b.y(), b.width(), b.height())) {
 					return true;
@@ -191,6 +196,36 @@ class OverlapResolver {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Builds transitive containment pairs from parentId chains.
+	 * Replicates the pattern from {@link LayoutQualityAssessor#buildContainmentPairs}.
+	 */
+	private static Set<String> buildContainmentPairs(List<AssessmentNode> nodes) {
+		Map<String, AssessmentNode> nodeMap = new HashMap<>();
+		for (AssessmentNode node : nodes) {
+			nodeMap.put(node.id(), node);
+		}
+		Set<String> pairs = new HashSet<>();
+		for (AssessmentNode node : nodes) {
+			if (node.parentId() != null) {
+				String descendantId = node.id();
+				AssessmentNode current = nodeMap.get(node.parentId());
+				while (current != null) {
+					pairs.add(current.id() + ":" + descendantId);
+					if (current.parentId() == null) break;
+					current = nodeMap.get(current.parentId());
+				}
+			}
+		}
+		return pairs;
+	}
+
+	private static boolean isContainmentPair(AssessmentNode a, AssessmentNode b,
+											  Set<String> containmentPairs) {
+		return containmentPairs.contains(a.id() + ":" + b.id())
+				|| containmentPairs.contains(b.id() + ":" + a.id());
 	}
 
 	private int countOverlaps(List<MutableRect> group) {

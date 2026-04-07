@@ -68,12 +68,13 @@ public class ElementCreationHandler {
 
     /**
      * Registers all tools provided by this handler with the command registry.
-     * Registers: create-element, create-relationship, create-view.
+     * Registers: create-element, create-relationship, create-view, clone-view.
      */
     public void registerTools() {
         registry.registerTool(buildCreateElementSpec());
         registry.registerTool(buildCreateRelationshipSpec());
         registry.registerTool(buildCreateViewSpec());
+        registry.registerTool(buildCloneViewSpec());
     }
 
     // ---- create-element ----
@@ -411,6 +412,99 @@ public class ElementCreationHandler {
         return List.of(
                 "Use get-views to see the created view in the list",
                 "Use get-view-contents with viewId '" + view.id() + "' to inspect the view");
+    }
+
+    // ---- clone-view (Story C2) ----
+
+    private McpServerFeatures.SyncToolSpecification buildCloneViewSpec() {
+        Map<String, Object> sourceViewIdProp = new LinkedHashMap<>();
+        sourceViewIdProp.put("type", "string");
+        sourceViewIdProp.put("description",
+                "ID of the source view to clone. Use get-views to find view IDs.");
+
+        Map<String, Object> newNameProp = new LinkedHashMap<>();
+        newNameProp.put("type", "string");
+        newNameProp.put("description", "Name for the cloned view");
+
+        Map<String, Object> folderIdProp = new LinkedHashMap<>();
+        folderIdProp.put("type", "string");
+        folderIdProp.put("description",
+                "Optional folder ID for the cloned view. If omitted, the clone is placed "
+                + "in the same folder as the source view.");
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("sourceViewId", sourceViewIdProp);
+        properties.put("newName", newNameProp);
+        properties.put("folderId", folderIdProp);
+
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", properties, List.of("sourceViewId", "newName"), null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("clone-view")
+                .description("[Mutation] Clone an existing view (deep copy of visual layout). "
+                        + "Creates a new view with identical element positions, connection routing, "
+                        + "groups, notes, and styling. Model elements and relationships are "
+                        + "REFERENCED (not duplicated) — the clone shares the same underlying "
+                        + "model objects. Useful for creating before/after pairs, filtered subsets, "
+                        + "or alternative layout experiments. "
+                        + "Required: sourceViewId, newName. Optional: folderId. "
+                        + "Supports undo (removes entire clone as single operation). "
+                        + "Related: get-views (find source view ID), get-view-contents "
+                        + "(inspect cloned view), remove-from-view (selectively remove elements "
+                        + "from clone).")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleCloneView)
+                .build();
+    }
+
+    McpSchema.CallToolResult handleCloneView(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling clone-view request");
+        try {
+            HandlerUtils.requireModelLoaded(accessor);
+            String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
+
+            Map<String, Object> args = request.arguments();
+            String sourceViewId = HandlerUtils.requireStringParam(args, "sourceViewId");
+            String newName = HandlerUtils.requireStringParam(args, "newName");
+            String folderId = HandlerUtils.optionalStringParam(args, "folderId");
+
+            MutationResult<ViewDto> result = accessor.cloneView(
+                    sessionId, sourceViewId, newName, folderId);
+
+            return HandlerUtils.formatMutationResponse(result.entity(), result,
+                    buildCloneViewNextSteps(result), accessor, formatter);
+
+        } catch (NoModelLoadedException e) {
+            return HandlerUtils.buildModelNotLoadedError(formatter, e);
+        } catch (ModelAccessException e) {
+            return HandlerUtils.buildModelAccessError(formatter, e);
+        } catch (MutationException e) {
+            return HandlerUtils.buildMutationError(formatter, e);
+        } catch (Exception e) {
+            logger.error("Unexpected error handling clone-view", e);
+            return HandlerUtils.buildInternalError(formatter,
+                    "An unexpected error occurred while cloning view");
+        }
+    }
+
+    private List<String> buildCloneViewNextSteps(MutationResult<ViewDto> result) {
+        if (result.isBatched()) {
+            return List.of(
+                    "Mutation queued as operation #" + result.batchSequenceNumber() + " in current batch",
+                    "Use get-batch-status to check batch progress",
+                    "Use end-batch to commit all queued mutations");
+        }
+        ViewDto view = result.entity();
+        return List.of(
+                "Use get-view-contents with viewId '" + view.id() + "' to inspect the cloned view",
+                "Use remove-from-view to selectively remove elements from the clone",
+                "Use undo to remove the entire clone if needed");
     }
 
     // ---- Duplicate detection response ----

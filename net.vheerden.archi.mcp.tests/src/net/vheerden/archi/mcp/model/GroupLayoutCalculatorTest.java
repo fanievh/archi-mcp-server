@@ -381,4 +381,79 @@ public class GroupLayoutCalculatorTest {
         // maxBottom=264, +10=274
         assertEquals(274, dims[1]);
     }
+
+    // ---- validateGroupGaps ----
+
+    @Test
+    public void validateGaps_noOverlap_shouldReturnTrue() {
+        // Two groups side by side with gap
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 100, 100},
+                new int[]{150, 0, 100, 100});
+
+        assertTrue(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_partialOverlap_shouldReturnFalse() {
+        // Second group overlaps the first by 20px
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 100, 100},
+                new int[]{80, 0, 100, 100});
+
+        assertFalse(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_exactEdgeTouching_shouldReturnTrue() {
+        // Groups share an edge but don't overlap (consistent with LayoutQualityAssessor AABB)
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 100, 100},
+                new int[]{100, 0, 100, 100});
+
+        assertTrue(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_completeContainment_shouldReturnFalse() {
+        // One group completely inside another (still an overlap geometrically)
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 300, 300},
+                new int[]{50, 50, 100, 100});
+
+        assertFalse(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_singleGroup_shouldReturnTrue() {
+        List<int[]> rects = List.of(new int[]{0, 0, 100, 100});
+        assertTrue(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_emptyList_shouldReturnTrue() {
+        assertTrue(GroupLayoutCalculator.validateGroupGaps(new ArrayList<>()));
+    }
+
+    @Test
+    public void validateGaps_threeGroups_oneOverlap_shouldReturnFalse() {
+        // Groups A and C overlap, B is separate
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 100, 100},      // A
+                new int[]{200, 0, 100, 100},     // B (no overlap)
+                new int[]{50, 50, 100, 100});    // C (overlaps A)
+
+        assertFalse(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
+
+    @Test
+    public void validateGaps_verticalOverlap_shouldReturnFalse() {
+        // Groups overlap vertically but not horizontally... wait, they do overlap:
+        // Group A at (0,0,100,100), Group B at (0,80,100,100)
+        List<int[]> rects = List.of(
+                new int[]{0, 0, 100, 100},
+                new int[]{0, 80, 100, 100});
+
+        assertFalse(GroupLayoutCalculator.validateGroupGaps(rects));
+    }
 }

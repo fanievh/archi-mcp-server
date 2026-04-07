@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.ElementSizer;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -24,6 +26,7 @@ import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
@@ -38,6 +41,7 @@ import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
@@ -111,6 +115,7 @@ public class ViewPlacementHandler {
         registry.registerTool(buildOptimizeGroupOrderSpec());
         registry.registerTool(buildDetectHubElementsSpec());
         registry.registerTool(buildLayoutFlatViewSpec());
+        registry.registerTool(buildResizeElementsToFitSpec());
     }
 
     // ---- add-to-view ----
@@ -165,6 +170,16 @@ public class ViewPlacementHandler {
                 + "from the top of the parent. "
                 + "Get valid parent viewObjectIds from get-view-contents (groups or elements).");
 
+        Map<String, Object> autoSizeProp = new LinkedHashMap<>();
+        autoSizeProp.put("type", "boolean");
+        autoSizeProp.put("description",
+                "Auto-size the element to fit its label text using font metrics and "
+                + "aspect-ratio-aware sizing (target 1.5:1, range [1.2:1, 2.5:1]). "
+                + "Short names (<=15 chars) keep default 120x55. "
+                + "Ignored if explicit width/height are provided. "
+                + "Recommended for flat views and individual element placement "
+                + "to prevent label truncation (default: false).");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("elementId", elementIdProp);
@@ -172,6 +187,7 @@ public class ViewPlacementHandler {
         properties.put("y", yProp);
         properties.put("width", widthProp);
         properties.put("height", heightProp);
+        properties.put("autoSize", autoSizeProp);
         properties.put("autoConnect", autoConnectProp);
         properties.put("parentViewObjectId", parentVoProp);
         addStylingProperties(properties);
@@ -189,8 +205,9 @@ public class ViewPlacementHandler {
                         + "This is useful for deployment views where the same infrastructure element "
                         + "appears in multiple locations (e.g., across availability zones). "
                         + "Requires viewId and elementId. Optional: x, y (both or neither for "
-                        + "auto-placement), width, height (default 120x55), autoConnect (auto-create "
-                        + "connections to elements already on the view). "
+                        + "auto-placement), width, height (default 120x55), "
+                        + "autoSize (auto-size to fit label — recommended for flat views), "
+                        + "autoConnect (auto-create connections to elements already on the view). "
                         + "Related: get-view-contents (inspect view), get-views (list views), "
                         + "auto-connect-view (batch connections), "
                         + "add-connection-to-view (individual connections), create-view (create new view).")
@@ -219,8 +236,17 @@ public class ViewPlacementHandler {
             Integer height = HandlerUtils.optionalIntegerParam(args, "height");
             boolean autoConnect = HandlerUtils.optionalBooleanParam(args, "autoConnect");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
+            boolean autoSize = HandlerUtils.optionalBooleanParam(args, "autoSize");
             StylingParams styling = extractStylingParams(args);
             ImageParams imageParams = extractImageParams(args);
+
+            if (autoSize && width == null && height == null) {
+                Optional<ElementDto> elementOpt = accessor.getElementById(elementId);
+                String elementName = elementOpt.map(ElementDto::name).orElse("");
+                int[] computed = ElementSizer.computeAutoSize(elementName);
+                width = computed[0];
+                height = computed[1];
+            }
 
             MutationResult<AddToViewResultDto> result = accessor.addToView(
                     sessionId, viewId, elementId, x, y, width, height, autoConnect,
@@ -3400,5 +3426,106 @@ public class ViewPlacementHandler {
                 "Use assess-layout to evaluate the overall layout quality.",
                 "Use undo to roll back and try different spacing or arrangement "
                         + "if the result is unsatisfactory.");
+    }
+
+    // ---- resize-elements-to-fit (Story B48) ----
+
+    private McpServerFeatures.SyncToolSpecification buildResizeElementsToFitSpec() {
+        Map<String, Object> viewIdProp = new LinkedHashMap<>();
+        viewIdProp.put("type", "string");
+        viewIdProp.put("description", "ID of the view whose elements to resize");
+
+        Map<String, Object> elementIdsProp = new LinkedHashMap<>();
+        elementIdsProp.put("type", "array");
+        Map<String, Object> elementIdItems = new LinkedHashMap<>();
+        elementIdItems.put("type", "string");
+        elementIdsProp.put("items", elementIdItems);
+        elementIdsProp.put("description",
+                "Optional list of specific element view object IDs to resize. "
+                + "If omitted, resizes all elements on the view. "
+                + "Get valid IDs from get-view-contents visualMetadata.");
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("viewId", viewIdProp);
+        properties.put("elementIds", elementIdsProp);
+
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", properties, List.of("viewId"), null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("resize-elements-to-fit")
+                .description("[Mutation] Resize elements on a view to fit their label text. "
+                        + "Uses SWT font metrics and aspect-ratio-aware sizing "
+                        + "(target 1.5:1 width:height, range [1.2:1, 2.5:1]). "
+                        + "Short names (<=15 chars) keep Archi defaults (120x55). "
+                        + "For nested elements, uses two-pass algorithm: children sized first, "
+                        + "then parents sized to contain children + own label + padding. "
+                        + "Recommended after placing elements on flat views to prevent label truncation. "
+                        + "Related: add-to-view with autoSize (size at placement time), "
+                        + "layout-flat-view (reposition elements), "
+                        + "auto-route-connections (route after resizing).")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleResizeElementsToFit)
+                .build();
+    }
+
+    McpSchema.CallToolResult handleResizeElementsToFit(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling resize-elements-to-fit request");
+        try {
+            HandlerUtils.requireModelLoaded(accessor);
+            String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
+
+            Map<String, Object> args = request.arguments();
+            String viewId = HandlerUtils.requireStringParam(args, "viewId");
+
+            // Extract optional elementIds array
+            List<String> elementIds = null;
+            Object elementIdsRaw = args.get("elementIds");
+            if (elementIdsRaw instanceof List<?> rawList && !rawList.isEmpty()) {
+                elementIds = new ArrayList<>();
+                for (Object item : rawList) {
+                    if (item instanceof String s) {
+                        elementIds.add(s);
+                    }
+                }
+            }
+
+            MutationResult<ResizeElementsResultDto> result =
+                    accessor.resizeElementsToFit(sessionId, viewId, elementIds);
+
+            return HandlerUtils.formatMutationResponse(result.entity(), result,
+                    buildResizeElementsNextSteps(result), accessor, formatter);
+
+        } catch (NoModelLoadedException e) {
+            return HandlerUtils.buildModelNotLoadedError(formatter, e);
+        } catch (ModelAccessException e) {
+            return HandlerUtils.buildModelAccessError(formatter, e);
+        } catch (MutationException e) {
+            return HandlerUtils.buildMutationError(formatter, e);
+        } catch (Exception e) {
+            logger.error("Unexpected error handling resize-elements-to-fit", e);
+            return HandlerUtils.buildInternalError(formatter, e.getMessage());
+        }
+    }
+
+    private List<String> buildResizeElementsNextSteps(
+            MutationResult<ResizeElementsResultDto> result) {
+        if (result.isBatched()) {
+            return List.of(
+                    "Mutation queued as operation #" + result.batchSequenceNumber()
+                            + " in current batch",
+                    "Use get-batch-status to check batch progress",
+                    "Use end-batch to commit all queued mutations");
+        }
+        return List.of(
+                "Run auto-route-connections to recompute connection paths "
+                        + "after element resizing.",
+                "Use assess-layout to evaluate the layout quality.",
+                "Use undo to roll back if the sizes are unsatisfactory.");
     }
 }

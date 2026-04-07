@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.2.0 (2026-04-07)
+
+Quality, completeness, and routing diversity cycle. Tool count grew from 57 to 60. Corridor diversity routing reduces coincident segments by spreading connections across available corridors. Auto-sizing ensures element labels are never truncated. Full CRUD coverage achieved for all core model objects.
+
+### New Tools
+
+- **clone-view** — Duplicate an existing view with all visual contents (elements, groups, notes, connections, bendpoints, styling). The clone references the same model objects — useful for layout experiments or presenting alternative arrangements for comparison.
+- **update-relationship** — Update relationship name, documentation, or properties. Source, target, and type are immutable (delete and recreate to change those). Completes full CRUD coverage for relationships (previously only create/delete existed).
+- **resize-elements-to-fit** — Resize all (or selected) elements on a view to fit their labels using SWT font metrics. Two-pass algorithm: children sized first, then parents sized to contain children + own label + padding. Recommended after placing elements without `autoSize` or when element names change.
+
+### New Capabilities
+
+- **Auto-size at placement** — `add-to-view` accepts `autoSize: true` to compute element dimensions from label text at placement time using SWT font metrics with aspect-ratio-aware sizing (target 1.5:1, range [1.2:1, 2.5:1]). Short names (≤15 chars) keep default 120x55. Explicit `width`/`height` take precedence. Eliminates the need for a post-placement resize pass on flat views.
+- **Corridor diversity routing** — `CorridorOccupancyTracker` records which corridors are used by previously routed connections. The A* cost function applies a multiplicative penalty for occupied corridors (`effectiveDistance *= 1 + occupancyWeight * occupancy`, default weight 0.75), encouraging route diversity and reducing coincident segments without post-processing.
+
+### Routing Pipeline Improvements
+
+- **Occupancy-aware A* routing** — New `CorridorOccupancyTracker` (pure-geometry class) records axis-aligned corridor usage after each connection is routed. Corridor keys use tolerance-aware grouping (`H:y` / `V:x`, 2px tolerance) matching the `CoincidentSegmentDetector` and `PathOrderer` formats. The A* router queries occupancy per edge and applies a multiplicative cost: `effectiveDistance *= (1 + occupancyWeight * occupancy)`. This steers later connections away from corridors already carrying traffic, producing visually diverse paths and reducing the need for post-routing coincident segment resolution.
+
+### Bug Fixes
+
+- Fix autoNudge false positive on containment overlaps — `OverlapResolver.hasOverlappingElements()` now excludes containment overlaps (parent-child nesting, e.g., ApplicationFunction inside ApplicationComponent). Previously, legitimate visual nesting was incorrectly detected as sibling overlap, causing autoNudge to skip routing and report degenerate geometry.
+- Fix grouped layout group overlap and boundary violations — `arrange-groups` and `layout-within-group` now correctly prevent group-on-group overlaps and child elements extending outside parent group boundaries after layout operations.
+- Fix Claude Code MCP config `type` field — README client configuration example corrected from `"type": "streamable-http"` to `"type": "http"`. Added Claude Desktop configuration instructions with `mcp-proxy` for both Windows and macOS.
+
+### Resource Updates
+
+- **archimate-view-patterns.md** — Added `autoSize: true` guidance to all view composition workflow branches (Branch 1, 2, 3). Added "Auto-Sizing Elements to Fit Labels" section with decision table for when to use `autoSize` vs `resize-elements-to-fit` vs `layout-within-group` `autoWidth`. Added `clone-view` guidance to Tips section for layout experiments and alternative arrangement comparison.
+
+### Documentation
+
+- Routing pipeline documentation updated with corridor diversity section (CorridorOccupancyTracker, occupancy-aware A* cost formula, configuration constants).
+- Layout engine documentation updated with auto-size and resize-elements-to-fit section.
+- Architecture documentation updated with CorridorOccupancyTracker in pure-geometry routing subpackage, updated handler tool counts.
+- README updated with complete 60-tool catalog, new tool entries for clone-view, update-relationship, and resize-elements-to-fit.
+
+---
+
 ## v1.1.0 (2026-04-03)
 
 Post-release enhancement cycle: 84 commits, 12 Epic 13 stories, 41+ backlog items. Tool count grew from 51 to 56. Routing pipeline refined through 19 quality iterations (B31-B46) achieving clearance-weighted pathfinding with corridor directionality, group-wall awareness, path straightening, terminal orthogonality enforcement, and severity-tiered quality assessment.

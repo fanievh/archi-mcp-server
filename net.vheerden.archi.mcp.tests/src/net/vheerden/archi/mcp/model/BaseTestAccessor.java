@@ -25,6 +25,7 @@ import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
 import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
@@ -196,9 +197,21 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
+    public MutationResult<ViewDto> cloneView(String sessionId, String sourceViewId,
+            String newName, String folderId) {
+        throw new UnsupportedOperationException("cloneView not implemented in test accessor");
+    }
+
+    @Override
     public MutationResult<ElementDto> updateElement(String sessionId, String id, String name,
             String documentation, Map<String, String> properties) {
         throw new UnsupportedOperationException("updateElement not implemented in test accessor");
+    }
+
+    @Override
+    public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
+            String name, String documentation, Map<String, String> properties) {
+        throw new UnsupportedOperationException("updateRelationship not implemented in test accessor");
     }
 
     @Override
@@ -301,6 +314,13 @@ public class BaseTestAccessor implements ArchiModelAccessor {
             boolean autoLayoutChildren) {
         throw new UnsupportedOperationException(
                 "layoutFlatView not implemented in test accessor");
+    }
+
+    @Override
+    public MutationResult<ResizeElementsResultDto> resizeElementsToFit(
+            String sessionId, String viewId, List<String> elementIds) {
+        throw new UnsupportedOperationException(
+                "resizeElementsToFit not implemented in test accessor");
     }
 
     @Override

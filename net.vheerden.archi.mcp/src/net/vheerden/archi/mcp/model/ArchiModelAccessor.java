@@ -24,6 +24,7 @@ import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
 import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
@@ -306,6 +307,26 @@ public interface ArchiModelAccessor {
     MutationResult<ViewDto> createView(String sessionId, String name,
             String viewpoint, String folderId, String connectionRouterType);
 
+    /**
+     * Clones an existing view (deep copy of visual layout, not model elements).
+     *
+     * <p>Creates a new view with the same visual structure: all view objects,
+     * connections, groups, and notes are duplicated with identical positions,
+     * sizes, styling, and routing. Model elements and relationships are
+     * REFERENCED (not copied) — the clone shares the same underlying model
+     * objects as the source view.</p>
+     *
+     * @param sessionId    the session identifier for mode detection
+     * @param sourceViewId the ID of the view to clone (required)
+     * @param newName      the name for the cloned view (required)
+     * @param folderId     optional target folder ID (null to use source view's folder)
+     * @return MutationResult containing the cloned ViewDto and optional batch sequence
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if source view not found or folder not found
+     */
+    MutationResult<ViewDto> cloneView(String sessionId, String sourceViewId,
+            String newName, String folderId);
+
     // ---- Mutation update methods (Story 7-3) ----
 
     /**
@@ -325,6 +346,28 @@ public interface ArchiModelAccessor {
      * @throws ModelAccessException if element not found or no fields to update
      */
     MutationResult<ElementDto> updateElement(String sessionId, String id, String name,
+            String documentation, Map<String, String> properties);
+
+    /**
+     * Updates an existing ArchiMate relationship's mutable fields.
+     *
+     * <p>Only non-null parameters are modified; null parameters leave the
+     * corresponding field unchanged. For properties, a merge semantic applies:
+     * non-null values add/update, null values remove the property key.</p>
+     *
+     * <p>Source, target, and type are immutable — changing these fundamentally
+     * alters the relationship's semantics and should be done via delete + create.</p>
+     *
+     * @param sessionId     the session identifier for mode detection
+     * @param id            relationship ID (required)
+     * @param name          new name, or null to leave unchanged
+     * @param documentation new documentation, or null to leave unchanged
+     * @param properties    property merge map (null value = remove key), or null to leave unchanged
+     * @return MutationResult containing the updated RelationshipDto and optional batch sequence
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if relationship not found or no fields to update
+     */
+    MutationResult<RelationshipDto> updateRelationship(String sessionId, String id, String name,
             String documentation, Map<String, String> properties);
 
     /**
@@ -784,6 +827,23 @@ public interface ArchiModelAccessor {
             Integer spacing, Integer padding, String sortBy,
             String categoryField, Integer columns,
             boolean autoLayoutChildren);
+
+    // ---- Resize elements to fit (Story B48) ----
+
+    /**
+     * Resizes elements on a view to fit their label text using font-metrics-based sizing.
+     * Two-pass algorithm for nested containment: children sized first, then parents.
+     *
+     * @param sessionId  the session identifier for mode detection
+     * @param viewId     the view's unique identifier (required)
+     * @param elementIds optional list of specific element view object IDs to resize;
+     *                   if null or empty, resizes all elements on the view
+     * @return MutationResult containing ResizeElementsResultDto
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException if view not found
+     */
+    MutationResult<ResizeElementsResultDto> resizeElementsToFit(
+            String sessionId, String viewId, List<String> elementIds);
 
     // ---- Hub element detection (Story 13-3) ----
 

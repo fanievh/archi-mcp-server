@@ -28,6 +28,7 @@ import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 
 import org.eclipse.gef.commands.Command;
 
@@ -58,8 +59,8 @@ public class ElementUpdateHandlerTest {
     // ---- Tool registration tests ----
 
     @Test
-    public void shouldRegisterOneTool_whenHandlerRegistered() {
-        assertEquals(1, registry.getToolSpecifications().size());
+    public void shouldRegisterTwoTools_whenHandlerRegistered() {
+        assertEquals(2, registry.getToolSpecifications().size());
     }
 
     @Test
@@ -67,6 +68,13 @@ public class ElementUpdateHandlerTest {
         boolean found = registry.getToolSpecifications().stream()
                 .anyMatch(spec -> "update-element".equals(spec.tool().name()));
         assertTrue("update-element tool should be registered", found);
+    }
+
+    @Test
+    public void shouldRegisterUpdateRelationshipTool() {
+        boolean found = registry.getToolSpecifications().stream()
+                .anyMatch(spec -> "update-relationship".equals(spec.tool().name()));
+        assertTrue("update-relationship tool should be registered", found);
     }
 
     @Test
@@ -361,7 +369,155 @@ public class ElementUpdateHandlerTest {
         assertTrue(nextSteps.stream().anyMatch(s -> s.contains("batch")));
     }
 
+    // ---- update-relationship success tests ----
+
+    @Test
+    public void shouldReturnUpdatedRelationshipDto_whenNameUpdated() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("name", "Updated Rel");
+        Map<String, Object> result = callRelAndParse(args);
+
+        Map<String, Object> entity = getResult(result);
+        assertEquals("rel-1", entity.get("id"));
+        assertEquals("Updated Rel", entity.get("name"));
+    }
+
+    @Test
+    public void shouldReturnUpdatedRelationship_whenDocumentationUpdated() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("documentation", "New rel docs");
+        Map<String, Object> result = callRelAndParse(args);
+
+        Map<String, Object> entity = getResult(result);
+        assertEquals("rel-1", entity.get("id"));
+    }
+
+    @Test
+    public void shouldReturnUpdatedRelationship_whenPropertiesUpdated() throws Exception {
+        Map<String, Object> props = new HashMap<>();
+        props.put("keep", "value");
+        props.put("remove", null);
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("properties", props);
+
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            assertNotNull("Properties should not be null", properties);
+            assertEquals("value", properties.get("keep"));
+            assertTrue("Should contain key with null value", properties.containsKey("remove"));
+            assertNull("Null value should be preserved", (Object) properties.get("remove"));
+            RelationshipDto dto = new RelationshipDto(id, "Test Rel", "AssociationRelationship", "src-1", "tgt-1");
+            return new MutationResult<>(dto, null);
+        });
+
+        McpSchema.CallToolResult result = callRelTool(args);
+        assertFalse("Should not be an error", result.isError());
+    }
+
+    @Test
+    public void shouldReturnUpdatedRelationship_whenAllFieldsUpdated() throws Exception {
+        Map<String, Object> props = new HashMap<>();
+        props.put("status", "active");
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("name", "New Name");
+        args.put("documentation", "New docs");
+        args.put("properties", props);
+        Map<String, Object> result = callRelAndParse(args);
+
+        Map<String, Object> entity = getResult(result);
+        assertEquals("rel-1", entity.get("id"));
+        assertEquals("New Name", entity.get("name"));
+    }
+
+    @Test
+    public void shouldReturnNextSteps_whenRelationshipUpdateSucceeds() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("name", "Updated Rel");
+        Map<String, Object> result = callRelAndParse(args);
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertFalse(nextSteps.isEmpty());
+        assertTrue(nextSteps.stream().anyMatch(s -> s.contains("get-relationships")));
+    }
+
+    // ---- update-relationship error tests ----
+
+    @Test
+    public void shouldReturnInvalidParameterError_whenRelIdMissing() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("name", "Updated Rel");
+
+        McpSchema.CallToolResult result = callRelTool(args);
+        assertTrue("Should be an error", result.isError());
+
+        Map<String, Object> parsed = parseResult(result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnRelationshipNotFoundError_whenRelationshipMissing() throws Exception {
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            throw new ModelAccessException("Relationship not found: " + id,
+                    ErrorCode.RELATIONSHIP_NOT_FOUND);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "bad-id");
+        args.put("name", "Updated");
+
+        McpSchema.CallToolResult result = callRelTool(args);
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("RELATIONSHIP_NOT_FOUND", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnInvalidParameterError_whenNoRelFieldsToUpdate() throws Exception {
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            throw new ModelAccessException(
+                    "No fields to update",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+
+        McpSchema.CallToolResult result = callRelTool(args);
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
     // ---- Helper methods ----
+
+    private McpSchema.CallToolResult callRelTool(Map<String, Object> args) throws Exception {
+        McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
+                .name("update-relationship")
+                .arguments(args)
+                .build();
+        return handler.handleUpdateRelationship(null, request);
+    }
+
+    private Map<String, Object> callRelAndParse(Map<String, Object> args) throws Exception {
+        McpSchema.CallToolResult result = callRelTool(args);
+        return parseResult(result);
+    }
 
     private McpSchema.CallToolResult callTool(Map<String, Object> args) throws Exception {
         McpSchema.CallToolRequest request = McpSchema.CallToolRequest.builder()
@@ -394,11 +550,18 @@ public class ElementUpdateHandlerTest {
                 String documentation, Map<String, String> properties);
     }
 
+    @FunctionalInterface
+    interface UpdateRelationshipBehavior {
+        MutationResult<RelationshipDto> apply(String sessionId, String id, String name,
+                String documentation, Map<String, String> properties);
+    }
+
     private static class StubUpdateAccessor extends BaseTestAccessor {
 
         private final StubMutationDispatcher dispatcher;
         private boolean batchMode = false;
         private UpdateElementBehavior updateElementBehavior;
+        private UpdateRelationshipBehavior updateRelationshipBehavior;
 
         StubUpdateAccessor() {
             super(true);
@@ -420,11 +583,21 @@ public class ElementUpdateHandlerTest {
             this.updateElementBehavior = behavior;
         }
 
+        void setUpdateRelationshipBehavior(UpdateRelationshipBehavior behavior) {
+            this.updateRelationshipBehavior = behavior;
+        }
+
         private void resetBehaviors() {
             this.updateElementBehavior = (sessionId, id, name, doc, properties) -> {
                 String displayName = name != null ? name : "Test Element";
                 ElementDto dto = ElementDto.standard(
                         id, displayName, "BusinessActor", "Business", doc, null);
+                return new MutationResult<>(dto, batchMode ? 1 : null);
+            };
+            this.updateRelationshipBehavior = (sessionId, id, name, doc, properties) -> {
+                String displayName = name != null ? name : "Test Relationship";
+                RelationshipDto dto = new RelationshipDto(
+                        id, displayName, "AssociationRelationship", "src-1", "tgt-1");
                 return new MutationResult<>(dto, batchMode ? 1 : null);
             };
         }
@@ -433,6 +606,12 @@ public class ElementUpdateHandlerTest {
         public MutationResult<ElementDto> updateElement(String sessionId, String id,
                 String name, String documentation, Map<String, String> properties) {
             return updateElementBehavior.apply(sessionId, id, name, documentation, properties);
+        }
+
+        @Override
+        public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
+                String name, String documentation, Map<String, String> properties) {
+            return updateRelationshipBehavior.apply(sessionId, id, name, documentation, properties);
         }
 
         @Override

@@ -118,6 +118,7 @@ import net.vheerden.archi.mcp.response.dto.ExportViewResultDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
 import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutViewResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.ModelImageDto;
@@ -933,6 +934,46 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
     }
 
+    @Override
+    public MutationResult<ViewDto> cloneView(String sessionId, String sourceViewId,
+            String newName, String folderId) {
+        logger.info("Cloning view: sourceViewId={}, newName={}", sourceViewId, newName);
+        requireAndCaptureModel();
+        try {
+            PreparedMutation<ViewDto> prepared = prepareCloneView(sourceViewId, newName, folderId);
+
+            // Approval gate (Story 7-6)
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                String description = "Clone view: " + newName + " (from " + sourceViewId + ")";
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                proposedChanges.put("sourceViewId", sourceViewId);
+                proposedChanges.put("newName", newName);
+                if (folderId != null) proposedChanges.put("folderId", folderId);
+                ProposalContext ctx = storeAsProposal(sessionId, "clone-view",
+                        prepared.command(), prepared.entity(), description,
+                        null, proposedChanges, "View clone prepared.");
+                return new MutationResult<>(prepared.entity(), null, ctx);
+            }
+
+            Integer batchSeq = dispatchOrQueue(sessionId, prepared.command(),
+                    "Clone view: " + newName);
+
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+
+            return new MutationResult<>(prepared.entity(), batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("Error cloning view from '{}'", sourceViewId, e);
+            throw new ModelAccessException(
+                    "Error cloning view from '" + sourceViewId + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
     // ---- Mutation update methods (Story 7-3) ----
 
     @Override
@@ -987,6 +1028,60 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         } catch (Exception e) {
             throw new ModelAccessException(
                     "Error updating element with ID '" + id + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    @Override
+    public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
+            String name, String documentation, Map<String, String> properties) {
+        logger.info("Updating relationship: id={}", id);
+        requireAndCaptureModel();
+        try {
+            PreparedMutation<RelationshipDto> prepared = prepareUpdateRelationship(id, name,
+                    documentation, properties);
+
+            // Approval gate
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                String description = "Update relationship: " + id;
+                RelationshipDto current = prepared.entity();
+                Map<String, Object> currentState = new LinkedHashMap<>();
+                currentState.put("name", current.name());
+                if (current.documentation() != null) {
+                    currentState.put("documentation", current.documentation());
+                }
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                if (name != null) proposedChanges.put("name", name);
+                if (documentation != null) proposedChanges.put("documentation", documentation);
+                if (properties != null) proposedChanges.put("properties", properties);
+                ProposalContext ctx = storeAsProposal(sessionId, "update-relationship",
+                        prepared.command(), prepared.entity(), description,
+                        currentState, proposedChanges, "Relationship exists. All changes valid.");
+                return new MutationResult<>(prepared.entity(), null, ctx);
+            }
+
+            Integer batchSeq = dispatchOrQueue(sessionId, prepared.command(),
+                    "Update relationship: " + id);
+
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+
+            // Re-read relationship state after command execution
+            RelationshipDto entity;
+            if (batchSeq == null && prepared.rawObject() instanceof IArchimateRelationship rel) {
+                entity = convertToRelationshipDto(rel);
+            } else {
+                entity = prepared.entity();
+            }
+
+            return new MutationResult<>(entity, batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error updating relationship with ID '" + id + "'",
                     e, ErrorCode.INTERNAL_ERROR);
         }
     }
@@ -2062,6 +2157,208 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return (list == null || list.isEmpty()) ? null : list;
     }
 
+    // ---- Resize elements to fit (Story B48) ----
+
+    /** Label area top padding for parent elements containing children. */
+    private static final int CONTAINMENT_LABEL_TOP = 25;
+    /** Bottom padding for parent elements containing children. */
+    private static final int CONTAINMENT_PADDING_BOTTOM = 10;
+    /** Left/right padding for parent elements containing children. */
+    private static final int CONTAINMENT_PADDING_SIDE = 10;
+
+    @Override
+    public MutationResult<ResizeElementsResultDto> resizeElementsToFit(
+            String sessionId, String viewId, List<String> elementIds) {
+        logger.info("Resize elements to fit: viewId={}, elementIds={}", viewId,
+                elementIds != null ? elementIds.size() + " specified" : "all");
+        IArchimateModel model = requireAndCaptureModel();
+
+        EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
+        if (!(viewObj instanceof IArchimateDiagramModel diagramModel)) {
+            throw new ModelAccessException(
+                    "View not found: " + viewId,
+                    ErrorCode.VIEW_NOT_FOUND,
+                    null,
+                    "Use get-views to find valid view IDs.",
+                    null);
+        }
+
+        // Collect all element view objects (not groups, not notes)
+        List<IDiagramModelArchimateObject> targets = new ArrayList<>();
+        collectElementViewObjects(diagramModel, targets);
+
+        // Filter to specific IDs if provided
+        if (elementIds != null && !elementIds.isEmpty()) {
+            java.util.Set<String> idSet = new java.util.HashSet<>(elementIds);
+            targets.removeIf(obj -> !idSet.contains(obj.getId()));
+        }
+
+        // Build parent-child map for nested containment (AC6)
+        Map<String, List<IDiagramModelArchimateObject>> childrenByParentId = new LinkedHashMap<>();
+        java.util.Set<String> hasChildren = new java.util.HashSet<>();
+        for (IDiagramModelArchimateObject t : targets) {
+            if (t.eContainer() instanceof IDiagramModelArchimateObject parent) {
+                childrenByParentId
+                        .computeIfAbsent(parent.getId(), k -> new ArrayList<>())
+                        .add(t);
+                hasChildren.add(parent.getId());
+            }
+        }
+
+        // Two-pass: size leaf elements first, then parents (bottom-up by depth)
+        List<IDiagramModelArchimateObject> leafElements = new ArrayList<>();
+        List<IDiagramModelArchimateObject> parentElements = new ArrayList<>();
+        for (IDiagramModelArchimateObject t : targets) {
+            if (hasChildren.contains(t.getId())) {
+                parentElements.add(t);
+            } else {
+                leafElements.add(t);
+            }
+        }
+
+        // Sort parents bottom-up by nesting depth so children-parents are sized
+        // before grandparents (supports recursive nesting per AC6)
+        parentElements.sort((a, b) -> Integer.compare(nestingDepth(b), nestingDepth(a)));
+
+        // Track computed sizes so Pass 2 uses resized dimensions, not stale bounds
+        Map<String, int[]> computedSizes = new LinkedHashMap<>();
+
+        List<PreparedMutation<ViewObjectDto>> mutations = new ArrayList<>();
+        List<ResizeElementsResultDto.ResizedElement> resizedList = new ArrayList<>();
+        int unchangedCount = 0;
+
+        // Pass 1: Size leaf elements using ElementSizer
+        for (IDiagramModelArchimateObject leaf : leafElements) {
+            String elName = leaf.getArchimateConcept() != null
+                    ? leaf.getArchimateConcept().getName() : "";
+            int[] computed = ElementSizer.computeAutoSize(elName);
+            IBounds bounds = leaf.getBounds();
+            int oldW = bounds.getWidth();
+            int oldH = bounds.getHeight();
+
+            computedSizes.put(leaf.getId(), computed);
+
+            if (computed[0] != oldW || computed[1] != oldH) {
+                PreparedMutation<ViewObjectDto> pm = prepareUpdateViewObjectDirect(
+                        leaf, null, null, computed[0], computed[1]);
+                mutations.add(pm);
+                resizedList.add(new ResizeElementsResultDto.ResizedElement(
+                        leaf.getId(), elName, oldW, oldH, computed[0], computed[1]));
+            } else {
+                unchangedCount++;
+            }
+        }
+
+        // Pass 2: Size parent elements based on children bounds + own label
+        for (IDiagramModelArchimateObject parent : parentElements) {
+            String parentName = parent.getArchimateConcept() != null
+                    ? parent.getArchimateConcept().getName() : "";
+
+            // Get auto-size for the parent's own label
+            int[] labelSize = ElementSizer.computeAutoSize(parentName);
+            int labelWidth = labelSize[0];
+
+            // Compute children bounding box using computed sizes (not stale bounds)
+            List<IDiagramModelArchimateObject> children = childrenByParentId.get(parent.getId());
+            int childMaxRight = 0;
+            int childMaxBottom = 0;
+            if (children != null) {
+                for (IDiagramModelArchimateObject child : children) {
+                    IBounds cb = child.getBounds();
+                    int[] childSize = computedSizes.getOrDefault(child.getId(),
+                            new int[] { cb.getWidth(), cb.getHeight() });
+                    int childRight = cb.getX() + childSize[0];
+                    int childBottom = cb.getY() + childSize[1];
+                    childMaxRight = Math.max(childMaxRight, childRight);
+                    childMaxBottom = Math.max(childMaxBottom, childBottom);
+                }
+            }
+
+            int newWidth = Math.max(labelWidth, childMaxRight) + 2 * CONTAINMENT_PADDING_SIDE;
+            int newHeight = CONTAINMENT_LABEL_TOP + childMaxBottom + CONTAINMENT_PADDING_BOTTOM;
+            newWidth = Math.max(newWidth, ElementSizer.DEFAULT_WIDTH);
+            newHeight = Math.max(newHeight, ElementSizer.DEFAULT_HEIGHT);
+
+            computedSizes.put(parent.getId(), new int[] { newWidth, newHeight });
+
+            IBounds bounds = parent.getBounds();
+            int oldW = bounds.getWidth();
+            int oldH = bounds.getHeight();
+
+            if (newWidth != oldW || newHeight != oldH) {
+                PreparedMutation<ViewObjectDto> pm = prepareUpdateViewObjectDirect(
+                        parent, null, null, newWidth, newHeight);
+                mutations.add(pm);
+                resizedList.add(new ResizeElementsResultDto.ResizedElement(
+                        parent.getId(), parentName, oldW, oldH, newWidth, newHeight));
+            } else {
+                unchangedCount++;
+            }
+        }
+
+        if (mutations.isEmpty()) {
+            return new MutationResult<>(
+                    new ResizeElementsResultDto(viewId, 0, unchangedCount, List.of()),
+                    (Integer) null);
+        }
+
+        // Build compound command (single undo unit)
+        String label = "Resize " + mutations.size() + " elements to fit labels";
+        NonNotifyingCompoundCommand compound = new NonNotifyingCompoundCommand(label);
+        for (PreparedMutation<ViewObjectDto> pm : mutations) {
+            compound.add(pm.command());
+        }
+
+        ResizeElementsResultDto dto = new ResizeElementsResultDto(
+                viewId, resizedList.size(), unchangedCount, resizedList);
+
+        // Check approval mode
+        if (mutationDispatcher.isApprovalRequired(sessionId)) {
+            Map<String, Object> proposedChanges = new LinkedHashMap<>();
+            proposedChanges.put("resizedCount", resizedList.size());
+            proposedChanges.put("unchangedCount", unchangedCount);
+            ProposalContext ctx = storeAsProposal(sessionId,
+                    "resize-elements-to-fit",
+                    compound, dto, label,
+                    null, proposedChanges,
+                    "Element resize ready for application.");
+            return new MutationResult<>(dto, null, ctx);
+        }
+
+        Integer batchSeq = dispatchOrQueue(sessionId, compound, label);
+        if (batchSeq == null) {
+            versionCounter.incrementAndGet();
+        }
+        return new MutationResult<>(dto, batchSeq);
+    }
+
+    private void collectElementViewObjects(IDiagramModelContainer container,
+            List<IDiagramModelArchimateObject> result) {
+        for (IDiagramModelObject child : container.getChildren()) {
+            if (child instanceof IDiagramModelArchimateObject archObj) {
+                result.add(archObj);
+                // Recurse into nested elements
+                collectElementViewObjects(archObj, result);
+            } else if (child instanceof IDiagramModelGroup group) {
+                // Recurse into groups to find elements inside them
+                collectElementViewObjects(group, result);
+            }
+        }
+    }
+
+    /**
+     * Computes nesting depth of a view object (0 = direct child of view).
+     */
+    private int nestingDepth(IDiagramModelObject obj) {
+        int depth = 0;
+        EObject container = obj.eContainer();
+        while (container instanceof IDiagramModelObject) {
+            depth++;
+            container = container.eContainer();
+        }
+        return depth;
+    }
+
     // ---- Hub element detection (Story 13-3) ----
 
     @Override
@@ -2362,14 +2659,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 // Ignored when force=true (force already applies all routes) or clear strategy
                 boolean effectiveAutoNudge = autoNudge && !force;
 
-                // Story 13-9: Skip autoNudge when elements overlap — degenerate geometry
+                // Story 13-9: Skip autoNudge when sibling elements overlap — degenerate geometry
                 // can crash the re-routing pipeline. Fall back to standard failure reporting.
+                // Containment overlaps (parent-child nesting) are excluded — they are intentional.
                 if (effectiveAutoNudge && OverlapResolver.hasOverlappingElements(nodes)) {
                     effectiveAutoNudge = false;
-                    logger.warn("Auto-nudge skipped: overlapping elements detected on view {}. "
+                    logger.warn("Auto-nudge skipped: overlapping sibling elements detected on view {}. "
                             + "Resolve overlaps first (e.g., layout-flat-view or layout-within-group), "
                             + "then re-route.", viewId);
-                    warnings.add("autoNudge skipped because elements have overlapping bounding boxes. "
+                    warnings.add("autoNudge skipped because sibling elements have overlapping bounding boxes. "
                             + "Use layout-flat-view or layout-within-group to separate elements first.");
                 }
 
@@ -3386,13 +3684,19 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 effectiveSpacing, targetRating, model, diagramModel, topLevelGroups);
     }
 
+    /** Maximum retries for arrange-groups gap enforcement within a single layout pass. */
+    private static final int MAX_ARRANGE_GAP_RETRIES = 5;
+    /** Inter-group spacing increment per gap-enforcement retry. */
+    private static final int ARRANGE_GAP_RETRY_INCREMENT = 20;
+
     /**
      * Computes a single grouped layout pass: layout-within-group for each group,
-     * arrange-groups, optimize-group-order, auto-route-connections.
-     * Returns all commands merged into a single compound for atomic undo.
+     * then arrange-groups with virtual bounds and gap enforcement.
+     * Returns layout + arrange commands merged into a single compound.
+     * Optimize-group-order and auto-route are handled by the caller.
      */
     private GroupedLayoutPassResult computeGroupedLayoutPass(
-            String viewId, String direction, int spacing,
+            String viewId, String direction, int intraGroupSpacing, int interGroupSpacing,
             IArchimateModel model, IArchimateDiagramModel diagramModel,
             List<IDiagramModelGroup> topLevelGroups) {
 
@@ -3405,6 +3709,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int resolvedPadding = DEFAULT_GROUP_PADDING;
         int startX = resolvedPadding;
         int startY = resolvedPadding + GROUP_LABEL_HEIGHT;
+
+        // Track virtual group bounds (post-resize dimensions) for arrange-groups
+        Map<String, int[]> virtualGroupBounds = new HashMap<>();
 
         for (IDiagramModelGroup group : topLevelGroups) {
             // Collect direct children (skip notes)
@@ -3419,7 +3726,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             // Compute column layout (default arrangement for grouped mode)
             boolean effectiveAutoWidth = true;
             List<int[]> positions = computeColumnLayout(children, startX, startY,
-                    spacing, null, null, effectiveAutoWidth);
+                    intraGroupSpacing, null, null, effectiveAutoWidth);
 
             // Build update commands for each child
             for (int i = 0; i < children.size(); i++) {
@@ -3438,20 +3745,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     currentBounds.getX(), currentBounds.getY(),
                     groupDims[0], groupDims[1]));
 
+            // Track virtual bounds for arrange-groups (uses post-resize dimensions)
+            virtualGroupBounds.put(group.getId(),
+                    new int[]{groupDims[0], groupDims[1]});
+
             // Resize ancestors if nested
             List<Command> ancestorCommands = new ArrayList<>();
             resizeAncestorGroups(group, ancestorCommands, resolvedPadding);
             ancestorCommands.forEach(compound::add);
         }
 
+        // Remember command count before arrange-groups (for retry: clear arrange commands only)
+        int layoutCommandCount = compound.size();
+
         // Step 2: Arrange groups by topology
-        // Determine arrangement direction
         String arrangement = ("RIGHT".equalsIgnoreCase(direction)
                 || "LEFT".equalsIgnoreCase(direction)) ? "row" : "column";
 
-        // Re-read top-level groups (positions may have changed from step 1 resizing).
-        // Intentionally includes empty groups: they should be positioned alongside
-        // populated groups even though layout-within-group skipped them.
+        // Re-read top-level groups. Intentionally includes empty groups.
         List<IDiagramModelGroup> arrangeTargets = new ArrayList<>();
         for (IDiagramModelObject child : diagramModel.getChildren()) {
             if (child instanceof IDiagramModelGroup group) {
@@ -3460,7 +3771,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         if (!arrangeTargets.isEmpty()) {
-            // Build topology ordering
+            // Build topology ordering (computed once, reused across retries)
             Map<String, String> elementToGroup = new HashMap<>();
             for (IDiagramModelGroup group : arrangeTargets) {
                 mapElementsToGroup(group, group.getId(), elementToGroup);
@@ -3479,7 +3790,6 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             GroupTopologyOrderer orderer = new GroupTopologyOrderer();
             List<String> orderedIds = orderer.orderLinear(groupIdsList, weights);
 
-            // Reorder targets to match topology
             Map<String, IDiagramModelGroup> groupById = new LinkedHashMap<>();
             for (IDiagramModelGroup g : arrangeTargets) {
                 groupById.put(g.getId(), g);
@@ -3490,46 +3800,81 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (g != null) orderedGroups.add(g);
             }
 
-            // Compute positions
-            int arrangeStartX = ARRANGE_GROUPS_ORIGIN;
-            int arrangeStartY = ARRANGE_GROUPS_ORIGIN;
-            List<int[]> positions;
-
-            if ("row".equals(arrangement)) {
-                positions = new ArrayList<>();
-                int curX = arrangeStartX;
-                for (IDiagramModelGroup g : orderedGroups) {
-                    IBounds b = g.getBounds();
-                    positions.add(new int[]{curX, arrangeStartY});
-                    curX += b.getWidth() + spacing;
+            // Arrange-groups with gap enforcement retry loop.
+            // Currently defensive: linear row/column arrangement with positive spacing
+            // cannot produce overlaps. Retry becomes load-bearing if arrangement
+            // changes to 2D grid or topology-aware placement.
+            int currentInterGroupSpacing = interGroupSpacing;
+            for (int retry = 0; retry <= MAX_ARRANGE_GAP_RETRIES; retry++) {
+                if (retry > 0) {
+                    // Clear previous arrange+resize commands, keep layout commands
+                    while (compound.size() > layoutCommandCount) {
+                        compound.getCommands().remove(compound.size() - 1);
+                    }
+                    currentInterGroupSpacing += ARRANGE_GAP_RETRY_INCREMENT;
+                    logger.info("Arrange-groups gap retry {}/{}: interGroupSpacing={}",
+                            retry, MAX_ARRANGE_GAP_RETRIES, currentInterGroupSpacing);
                 }
-            } else {
-                positions = new ArrayList<>();
-                int curY = arrangeStartY;
-                for (IDiagramModelGroup g : orderedGroups) {
-                    IBounds b = g.getBounds();
-                    positions.add(new int[]{arrangeStartX, curY});
-                    curY += b.getHeight() + spacing;
+
+                // Compute arrange positions using virtual bounds (post-resize dimensions)
+                int arrangeStartX = ARRANGE_GROUPS_ORIGIN;
+                int arrangeStartY = ARRANGE_GROUPS_ORIGIN;
+                List<int[]> positions;
+
+                if ("row".equals(arrangement)) {
+                    positions = new ArrayList<>();
+                    int curX = arrangeStartX;
+                    for (IDiagramModelGroup g : orderedGroups) {
+                        int[] vb = virtualGroupBounds.get(g.getId());
+                        int w = (vb != null) ? vb[0] : g.getBounds().getWidth();
+                        positions.add(new int[]{curX, arrangeStartY});
+                        curX += w + currentInterGroupSpacing;
+                    }
+                } else {
+                    positions = new ArrayList<>();
+                    int curY = arrangeStartY;
+                    for (IDiagramModelGroup g : orderedGroups) {
+                        int[] vb = virtualGroupBounds.get(g.getId());
+                        int h = (vb != null) ? vb[1] : g.getBounds().getHeight();
+                        positions.add(new int[]{arrangeStartX, curY});
+                        curY += h + currentInterGroupSpacing;
+                    }
+                }
+
+                // Build arrange commands using virtual bounds for dimensions
+                for (int i = 0; i < orderedGroups.size(); i++) {
+                    IDiagramModelGroup g = orderedGroups.get(i);
+                    int[] vb = virtualGroupBounds.get(g.getId());
+                    int w = (vb != null) ? vb[0] : g.getBounds().getWidth();
+                    int h = (vb != null) ? vb[1] : g.getBounds().getHeight();
+                    int[] pos = positions.get(i);
+                    compound.add(new UpdateViewObjectCommand(g,
+                            pos[0], pos[1], w, h));
+                }
+                groupsArranged = orderedGroups.size();
+
+                // Step 3: Validate group gaps (no overlaps)
+                List<int[]> groupRects = new ArrayList<>();
+                for (int i = 0; i < orderedGroups.size(); i++) {
+                    IDiagramModelGroup g = orderedGroups.get(i);
+                    int[] vb = virtualGroupBounds.get(g.getId());
+                    int w = (vb != null) ? vb[0] : g.getBounds().getWidth();
+                    int h = (vb != null) ? vb[1] : g.getBounds().getHeight();
+                    int[] pos = positions.get(i);
+                    groupRects.add(new int[]{pos[0], pos[1], w, h});
+                }
+
+                if (GroupLayoutCalculator.validateGroupGaps(groupRects)) {
+                    logger.info("Arrange-groups gap validation passed (retry={})", retry);
+                    break;
+                }
+
+                if (retry == MAX_ARRANGE_GAP_RETRIES) {
+                    logger.warn("Arrange-groups gap validation failed after {} retries, "
+                            + "proceeding with best available layout", MAX_ARRANGE_GAP_RETRIES);
                 }
             }
-
-            // Build arrange commands
-            for (int i = 0; i < orderedGroups.size(); i++) {
-                IDiagramModelGroup g = orderedGroups.get(i);
-                IBounds b = g.getBounds();
-                int[] pos = positions.get(i);
-                compound.add(new UpdateViewObjectCommand(g,
-                        pos[0], pos[1], b.getWidth(), b.getHeight()));
-            }
-            groupsArranged = orderedGroups.size();
         }
-
-        // Step 3: Optimize group order (crossing minimization)
-        // This is done via computeOptimizeGroupOrderPass which reads current EMF state
-        // We need to dispatch what we have so far temporarily, then compute optimize pass
-        // But since this is called from the loop, the caller handles dispatch.
-        // Instead, we just return the layout+arrange commands; optimize and route are
-        // handled by the existing computeOptimizeGroupOrderPass and computeAutoRoutePass.
 
         return new GroupedLayoutPassResult(compound, elementsRepositioned, groupsArranged);
     }
@@ -3542,10 +3887,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             IArchimateModel model, IArchimateDiagramModel diagramModel,
             List<IDiagramModelGroup> topLevelGroups) {
 
-        logger.info("Grouped single-pass: step 1/4 — computing layout for {} groups, spacing={}",
-                topLevelGroups.size(), spacing);
+        int interGroupSpacing = (int) (spacing * 1.5);
+        logger.info("Grouped single-pass: step 1/4 — computing layout for {} groups, "
+                + "intraGroupSpacing={}, interGroupSpacing={}",
+                topLevelGroups.size(), spacing, interGroupSpacing);
         GroupedLayoutPassResult layoutPass = computeGroupedLayoutPass(
-                viewId, direction, spacing, model, diagramModel, topLevelGroups);
+                viewId, direction, spacing, interGroupSpacing, model, diagramModel,
+                topLevelGroups);
 
         // Apply layout+arrange temporarily to compute optimize+route
         logger.info("Grouped single-pass: step 2/4 — applying layout temporarily");
@@ -3654,11 +4002,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int iterationsPerformed = 0;
 
         for (int i = 0; i < MAX_TARGET_RATING_ITERATIONS; i++) {
-            int currentSpacing = baseSpacing + (i * TARGET_RATING_SPACING_INCREMENT);
+            int currentIntraSpacing = baseSpacing + (i * TARGET_RATING_SPACING_INCREMENT);
+            int currentInterSpacing = (int) (currentIntraSpacing * 1.5)
+                    + (i * TARGET_RATING_SPACING_INCREMENT);
             iterationsPerformed = i + 1;
-            logger.info("Grouped quality target iteration {}/{}: spacing={}, target={}",
+            logger.info("Grouped quality target iteration {}/{}: intraSpacing={}, "
+                    + "interSpacing={}, target={}",
                     iterationsPerformed, MAX_TARGET_RATING_ITERATIONS,
-                    currentSpacing, targetRating);
+                    currentIntraSpacing, currentInterSpacing, targetRating);
 
             // Re-discover top-level groups each iteration (EMF state changes after undo)
             List<IDiagramModelGroup> iterGroups;
@@ -3676,7 +4027,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
             // Compute grouped layout pass
             GroupedLayoutPassResult layoutPass = computeGroupedLayoutPass(
-                    viewId, direction, currentSpacing, model, diagramModel, iterGroups);
+                    viewId, direction, currentIntraSpacing, currentInterSpacing,
+                    model, diagramModel, iterGroups);
 
             // Apply temporarily for optimize + route + assessment
             mutationDispatcher.dispatchImmediate(layoutPass.compound);
@@ -3702,10 +4054,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             String rating = assessment.overallRating();
             int score = assessment.overlapCount() + assessment.edgeCrossingCount();
 
-            logger.info("Grouped quality target iteration {}: spacing={}, rating={}, "
-                    + "overlaps={}, crossings={}, groups={}",
-                    iterationsPerformed, currentSpacing, rating,
-                    assessment.overlapCount(), assessment.edgeCrossingCount(),
+            logger.info("Grouped quality target iteration {}: intraSpacing={}, "
+                    + "interSpacing={}, rating={}, overlaps={}, crossings={}, groups={}",
+                    iterationsPerformed, currentIntraSpacing, currentInterSpacing,
+                    rating, assessment.overlapCount(), assessment.edgeCrossingCount(),
                     layoutPass.groupsArranged);
 
             // Track best result — merge all compounds into one
@@ -3739,7 +4091,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 bestLabelsOptimized = (routeResult != null ? routeResult.labelsOptimized : 0);
                 bestRouterTypeSwitched = (routeResult != null && routeResult.routerTypeSwitched);
                 bestGroupsArranged = layoutPass.groupsArranged;
-                bestSpacing = currentSpacing;
+                bestSpacing = currentIntraSpacing;
                 bestAssessment = assessment;
             }
 
@@ -7265,6 +7617,330 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     }
 
     /**
+     * Prepares a clone-view mutation: deep-copies visual layout, references same model elements.
+     *
+     * <p>Strategy (Option A): Build the complete view tree in memory before creating the
+     * command. A single {@link CreateViewCommand} adds the fully-populated view to the
+     * folder. EMF containment cascade handles undo (removing the view removes all children
+     * and connections).</p>
+     *
+     * <p><strong>CRITICAL:</strong> View objects reference the SAME underlying model elements
+     * and relationships — no copies are created. {@code EcoreUtil.copy()} is intentionally
+     * avoided because it deep-copies referenced model elements, breaking model integrity.</p>
+     */
+    private PreparedMutation<ViewDto> prepareCloneView(String sourceViewId, String newName,
+            String folderId) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        // 1. Find source view
+        EObject sourceObj = ArchimateModelUtils.getObjectByID(model, sourceViewId);
+        if (!(sourceObj instanceof IArchimateDiagramModel sourceView)) {
+            throw new ModelAccessException(
+                    "Source view not found: " + sourceViewId,
+                    ErrorCode.VIEW_NOT_FOUND,
+                    null,
+                    "Use get-views to find valid view IDs",
+                    null);
+        }
+
+        // 2. Create new view with metadata from source
+        IArchimateDiagramModel clonedView = IArchimateFactory.eINSTANCE.createArchimateDiagramModel();
+        clonedView.setName(newName);
+        String vp = sourceView.getViewpoint();
+        if (vp != null && !vp.isEmpty()) {
+            clonedView.setViewpoint(vp);
+        }
+        clonedView.setConnectionRouterType(sourceView.getConnectionRouterType());
+
+        // Copy documentation
+        String doc = sourceView.getDocumentation();
+        if (doc != null && !doc.isEmpty()) {
+            clonedView.setDocumentation(doc);
+        }
+
+        // Copy custom properties
+        for (IProperty prop : sourceView.getProperties()) {
+            IProperty newProp = IArchimateFactory.eINSTANCE.createProperty();
+            newProp.setKey(prop.getKey());
+            newProp.setValue(prop.getValue());
+            clonedView.getProperties().add(newProp);
+        }
+
+        // 3. Resolve target folder
+        IFolder targetFolder;
+        if (folderId != null && !folderId.isBlank()) {
+            targetFolder = FolderOperations.findFolderById(model, folderId);
+            if (targetFolder == null) {
+                throw new ModelAccessException(
+                        "Folder not found: " + folderId,
+                        ErrorCode.FOLDER_NOT_FOUND);
+            }
+        } else {
+            // Same folder as source view
+            if (sourceView.eContainer() instanceof IFolder sourceFolder) {
+                targetFolder = sourceFolder;
+            } else {
+                targetFolder = model.getFolder(FolderType.DIAGRAMS);
+            }
+        }
+
+        // 4. Recursively clone children with ID mapping
+        Map<String, IDiagramModelObject> idMapping = new LinkedHashMap<>();
+        cloneChildren(sourceView, clonedView, idMapping);
+
+        // 5. Collect deferred connections (can't call connect() during preparation —
+        // it fires EMF notifications that cascade to SWT UI thread)
+        List<Object[]> deferredConnections = new ArrayList<>();
+        collectDeferredConnections(sourceView, idMapping, deferredConnections);
+
+        // 6. Build compound command: create view + wire all connections
+        NonNotifyingCompoundCommand compound = new NonNotifyingCompoundCommand(
+                "Clone view: " + newName);
+        compound.add(new CreateViewCommand(clonedView, targetFolder));
+        for (Object[] dc : deferredConnections) {
+            IDiagramModelConnection conn = (IDiagramModelConnection) dc[0];
+            IConnectable src = (IConnectable) dc[1];
+            IConnectable tgt = (IConnectable) dc[2];
+            if (conn instanceof IDiagramModelArchimateConnection archConn) {
+                compound.add(new AddConnectionToViewCommand(archConn, src, tgt));
+            } else {
+                // Generic connection (e.g., note connection) — must override redo()
+                // because disconnect() preserves internal source/target fields and
+                // connect() early-returns when they already match (same issue that
+                // AddConnectionToViewCommand.redo() handles for archimate connections).
+                compound.add(new Command("Connect") {
+                    @Override public void execute() { conn.connect(src, tgt); }
+                    @Override public void undo() { conn.disconnect(); }
+                    @Override public void redo() {
+                        conn.setSource(null);
+                        conn.setTarget(null);
+                        conn.connect(src, tgt);
+                    }
+                });
+            }
+        }
+
+        ViewDto dto = buildViewDto(clonedView, FolderOperations.buildFolderPath(targetFolder));
+
+        return new PreparedMutation<>(compound, dto, clonedView.getId(), clonedView);
+    }
+
+    /**
+     * Recursively clones children from source container to target container.
+     * Builds an ID mapping (source view object ID → cloned view object) for
+     * connection resolution.
+     */
+    private void cloneChildren(IDiagramModelContainer source, IDiagramModelContainer target,
+            Map<String, IDiagramModelObject> idMapping) {
+        for (IDiagramModelObject child : source.getChildren()) {
+            IDiagramModelObject cloned = cloneViewObject(child);
+            target.getChildren().add(cloned);
+            idMapping.put(child.getId(), cloned);
+
+            // Recurse into containers (groups, element-as-container)
+            if (child instanceof IDiagramModelContainer sourceContainer
+                    && cloned instanceof IDiagramModelContainer clonedContainer) {
+                cloneChildren(sourceContainer, clonedContainer, idMapping);
+            }
+        }
+    }
+
+    /**
+     * Creates a clone of a single view object, copying all visual properties.
+     * Does NOT recurse into children — that is handled by {@link #cloneChildren}.
+     */
+    private IDiagramModelObject cloneViewObject(IDiagramModelObject source) {
+        if (source instanceof IDiagramModelArchimateObject archObj) {
+            IDiagramModelArchimateObject cloned =
+                    IArchimateFactory.eINSTANCE.createDiagramModelArchimateObject();
+            cloned.setArchimateElement(archObj.getArchimateElement()); // REFERENCE, not copy
+            copyDiagramObjectProperties(source, cloned);
+            // figureType / type
+            cloned.setType(archObj.getType());
+            return cloned;
+
+        } else if (source instanceof IDiagramModelGroup groupObj) {
+            IDiagramModelGroup cloned = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
+            cloned.setName(groupObj.getName());
+            String groupDoc = groupObj.getDocumentation();
+            if (groupDoc != null && !groupDoc.isEmpty()) {
+                cloned.setDocumentation(groupDoc);
+            }
+            copyDiagramObjectProperties(source, cloned);
+            return cloned;
+
+        } else if (source instanceof IDiagramModelNote noteObj) {
+            IDiagramModelNote cloned = IArchimateFactory.eINSTANCE.createDiagramModelNote();
+            cloned.setContent(noteObj.getContent());
+            copyDiagramObjectProperties(source, cloned);
+            return cloned;
+
+        } else {
+            // Fail loudly rather than creating an invalid EMF object without a backing
+            // model element — an orphan IDiagramModelArchimateObject would NPE on any
+            // subsequent access and could corrupt the .archimate file if persisted.
+            throw new ModelAccessException(
+                    "Cannot clone unsupported view object type: " + source.eClass().getName(),
+                    ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Copies visual properties common to all diagram objects:
+     * bounds, fill/line/font colors, opacity, line width, font, text alignment,
+     * text position, and image properties.
+     */
+    private void copyDiagramObjectProperties(IDiagramModelObject source, IDiagramModelObject target) {
+        // Bounds
+        IBounds srcBounds = source.getBounds();
+        if (srcBounds != null) {
+            target.setBounds(srcBounds.getX(), srcBounds.getY(),
+                    srcBounds.getWidth(), srcBounds.getHeight());
+        }
+
+        // Colors
+        if (source.getFillColor() != null) {
+            target.setFillColor(source.getFillColor());
+        }
+        target.setAlpha(source.getAlpha());
+
+        // Line properties
+        if (source instanceof ILineObject srcLine && target instanceof ILineObject tgtLine) {
+            if (srcLine.getLineColor() != null) {
+                tgtLine.setLineColor(srcLine.getLineColor());
+            }
+            tgtLine.setLineWidth(srcLine.getLineWidth());
+        }
+
+        // Font properties
+        if (source instanceof IFontAttribute srcFont && target instanceof IFontAttribute tgtFont) {
+            if (srcFont.getFont() != null) {
+                tgtFont.setFont(srcFont.getFont());
+            }
+            if (srcFont.getFontColor() != null) {
+                tgtFont.setFontColor(srcFont.getFontColor());
+            }
+        }
+
+        // Text alignment
+        target.setTextAlignment(source.getTextAlignment());
+
+        // Image properties (via ImageHelper pattern)
+        ImageHelper.copyImageProperties(source, target);
+    }
+
+    /**
+     * Collects deferred connections from the source view using the ID mapping.
+     * Connections cannot be wired during preparation because {@code connect()} fires
+     * EMF notifications that cascade to SWT UI thread. Instead, connection info is
+     * collected and wired later inside command execution on the UI thread.
+     *
+     * <p>Each entry in the list is a 3-element array: [clonedConnection, clonedSource, clonedTarget].</p>
+     */
+    private void collectDeferredConnections(IDiagramModelContainer sourceContainer,
+            Map<String, IDiagramModelObject> idMapping,
+            List<Object[]> deferredConnections) {
+        for (IDiagramModelObject child : sourceContainer.getChildren()) {
+            // Clone source connections for this view object
+            for (IDiagramModelConnection conn : child.getSourceConnections()) {
+                IDiagramModelObject clonedSource = idMapping.get(child.getId());
+                IConnectable target = conn.getTarget();
+                IDiagramModelObject clonedTarget = (target != null)
+                        ? idMapping.get(target.getId()) : null;
+
+                if (clonedSource == null || clonedTarget == null) {
+                    logger.warn("Skipping connection clone — source or target not in mapping: "
+                            + "source={}, target={}", child.getId(),
+                            target != null ? target.getId() : "null");
+                    continue;
+                }
+
+                IDiagramModelConnection clonedConn;
+                if (conn instanceof IDiagramModelArchimateConnection archConn) {
+                    IDiagramModelArchimateConnection clonedArchConn =
+                            IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+                    clonedArchConn.setArchimateRelationship(
+                            archConn.getArchimateRelationship()); // REFERENCE, not copy
+                    clonedConn = clonedArchConn;
+                } else {
+                    // Non-archimate connection (e.g., note connection)
+                    clonedConn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
+                    if (conn instanceof ITextContent tc && clonedConn instanceof ITextContent clonedTc) {
+                        String text = tc.getContent();
+                        if (text != null && !text.isEmpty()) {
+                            clonedTc.setContent(text);
+                        }
+                    }
+                }
+
+                // Copy connection visual properties
+                copyConnectionProperties(conn, clonedConn);
+
+                // Defer wiring — will be executed on UI thread via command
+                deferredConnections.add(new Object[]{
+                        clonedConn, clonedSource, clonedTarget});
+
+                // Warn if connection has its own source connections (connection-on-connection).
+                // These are not cloned — would require a second pass with a separate
+                // IConnectable mapping. Extremely rare in ArchiMate (relationship-to-relationship).
+                if (!conn.getSourceConnections().isEmpty()) {
+                    logger.warn("Connection-on-connection detected during clone — {} "
+                            + "connection(s) on connection {} will not be cloned",
+                            conn.getSourceConnections().size(), conn.getId());
+                }
+            }
+
+            // Recurse into containers
+            if (child instanceof IDiagramModelContainer container) {
+                collectDeferredConnections(container, idMapping, deferredConnections);
+            }
+        }
+    }
+
+    /**
+     * Copies visual properties from source connection to target connection:
+     * bendpoints, line color, line width, font, font color, text position,
+     * type (line style), opacity, and name visibility.
+     */
+    private void copyConnectionProperties(IDiagramModelConnection source,
+            IDiagramModelConnection target) {
+        // Bendpoints (relative coordinates)
+        for (IDiagramModelBendpoint bp : source.getBendpoints()) {
+            IDiagramModelBendpoint clonedBp =
+                    IArchimateFactory.eINSTANCE.createDiagramModelBendpoint();
+            clonedBp.setStartX(bp.getStartX());
+            clonedBp.setStartY(bp.getStartY());
+            clonedBp.setEndX(bp.getEndX());
+            clonedBp.setEndY(bp.getEndY());
+            target.getBendpoints().add(clonedBp);
+        }
+
+        // Line properties
+        if (source.getLineColor() != null) {
+            target.setLineColor(source.getLineColor());
+        }
+        target.setLineWidth(source.getLineWidth());
+
+        // Font properties
+        if (source.getFont() != null) {
+            target.setFont(source.getFont());
+        }
+        if (source.getFontColor() != null) {
+            target.setFontColor(source.getFontColor());
+        }
+
+        // Text position and line type
+        target.setTextPosition(source.getTextPosition());
+        target.setType(source.getType());
+
+        // Name visibility (label show/hide) — only on archimate connections
+        if (source instanceof IDiagramModelArchimateConnection srcArch
+                && target instanceof IDiagramModelArchimateConnection tgtArch) {
+            tgtArch.setNameVisible(srcArch.isNameVisible());
+        }
+    }
+
+    /**
      * Prepares an update-element mutation without dispatching.
      */
     private PreparedMutation<ElementDto> prepareUpdateElement(String id, String name,
@@ -7293,6 +7969,37 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         Command cmd = new UpdateElementCommand(element, name, documentation, properties);
 
         return new PreparedMutation<>(cmd, convertToElementDto(element), element.getId(), element);
+    }
+
+    /**
+     * Prepares an update-relationship mutation without dispatching.
+     */
+    private PreparedMutation<RelationshipDto> prepareUpdateRelationship(String id, String name,
+            String documentation, Map<String, String> properties) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (name == null && documentation == null && properties == null) {
+            throw new ModelAccessException(
+                    "No fields to update — provide at least one of: name, documentation, properties",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Specify name, documentation, or properties to update",
+                    null);
+        }
+
+        EObject obj = ArchimateModelUtils.getObjectByID(model, id);
+        if (!(obj instanceof IArchimateRelationship relationship)) {
+            throw new ModelAccessException(
+                    "Relationship not found: " + id,
+                    ErrorCode.RELATIONSHIP_NOT_FOUND,
+                    null,
+                    "Use search-relationships or get-relationships to find the correct relationship ID",
+                    null);
+        }
+
+        Command cmd = new UpdateRelationshipCommand(relationship, name, documentation, properties);
+
+        return new PreparedMutation<>(cmd, convertToRelationshipDto(relationship), relationship.getId(), relationship);
     }
 
     /**
@@ -10046,6 +10753,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Map<String, String> properties = optionalStringMapWithNulls(params, "properties");
                 yield prepareUpdateElement(id, name, documentation, properties);
             }
+            case "update-relationship" -> {
+                String id = requireParam(params, "id");
+                String name = optionalParam(params, "name");
+                String documentation = optionalParam(params, "documentation");
+                Map<String, String> properties = optionalStringMapWithNulls(params, "properties");
+                yield prepareUpdateRelationship(id, name, documentation, properties);
+            }
             case "update-view" -> {
                 String viewId = requireParam(params, "viewId");
                 String name = optionalParam(params, "name");
@@ -10069,9 +10783,25 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 Integer y = optionalIntParam(params, "y");
                 Integer width = optionalIntParam(params, "width");
                 Integer height = optionalIntParam(params, "height");
+                Boolean autoSize = optionalBoolParam(params, "autoSize");
                 String parentViewObjectId = optionalParam(params, "parentViewObjectId");
                 StylingParams bulkStyling = extractBulkStylingParams(params);
                 ImageParams bulkImageParams = extractBulkImageParams(params);
+
+                // B48: Auto-size element to fit label when autoSize=true and no explicit dimensions
+                if (Boolean.TRUE.equals(autoSize) && width == null && height == null) {
+                    // Check back-referenced element first, then model lookup
+                    IArchimateElement backRef = findBackReferencedElement(elementId, createdElements);
+                    String elName = backRef != null ? backRef.getName() : "";
+                    if (elName.isEmpty()) {
+                        // Try model lookup
+                        Optional<ElementDto> elOpt = getElementById(elementId);
+                        elName = elOpt.map(ElementDto::name).orElse("");
+                    }
+                    int[] computed = ElementSizer.computeAutoSize(elName);
+                    width = computed[0];
+                    height = computed[1];
+                }
 
                 // Story 10-20: Resolve batch-created parent container (group or element
                 // created earlier in this batch via add-group-to-view or add-to-view)
@@ -10802,7 +11532,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             case "add-connection-to-view" -> "connected";
             case "remove-from-view" -> "removed";
             case "clear-view" -> "cleared";
-            case "update-view", "update-view-object", "update-view-connection", "update-element" -> "updated";
+            case "update-view", "update-view-object", "update-view-connection", "update-element", "update-relationship" -> "updated";
             case "delete-element", "delete-relationship", "delete-view", "delete-folder" -> "deleted";
             default -> "created";
         };

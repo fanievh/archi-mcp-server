@@ -20,8 +20,16 @@ public class HasOverlappingElementsTest {
 		return new AssessmentNode(id, x, y, w, h, null, false, false);
 	}
 
+	private static AssessmentNode elementWithParent(String id, double x, double y, double w, double h, String parentId) {
+		return new AssessmentNode(id, x, y, w, h, parentId, false, false);
+	}
+
 	private static AssessmentNode group(String id, double x, double y, double w, double h) {
 		return new AssessmentNode(id, x, y, w, h, null, true, false);
+	}
+
+	private static AssessmentNode groupWithParent(String id, double x, double y, double w, double h, String parentId) {
+		return new AssessmentNode(id, x, y, w, h, parentId, true, false);
 	}
 
 	private static AssessmentNode note(String id, double x, double y, double w, double h) {
@@ -158,6 +166,70 @@ public class HasOverlappingElementsTest {
 		List<AssessmentNode> nodes = List.of(
 				element("a", 100, 100, 140, 70),
 				element("b", 239, 100, 140, 70));
+		assertTrue(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	// --- Containment overlap exclusion (Bug 11.1: autoNudge false positive) ---
+
+	@Test
+	public void shouldReturnFalse_whenChildNestedInsideParent() {
+		// Child element inside parent element — containment, not sibling overlap
+		List<AssessmentNode> nodes = List.of(
+				element("parent", 100, 100, 300, 200),
+				elementWithParent("child", 120, 130, 120, 55, "parent"));
+		assertFalse(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	@Test
+	public void shouldReturnFalse_whenMultipleChildrenInsideParent() {
+		// Multiple children nested inside parent — all containment overlaps
+		List<AssessmentNode> nodes = List.of(
+				element("parent", 100, 100, 300, 300),
+				elementWithParent("child1", 120, 130, 120, 55, "parent"),
+				elementWithParent("child2", 120, 200, 120, 55, "parent"));
+		assertFalse(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	@Test
+	public void shouldReturnTrue_whenSiblingsOverlapInsideParent() {
+		// Two children overlap each other (siblings) — genuine overlap even though both have same parent
+		List<AssessmentNode> nodes = List.of(
+				element("parent", 100, 100, 300, 300),
+				elementWithParent("child1", 120, 130, 120, 55, "parent"),
+				elementWithParent("child2", 120, 140, 120, 55, "parent"));  // overlaps child1
+		assertTrue(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	@Test
+	public void shouldReturnFalse_whenTransitiveContainment() {
+		// Grandchild inside group inside grandparent — transitive containment
+		List<AssessmentNode> nodes = List.of(
+				group("grandparent", 50, 50, 500, 500),
+				groupWithParent("parent-group", 70, 70, 400, 400, "grandparent"),
+				elementWithParent("grandchild", 100, 100, 120, 55, "parent-group"));
+		assertFalse(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	@Test
+	public void shouldReturnFalse_whenFlatViewWithEmbeddedFunctions() {
+		// Reproduces the E2E bug: ApplicationComponent with nested ApplicationFunction
+		// on a flat view — containment overlaps, not sibling overlaps
+		List<AssessmentNode> nodes = List.of(
+				element("app1", 100, 100, 160, 80),
+				elementWithParent("func1", 110, 130, 100, 40, "app1"),
+				element("app2", 400, 100, 160, 80),
+				elementWithParent("func2", 410, 130, 100, 40, "app2"));
+		assertFalse(OverlapResolver.hasOverlappingElements(nodes));
+	}
+
+	@Test
+	public void shouldReturnTrue_whenSiblingOverlapAmidContainment() {
+		// Genuine sibling overlap exists alongside containment overlaps
+		List<AssessmentNode> nodes = List.of(
+				element("app1", 100, 100, 160, 80),
+				elementWithParent("func1", 110, 130, 100, 40, "app1"),
+				element("app2", 200, 100, 160, 80),  // overlaps app1 (siblings, not containment)
+				elementWithParent("func2", 210, 130, 100, 40, "app2"));
 		assertTrue(OverlapResolver.hasOverlappingElements(nodes));
 	}
 }
