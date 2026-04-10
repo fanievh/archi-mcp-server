@@ -35,7 +35,7 @@ public class ResourceHandlerTest {
 		TestableResourceHandler handler = new TestableResourceHandler(true);
 		handler.registerResources(registry);
 
-		assertEquals(6, registry.getResourceCount());
+		assertEquals(7, registry.getResourceCount());
 	}
 
 	@Test
@@ -51,7 +51,7 @@ public class ResourceHandlerTest {
 		TestableResourceHandler handler = new TestableResourceHandler(true);
 		handler.registerResources(registry);
 
-		assertEquals(6, handler.getCachedResourceCount());
+		assertEquals(7, handler.getCachedResourceCount());
 	}
 
 	@Test
@@ -115,6 +115,21 @@ public class ResourceHandlerTest {
 		handler.registerResources(registry);
 
 		assertResourceRegistered("archimate://reference/archimate-relationships");
+	}
+
+	@Test
+	public void shouldRegisterArchimateSpecializationsReference() {
+		TestableResourceHandler handler = new TestableResourceHandler(true);
+		handler.registerResources(registry);
+
+		assertResourceRegistered("archimate://reference/archimate-specializations");
+
+		McpServerFeatures.SyncResourceSpecification spec = registry.getResourceSpecifications().stream()
+				.filter(s -> "archimate://reference/archimate-specializations".equals(s.resource().uri()))
+				.findFirst().orElseThrow();
+		assertEquals("ArchiMate Specializations Reference", spec.resource().name());
+		assertTrue("Description should mention specialization",
+				spec.resource().description().toLowerCase().contains("specialization"));
 	}
 
 	@Test
@@ -251,8 +266,8 @@ public class ResourceHandlerTest {
 		Assume.assumeTrue("Resource files only available in PDE environment",
 				handler.getCachedResourceCount() > 0);
 
-		assertEquals("All 6 resource files should load in PDE", 6, handler.getCachedResourceCount());
-		assertEquals(6, registry.getResourceCount());
+		assertEquals("All 7 resource files should load in PDE", 7, handler.getCachedResourceCount());
+		assertEquals(7, registry.getResourceCount());
 
 		// Verify model-exploration-guide content
 		McpSchema.ReadResourceRequest request = new McpSchema.ReadResourceRequest(

@@ -41,7 +41,7 @@ public class SummaryFormatterTest {
     @Test
     public void summarizeElements_singleElement_shouldShowTypeAndLayer() {
         ElementDto e = ElementDto.standard("id1", "Portal",
-                "ApplicationComponent", "Application", null, null);
+                "ApplicationComponent", null, "Application", null, null);
         String result = SummaryFormatter.summarizeElements(List.of(e), null);
         assertTrue(result.contains("Found 1 element"));
         assertTrue(result.contains("ApplicationComponent"));
@@ -51,9 +51,9 @@ public class SummaryFormatterTest {
     @Test
     public void summarizeElements_multipleElements_shouldShowTypeDistribution() {
         List<ElementDto> elements = List.of(
-                ElementDto.standard("1", "A", "ApplicationComponent", "Application", null, null),
-                ElementDto.standard("2", "B", "ApplicationComponent", "Application", null, null),
-                ElementDto.standard("3", "C", "BusinessProcess", "Business", null, null));
+                ElementDto.standard("1", "A", "ApplicationComponent", null, "Application", null, null),
+                ElementDto.standard("2", "B", "ApplicationComponent", null, "Application", null, null),
+                ElementDto.standard("3", "C", "BusinessProcess", null, "Business", null, null));
         String result = SummaryFormatter.summarizeElements(elements, "test");
         assertTrue(result.contains("Found 3 elements"));
         assertTrue(result.contains("'test'"));
@@ -64,13 +64,13 @@ public class SummaryFormatterTest {
     @Test
     public void summarizeElements_manyTypes_shouldShowTop3AndOthers() {
         List<ElementDto> elements = List.of(
-                ElementDto.standard("1", "A", "ApplicationComponent", "Application", null, null),
-                ElementDto.standard("2", "B", "ApplicationComponent", "Application", null, null),
-                ElementDto.standard("3", "C", "BusinessProcess", "Business", null, null),
-                ElementDto.standard("4", "D", "BusinessProcess", "Business", null, null),
-                ElementDto.standard("5", "E", "Node", "Technology", null, null),
-                ElementDto.standard("6", "F", "Stakeholder", "Motivation", null, null),
-                ElementDto.standard("7", "G", "Driver", "Motivation", null, null));
+                ElementDto.standard("1", "A", "ApplicationComponent", null, "Application", null, null),
+                ElementDto.standard("2", "B", "ApplicationComponent", null, "Application", null, null),
+                ElementDto.standard("3", "C", "BusinessProcess", null, "Business", null, null),
+                ElementDto.standard("4", "D", "BusinessProcess", null, "Business", null, null),
+                ElementDto.standard("5", "E", "Node", null, "Technology", null, null),
+                ElementDto.standard("6", "F", "Stakeholder", null, "Motivation", null, null),
+                ElementDto.standard("7", "G", "Driver", null, "Motivation", null, null));
         String result = SummaryFormatter.summarizeElements(elements, null);
         assertTrue(result.contains("Found 7 elements"));
         // Top 3 types shown, rest as "others"
@@ -119,8 +119,8 @@ public class SummaryFormatterTest {
     @Test
     public void summarizeViewContents_shouldShowCountsAndDistributions() {
         List<ElementDto> elements = List.of(
-                ElementDto.standard("e1", "Portal", "ApplicationComponent", "Application", null, null),
-                ElementDto.standard("e2", "Auth", "ApplicationService", "Application", null, null));
+                ElementDto.standard("e1", "Portal", "ApplicationComponent", null, "Application", null, null),
+                ElementDto.standard("e2", "Auth", "ApplicationService", null, "Application", null, null));
         List<RelationshipDto> rels = List.of(
                 new RelationshipDto("r1", "serves", "ServingRelationship", "e1", "e2"));
         List<ViewConnectionDto> connections = List.of(
@@ -150,7 +150,7 @@ public class SummaryFormatterTest {
 
     @Test
     public void summarizeDepthRelationships_empty_shouldMentionNoRelationships() {
-        ElementDto element = ElementDto.standard("e1", "Portal", null, null, null, null);
+        ElementDto element = ElementDto.standard("e1", "Portal", null, null, null, null, null);
         String result = SummaryFormatter.summarizeDepthRelationships(List.of(), element);
         assertTrue(result.contains("Portal"));
         assertTrue(result.contains("no relationships"));
@@ -158,7 +158,7 @@ public class SummaryFormatterTest {
 
     @Test
     public void summarizeDepthRelationships_withRelationships_shouldShowTypeDistributionAndConnectedCount() {
-        ElementDto element = ElementDto.standard("e1", "Portal", null, null, null, null);
+        ElementDto element = ElementDto.standard("e1", "Portal", null, null, null, null, null);
         List<RelationshipDto> rels = List.of(
                 new RelationshipDto("r1", null, "ServingRelationship", "e1", "e2"),
                 new RelationshipDto("r2", null, "ServingRelationship", "e1", "e3"),
@@ -188,7 +188,7 @@ public class SummaryFormatterTest {
         Map<String, Object> traversalResult = new LinkedHashMap<>();
         traversalResult.put("traversalSummary", summary);
 
-        ElementDto start = ElementDto.standard("e1", "Portal", null, null, null, null);
+        ElementDto start = ElementDto.standard("e1", "Portal", null, null, null, null, null);
         String result = SummaryFormatter.summarizeTraversal(traversalResult, start);
         assertTrue(result.contains("Portal"));
         assertTrue(result.contains("5 elements"));
@@ -208,7 +208,7 @@ public class SummaryFormatterTest {
         Map<String, Object> traversalResult = new LinkedHashMap<>();
         traversalResult.put("traversalSummary", summary);
 
-        ElementDto start = ElementDto.standard("e1", "DB", null, null, null, null);
+        ElementDto start = ElementDto.standard("e1", "DB", null, null, null, null, null);
         String result = SummaryFormatter.summarizeTraversal(traversalResult, start);
         assertTrue(result.contains("Cycles detected"));
     }
@@ -218,7 +218,7 @@ public class SummaryFormatterTest {
         Map<String, Object> traversalResult = new LinkedHashMap<>();
         // no traversalSummary key
 
-        ElementDto start = ElementDto.standard("e1", "Portal", null, null, null, null);
+        ElementDto start = ElementDto.standard("e1", "Portal", null, null, null, null, null);
         String result = SummaryFormatter.summarizeTraversal(traversalResult, start);
         assertTrue(result.contains("Portal"));
         assertTrue(result.contains("no summary"));

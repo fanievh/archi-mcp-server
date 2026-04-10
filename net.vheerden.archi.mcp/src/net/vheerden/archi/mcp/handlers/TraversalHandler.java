@@ -227,6 +227,7 @@ public class TraversalHandler {
                         + "connected element layer (filterLayer), and field selection (fields/exclude). "
                         + "Set dryRun=true to get a cost estimate without returning results. "
                         + "Set format=graph for deduplicated node/edge structure, format=summary for condensed text overview. "
+                        + "Relationships include specialization field showing primary specialization name (null if none). "
                         + "Related: get-element (full element details), "
                         + "search-elements (find elements by name).")
                 .inputSchema(inputSchema)

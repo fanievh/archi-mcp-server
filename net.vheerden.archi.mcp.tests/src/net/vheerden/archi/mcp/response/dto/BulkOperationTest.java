@@ -111,8 +111,33 @@ public class BulkOperationTest {
     }
 
     @Test
-    public void shouldHaveTwentySupportedTools() {
-        assertEquals(20, BulkOperation.SUPPORTED_TOOLS.size());
+    public void shouldAcceptCreateSpecializationTool() {
+        BulkOperation op = new BulkOperation("create-specialization",
+                Map.of("name", "Cloud Server", "conceptType", "Node"));
+        op.validate();
+    }
+
+    @Test
+    public void shouldAcceptUpdateSpecializationTool() {
+        BulkOperation op = new BulkOperation("update-specialization",
+                Map.of("name", "Old", "conceptType", "Node", "newName", "New"));
+        op.validate();
+    }
+
+    @Test
+    public void shouldAcceptDeleteSpecializationTool() {
+        BulkOperation op = new BulkOperation("delete-specialization",
+                Map.of("name", "Cloud Server", "conceptType", "Node"));
+        op.validate();
+    }
+
+    @Test
+    public void shouldHaveTwentyThreeSupportedTools() {
+        assertEquals(23, BulkOperation.SUPPORTED_TOOLS.size());
+        // Story C3c: specialization profile management tools
+        assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("create-specialization"));
+        assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("update-specialization"));
+        assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("delete-specialization"));
         assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("create-element"));
         assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("create-relationship"));
         assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("create-view"));

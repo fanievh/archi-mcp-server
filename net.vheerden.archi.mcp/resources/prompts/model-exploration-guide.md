@@ -4,10 +4,11 @@
 
 Follow this sequence when exploring any ArchiMate model:
 
-1. **`get-model-info`** — Always call first. Returns model name, element/relationship/view counts, type distributions, layer distributions, and model-size-aware `nextSteps` suggestions.
-2. **Targeted search** — Use `search-elements` with text queries and type/layer filters to find specific elements.
-3. **Traverse from anchors** — Use `get-relationships` on discovered elements to map dependencies and connections.
-4. **View contents as needed** — Use `get-view-contents` to see how elements are arranged in specific diagrams.
+1. **`get-model-info`** — Always call first. Returns model name, element/relationship/view counts, type distributions, layer distributions, `specializationCount`, and model-size-aware `nextSteps` suggestions.
+2. **`list-specializations` (conditional)** — If `specializationCount > 0`, call this next to learn the model's specialization vocabulary before searching or creating elements. The catalog changes how subsequent searches and creations should be framed.
+3. **Targeted search** — Use `search-elements` with text queries and type/layer/specialization filters to find specific elements.
+4. **Traverse from anchors** — Use `get-relationships` on discovered elements to map dependencies and connections.
+5. **View contents as needed** — Use `get-view-contents` to see how elements are arranged in specific diagrams.
 
 ## Interpreting get-model-info Statistics
 
@@ -21,6 +22,7 @@ The `get-model-info` response provides planning data:
 | `elementTypeDistribution` | Count per ArchiMate type (e.g., `"ApplicationComponent": 42`) — shows where model mass is |
 | `relationshipTypeDistribution` | Count per relationship type (e.g., `"ServingRelationship": 30`) — shows what connections exist before committing to traversal |
 | `layerDistribution` | Count per ArchiMate layer (e.g., `"Application": 87`) — shows which architectural layers are most documented |
+| `specializationCount` | Total specialization definitions — when > 0, the model uses a custom IS-A vocabulary; call `list-specializations` to enumerate and `get-specialization-usage` to audit per-specialization usage |
 
 ## Scale-Based Exploration Heuristics
 
@@ -78,7 +80,16 @@ The `get-model-info` response provides planning data:
 | Focus on specific dependencies | `get-relationships` with `includeTypes`/`excludeTypes`/`filterLayer` | Constrained traversal for targeted analysis |
 | Scope all queries to a subset | `set-session-filter` | Persistent filter — no need to repeat on every query |
 | Check active filters | `get-session-filters` | View current session filter state |
+| Browse specialization catalog | `list-specializations` | Returns all specializations with `(name, conceptType, layer, usageCount)` |
+| Find elements by specialization | `search-elements` with `specialization` filter | Filtered by the IS-A vocabulary, not just type |
+| Audit a specialization before delete/rename | `get-specialization-usage` | Returns elements + relationships referencing the specialization |
 
 ## Dynamic nextSteps
 
 The `get-model-info` response includes a `nextSteps` array with model-size-aware recommendations. These suggestions are tailored to the actual model's element count and composition, providing contextually appropriate guidance at the point of first contact. Follow these suggestions as your starting point.
+
+## Specialization-Aware Creation
+
+Prefer the inline `specialization` param on `create-element` / `create-relationship` over a two-step "create generic concept, then assign specialization" pattern. The inline path uses a single CompoundCommand for atomic undo and auto-creates the specialization if it does not yet exist.
+
+For pre-registering a vocabulary at the start of a session, use `bulk-mutate` with a sequence of `create-specialization` operations followed by element-creation operations that reference those names — all in one atomic batch with a single undo step. `create-specialization` is idempotent, so the pre-registration block is safe to retry. See `archimate-specializations.md` for the full pipeline and a worked end-to-end example.

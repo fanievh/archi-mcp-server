@@ -230,6 +230,7 @@ The plugin serves static reference materials as MCP Resources via the `ResourceH
 |-----|------|---------|
 | `archimate://reference/archimate-layers` | ArchiMate Layers Reference | All layers with element types |
 | `archimate://reference/archimate-relationships` | ArchiMate Relationships Reference | Relationship types with valid combinations |
+| `archimate://reference/archimate-specializations` | ArchiMate Specializations Reference | Specialization vocabulary, identity rules, when-to-use guidance, tool pipeline |
 | `archimate://reference/archimate-view-patterns` | ArchiMate View Patterns | Layout and diagramming best practices |
 
 ### Loading and Serving

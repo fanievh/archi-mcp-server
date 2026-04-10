@@ -84,7 +84,7 @@ public final class FieldSelector {
 
     /** Valid field names that may appear in an exclude list. */
     public static final Set<String> VALID_EXCLUDE_FIELDS = Set.of(
-            "documentation", "properties", "layer", "type",
+            "documentation", "properties", "layer", "type", "specialization",
             "viewpointType", "connectionRouterType", "folderPath",
             "visualMetadata", "connections", "groups", "notes");
 
@@ -92,8 +92,8 @@ public final class FieldSelector {
 
     private static final Set<String> ELEMENT_MINIMAL = Set.of("id", "name");
     private static final Set<String> ELEMENT_STANDARD = Set.of(
-            "id", "name", "type", "layer", "documentation", "properties");
-    private static final Set<String> ELEMENT_FULL = ELEMENT_STANDARD; // no extra fields yet
+            "id", "name", "type", "specialization", "layer", "documentation", "properties");
+    private static final Set<String> ELEMENT_FULL = ELEMENT_STANDARD;
 
     private static final Set<String> VIEW_MINIMAL = Set.of("id", "name");
     private static final Set<String> VIEW_STANDARD = Set.of(
@@ -112,7 +112,7 @@ public final class FieldSelector {
     private static final Set<String> RELATIONSHIP_STANDARD = Set.of(
             "id", "name", "type", "sourceId", "targetId");
     private static final Set<String> RELATIONSHIP_FULL = Set.of(
-            "id", "name", "type", "sourceId", "targetId",
+            "id", "name", "type", "specialization", "sourceId", "targetId",
             "documentation", "properties", "sourceName", "targetName");
     // Alias for backward compatibility (used by applyToRelationship for non-search contexts)
     private static final Set<String> RELATIONSHIP_ALL = RELATIONSHIP_STANDARD;
@@ -130,6 +130,7 @@ public final class FieldSelector {
         map.put("id", dto.id());
         map.put("name", dto.name());
         if (dto.type() != null) map.put("type", dto.type());
+        if (dto.specialization() != null) map.put("specialization", dto.specialization());
         if (dto.layer() != null) map.put("layer", dto.layer());
         if (dto.documentation() != null) map.put("documentation", dto.documentation());
         if (dto.properties() != null && !dto.properties().isEmpty()) map.put("properties", dto.properties());
@@ -147,6 +148,7 @@ public final class FieldSelector {
         map.put("id", dto.id());
         map.put("name", dto.name());
         if (dto.type() != null) map.put("type", dto.type());
+        if (dto.specialization() != null) map.put("specialization", dto.specialization());
         if (dto.sourceId() != null) map.put("sourceId", dto.sourceId());
         if (dto.targetId() != null) map.put("targetId", dto.targetId());
         if (dto.documentation() != null) map.put("documentation", dto.documentation());

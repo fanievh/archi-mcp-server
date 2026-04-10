@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.3.0 (2026-04-10)
+
+Expressiveness cycle. Adds first-class support for ArchiMate **specializations** (IS-A subtypes of element and relationship types) across the read, write, search, and resource surfaces. Tool count grew from 60 to 65. Also bundles quality enhancements (B50–B55) discovered during E2E validation runs.
+
+### New Tools
+
+- **list-specializations** — List every specialization defined on the model with `(name, conceptType, layer, usageCount)`. Optional `conceptType` filter narrows the result to a single concept binding.
+- **create-specialization** — Define a specialization explicitly without creating any element. Idempotent — returns the existing specialization on duplicate `(name, conceptType)`. Use this to pre-register a vocabulary at session start.
+- **update-specialization** — Rename a specialization. Refuses to merge into an existing target name (collision-rejecting). Existing references on elements and relationships move with the rename.
+- **delete-specialization** — Remove a specialization. Refuses by default if any concept uses it; pass `force: true` to detach all references and delete in one atomic command. Refuses force-delete on concepts that carry more than one specialization (clear the extras first).
+- **get-specialization-usage** — Pure query. Lists every element and relationship referencing a specialization. Call before rename or delete to audit the blast radius.
+
+### New Capabilities
+
+- **Inline specialization on element and relationship mutations** — `create-element`, `create-relationship`, `update-element`, and `update-relationship` accept an optional `specialization` parameter. On create, the specialization is auto-created if missing — the element/relationship and the specialization land in one CompoundCommand (single undo unit). On update, pass an empty string `""` to clear all specializations from the concept. Source, target, and type remain immutable on relationship updates.
+- **Specialization filter on search** — `search-elements` and `search-relationships` accept a `specialization` filter that returns only concepts of the given specialized type. Combines with existing `type`, `layer`, and text filters.
+- **specializationCount on `get-model-info`** — Model overview now reports the total specialization count. Non-zero means the model uses a custom vocabulary; call `list-specializations` to browse it.
+- **`specialization` field on `ElementDto` and `RelationshipDto`** — Query responses now expose the primary specialization name on every element and relationship DTO. (See "Multi-Profile Caveat" in the new resource for the single-primary semantics.)
+- **Connection styling on `auto-connect-view`** — `auto-connect-view` accepts `lineColor`, `fontColor`, and `lineWidth` parameters, applied uniformly to every connection it creates. Combines with `relationshipTypes` to batch-style connections by relationship type in a single call (e.g. blue for API calls, orange for domain events).
+
+### Routing Pipeline Improvements
+
+- **Self-element pass-through rating tolerance (B54)** — Self-element pass-throughs (a connection's route entering its own source or target through an interior point rather than from an edge) no longer penalise the overall layout quality rating. Cross-element pass-throughs still penalise as before. Informational reporting is preserved for both types — `assess-layout` still surfaces the count, but the rating reflects only structurally meaningful violations.
+
+### Layout Improvements
+
+- **Containment-aware dynamic label height in `resize-elements-to-fit` (B50)** — Replaces the fixed 25px containment top margin with a per-parent label height computed from SWT font metrics and word-wrap simulation. When a parent element wraps its label across multiple lines, children are shifted down to clear the full label height instead of being obscured by the lower lines. Parent height never shrinks during the operation — only grows to accommodate the wrapped label and its children.
+- **Element-count heuristic for grouped layout intra-group arrangement (B51)** — `auto-layout-and-route` with `mode: "grouped"` and `optimize-group-order` now choose intra-group arrangement based on element count and flow direction. For vertical flow (DOWN/UP): 1-3 elements arrange as a row, 4+ elements arrange as a grid. For horizontal flow (RIGHT/LEFT): column arrangement is preserved. Replaces the previous hardcoded column arrangement that produced 1:12 aspect ratio strips on vertical-flow grouped views.
+
+### Assessment Improvements
+
+- **Violator IDs for targeted fixes (B55)** — `assess-layout` accepts a new optional `includeViolatorIds` parameter (default `false`). When enabled, the response includes a `violatorIds` map keyed by metric name, each containing the list of visual object IDs that violate that metric. Supported metrics: `overlaps` (both element IDs per pair), `passThroughs` (connection IDs, cross-element only), `coincidentSegments` (connection IDs sharing corridors), `nonOrthogonalTerminals` (connection IDs with diagonal entry), and `boundaryViolations` (child IDs outside parent bounds). Crossings are excluded as an emergent property best addressed by global tools. The complete ID set is returned (no cap), enabling surgical per-element fixes without full re-layout.
+- **Informational containment overlap suggestion** — When `assess-layout` reports containment overlaps (ancestor-descendant nesting), the suggestions list now includes an explicit informational note clarifying these are expected overlaps that need no action. Previously, the bare counter caused LLM consumers to interpret grouped views as broken.
+- **Informational detections in `assess-layout` (B53)** — Three new detections appear in the assessment output but do not affect the overall rating:
+  - **Label truncation** — word-wrap-aware vertical overflow check identifies elements whose label rendering exceeds the element bounds.
+  - **Parent label obscured by child** — flags parent elements whose label area is overlapped by a child element. (Notes are excluded from this check.)
+  - **Image sibling overlap** — flags elements with custom images that visually overlap sibling elements at the same containment level.
+  These detections give LLM agents actionable signals to fix label and image quality issues without breaking the severity-tiered rating system.
+
+### Bug Fixes
+
+- **Bulk specialization profile deduplication (B54)** — Fixed a data-integrity bug where `bulk-mutate` creating multiple elements with the same new specialization (e.g. 8 `ApplicationComponent` elements all with `specialization: "Cloud Platform"`) produced duplicate specialization profiles — one per element in the batch — instead of sharing a single profile. Downstream operations were affected: `update-specialization` (rename) only renamed 1 of N references, `delete-specialization` only removed 1 of N, and `get-specialization-usage` understated impact. Root cause: bulk-mutate runs all prepare methods before dispatching any commands, so `resolveOrCreateProfile` could not find profiles created by earlier (not yet executed) operations in the same batch. Fix introduces a `ThreadLocal` bulk profile cache scoped to `executeBulk`, consulted before model lookup. Single-call (non-bulk) paths are unaffected.
+
+### Resource Updates
+
+- **archimate-specializations.md (new resource)** — Comprehensive specialization reference at `archimate://reference/archimate-specializations`. Covers identity rules (`(name, conceptType)` pair), the specializations-vs-properties decision table (do NOT use specializations for environment/version/owner/status), the full 9-step tool pipeline, common element specializations per layer, common relationship specializations, the bulk-mutate pre-registration pattern, the multi-profile caveat (primary-only semantics), and an end-to-end Cloud Server Technology landscape walkthrough. Total resource count grew from 6 to 7.
+- **archimate-view-patterns.md** — Added "Specialization Hierarchy" entry to the Common Viewpoint Patterns table and a matching row in Layout Conventions by Viewpoint, cross-linking to the new specializations reference.
+
+### Documentation
+
+- Mutation model documentation updated with the inline `specialization` parameter contract on create/update mutations, the auto-create-on-first-use semantics, and the bulk profile deduplication cache.
+- MCP integration documentation updated with the new specialization tools and the new `archimate-specializations` resource.
+- Extension guide updated with `SpecializationHandler` as an example of registering a domain-focused handler with multiple related tools.
+- Layout engine documentation updated with B50 dynamic label height, B51 grouped intra-group heuristic, B53 informational detections, B55 violator IDs, and containment overlap suggestion.
+- Routing pipeline documentation updated with B54 self-element pass-through rating tolerance.
+- README updated with the complete 65-tool catalog, new specialization section, and B55 violator IDs on assess-layout.
+
+---
+
 ## v1.2.0 (2026-04-07)
 
 Quality, completeness, and routing diversity cycle. Tool count grew from 57 to 60. Corridor diversity routing reduces coincident segments by spreading connections across available corridors. Auto-sizing ensures element labels are never truncated. Full CRUD coverage achieved for all core model objects.

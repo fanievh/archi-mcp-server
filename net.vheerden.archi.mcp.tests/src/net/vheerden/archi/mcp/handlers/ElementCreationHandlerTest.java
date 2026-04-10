@@ -499,7 +499,7 @@ public class ElementCreationHandlerTest {
         ProposalContext proposalCtx = new ProposalContext("p-42", "Create BusinessActor: Approved Actor", Instant.now());
         accessor.setCreateElementBehavior((sessionId, type, name, doc, props, folderId) -> {
             ElementDto dto = ElementDto.standard(
-                    "elem-preview-1", name, type, "Business", doc, null);
+                    "elem-preview-1", name, type, null, "Business", doc, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -528,7 +528,7 @@ public class ElementCreationHandlerTest {
                 "Create BusinessActor: Sourced Actor", Instant.now());
         accessor.setCreateElementBehavior((sessionId, type, name, doc, props, folderId) -> {
             ElementDto dto = ElementDto.standard(
-                    "elem-src-1", name, type, "Business", doc, null);
+                    "elem-src-1", name, type, null, "Business", doc, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -812,6 +812,7 @@ public class ElementCreationHandlerTest {
         private List<DuplicateCandidate> findDuplicatesResult = List.of();
         boolean createElementCalled = false;
         Map<String, String> capturedSource;
+        String capturedSpecialization;
 
         StubCreationAccessor() {
             super(true);
@@ -853,7 +854,7 @@ public class ElementCreationHandlerTest {
             this.createElementBehavior = (sessionId, type, name, doc, props, folderId) -> {
                 createElementCalled = true;
                 ElementDto dto = ElementDto.standard(
-                        "elem-created-1", name, type, "Business", doc, null);
+                        "elem-created-1", name, type, null, "Business", doc, null);
                 return new MutationResult<>(dto, batchMode ? 1 : null);
             };
             this.createRelationshipBehavior = (sessionId, type, sourceId, targetId, name) -> {
@@ -873,14 +874,15 @@ public class ElementCreationHandlerTest {
         }
 
         @Override
-        public List<DuplicateCandidate> findDuplicates(String type, String name) {
+        public List<DuplicateCandidate> findDuplicates(String type, String name, String specialization) {
             return findDuplicatesResult;
         }
 
         @Override
         public MutationResult<ElementDto> createElement(String sessionId, String type,
                 String name, String documentation, Map<String, String> properties,
-                String folderId) {
+                String folderId, String specialization) {
+            capturedSpecialization = specialization;
             return createElementBehavior.apply(sessionId, type, name, documentation,
                     properties, folderId);
         }
@@ -888,14 +890,17 @@ public class ElementCreationHandlerTest {
         @Override
         public MutationResult<ElementDto> createElement(String sessionId, String type,
                 String name, String documentation, Map<String, String> properties,
-                String folderId, Map<String, String> source) {
+                String folderId, Map<String, String> source, String specialization) {
             capturedSource = source;
-            return createElement(sessionId, type, name, documentation, properties, folderId);
+            capturedSpecialization = specialization;
+            return createElementBehavior.apply(sessionId, type, name, documentation,
+                    properties, folderId);
         }
 
         @Override
         public MutationResult<RelationshipDto> createRelationship(String sessionId,
-                String type, String sourceId, String targetId, String name) {
+                String type, String sourceId, String targetId, String name, String specialization) {
+            capturedSpecialization = specialization;
             return createRelationshipBehavior.apply(sessionId, type, sourceId, targetId, name);
         }
 

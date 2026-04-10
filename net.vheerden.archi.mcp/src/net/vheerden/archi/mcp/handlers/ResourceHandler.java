@@ -56,6 +56,10 @@ public class ResourceHandler {
 					"ArchiMate Relationships Reference",
 					"All ArchiMate relationship types with valid source/target combinations and usage guidance",
 					"reference/archimate-relationships.md"),
+			"reference/archimate-specializations", new ResourceDefinition(
+					"ArchiMate Specializations Reference",
+					"Specialization (IS-A subtype) vocabulary: when to use specializations vs properties, common patterns per layer, and the discovery/create/audit/delete tool pipeline",
+					"reference/archimate-specializations.md"),
 			"reference/archimate-view-patterns", new ResourceDefinition(
 					"ArchiMate View Patterns",
 					"Curated viewpoint patterns, layout algorithm guidance, and diagramming best practices for composing ArchiMate views",

@@ -617,6 +617,73 @@ public class CoincidentSegmentDetector {
         return count;
     }
 
+    /** Result of coincident segment detection with optional violator connection indices (B55). */
+    public record CoincidentSegmentResult(int count, Set<Integer> violatorConnectionIndices) {}
+
+    /**
+     * Counts coincident segments and optionally collects the connection indices involved (B55).
+     *
+     * @param connections assessment connections with full path points
+     * @param collectViolatorIndices if true, collects connection indices involved in coincident segments
+     * @return count and optional violator connection indices
+     */
+    public CoincidentSegmentResult detectCoincidentSegments(
+            List<? extends CoincidentAssessable> connections, boolean collectViolatorIndices) {
+        if (connections.size() < 2) {
+            return new CoincidentSegmentResult(0, Set.of());
+        }
+
+        List<PathOrderer.Segment> allSegments = new ArrayList<>();
+        for (int connIdx = 0; connIdx < connections.size(); connIdx++) {
+            CoincidentAssessable conn = connections.get(connIdx);
+            List<double[]> points = conn.pathPoints();
+            if (points.size() < 3) {
+                continue;
+            }
+            for (int i = 1; i < points.size() - 2; i++) {
+                double[] p1 = points.get(i);
+                double[] p2 = points.get(i + 1);
+                int x1 = (int) Math.round(p1[0]);
+                int y1 = (int) Math.round(p1[1]);
+                int x2 = (int) Math.round(p2[0]);
+                int y2 = (int) Math.round(p2[1]);
+                boolean horizontal = (y1 == y2);
+                boolean vertical = (x1 == x2);
+                if (horizontal || vertical) {
+                    allSegments.add(new PathOrderer.Segment(
+                            connIdx, i - 1, x1, y1, x2, y2, horizontal));
+                }
+            }
+        }
+
+        if (allSegments.isEmpty()) {
+            return new CoincidentSegmentResult(0, Set.of());
+        }
+
+        Map<String, List<PathOrderer.Segment>> groups = pathOrderer.groupSegments(allSegments);
+
+        int count = 0;
+        List<CoincidentPair> pairs = new ArrayList<>();
+        Set<Integer> violatorIndices = collectViolatorIndices ? new java.util.HashSet<>() : Set.of();
+        for (List<PathOrderer.Segment> group : groups.values()) {
+            if (group.size() < 2) {
+                continue;
+            }
+            int before = pairs.size();
+            detectCoincidentInGroup(group, pairs);
+            if (collectViolatorIndices) {
+                for (int i = before; i < pairs.size(); i++) {
+                    CoincidentPair pair = pairs.get(i);
+                    violatorIndices.add(pair.segA().connectionIndex());
+                    violatorIndices.add(pair.segB().connectionIndex());
+                }
+            }
+            count += (pairs.size() - before);
+        }
+
+        return new CoincidentSegmentResult(count, violatorIndices);
+    }
+
     /**
      * Interface for objects that provide path points for coincident assessment.
      */

@@ -581,7 +581,7 @@ public class ViewHandlerTreeFormatTest {
 
         @Override
         public ModelInfoDto getModelInfo() {
-            return new ModelInfoDto("Test Model", 10, 5, 4, Map.of(), Map.of(), Map.of());
+            return new ModelInfoDto("Test Model", 10, 5, 4, 0, Map.of(), Map.of(), Map.of());
         }
 
         @Override
@@ -601,9 +601,9 @@ public class ViewHandlerTreeFormatTest {
          */
         private ViewContentsDto createGroupedView() {
             List<ElementDto> elements = List.of(
-                    ElementDto.standard("elem-1", "Server", "Node", "Technology", null, null),
-                    ElementDto.standard("elem-2", "Database", "Node", "Technology", null, null),
-                    ElementDto.standard("elem-3", "Firewall", "Node", "Technology", null, null));
+                    ElementDto.standard("elem-1", "Server", "Node", null, "Technology", null, null),
+                    ElementDto.standard("elem-2", "Database", "Node", null, "Technology", null, null),
+                    ElementDto.standard("elem-3", "Firewall", "Node", null, "Technology", null, null));
 
             List<ViewNodeDto> visualMetadata = List.of(
                     new ViewNodeDto("vo-1", "elem-1", 10, 10, 120, 55, "grp-1"),
@@ -627,8 +627,8 @@ public class ViewHandlerTreeFormatTest {
          */
         private ViewContentsDto createNestedView() {
             List<ElementDto> elements = List.of(
-                    ElementDto.standard("elem-1", "App Server", "Node", "Technology", null, null),
-                    ElementDto.standard("elem-2", "Container", "Node", "Technology", null, null));
+                    ElementDto.standard("elem-1", "App Server", "Node", null, "Technology", null, null),
+                    ElementDto.standard("elem-2", "Container", "Node", null, "Technology", null, null));
 
             List<ViewNodeDto> visualMetadata = List.of(
                     new ViewNodeDto("vo-1", "elem-1", 10, 10, 120, 55, "grp-outer"),
@@ -649,8 +649,8 @@ public class ViewHandlerTreeFormatTest {
          */
         private ViewContentsDto createFlatView() {
             List<ElementDto> elements = List.of(
-                    ElementDto.standard("elem-1", "Web App", "ApplicationComponent", "Application", null, null),
-                    ElementDto.standard("elem-2", "API", "ApplicationComponent", "Application", null, null));
+                    ElementDto.standard("elem-1", "Web App", "ApplicationComponent", null, "Application", null, null),
+                    ElementDto.standard("elem-2", "API", "ApplicationComponent", null, "Application", null, null));
 
             List<RelationshipDto> relationships = List.of(
                     new RelationshipDto("rel-1", "Serves", "ServingRelationship", "elem-1", "elem-2"));

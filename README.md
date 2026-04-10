@@ -6,7 +6,7 @@ An Eclipse PDE plugin for [Archi](https://www.archimatetool.com/) that exposes A
 
 Archi MCP Server embeds an HTTP server inside Archi that speaks MCP. Once running, any MCP-compatible LLM client (Claude, Cline, LM Studio, etc.) can connect and interact with the currently open ArchiMate model — asking questions, searching elements, traversing relationships, composing view diagrams, and even creating or modifying model content.
 
-The server provides **60 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, images, and more — plus **6 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
+The server provides **65 MCP tools** across querying, searching, creating, layout, routing, assessment, batch operations, images, specializations, and more — plus **7 MCP resources** with ArchiMate reference material and workflow guides for LLMs.
 
 **Example conversation:**
 
@@ -138,13 +138,13 @@ Clients must trust the self-signed certificate. For `curl` testing, use the `-k`
 
 ## Available Tools
 
-The server exposes **60 MCP tools** organised into functional categories.
+The server exposes **65 MCP tools** organised into functional categories.
 
 ### Query & Model Inspection (5 tools)
 
 | Tool | Description |
 |---|---|
-| `get-model-info` | Model overview — name, purpose, element/relationship/view counts by type and layer |
+| `get-model-info` | Model overview — name, purpose, element/relationship/view counts by type and layer, plus specialization count |
 | `get-element` | Retrieve element(s) by ID (single via `id` or batch via `ids` array) |
 | `get-views` | List views with optional viewpoint type or name filtering |
 | `get-view-contents` | View diagram contents — elements, relationships, visual positions, connection routing |
@@ -154,8 +154,8 @@ The server exposes **60 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `search-elements` | Full-text search across element names, documentation, and properties with optional type/layer filters |
-| `search-relationships` | Search all relationships by text, type, and source/target element layer — no element ID needed |
+| `search-elements` | Full-text search across element names, documentation, and properties with optional type, layer, and `specialization` filters |
+| `search-relationships` | Search all relationships by text, type, source/target element layer, and `specialization` — no element ID needed |
 | `get-or-create-element` | Discovery-first — returns existing element if exact name+type match exists, otherwise creates new |
 | `search-and-create` | Combined search + conditional create with duplicate candidate display |
 
@@ -163,8 +163,8 @@ The server exposes **60 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `create-element` | Create an ArchiMate element with type validation and duplicate detection |
-| `create-relationship` | Create a relationship with ArchiMate specification rule enforcement |
+| `create-element` | Create an ArchiMate element with type validation and duplicate detection. Optional `specialization` parameter auto-creates the specialization on first use |
+| `create-relationship` | Create a relationship with ArchiMate specification rule enforcement. Optional `specialization` parameter auto-creates the specialization on first use |
 | `create-view` | Create a new diagram view with optional viewpoint and connection router type |
 | `clone-view` | Duplicate an existing view with all visual contents (elements, groups, notes, connections, bendpoints, styling). The clone references the same model objects |
 
@@ -172,9 +172,21 @@ The server exposes **60 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `update-element` | Update element name, documentation, or properties |
-| `update-relationship` | Update relationship name, documentation, or properties (source, target, type are immutable) |
+| `update-element` | Update element name, documentation, properties, or `specialization` (pass `""` to clear) |
+| `update-relationship` | Update relationship name, documentation, properties, or `specialization` (pass `""` to clear). Source, target, and type are immutable |
 | `update-view` | Update view name, viewpoint, documentation, properties, or connection router type |
+
+### ArchiMate Specializations (5 tools)
+
+Specializations are IS-A subtypes of ArchiMate concept types (e.g. "Microservice" is a kind of `ApplicationComponent`, "Cloud Server" is a kind of `Node`). Use them to classify the *kind of thing* an element is — not for per-instance attributes like environment or version. See `archimate://reference/archimate-specializations` for the full guide.
+
+| Tool | Description |
+|---|---|
+| `list-specializations` | List every specialization defined on the model with `(name, conceptType, layer, usageCount)`. Optional `conceptType` filter |
+| `create-specialization` | Define a specialization explicitly without creating any element. Idempotent on duplicate `(name, conceptType)` — useful for pre-registering vocabulary at session start |
+| `update-specialization` | Rename a specialization. Refuses to merge into an existing target name. Existing references move with the rename |
+| `delete-specialization` | Delete a specialization. Refuses by default if any concept uses it; pass `force: true` to detach references and delete in one atomic command |
+| `get-specialization-usage` | Audit query — lists every element and relationship referencing a specialization. Call before rename or delete |
 
 ### View Composition (7 tools)
 
@@ -212,14 +224,14 @@ The server exposes **60 MCP tools** organised into functional categories.
 
 | Tool | Description |
 |---|---|
-| `assess-layout` | Assess view layout quality with severity-tiered rating across 8 metrics — overlaps, crossings, pass-throughs, coincident segments, non-orthogonal terminals, spacing, alignment, label overlaps — with actionable improvement suggestions |
+| `assess-layout` | Assess view layout quality with severity-tiered rating across 8 metrics — overlaps, crossings, pass-throughs, coincident segments, non-orthogonal terminals, spacing, alignment, label overlaps — plus informational detections for label truncation, parent-label obscured by child, and image sibling overlap. Self-element pass-throughs are reported but excluded from rating. Optional `includeViolatorIds` returns per-metric visual object IDs for targeted fixes |
 | `detect-hub-elements` | Identify hub elements by counting visual connections per element, sorted descending. Includes sizing suggestions for elements with >6 connections based on the hub element formula |
 
 ### View Operations (1 tool)
 
 | Tool | Description |
 |---|---|
-| `auto-connect-view` | Create visual connections for all existing model relationships between elements already placed on a view. Optional `showLabel: false` to suppress labels on all created connections |
+| `auto-connect-view` | Create visual connections for all existing model relationships between elements already placed on a view. Optional `showLabel: false` to suppress labels, and optional `lineColor`, `fontColor`, `lineWidth` to batch-style every connection it creates (combine with `relationshipTypes` filter to style by type) |
 
 ### Folder Management (5 tools)
 
@@ -294,7 +306,7 @@ All query tools support response optimisation parameters:
 
 ## MCP Resources
 
-The server provides 6 reference resources accessible to LLM clients.
+The server provides 7 reference resources accessible to LLM clients.
 
 ### Prompts
 
@@ -310,6 +322,7 @@ The server provides 6 reference resources accessible to LLM clients.
 |---|---|
 | `archimate://reference/archimate-layers` | Comprehensive mapping of ArchiMate layers to element types with descriptions |
 | `archimate://reference/archimate-relationships` | All ArchiMate relationship types with valid source/target combinations and usage guidance |
+| `archimate://reference/archimate-specializations` | Specialization (IS-A subtype) vocabulary: when to use specializations vs properties, common patterns per layer, and the discovery/create/audit/delete tool pipeline |
 | `archimate://reference/archimate-view-patterns` | Curated viewpoint patterns, layout algorithm guidance, and diagramming best practices for composing ArchiMate views |
 
 ## Mutation Safety
@@ -377,7 +390,7 @@ arch-mcp-server/
 │   ├── src/net/vheerden/archi/mcp/
 │   │   ├── McpPlugin.java           # Plugin lifecycle & preferences
 │   │   ├── server/                   # Jetty + MCP SDK wiring
-│   │   ├── handlers/                 # MCP tool implementations (18 handler classes)
+│   │   ├── handlers/                 # MCP tool implementations (19 handler classes)
 │   │   ├── model/                    # EMF model access layer
 │   │   │   ├── geometry/             # Geometry utilities
 │   │   │   └── routing/              # Connection routing pipeline

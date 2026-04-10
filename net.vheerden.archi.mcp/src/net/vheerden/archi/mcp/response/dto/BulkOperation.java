@@ -37,7 +37,10 @@ public record BulkOperation(String tool, Map<String, Object> params) {
             "delete-folder",
             "create-folder",
             "update-folder",
-            "move-to-folder");
+            "move-to-folder",
+            "create-specialization",
+            "update-specialization",
+            "delete-specialization");
 
     /** Maximum number of operations allowed per bulk-mutate call. */
     public static final int MAX_OPERATIONS = 150;

@@ -149,7 +149,7 @@ public class ElementUpdateHandlerTest {
             assertEquals("value", properties.get("keep"));
             assertTrue("Should contain key with null value", properties.containsKey("remove"));
             assertNull("Null value should be preserved", (Object) properties.get("remove"));
-            ElementDto dto = ElementDto.standard(id, "Test", "BusinessActor", "Business", doc, null);
+            ElementDto dto = ElementDto.standard(id, "Test", "BusinessActor", null, "Business", doc, null);
             return new MutationResult<>(dto, null);
         });
 
@@ -279,7 +279,7 @@ public class ElementUpdateHandlerTest {
                 "Update element: elem-1", Instant.now());
         accessor.setUpdateElementBehavior((sessionId, id, name, doc, properties) -> {
             ElementDto dto = ElementDto.standard(
-                    id, name != null ? name : "Original", "BusinessActor", "Business", doc, null);
+                    id, name != null ? name : "Original", "BusinessActor", null, "Business", doc, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -311,7 +311,7 @@ public class ElementUpdateHandlerTest {
                 "Update element: elem-1 (name → Updated)", testTime);
         accessor.setUpdateElementBehavior((sessionId, id, name, doc, properties) -> {
             ElementDto dto = ElementDto.standard(
-                    id, name != null ? name : "Original", "BusinessActor", "Business", doc, null);
+                    id, name != null ? name : "Original", "BusinessActor", null, "Business", doc, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -333,7 +333,7 @@ public class ElementUpdateHandlerTest {
                 "Update element: elem-1", Instant.now());
         accessor.setUpdateElementBehavior((sessionId, id, name, doc, properties) -> {
             ElementDto dto = ElementDto.standard(
-                    id, name != null ? name : "Original", "BusinessActor", "Business", doc, null);
+                    id, name != null ? name : "Original", "BusinessActor", null, "Business", doc, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -591,7 +591,7 @@ public class ElementUpdateHandlerTest {
             this.updateElementBehavior = (sessionId, id, name, doc, properties) -> {
                 String displayName = name != null ? name : "Test Element";
                 ElementDto dto = ElementDto.standard(
-                        id, displayName, "BusinessActor", "Business", doc, null);
+                        id, displayName, "BusinessActor", null, "Business", doc, null);
                 return new MutationResult<>(dto, batchMode ? 1 : null);
             };
             this.updateRelationshipBehavior = (sessionId, id, name, doc, properties) -> {
@@ -602,15 +602,22 @@ public class ElementUpdateHandlerTest {
             };
         }
 
+        String capturedElementSpecialization;
+        String capturedRelationshipSpecialization;
+
         @Override
         public MutationResult<ElementDto> updateElement(String sessionId, String id,
-                String name, String documentation, Map<String, String> properties) {
+                String name, String documentation, Map<String, String> properties,
+                String specialization) {
+            capturedElementSpecialization = specialization;
             return updateElementBehavior.apply(sessionId, id, name, documentation, properties);
         }
 
         @Override
         public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
-                String name, String documentation, Map<String, String> properties) {
+                String name, String documentation, Map<String, String> properties,
+                String specialization) {
+            capturedRelationshipSpecialization = specialization;
             return updateRelationshipBehavior.apply(sessionId, id, name, documentation, properties);
         }
 

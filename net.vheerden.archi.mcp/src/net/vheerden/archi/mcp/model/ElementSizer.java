@@ -35,6 +35,12 @@ public final class ElementSizer {
     static final int HORIZONTAL_PADDING = 30;
     /** Vertical padding for top/bottom margins. */
     static final int VERTICAL_PADDING = 20;
+    /** Vertical padding for label text area (top + bottom of text). */
+    static final int LABEL_VERTICAL_PADDING = 6;
+    /** Clearance between label bottom and first child element. */
+    static final int LABEL_CHILD_CLEARANCE = 5;
+    /** Default containment label top for null/empty/short labels (backward compatible). */
+    static final int DEFAULT_LABEL_HEIGHT = 25;
 
     private ElementSizer() {}
 
@@ -52,6 +58,43 @@ public final class ElementSizer {
 
         FontMetrics metrics = measureText(labelText);
         return computeDimensions(labelText, metrics);
+    }
+
+    /**
+     * Computes the vertical space needed for a parent element's label text area,
+     * accounting for word-wrap at the given element width.
+     *
+     * <p>Used by {@code resizeElementsToFit} Pass 2 to dynamically reserve label space
+     * above children, replacing the fixed {@code CONTAINMENT_LABEL_TOP = 25} constant.</p>
+     *
+     * @param labelText the parent element's display name (may be null or empty)
+     * @param elementWidth the resolved parent element width in pixels
+     * @return label height in pixels (~25px for single-line, more for multi-line)
+     */
+    public static int computeLabelHeight(String labelText, int elementWidth) {
+        if (labelText == null || labelText.isEmpty() || labelText.length() <= SHORT_NAME_THRESHOLD) {
+            return DEFAULT_LABEL_HEIGHT;
+        }
+
+        FontMetrics metrics = measureText(labelText);
+        return computeLabelHeightFromMetrics(labelText, metrics, elementWidth);
+    }
+
+    /**
+     * Pure-geometry label height computation — testable without SWT.
+     */
+    static int computeLabelHeightFromMetrics(String labelText, FontMetrics metrics, int elementWidth) {
+        if (labelText == null || labelText.isEmpty()) {
+            return DEFAULT_LABEL_HEIGHT;
+        }
+
+        int contentWidth = elementWidth - HORIZONTAL_PADDING;
+        if (contentWidth <= 0) {
+            return DEFAULT_LABEL_HEIGHT;
+        }
+
+        int lineCount = simulateWordWrap(labelText, metrics.wordWidths, metrics.spaceWidth, contentWidth);
+        return lineCount * metrics.lineHeight + LABEL_VERTICAL_PADDING + LABEL_CHILD_CLEARANCE;
     }
 
     /**
@@ -137,7 +180,7 @@ public final class ElementSizer {
     /**
      * Measures text using SWT font metrics on the UI thread.
      */
-    private static FontMetrics measureText(String labelText) {
+    static FontMetrics measureText(String labelText) {
         AtomicReference<FontMetrics> metricsRef = new AtomicReference<>();
         AtomicReference<RuntimeException> errorRef = new AtomicReference<>();
 

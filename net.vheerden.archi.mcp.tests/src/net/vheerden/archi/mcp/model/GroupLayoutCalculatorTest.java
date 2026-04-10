@@ -382,6 +382,123 @@ public class GroupLayoutCalculatorTest {
         assertEquals(274, dims[1]);
     }
 
+    // ---- chooseIntraGroupArrangement (B51) ----
+
+    @Test
+    public void chooseIntraGroupArrangement_directionDown_1element_shouldReturnRow() {
+        assertEquals("row", GroupLayoutCalculator.chooseIntraGroupArrangement(1, "DOWN"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionDown_3elements_shouldReturnRow() {
+        assertEquals("row", GroupLayoutCalculator.chooseIntraGroupArrangement(3, "DOWN"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionDown_4elements_shouldReturnGrid() {
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(4, "DOWN"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionDown_9elements_shouldReturnGrid() {
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(9, "DOWN"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionRight_1element_shouldReturnColumn() {
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(1, "RIGHT"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionRight_5elements_shouldReturnColumn() {
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(5, "RIGHT"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionUp_4elements_shouldReturnGrid() {
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(4, "UP"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionLeft_4elements_shouldReturnColumn() {
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(4, "LEFT"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_nullDirection_shouldTreatAsDown() {
+        // null direction defaults to vertical flow behavior
+        assertEquals("row", GroupLayoutCalculator.chooseIntraGroupArrangement(2, null));
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(5, null));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionLowercase_shouldWork() {
+        assertEquals("row", GroupLayoutCalculator.chooseIntraGroupArrangement(2, "down"));
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(5, "right"));
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(4, "up"));
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(4, "left"));
+    }
+
+    @Test
+    public void chooseIntraGroupArrangement_directionMixedCase_shouldWork() {
+        assertEquals("grid", GroupLayoutCalculator.chooseIntraGroupArrangement(6, "Down"));
+        assertEquals("column", GroupLayoutCalculator.chooseIntraGroupArrangement(6, "Right"));
+    }
+
+    // ---- computeGridColumns (B51) ----
+
+    @Test
+    public void computeGridColumns_0elements_shouldReturn1() {
+        // Guard: elementCount < 4 returns max(1, count)
+        assertEquals(1, GroupLayoutCalculator.computeGridColumns(0));
+    }
+
+    @Test
+    public void computeGridColumns_1element_shouldReturn1() {
+        assertEquals(1, GroupLayoutCalculator.computeGridColumns(1));
+    }
+
+    @Test
+    public void computeGridColumns_3elements_shouldReturn3() {
+        assertEquals(3, GroupLayoutCalculator.computeGridColumns(3));
+    }
+
+    @Test
+    public void computeGridColumns_4elements_shouldReturn2columns() {
+        // 4 elements → 2 rows → ceil(4/2) = 2 columns
+        assertEquals(2, GroupLayoutCalculator.computeGridColumns(4));
+    }
+
+    @Test
+    public void computeGridColumns_5elements_shouldReturn3columns() {
+        // 5 elements → 2 rows → ceil(5/2) = 3 columns
+        assertEquals(3, GroupLayoutCalculator.computeGridColumns(5));
+    }
+
+    @Test
+    public void computeGridColumns_8elements_shouldReturn4columns() {
+        // 8 elements → 2 rows → ceil(8/2) = 4 columns
+        assertEquals(4, GroupLayoutCalculator.computeGridColumns(8));
+    }
+
+    @Test
+    public void computeGridColumns_9elements_shouldReturn3columns() {
+        // 9 elements → 3 rows → ceil(9/3) = 3 columns
+        assertEquals(3, GroupLayoutCalculator.computeGridColumns(9));
+    }
+
+    @Test
+    public void computeGridColumns_12elements_shouldReturn4columns() {
+        // 12 elements → 3 rows → ceil(12/3) = 4 columns
+        assertEquals(4, GroupLayoutCalculator.computeGridColumns(12));
+    }
+
+    @Test
+    public void computeGridColumns_15elements_shouldReturn5columns() {
+        // 15 elements → 3 rows → ceil(15/3) = 5 columns
+        assertEquals(5, GroupLayoutCalculator.computeGridColumns(15));
+    }
+
     // ---- validateGroupGaps ----
 
     @Test

@@ -19,6 +19,8 @@ public record RelationshipDto(
     String id,
     String name,
     String type,
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    String specialization,
     String sourceId,
     String targetId,
     @JsonInclude(JsonInclude.Include.NON_DEFAULT)
@@ -36,7 +38,7 @@ public record RelationshipDto(
      * Convenience constructor without optional fields (defaults to null/false).
      */
     public RelationshipDto(String id, String name, String type, String sourceId, String targetId) {
-        this(id, name, type, sourceId, targetId, false, null, null, null, null);
+        this(id, name, type, null, sourceId, targetId, false, null, null, null, null);
     }
 
     /**
@@ -44,6 +46,6 @@ public record RelationshipDto(
      */
     public RelationshipDto(String id, String name, String type, String sourceId, String targetId,
                            boolean alreadyExisted) {
-        this(id, name, type, sourceId, targetId, alreadyExisted, null, null, null, null);
+        this(id, name, type, null, sourceId, targetId, alreadyExisted, null, null, null, null);
     }
 }

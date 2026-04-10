@@ -41,6 +41,43 @@ class GroupLayoutCalculator {
     }
 
     /**
+     * Chooses the intra-group arrangement based on element count and inter-group
+     * flow direction. For vertical inter-group flow (DOWN/UP), uses element count
+     * to avoid tall/narrow groups. For horizontal flow (RIGHT/LEFT), preserves
+     * column arrangement (current correct behavior).
+     *
+     * @param elementCount       number of elements in the group
+     * @param interGroupDirection the inter-group flow direction (DOWN, UP, RIGHT, LEFT); null treated as DOWN
+     * @return "row", "column", or "grid"
+     */
+    static String chooseIntraGroupArrangement(int elementCount, String interGroupDirection) {
+        if ("RIGHT".equalsIgnoreCase(interGroupDirection)
+                || "LEFT".equalsIgnoreCase(interGroupDirection)) {
+            return "column";
+        }
+        // DOWN, UP, or null (default vertical flow)
+        if (elementCount <= 3) {
+            return "row";
+        }
+        return "grid";
+    }
+
+    /**
+     * Computes the number of grid columns for a given element count.
+     * Targets 2 rows for 4-8 elements, 3 rows for 9+.
+     *
+     * @param elementCount number of elements (must be >= 4)
+     * @return number of columns
+     */
+    static int computeGridColumns(int elementCount) {
+        if (elementCount < 4) {
+            return Math.max(1, elementCount);
+        }
+        int targetRows = (elementCount <= 8) ? 2 : 3;
+        return (int) Math.ceil((double) elementCount / targetRows);
+    }
+
+    /**
      * Computes row arrangement positions (left-to-right).
      *
      * @param elementSizes list of [width, height] per element

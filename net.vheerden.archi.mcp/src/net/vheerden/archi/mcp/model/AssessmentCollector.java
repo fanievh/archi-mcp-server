@@ -59,8 +59,33 @@ final class AssessmentCollector {
             double absY = bounds.getY() + parentOffsetY;
             boolean isGroup = child instanceof IDiagramModelGroup;
             boolean isNote = child instanceof IDiagramModelNote;
+
+            // B53: Extract name and pre-compute label text width
+            String name = child.getName();
+            double labelTextWidth = 0.0;
+            if (name != null && !name.isEmpty() && !isGroup && !isNote) {
+                try {
+                    labelTextWidth = ElementSizer.measureText(name).textWidth();
+                } catch (Exception e) {
+                    logger.warn("Failed to measure text for '{}': {}", name, e.getMessage());
+                }
+            }
+
+            // B53: Extract image path and position
+            String imgPath = ImageHelper.readImagePath(child);
+            String imgPosition = null;
+            if (imgPath != null && !imgPath.isEmpty()) {
+                imgPosition = ImageHelper.readImagePosition(child);
+                if (imgPosition == null) {
+                    imgPosition = "top-right"; // Archi default
+                }
+            } else {
+                imgPath = null; // normalize empty to null
+            }
+
             nodes.add(new AssessmentNode(child.getId(),
-                    absX, absY, w, h, parentId, isGroup, isNote));
+                    absX, absY, w, h, parentId, isGroup, isNote,
+                    name, labelTextWidth, imgPath, imgPosition));
 
             if (child instanceof IDiagramModelContainer nested) {
                 collectAssessmentNodesRecursive(nested, child.getId(),

@@ -95,11 +95,21 @@ public class ElementUpdateHandler {
                 + "set value to null to remove the property key. Omit to leave properties unchanged.");
         propertiesProp.put("additionalProperties", propertiesValueSchema);
 
+        Map<String, Object> specializationProp = new LinkedHashMap<>();
+        specializationProp.put("type", "string");
+        specializationProp.put("description",
+                "New specialization (profile) name for the element. Profile lookup is "
+                + "case-insensitive and scoped by element type; auto-creates the profile if "
+                + "absent. Setting a value REPLACES any existing specialization. Empty string "
+                + "(\"\") clears all specializations from the element. Omit to leave the "
+                + "current specialization unchanged.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("id", idProp);
         properties.put("name", nameProp);
         properties.put("documentation", documentationProp);
         properties.put("properties", propertiesProp);
+        properties.put("specialization", specializationProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("id"), null, null, null);
@@ -109,11 +119,16 @@ public class ElementUpdateHandler {
                 .description("[Mutation] Update an existing ArchiMate element. "
                         + "Requires id. Optional: name (new display name), documentation "
                         + "(new description text), properties (object with key-value pairs; "
-                        + "set value to null to remove a property). Only provided fields are "
+                        + "set value to null to remove a property), specialization "
+                        + "(new profile name; empty string clears). Only provided fields are "
                         + "modified; omitted fields remain unchanged. If a property key appears "
                         + "multiple times on the element, only the first occurrence is updated. "
+                        + "Specialization semantics: providing a name REPLACES any existing "
+                        + "specialization (auto-creating the profile if needed); empty string "
+                        + "removes all specializations; omitting leaves them unchanged. "
                         + "Related: get-element (inspect before/after), search-elements "
-                        + "(find element to update), create-element (create new elements).")
+                        + "(find element to update), create-element (create new elements), "
+                        + "list-specializations.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -135,9 +150,12 @@ public class ElementUpdateHandler {
             String name = HandlerUtils.optionalStringParam(args, "name");
             String documentation = HandlerUtils.optionalStringParam(args, "documentation");
             Map<String, String> properties = HandlerUtils.optionalMapParamWithNulls(args, "properties");
+            // Specialization clear semantics: empty string means "clear all profiles".
+            // Use AllowEmpty so we can distinguish absent (null = no change) from "" (clear).
+            String specialization = HandlerUtils.optionalStringParamAllowEmpty(args, "specialization");
 
             MutationResult<ElementDto> result = accessor.updateElement(
-                    sessionId, id, name, documentation, properties);
+                    sessionId, id, name, documentation, properties, specialization);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildUpdateElementNextSteps(result), accessor, formatter);
@@ -198,11 +216,21 @@ public class ElementUpdateHandler {
                 + "set value to null to remove the property key. Omit to leave properties unchanged.");
         propertiesProp.put("additionalProperties", propertiesValueSchema);
 
+        Map<String, Object> specializationProp = new LinkedHashMap<>();
+        specializationProp.put("type", "string");
+        specializationProp.put("description",
+                "New specialization (profile) name for the relationship. Profile lookup is "
+                + "case-insensitive and scoped by relationship type; auto-creates the profile "
+                + "if absent. Setting a value REPLACES any existing specialization. Empty string "
+                + "(\"\") clears all specializations. Omit to leave the current specialization "
+                + "unchanged.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("id", idProp);
         properties.put("name", nameProp);
         properties.put("documentation", documentationProp);
         properties.put("properties", propertiesProp);
+        properties.put("specialization", specializationProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("id"), null, null, null);
@@ -210,11 +238,16 @@ public class ElementUpdateHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("update-relationship")
                 .description("[Mutation] Update an existing ArchiMate relationship's name, "
-                        + "documentation, or properties. Requires id. Only provided fields are "
-                        + "modified; omitted fields remain unchanged. Source, target, and type "
-                        + "CANNOT be changed — to change these, delete and recreate the relationship. "
+                        + "documentation, properties, or specialization. Requires id. Only "
+                        + "provided fields are modified; omitted fields remain unchanged. Source, "
+                        + "target, and type CANNOT be changed — to change these, delete and "
+                        + "recreate the relationship. Specialization semantics: providing a name "
+                        + "REPLACES any existing specialization (auto-creating the profile if "
+                        + "needed); empty string removes all specializations; omitting leaves "
+                        + "them unchanged. "
                         + "Related: get-relationships (verify changes), search-relationships "
-                        + "(find relationship to update), get-view-contents (check visual representation).")
+                        + "(find relationship to update), get-view-contents (check visual "
+                        + "representation), list-specializations.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -236,9 +269,11 @@ public class ElementUpdateHandler {
             String name = HandlerUtils.optionalStringParam(args, "name");
             String documentation = HandlerUtils.optionalStringParam(args, "documentation");
             Map<String, String> properties = HandlerUtils.optionalMapParamWithNulls(args, "properties");
+            // Specialization clear semantics: empty string means "clear all profiles".
+            String specialization = HandlerUtils.optionalStringParamAllowEmpty(args, "specialization");
 
             MutationResult<RelationshipDto> result = accessor.updateRelationship(
-                    sessionId, id, name, documentation, properties);
+                    sessionId, id, name, documentation, properties, specialization);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildUpdateRelationshipNextSteps(result), accessor, formatter);

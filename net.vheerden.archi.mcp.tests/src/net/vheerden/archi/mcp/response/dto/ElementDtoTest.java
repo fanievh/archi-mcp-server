@@ -34,6 +34,7 @@ public class ElementDtoTest {
             "id-456",
             "Application Component",
             "ApplicationComponent",
+            null,
             "Application",
             "This is the documentation",
             props
@@ -45,6 +46,30 @@ public class ElementDtoTest {
         assertEquals("Application", dto.layer());
         assertEquals("This is the documentation", dto.documentation());
         assertEquals(1, dto.properties().size());
+    }
+
+    @Test
+    public void shouldIncludeSpecializationWhenPresent() {
+        ElementDto dto = ElementDto.standard(
+            "id-1", "Cloud Server", "Node", "Cloud Server",
+            "Technology", null, null);
+
+        assertEquals("Cloud Server", dto.specialization());
+    }
+
+    @Test
+    public void shouldHaveNullSpecializationWhenNone() {
+        ElementDto dto = ElementDto.standard(
+            "id-1", "Server", "Node", null,
+            "Technology", null, null);
+
+        assertNull(dto.specialization());
+    }
+
+    @Test
+    public void shouldHaveNullSpecializationForMinimal() {
+        ElementDto dto = ElementDto.minimal("id-1", "Name");
+        assertNull(dto.specialization());
     }
 
     @Test

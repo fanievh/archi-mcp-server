@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.response.dto;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.List;
 import java.util.Map;
 
@@ -15,6 +17,7 @@ import java.util.Map;
  *   <li>id - unique element identifier</li>
  *   <li>name - element display name</li>
  *   <li>type - ArchiMate element type (e.g., "ApplicationComponent")</li>
+ *   <li>specialization - primary specialization name (null if none)</li>
  *   <li>layer - ArchiMate layer (e.g., "Application", "Technology")</li>
  *   <li>documentation - element description/documentation</li>
  *   <li>properties - custom key-value properties</li>
@@ -27,6 +30,8 @@ public record ElementDto(
     String id,
     String name,
     String type,
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    String specialization,
     String layer,
     String documentation,
     List<Map<String, String>> properties
@@ -37,7 +42,7 @@ public record ElementDto(
      * Used for minimal field level preset.
      */
     public static ElementDto minimal(String id, String name) {
-        return new ElementDto(id, name, null, null, null, null);
+        return new ElementDto(id, name, null, null, null, null, null);
     }
 
     /**
@@ -45,8 +50,9 @@ public record ElementDto(
      * Used for standard field level preset (MVP default).
      */
     public static ElementDto standard(String id, String name, String type,
-                                       String layer, String documentation,
+                                       String specialization, String layer,
+                                       String documentation,
                                        List<Map<String, String>> properties) {
-        return new ElementDto(id, name, type, layer, documentation, properties);
+        return new ElementDto(id, name, type, specialization, layer, documentation, properties);
     }
 }

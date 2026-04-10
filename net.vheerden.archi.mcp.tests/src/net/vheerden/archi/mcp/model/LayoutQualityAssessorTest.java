@@ -33,7 +33,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 200, 0, 100, 50),
                 node("c", 0, 100, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
         assertTrue(result.overlaps().isEmpty());
@@ -46,7 +46,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 50, 25, 100, 50),  // overlaps a
                 node("c", 300, 0, 100, 50));  // no overlap
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(1, result.overlapCount());
         assertEquals(1, result.overlaps().size());
@@ -61,7 +61,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 100, 0, 100, 50));  // touching, not overlapping
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
     }
@@ -74,7 +74,7 @@ public class LayoutQualityAssessorTest {
                 childNode("child1", 50, 50, 100, 50, "grp"),
                 childNode("child2", 200, 50, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // The group overlaps both children geometrically, but should be excluded
         assertEquals(0, result.overlapCount());
@@ -90,7 +90,7 @@ public class LayoutQualityAssessorTest {
                 childNode("child1", 50, 50, 100, 50, "grp"),
                 childNode("child2", 100, 50, 100, 50, "grp"));  // overlaps child1
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Story 9-0d: verify sibling overlap counted, containment tracked separately
         assertEquals(1, result.overlapCount());
@@ -112,7 +112,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c2", "c", "d",
                         List.of(new double[]{50, 125}, new double[]{250, 125}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         assertEquals(0, result.edgeCrossingCount());
     }
@@ -127,7 +127,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c2", "b", "c",
                         List.of(new double[]{250, 25}, new double[]{50, 125}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         assertEquals(1, result.edgeCrossingCount());
     }
@@ -149,7 +149,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c2", "a", "c",
                         List.of(new double[]{10, 60}, new double[]{210, 110}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         // Fan-out from same source doesn't cross — segments share starting point
         assertEquals(0, result.edgeCrossingCount());
@@ -165,7 +165,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 150, 0, 100, 50),
                 node("c", 300, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Each element's nearest neighbor is 50px away
         assertEquals(50.0, result.averageSpacing(), 0.1);
@@ -178,7 +178,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 105, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(5.0, result.averageSpacing(), 0.1);
     }
@@ -191,7 +191,7 @@ public class LayoutQualityAssessorTest {
                 childNode("c1", 50, 50, 100, 50, "grp"),
                 childNode("c2", 250, 50, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Spacing should be between the two children (100px gap), not group-to-child (0px)
         assertEquals(100.0, result.averageSpacing(), 1.0);
@@ -207,7 +207,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 0, 100, 100, 50),
                 node("c", 0, 200, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(100, result.alignmentScore());
     }
@@ -221,7 +221,7 @@ public class LayoutQualityAssessorTest {
                 node("c", 123, 199, 110, 60),
                 node("d", 367, 11, 90, 45));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue("Alignment should be low for random positions",
                 result.alignmentScore() < 50);
@@ -236,7 +236,7 @@ public class LayoutQualityAssessorTest {
                 childNode("c1", 150, 150, 100, 50, "grp"),
                 childNode("c2", 150, 250, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Children share left-edge x=150 → 100% alignment (group excluded)
         assertEquals(100, result.alignmentScore());
@@ -245,7 +245,7 @@ public class LayoutQualityAssessorTest {
     @Test
     public void assess_emptyNodes_alignment_shouldReturnZero() {
         // Finding #12: empty input should return 0, not 100
-        LayoutAssessmentResult result = assessor.assess(List.of(), List.of());
+        LayoutAssessmentResult result = assessor.assess(List.of(), List.of(), false);
         assertEquals(0, result.alignmentScore());
     }
 
@@ -253,7 +253,7 @@ public class LayoutQualityAssessorTest {
     public void assess_singleNode_alignment_shouldReturnZero() {
         // Finding #12: single element should return 0, not 100
         List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
         assertEquals(0, result.alignmentScore());
     }
 
@@ -267,7 +267,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 0, 100, 100, 50),
                 node("c", 0, 200, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("excellent", result.overallRating());
     }
@@ -280,7 +280,7 @@ public class LayoutQualityAssessorTest {
             nodes.add(node("n" + i, 0, 0, 100, 50));
         }
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("poor", result.overallRating());
         assertTrue(result.overlapCount() > 3);
@@ -295,7 +295,7 @@ public class LayoutQualityAssessorTest {
                 group("group", 0, 0, 400, 300),
                 childNode("child", 50, 50, 100, 50, "group"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue(result.boundaryViolations().isEmpty());
     }
@@ -308,7 +308,7 @@ public class LayoutQualityAssessorTest {
                 group("group", 0, 0, 200, 150),
                 childNode("child", 150, 100, 100, 80, "group"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertFalse(result.boundaryViolations().isEmpty());
         assertTrue(result.boundaryViolations().get(0).contains("'child'"));
@@ -323,7 +323,7 @@ public class LayoutQualityAssessorTest {
                 node("a", -50, -30, 100, 50),
                 node("b", 100, 100, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertFalse(result.offCanvasWarnings().isEmpty());
         assertTrue(result.offCanvasWarnings().get(0).contains("'a'"));
@@ -336,7 +336,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 11000, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertFalse(result.offCanvasWarnings().isEmpty());
         assertTrue(result.offCanvasWarnings().get(0).contains("'b'"));
@@ -347,7 +347,7 @@ public class LayoutQualityAssessorTest {
 
     @Test
     public void assess_emptyNodes_shouldReturnEmptyResult() {
-        LayoutAssessmentResult result = assessor.assess(List.of(), List.of());
+        LayoutAssessmentResult result = assessor.assess(List.of(), List.of(), false);
 
         assertEquals(0, result.overlapCount());
         assertEquals(0, result.edgeCrossingCount());
@@ -359,7 +359,7 @@ public class LayoutQualityAssessorTest {
     public void assess_singleNode_shouldReturnTrivialResult() {
         List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
         assertEquals(0.0, result.averageSpacing(), 0.001);
@@ -374,7 +374,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 50, 25, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue(result.suggestions().stream()
                 .anyMatch(s -> s.contains("overlapping") && s.contains("auto-layout-and-route")));
@@ -386,7 +386,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 0, 100, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue(result.suggestions().stream()
                 .anyMatch(s -> s.contains("good") || s.contains("no immediate")));
@@ -400,7 +400,7 @@ public class LayoutQualityAssessorTest {
             nodes.add(node("n" + i, i * 150, 0, 100, 50));
         }
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue("Should warn about large view",
                 result.suggestions().stream().anyMatch(s -> s.contains("501 elements")));
@@ -457,7 +457,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "a", "b",
                         List.of(new double[]{25, 125}, new double[]{425, 125}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         assertFalse(result.connectionPassThroughs().isEmpty());
         assertTrue(result.connectionPassThroughs().get(0).contains("'mid'"));
@@ -477,7 +477,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "a", "b",
                         List.of(new double[]{75, 100}, new double[]{425, 100}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         // Group should NOT be reported as pass-through (it's an ancestor of both endpoints)
         assertTrue("Parent group should not be flagged as pass-through",
@@ -502,7 +502,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "p", "ext",
                         List.of(new double[]{250, 150}, new double[]{750, 150}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         assertTrue("Grandchild of source should not be flagged as pass-through",
                 result.connectionPassThroughs().isEmpty());
@@ -522,7 +522,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "ext", "p",
                         List.of(new double[]{50, 150}, new double[]{450, 150}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         assertTrue("Grandchild of target should not be flagged as pass-through",
                 result.connectionPassThroughs().isEmpty());
@@ -548,7 +548,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{250, 350}, new double[]{600, 300},
                                 new double[]{950, 50}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         // OrthogonalAnchor exits source toward first bendpoint (600,300),
         // ref.x=600 outside (0-500), ref.y=300 inside (200-500) → right edge at y=300.
@@ -604,7 +604,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{504.5, 1164.5}, new double[]{732, 446},
                                 new double[]{1036, 396.5}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         // OrthogonalAnchor exits source at ref.x=732 (first bendpoint x, inside 264-745),
         // top edge y=1020 → exit at (732,1020). Line from (732,1020) to (732,446) is nearly
@@ -739,7 +739,7 @@ public class LayoutQualityAssessorTest {
                 childGroup("subGrp", 20, 20, 460, 360, "topGrp"),
                 childNode("elem1", 50, 50, 100, 50, "subGrp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("No sibling overlaps expected", 0, result.overlapCount());
         // topGrp:subGrp, topGrp:elem1, subGrp:elem1 = 3 containment pairs
@@ -756,7 +756,7 @@ public class LayoutQualityAssessorTest {
                 childGroup("l3", 20, 20, 560, 460, "l2"),
                 childNode("leaf", 50, 50, 100, 50, "l3"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("No sibling overlaps in nested containment", 0, result.overlapCount());
         // l1:l2, l1:l3, l1:leaf, l2:l3, l2:leaf, l3:leaf = 6 containment pairs
@@ -772,7 +772,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a", 50, 50, 100, 50, "subGrp"),
                 childNode("b", 100, 50, 100, 50, "subGrp"));  // overlaps a
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Sibling overlap should be counted", 1, result.overlapCount());
         assertTrue(result.overlaps().get(0).contains("'a'"));
@@ -789,7 +789,7 @@ public class LayoutQualityAssessorTest {
                 childNode("c1", 50, 50, 100, 50, "grp"),
                 childNode("c2", 200, 50, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
         // grp:c1 and grp:c2 = 2 containment overlaps
@@ -806,7 +806,7 @@ public class LayoutQualityAssessorTest {
                 childNode("c2", 20, 150, 100, 50, "grp"),
                 childNode("c3", 20, 250, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
         assertTrue("Containment overlaps should exist", result.containmentOverlapCount() > 0);
@@ -821,12 +821,29 @@ public class LayoutQualityAssessorTest {
                 childNode("c1", 50, 50, 100, 50, "grp"),
                 childNode("c2", 50, 150, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // No suggestion should mention "overlapping" or "spacious"
         assertFalse("Containment-only should not trigger spacious suggestion",
                 result.suggestions().stream()
                         .anyMatch(s -> s.contains("overlapping") && s.contains("spacious")));
+    }
+
+    @Test
+    public void assess_containmentOverlaps_shouldAddInformationalSuggestion() {
+        // §10.4: containment overlaps should produce an informational suggestion
+        // so the LLM knows they are expected ancestor-descendant overlaps
+        List<AssessmentNode> nodes = List.of(
+                group("grp", 0, 0, 500, 300),
+                childNode("c1", 50, 50, 100, 50, "grp"),
+                childNode("c2", 50, 150, 100, 50, "grp"));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        assertTrue("Should include informational containment overlap suggestion",
+                result.suggestions().stream()
+                        .anyMatch(s -> s.contains("containment overlaps detected")
+                                && s.contains("No action needed")));
     }
 
     // ---- Label overlap detection tests (Story 10-8) ----
@@ -899,7 +916,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{50, 25}, new double[]{450, 25}),
                         "Accesses", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         // labelOverlapCount should be reflected in result
         assertTrue("Label overlap count should be >= 0", result.labelOverlapCount() >= 0);
         assertNotNull(result.labelOverlaps());
@@ -936,7 +953,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{50, 25}, new double[]{450, 25}),
                         "Accesses", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         assertTrue("Label should overlap mid element", result.labelOverlapCount() > 0);
         assertTrue("Should have label overlap suggestion",
                 result.suggestions().stream()
@@ -948,8 +965,8 @@ public class LayoutQualityAssessorTest {
         // Connection from a (inside group g) to b — label sits inside group g's bounds
         // Group g is an ancestor of source, so should be excluded
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("g", 0, 0, 500, 200, null, true, false),
-                new AssessmentNode("a", 10, 10, 100, 50, "g", false, false),
+                new AssessmentNode("g", 0, 0, 500, 200, null, true, false, null, 0.0, null, null),
+                new AssessmentNode("a", 10, 10, 100, 50, "g", false, false, null, 0.0, null, null),
                 node("b", 400, 300, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "a", "b",
@@ -968,7 +985,7 @@ public class LayoutQualityAssessorTest {
         // Groups are transparent containers and should be skipped
         List<AssessmentNode> nodes = List.of(
                 node("a", 0, 0, 100, 50),
-                new AssessmentNode("unrelatedGroup", 150, 0, 200, 100, null, true, false),
+                new AssessmentNode("unrelatedGroup", 150, 0, 200, 100, null, true, false, null, 0.0, null, null),
                 node("b", 400, 0, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "a", "b",
@@ -986,8 +1003,8 @@ public class LayoutQualityAssessorTest {
         // Connection from parent group g to b — child c is inside g
         // Label near source may overlap child c, but c is descendant of source
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("g", 0, 0, 200, 150, null, true, false),
-                new AssessmentNode("child", 10, 10, 80, 40, "g", false, false),
+                new AssessmentNode("g", 0, 0, 200, 150, null, true, false, null, 0.0, null, null),
+                new AssessmentNode("child", 10, 10, 80, 40, "g", false, false, null, 0.0, null, null),
                 node("b", 400, 0, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "g", "b",
@@ -1098,7 +1115,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c2", "b", "ext",
                         List.of(new double[]{250, 225}, new double[]{550, 125}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         boolean hasLayoutWithinGroup = result.suggestions().stream()
                 .anyMatch(s -> s.contains("layout-within-group"));
         boolean hasComputeLayout = result.suggestions().stream()
@@ -1125,7 +1142,7 @@ public class LayoutQualityAssessorTest {
                     List.of(new double[]{250, 25}, new double[]{50, 225}), "", 1));
         }
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         assertTrue("Should have >10 crossings", result.edgeCrossingCount() > 10);
         boolean hasComputeLayout = result.suggestions().stream()
                 .anyMatch(s -> s.contains("compute-layout"));
@@ -1143,7 +1160,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a", 20, 20, 150, 50, "grp"),
                 childNode("b", 100, 20, 150, 50, "grp")); // overlaps a
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
         boolean hasLayoutWithinGroup = result.suggestions().stream()
                 .anyMatch(s -> s.contains("layout-within-group"));
         boolean hasComputeLayout = result.suggestions().stream()
@@ -1218,7 +1235,7 @@ public class LayoutQualityAssessorTest {
                 childNode("elem1", 250, 250, 100, 50, "subGrp"),
                 childNode("elem2", 365, 250, 100, 50, "subGrp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
         assertEquals("Elements with 15px gap should not overlap", 0, result.overlapCount());
     }
 
@@ -1231,7 +1248,7 @@ public class LayoutQualityAssessorTest {
                 childNode("elem1", 250, 250, 100, 50, "subGrp"),
                 childNode("elem2", 320, 250, 100, 50, "subGrp")); // overlaps elem1
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
         assertEquals("Genuinely overlapping siblings should be detected",
                 1, result.overlapCount());
     }
@@ -1247,7 +1264,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "a", "b",
                         List.of(new double[]{50, 25}, new double[]{250, 25}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         assertEquals(1, result.connectionCount());
         assertEquals(0.0, result.crossingsPerConnection(), 0.001);
     }
@@ -1272,7 +1289,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{70, 145}, new double[]{350, 95}),
                         "uses", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         // Find label overlap suggestions if any
         for (String suggestion : result.suggestions()) {
             if (suggestion.contains("labels overlap")) {
@@ -1306,7 +1323,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 200, 0, 100, 50),
                 note("n1", 0, 0, 150, 30)); // overlaps "a" but is a note
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
     }
@@ -1319,7 +1336,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 200, 0, 100, 50),
                 note("n1", 105, 0, 80, 30)); // very close to "a", between a and b
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Spacing should be between "a" and "b" only (100px gap)
         assertEquals(100.0, result.averageSpacing(), 1.0);
@@ -1333,7 +1350,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 200, 0, 100, 50),  // aligned with "a" on y
                 note("n1", 50, 77, 100, 30)); // misaligned — should be ignored
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Score should reflect 100% alignment of the two elements
         assertEquals(100, result.alignmentScore());
@@ -1347,7 +1364,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 200, 0, 100, 50),
                 note("n1", 10, 10, 80, 30)); // overlaps "a"
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount()); // no sibling overlap
         assertEquals(1, result.noteOverlapCount());
@@ -1363,9 +1380,9 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grp", 0, 0, 400, 300),
                 childNode("elem", 20, 50, 100, 50, "grp"),
-                new AssessmentNode("n1", 10, 10, 150, 30, "grp", false, true));
+                new AssessmentNode("n1", 10, 10, 150, 30, "grp", false, true, null, 0.0, null, null));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.noteOverlapCount());
         assertTrue(result.noteOverlapDescriptions().isEmpty());
@@ -1379,7 +1396,7 @@ public class LayoutQualityAssessorTest {
                 childNode("elem", 50, 50, 100, 50, "grp"),
                 note("n1", 0, 0, 150, 30)); // overlaps group bounds
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(1, result.noteOverlapCount());
         assertEquals(1, result.noteOverlapDescriptions().size());
@@ -1394,7 +1411,7 @@ public class LayoutQualityAssessorTest {
                 note("n1", 0, 0, 100, 30),
                 note("n2", 50, 10, 100, 30)); // overlaps n1
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.overlapCount());
         assertEquals(0, result.edgeCrossingCount());
@@ -1412,7 +1429,7 @@ public class LayoutQualityAssessorTest {
                 group("grp", 0, 0, 400, 300),
                 note("n1", 10, 5, 100, 20)); // overlaps group at top edge (y=5, h=20 → bottom=25)
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(1, result.noteOverlapCount());
         assertTrue(result.noteOverlapDescriptions().get(0).contains("group"));
@@ -1426,7 +1443,7 @@ public class LayoutQualityAssessorTest {
                 childNode("elem", 10, 10, 100, 50, "grp"),
                 note("n1", 5, 5, 120, 60)); // overlaps both grp and elem
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(2, result.noteOverlapCount());
     }
@@ -1439,7 +1456,7 @@ public class LayoutQualityAssessorTest {
                 node("elem", 10, 10, 50, 50),
                 note("n1", 500, 500, 100, 30)); // far away
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(0, result.noteOverlapCount());
     }
@@ -1451,7 +1468,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 note("n1", 10, 10, 80, 30)); // overlaps "a"
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals(1, result.noteOverlapCount());
         assertTrue(result.noteOverlapDescriptions().get(0).contains("element"));
@@ -1463,9 +1480,9 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grpA", 0, 0, 200, 200),
                 group("grpB", 180, 0, 200, 200),
-                new AssessmentNode("n1", 170, 10, 50, 30, "grpA", false, true)); // child of grpA, overlaps grpB
+                new AssessmentNode("n1", 170, 10, 50, 30, "grpA", false, true, null, 0.0, null, null)); // child of grpA, overlaps grpB
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Should detect overlap with grpB (not excluded) but NOT with grpA (parent excluded)
         // Also overlaps grpA since note at x=170 is within grpA's 0-200 range — but parent exclusion skips it
@@ -1479,9 +1496,9 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grp", 0, 0, 400, 300),
                 childNode("elem", 20, 50, 100, 50, "grp"),
-                new AssessmentNode("n1", 10, 40, 120, 30, "grp", false, true)); // child note overlaps sibling elem
+                new AssessmentNode("n1", 10, 40, 120, 30, "grp", false, true, null, 0.0, null, null)); // child note overlaps sibling elem
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Parent group overlap excluded, but sibling element overlap detected
         assertEquals(1, result.noteOverlapCount());
@@ -1498,14 +1515,14 @@ public class LayoutQualityAssessorTest {
                 childNode("b", 200, 50, 100, 50, "grp"),
                 note("n1", 0, 0, 150, 30)); // overlaps group
 
-        LayoutAssessmentResult withNote = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult withNote = assessor.assess(nodes, List.of(), false);
 
         List<AssessmentNode> nodesWithoutNote = List.of(
                 group("grp", 0, 0, 400, 300),
                 childNode("a", 20, 50, 100, 50, "grp"),
                 childNode("b", 200, 50, 100, 50, "grp"));
 
-        LayoutAssessmentResult withoutNote = assessor.assess(nodesWithoutNote, List.of());
+        LayoutAssessmentResult withoutNote = assessor.assess(nodesWithoutNote, List.of(), false);
 
         // Rating should be identical regardless of note overlaps
         assertEquals(withoutNote.overallRating(), withNote.overallRating());
@@ -1521,7 +1538,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a", 20, 20, 100, 50, "g1"),
                 childNode("b", 200, 20, 100, 50, "g1"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue("hasGroups should be true when groups present", result.hasGroups());
     }
@@ -1532,7 +1549,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 200, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertFalse("hasGroups should be false when no groups present", result.hasGroups());
     }
@@ -1543,7 +1560,7 @@ public class LayoutQualityAssessorTest {
                 note("n1", 0, 0, 100, 30),
                 note("n2", 200, 0, 100, 30));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertFalse("hasGroups should be false for notes-only views", result.hasGroups());
     }
@@ -1556,7 +1573,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 200, 0, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNotNull("ratingBreakdown should not be null", result.ratingBreakdown());
         assertTrue("breakdown should contain overlaps", result.ratingBreakdown().containsKey("overlaps"));
@@ -1680,7 +1697,7 @@ public class LayoutQualityAssessorTest {
                 childNode("c", 530, 30, 120, 60, "grp2"),
                 childNode("d", 530, 200, 120, 60, "grp2"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertTrue("Should detect groups", result.hasGroups());
         assertNotNull("ratingBreakdown should be present", result.ratingBreakdown());
@@ -1790,7 +1807,7 @@ public class LayoutQualityAssessorTest {
                 childNode("child2", 80, 20, 100, 50, "parent"),  // overlaps child1
                 node("ext", 400, 50, 100, 50));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         // Verify containment is detected
         assertTrue("Should detect containment overlaps", result.containmentOverlapCount() > 0);
@@ -1809,7 +1826,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> flatOverlap = List.of(
                 node("a", 0, 0, 100, 50),
                 node("b", 50, 25, 100, 50));
-        LayoutAssessmentResult flatResult = assessor.assess(flatOverlap, List.of());
+        LayoutAssessmentResult flatResult = assessor.assess(flatOverlap, List.of(), false);
         boolean flatHasComputeLayout = flatResult.suggestions().stream()
                 .anyMatch(s -> s.contains("compute-layout"));
         assertFalse("Flat overlaps should not suggest compute-layout", flatHasComputeLayout);
@@ -1827,7 +1844,7 @@ public class LayoutQualityAssessorTest {
             connections.add(new AssessmentConnection("bc" + i, "b", "c",
                     List.of(new double[]{250, 25}, new double[]{50, 225}), "", 1));
         }
-        LayoutAssessmentResult crossResult = assessor.assess(flatCross, connections);
+        LayoutAssessmentResult crossResult = assessor.assess(flatCross, connections, false);
         boolean crossHasComputeLayout = crossResult.suggestions().stream()
                 .anyMatch(s -> s.contains("compute-layout"));
         assertFalse("Flat crossings should not suggest compute-layout", crossHasComputeLayout);
@@ -1837,7 +1854,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 37, 63, 100, 50),
                 node("c", 74, 126, 100, 50));
-        LayoutAssessmentResult alignResult = assessor.assess(flatAlign, List.of());
+        LayoutAssessmentResult alignResult = assessor.assess(flatAlign, List.of(), false);
         boolean alignHasComputeLayout = alignResult.suggestions().stream()
                 .anyMatch(s -> s.contains("compute-layout"));
         assertFalse("Flat alignment should not suggest compute-layout", alignHasComputeLayout);
@@ -1851,7 +1868,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a", 20, 20, 150, 50, "grp"),
                 childNode("b", 100, 20, 150, 50, "grp"));  // overlaps a
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         boolean hasLayoutWithinGroup = result.suggestions().stream()
                 .anyMatch(s -> s.contains("layout-within-group"));
@@ -1874,7 +1891,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a1", 140, 50, 80, 40, "grpA"),  // extends to x=220 (into grpB's area)
                 childNode("b1", 190, 50, 80, 40, "grpB")); // starts at x=190 (overlaps a1's bbox)
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Cross-group boundary elements should not count as sibling overlaps",
                 0, result.overlapCount());
@@ -1888,7 +1905,7 @@ public class LayoutQualityAssessorTest {
                 childNode("a", 50, 50, 100, 50, "grp"),
                 childNode("b", 100, 50, 100, 50, "grp"));  // overlaps a
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Same-group sibling overlap should be counted", 1, result.overlapCount());
     }
@@ -1900,7 +1917,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 0, 0, 100, 50),
                 node("b", 50, 25, 100, 50));  // overlaps a
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Top-level elements (both null parent) should count as sibling overlap",
                 1, result.overlapCount());
@@ -1913,7 +1930,7 @@ public class LayoutQualityAssessorTest {
                 group("grpA", 0, 0, 300, 200),
                 group("grpB", 200, 0, 300, 200));  // overlaps grpA
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Top-level group overlap should count as sibling overlap",
                 1, result.overlapCount());
@@ -1939,7 +1956,7 @@ public class LayoutQualityAssessorTest {
                 childNode("l3a", 590, 50, 100, 40, "layer3"),
                 childNode("l3b", 590, 120, 100, 40, "layer3"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Layered view should have zero sibling overlaps (no false positives)",
                 0, result.overlapCount());
@@ -1961,10 +1978,196 @@ public class LayoutQualityAssessorTest {
                 // Element in grpB near boundary with grpA — overlaps a3's bbox
                 childNode("b1", 290, 50, 80, 50, "grpB"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertEquals("Only same-parent overlap (a1+a2) should be counted, not cross-group (a3+b1)",
                 1, result.overlapCount());
+    }
+
+    // ---- B53: Label truncation detection tests ----
+
+    @Test
+    public void detectLabelTruncation_shouldNotDetect_whenLabelFits() {
+        // Element 120px wide, 16px type icon = 104px available. Short name fits.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "Short", 50.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(0, result.count());
+        assertTrue(result.descriptions().isEmpty());
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldDetect_whenWrappedLabelOverflowsVertically() {
+        // Element 80px wide, 16px type icon = 64px available. Label 250px wide.
+        // Estimated lines = ceil(250/64) = 4. Needed height = 4*14 + 6 = 62 > 55 → truncated.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Very Long Element Name That Wraps Many Lines", 250.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(1, result.count());
+        assertEquals(1, result.descriptions().size());
+        assertTrue(result.descriptions().get(0).contains("Very Long Element Name"));
+        assertTrue(result.descriptions().get(0).contains("may be truncated"));
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldNotDetect_whenWrappedLabelFitsVertically() {
+        // Element 80px wide, 16px type icon = 64px available. Label 100px wide.
+        // Estimated lines = ceil(100/64) = 2. Needed height = 2*14 + 6 = 34 < 55 → fits.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Wraps But Fits", 100.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldSkipGroups() {
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("g1", 0, 0, 50, 50, null, true, false, "Group Name", 200.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldSkipNotes() {
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("n1", 0, 0, 50, 50, null, false, true, "Note Text", 200.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldSkipNullName() {
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 80, 55, null, false, false, null, 0.0, null, null));
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectLabelTruncation_shouldCapDescriptionsAtMax() {
+        List<AssessmentNode> nodes = new java.util.ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            nodes.add(new AssessmentNode("e" + i, i * 100, 0, 50, 55, null, false, false,
+                    "VeryLongName" + i, 200.0, null, null));
+        }
+        LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
+        assertEquals(15, result.count()); // exact count
+        assertEquals(10, result.descriptions().size()); // capped at MAX_DESCRIPTIONS
+    }
+
+    // ---- B53: Parent label obscured tests ----
+
+    @Test
+    public void detectParentLabelObscured_shouldNotDetect_whenChildBelowLabel() {
+        // Parent at y=0, label needs 20px. Child at y=30 (relative) = y=30 (absolute) — below label.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null),
+                new AssessmentNode("child", 10, 30, 80, 40, "parent", false, false, "Child", 40.0, null, null));
+        LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectParentLabelObscured_shouldDetect_whenChildOverlapsLabel() {
+        // Parent at y=0, label needs 20px. Child at y=10 (absolute) — inside label area.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null),
+                new AssessmentNode("child", 10, 10, 80, 40, "parent", false, false, "Child", 40.0, null, null));
+        LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
+        assertEquals(1, result.count());
+        assertEquals(1, result.descriptions().size());
+        assertTrue(result.descriptions().get(0).contains("Parent Group"));
+    }
+
+    @Test
+    public void detectParentLabelObscured_shouldNotDetect_whenNoChildren() {
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null));
+        LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectParentLabelObscured_shouldCountOnlyObscuredParents() {
+        // Two parents: one with child below label, one with child in label
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("p1", 0, 0, 200, 150, null, true, false, "OK Parent", 80.0, null, null),
+                new AssessmentNode("c1", 10, 30, 80, 40, "p1", false, false, "OK Child", 40.0, null, null),
+                new AssessmentNode("p2", 300, 0, 200, 150, null, true, false, "Bad Parent", 80.0, null, null),
+                new AssessmentNode("c2", 310, 5, 80, 40, "p2", false, false, "Bad Child", 40.0, null, null));
+        LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
+        assertEquals(1, result.count());
+        assertTrue(result.descriptions().get(0).contains("Bad Parent"));
+    }
+
+    // ---- B53: Image sibling overlap tests ----
+
+    @Test
+    public void detectImageSiblingOverlap_shouldNotDetect_whenNoSiblingOverlap() {
+        // Element with image at bottom-left, sibling far away
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left"),
+                new AssessmentNode("e2", 200, 0, 120, 55, null, false, false, "Other", 40.0, null, null));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldDetect_whenFillImageOverlappedBySibling() {
+        // Element with fill image, sibling overlaps its bounds
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "FillImg", 60.0, "img/bg.png", "fill"),
+                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Overlapper", 60.0, null, null));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(1, result.count());
+        assertTrue(result.descriptions().get(0).contains("FillImg"));
+        assertTrue(result.descriptions().get(0).contains("fill"));
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldNotDetect_whenBottomLeftNotOverlapped() {
+        // Element with bottom-left image (24x24 at bottom-left corner), sibling only overlaps top-right area
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left"),
+                new AssessmentNode("e2", 100, 0, 120, 30, null, false, false, "TopOnly", 40.0, null, null));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldSkipElementsWithoutImage() {
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "NoImg", 60.0, null, null),
+                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Other", 60.0, null, null));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(0, result.count());
+    }
+
+    // ---- B53: Rating regression test ----
+
+    @Test
+    public void assess_withB53Fields_shouldNotChangeRating() {
+        // Same layout as existing tests, but with B53 fields populated — rating must be identical
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("a", 0, 0, 120, 55, null, false, false, "Very Long Name That Gets Truncated", 200.0, "img/bg.png", "fill"),
+                new AssessmentNode("b", 200, 0, 120, 55, null, false, false, "B", 10.0, null, null),
+                new AssessmentNode("c", 0, 100, 120, 55, null, false, false, "C", 10.0, null, null),
+                new AssessmentNode("d", 200, 100, 120, 55, null, false, false, "D", 10.0, null, null));
+
+        // Same layout without B53 fields
+        List<AssessmentNode> nodesWithout = List.of(
+                node("a", 0, 0, 120, 55),
+                node("b", 200, 0, 120, 55),
+                node("c", 0, 100, 120, 55),
+                node("d", 200, 100, 120, 55));
+
+        LayoutAssessmentResult withFields = assessor.assess(nodes, List.of(), false);
+        LayoutAssessmentResult withoutFields = assessor.assess(nodesWithout, List.of(), false);
+
+        assertEquals("Rating must be identical regardless of B53 fields",
+                withoutFields.overallRating(), withFields.overallRating());
+        assertEquals("Rating breakdown must be identical",
+                withoutFields.ratingBreakdown(), withFields.ratingBreakdown());
     }
 
     // ---- Helper methods ----
@@ -1972,31 +2175,31 @@ public class LayoutQualityAssessorTest {
     /** Creates a top-level leaf element (non-group, no parent). */
     private static AssessmentNode node(String id, double x, double y,
                                         double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, false);
+        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
     }
 
     /** Creates a group container (top-level, no parent). */
     private static AssessmentNode group(String id, double x, double y,
                                          double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, true, false);
+        return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null);
     }
 
     /** Creates a child element inside a group. */
     private static AssessmentNode childNode(String id, double x, double y,
                                              double w, double h, String parentId) {
-        return new AssessmentNode(id, x, y, w, h, parentId, false, false);
+        return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null);
     }
 
     /** Creates a child group (nested group inside a parent group). */
     private static AssessmentNode childGroup(String id, double x, double y,
                                               double w, double h, String parentId) {
-        return new AssessmentNode(id, x, y, w, h, parentId, true, false);
+        return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null);
     }
 
     /** Creates a top-level note (Story 11-15). */
     private static AssessmentNode note(String id, double x, double y,
                                         double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, true);
+        return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null);
     }
 
     private List<AssessmentNode> createFourNodeGrid() {
@@ -2080,7 +2283,7 @@ public class LayoutQualityAssessorTest {
                         new double[]{400, 25}, new double[]{450, 25}),
                 null, 0);
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1), false);
 
         assertTrue("Should detect coincident segments",
                 result.coincidentSegmentCount() > 0);
@@ -2102,7 +2305,7 @@ public class LayoutQualityAssessorTest {
                         new double[]{400, 200}, new double[]{450, 75}),
                 null, 0);
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1), false);
 
         assertEquals("Should detect no coincident segments", 0,
                 result.coincidentSegmentCount());
@@ -2124,7 +2327,7 @@ public class LayoutQualityAssessorTest {
                         new double[]{400, 25}, new double[]{450, 25}),
                 null, 0);
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn0, conn1), false);
 
         boolean hasSuggestion = result.suggestions().stream()
                 .anyMatch(s -> s.contains("overlapping connection segments"));
@@ -2139,7 +2342,7 @@ public class LayoutQualityAssessorTest {
                 node("a", 100, 50, 120, 60),
                 node("b", 300, 200, 80, 40));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNotNull("contentBounds should be present", result.contentBounds());
         assertEquals(100.0, result.contentBounds().x(), 0.001);
@@ -2153,7 +2356,7 @@ public class LayoutQualityAssessorTest {
     public void assess_shouldReturnNullContentBounds_whenViewIsEmpty() {
         List<AssessmentNode> nodes = List.of();
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNull("contentBounds should be null for empty view", result.contentBounds());
     }
@@ -2165,7 +2368,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 node("only", 50, 100, 200, 80));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNotNull("contentBounds should be present for single element", result.contentBounds());
         assertEquals(50.0, result.contentBounds().x(), 0.001);
@@ -2182,7 +2385,7 @@ public class LayoutQualityAssessorTest {
                 node("b", 300, 200, 80, 40),
                 note("title", 50, 10, 200, 30));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNotNull("contentBounds should be present", result.contentBounds());
         // min x = 50 (note), min y = 10 (note)
@@ -2202,7 +2405,7 @@ public class LayoutQualityAssessorTest {
                 childNode("child1", 50, 50, 100, 50, "grp"),
                 childNode("child2", 350, 250, 100, 50, "grp"));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, List.of());
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
         assertNotNull("contentBounds should be present", result.contentBounds());
         // min x = 0 (group), min y = 0 (group)
@@ -2230,7 +2433,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{25, 115}, new double[]{200, 115},
                                 new double[]{350, 115}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
                 .anyMatch(d -> d.contains("routes through its own target"));
@@ -2256,7 +2459,7 @@ public class LayoutQualityAssessorTest {
                                 new double[]{210, 50}, new double[]{50, 50},
                                 new double[]{50, 115}, new double[]{425, 115}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
                 .anyMatch(d -> d.contains("routes through its own source"));
@@ -2347,7 +2550,7 @@ public class LayoutQualityAssessorTest {
                 new AssessmentConnection("c1", "a", "b",
                         List.of(new double[]{25, 115}, new double[]{300, 115}), "", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
 
         boolean hasSelfPassThrough = result.connectionPassThroughs().stream()
                 .anyMatch(d -> d.contains("routes through its own"));
@@ -2442,7 +2645,7 @@ public class LayoutQualityAssessorTest {
                         List.of(new double[]{50, 25}, new double[]{90, 25}),
                         "VeryLongLabelName", 1));
 
-        LayoutAssessmentResult result = assessor.assess(nodes, connections);
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
         boolean hasShortSegmentSuggestion = result.suggestions().stream()
                 .anyMatch(s -> s.contains("exceed available segment length"));
         assertTrue("Should include short-segment suggestion", hasShortSegmentSuggestion);
@@ -2646,7 +2849,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(
                         new double[]{0, 50}, new double[]{100, 50}, new double[]{100, 150}), "", 0));
-        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns, false).count());
     }
 
     @Test
@@ -2655,7 +2858,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(
                         new double[]{0, 0}, new double[]{30, 40}, new double[]{30, 100}), "", 0));
-        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns, false).count());
     }
 
     @Test
@@ -2664,7 +2867,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(
                         new double[]{0, 0}, new double[]{0, 50}, new double[]{30, 90}), "", 0));
-        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns, false).count());
     }
 
     @Test
@@ -2673,7 +2876,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(
                         new double[]{0, 0}, new double[]{30, 40}, new double[]{60, 80}), "", 0));
-        assertEquals(1, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(1, assessor.countNonOrthogonalTerminals(conns, false).count());
     }
 
     @Test
@@ -2682,7 +2885,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(
                         new double[]{0, 0}, new double[]{3, 40}, new double[]{3, 100}), "", 0));
-        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns, false).count());
     }
 
     @Test
@@ -2690,6 +2893,328 @@ public class LayoutQualityAssessorTest {
         // Path with less than 2 points — should not crash
         List<AssessmentConnection> conns = List.of(
                 new AssessmentConnection("c1", "a", "b", List.of(new double[]{0, 0}), "", 0));
-        assertEquals(0, assessor.countNonOrthogonalTerminals(conns));
+        assertEquals(0, assessor.countNonOrthogonalTerminals(conns, false).count());
+    }
+
+    // ---- B54: Self-element PT rating tolerance tests ----
+
+    @Test
+    public void detectPassThroughs_selfElementOnly_shouldReturnZeroCrossCount() {
+        // Connection routes through own target only — crossElementCount should be 0
+        // Geometry: path overshoots past target, terminal segment doubles back.
+        // After clipping: (50,125)→(350,125)→(200,125). Segment 0 crosses target body.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 100, 50, 50),
+                node("b", 100, 100, 100, 50));
+
+        // Path overshoots past target, then terminal returns — non-terminal seg crosses target
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{25, 125}, new double[]{350, 125},
+                                new double[]{150, 125}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertTrue("Should have descriptions for self-element PT",
+                result.descriptions().stream().anyMatch(d -> d.contains("routes through its own")));
+        assertEquals("Self-element PTs should not count as cross-element", 0, result.crossElementCount());
+        assertTrue("Total count should include self-element PTs", result.totalCount() > 0);
+    }
+
+    @Test
+    public void detectPassThroughs_crossElementOnly_shouldCountAsCross() {
+        // Connection from A to C passes through unrelated element B
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 90, 50, 50),      // source
+                node("b", 150, 90, 50, 50),     // unrelated element in the path
+                node("c", 400, 90, 50, 50));    // target
+
+        // Path goes straight through B
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "c",
+                        List.of(new double[]{25, 115}, new double[]{175, 115},
+                                new double[]{425, 115}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertTrue("Should have cross-element PT description",
+                result.descriptions().stream().anyMatch(d -> d.contains("passes through element")));
+        assertEquals("Cross-element PT should be counted", 1, result.crossElementCount());
+    }
+
+    @Test
+    public void detectPassThroughs_mixedSelfAndCross_shouldSeparateCounts() {
+        // Connection from A to C passes through unrelated B AND routes through own target C.
+        // Geometry: path goes through B (cross-element), overshoots past C, terminal returns.
+        // After clipping: (50,125)→(225,125)→(600,125)→(500,125).
+        // Seg 0 crosses B (cross-element). Seg 1 crosses C body (self-element).
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 100, 50, 50),       // source
+                node("b", 200, 100, 50, 50),      // unrelated element
+                node("c", 400, 100, 100, 50));    // target (path overshoots past it)
+
+        // Path goes through B, overshoots past C, terminal segment returns to C
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "c",
+                        List.of(new double[]{25, 125}, new double[]{225, 125},
+                                new double[]{600, 125}, new double[]{450, 125}), "", 2));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        boolean hasCross = result.descriptions().stream()
+                .anyMatch(d -> d.contains("passes through element"));
+        boolean hasSelf = result.descriptions().stream()
+                .anyMatch(d -> d.contains("routes through its own"));
+        assertTrue("Should have cross-element description", hasCross);
+        assertTrue("Should have self-element description", hasSelf);
+        assertEquals("Only cross-element should be in crossElementCount", 1, result.crossElementCount());
+        assertTrue("Total count should include both types", result.totalCount() >= 2);
+    }
+
+    @Test
+    public void rating_selfElementPTOnly_shouldNotPenalise() {
+        // 3 self-element PTs, 0 cross-element → passThroughs rating should be "pass"
+        // computeRatingWithBreakdown receives crossElementCount (0), not total
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+        assertEquals("pass", result.breakdown().get("passThroughs"));
+    }
+
+    @Test
+    public void rating_groupedView_selfElementPTOnly_shouldStillGetLeniency() {
+        // AC3: Grouped-view leniency gate uses cross-element count only.
+        // With crossElementCount=0 (even if self-element PTs exist), leniency applies.
+        // crossings=25 → "fair" normally (ratio 2.5 > CROSSING_RATIO_GOOD but ≤ MODERATE).
+        // Leniency boosts "fair" → "good".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 25, 50.0, 80, 0, 0, 0, 0, 10, true);
+        assertEquals("good", result.breakdown().get("edgeCrossings"));
+    }
+
+    @Test
+    public void rating_crossElementPT_shouldStillPenalise() {
+        // 1 cross-element PT → passThroughs rating should be "fair" (unchanged behaviour)
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 1, 0, 0, 0, false);
+        assertEquals("fair", result.breakdown().get("passThroughs"));
+    }
+
+    @Test
+    public void assess_selfElementPTOnly_shouldNotAffectRating() {
+        // Integration test: view with only self-element PTs should get "pass" for passThroughs.
+        // Same geometry as detectPassThroughs_selfElementOnly test — overshoot-and-return path.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 100, 50, 50),
+                node("b", 100, 100, 100, 50));
+
+        // Path overshoots past target, terminal returns — non-terminal seg crosses target
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{25, 125}, new double[]{350, 125},
+                                new double[]{150, 125}), "", 1));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
+
+        // Informational reporting preserved — descriptions should contain the self-element PT
+        assertTrue("Descriptions should still contain self-element PT",
+                result.connectionPassThroughs().stream()
+                        .anyMatch(d -> d.contains("routes through its own")));
+        // Rating should not be penalised
+        assertEquals("Self-element PT should not penalise rating",
+                "pass", result.ratingBreakdown().get("passThroughs"));
+    }
+
+    // ---- B55: Violator ID collection tests ----
+
+    @Test
+    public void b55_assess_withViolatorIdsFalse_shouldReturnNullViolatorIds() {
+        // Two overlapping elements, but includeViolatorIds=false
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 50, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+        assertNull("violatorIds should be null when not requested", result.violatorIds());
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_overlaps_shouldReturnBothElementIds() {
+        // Two overlapping sibling elements (same null parent)
+        List<AssessmentNode> nodes = List.of(
+                node("elem-1", 0, 0, 100, 50),
+                node("elem-2", 50, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), true);
+        assertNotNull("violatorIds should be present", result.violatorIds());
+        assertTrue("Should have overlaps key", result.violatorIds().containsKey("overlaps"));
+        Set<String> overlapIds = result.violatorIds().get("overlaps");
+        assertTrue("Should contain elem-1", overlapIds.contains("elem-1"));
+        assertTrue("Should contain elem-2", overlapIds.contains("elem-2"));
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_passThroughs_shouldReturnConnectionIds() {
+        // Connection passes through an unrelated element
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 100, 50, 50),
+                node("tgt", 400, 100, 50, 50),
+                node("blocker", 150, 100, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn-1", "src", "tgt",
+                        List.of(new double[]{25, 125}, new double[]{425, 125}), "", 1));
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, true);
+        assertNotNull("violatorIds should be present", result.violatorIds());
+        assertTrue("Should have passThroughs key", result.violatorIds().containsKey("passThroughs"));
+        Set<String> ptIds = result.violatorIds().get("passThroughs");
+        assertTrue("Should contain conn-1", ptIds.contains("conn-1"));
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_passThroughs_shouldExcludeSelfElement() {
+        // Self-element pass-through should NOT be in violatorIds (AC5: cross-element only)
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 100, 50, 50),
+                node("b", 100, 100, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{25, 125}, new double[]{350, 125},
+                                new double[]{150, 125}), "", 1));
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, true);
+        // Self-element PT only — no cross-element PTs, so no passThroughs key in violatorIds.
+        // violatorIds may be null (no violations at all) or present without passThroughs key.
+        // Either way, passThroughs must NOT appear.
+        if (result.violatorIds() == null) {
+            // Null map is acceptable — means no violating metrics at all
+            assertNull("Null violatorIds is acceptable (no cross-element violations)",
+                    result.violatorIds());
+        } else {
+            assertFalse("Self-element PTs should not appear in violatorIds",
+                    result.violatorIds().containsKey("passThroughs"));
+        }
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_nonOrthogonalTerminals_shouldReturnConnectionIds() {
+        // Connection with diagonal source terminal
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 50, 50),
+                node("b", 200, 200, 50, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn-diag", "a", "b",
+                        List.of(new double[]{25, 25}, new double[]{55, 55}, new double[]{225, 225}), "", 1));
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, true);
+        assertNotNull("violatorIds should be present", result.violatorIds());
+        assertTrue("Should have nonOrthogonalTerminals key",
+                result.violatorIds().containsKey("nonOrthogonalTerminals"));
+        assertTrue("Should contain conn-diag",
+                result.violatorIds().get("nonOrthogonalTerminals").contains("conn-diag"));
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_boundaryViolations_shouldReturnChildIds() {
+        // Child extends outside parent group
+        List<AssessmentNode> nodes = List.of(
+                group("grp", 0, 0, 200, 200),
+                childNode("child-out", 180, 50, 100, 50, "grp"));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), true);
+        assertNotNull("violatorIds should be present", result.violatorIds());
+        assertTrue("Should have boundaryViolations key",
+                result.violatorIds().containsKey("boundaryViolations"));
+        Set<String> bvIds = result.violatorIds().get("boundaryViolations");
+        assertTrue("Should contain child-out", bvIds.contains("child-out"));
+        assertFalse("Should NOT contain parent group ID", bvIds.contains("grp"));
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_crossingsExcluded() {
+        // Edge crossings exist but should NOT appear in violatorIds (AC9)
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 50, 50),
+                node("b", 200, 0, 50, 50),
+                node("c", 0, 200, 50, 50),
+                node("d", 200, 200, 50, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "d",
+                        List.of(new double[]{25, 25}, new double[]{225, 225}), "", 1),
+                new AssessmentConnection("c2", "b", "c",
+                        List.of(new double[]{225, 25}, new double[]{25, 225}), "", 1));
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, true);
+        assertTrue("Should have edge crossings", result.edgeCrossingCount() > 0);
+        if (result.violatorIds() != null) {
+            assertFalse("Crossings should NOT be in violatorIds",
+                    result.violatorIds().containsKey("crossings"));
+            assertFalse("edgeCrossings should NOT be in violatorIds",
+                    result.violatorIds().containsKey("edgeCrossings"));
+        }
+    }
+
+    @Test
+    public void b55_assess_withViolatorIdsTrue_emptyMetricsOmitted() {
+        // Well-laid-out view with no violations — violatorIds map should be null (AC10)
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), true);
+        // No violations at all → map should be null (empty map becomes null)
+        assertNull("violatorIds should be null when no violations exist", result.violatorIds());
+    }
+
+    @Test
+    public void b55_computeOverlaps_withViolatorIds_shouldCollectBothElementIds() {
+        List<AssessmentNode> nodes = List.of(
+                node("x", 0, 0, 100, 50),
+                node("y", 50, 0, 100, 50),
+                node("z", 300, 0, 100, 50));
+        LayoutQualityAssessor.OverlapResult result =
+                assessor.computeOverlaps(nodes, Set.of(), true);
+        assertEquals(1, result.siblingCount());
+        assertTrue("Should contain x", result.violatorIds().contains("x"));
+        assertTrue("Should contain y", result.violatorIds().contains("y"));
+        assertFalse("Should NOT contain z (no overlap)", result.violatorIds().contains("z"));
+    }
+
+    @Test
+    public void b55_detectBoundaryViolations_withViolatorIds_shouldCollectChildIds() {
+        List<AssessmentNode> nodes = List.of(
+                group("g1", 0, 0, 200, 200),
+                childNode("ok", 10, 30, 80, 40, "g1"),
+                childNode("bad", 180, 30, 80, 40, "g1"));
+        LayoutQualityAssessor.BoundaryViolationResult result =
+                assessor.detectBoundaryViolations(nodes, true);
+        assertEquals(1, result.descriptions().size());
+        assertTrue("Should contain bad", result.violatorIds().contains("bad"));
+        assertFalse("Should NOT contain ok", result.violatorIds().contains("ok"));
+    }
+
+    @Test
+    public void b55_countNonOrthogonalTerminals_withViolatorIds_shouldCollectConnectionIds() {
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("c-orth", "a", "b", List.of(
+                        new double[]{0, 50}, new double[]{100, 50}, new double[]{100, 150}), "", 0),
+                new AssessmentConnection("c-diag", "a", "c", List.of(
+                        new double[]{0, 0}, new double[]{30, 40}, new double[]{30, 100}), "", 0));
+        LayoutQualityAssessor.NonOrthogonalTerminalResult result =
+                assessor.countNonOrthogonalTerminals(conns, true);
+        assertEquals(1, result.count());
+        assertTrue("Should contain c-diag", result.violatorIds().contains("c-diag"));
+        assertFalse("Should NOT contain c-orth", result.violatorIds().contains("c-orth"));
+    }
+
+    @Test
+    public void b55_detectPassThroughs_withViolatorIds_shouldCollectConnectionIds() {
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 100, 50, 50),
+                node("tgt", 400, 100, 50, 50),
+                node("blocker", 150, 100, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("pt-conn", "src", "tgt",
+                        List.of(new double[]{25, 125}, new double[]{425, 125}), "", 1),
+                new AssessmentConnection("clean-conn", "src", "tgt",
+                        List.of(new double[]{25, 125}, new double[]{25, 50},
+                                new double[]{425, 50}, new double[]{425, 125}), "", 1));
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, true);
+        assertTrue("Should contain pt-conn", result.violatorIds().contains("pt-conn"));
     }
 }

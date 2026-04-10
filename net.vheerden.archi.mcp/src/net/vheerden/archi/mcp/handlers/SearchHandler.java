@@ -154,11 +154,19 @@ public class SearchHandler {
                 + "'Technology', 'Business'). Only elements in this layer are returned.");
         properties.put("layer", layerProp);
 
+        Map<String, Object> specProp = new LinkedHashMap<>();
+        specProp.put("type", "string");
+        specProp.put("description",
+                "Optional specialization name filter (exact match, case-insensitive). "
+                + "Only elements with this primary specialization are returned. "
+                + "Use list-specializations to see available specializations.");
+        properties.put("specialization", specProp);
+
         Map<String, Object> fieldsProp = new LinkedHashMap<>();
         fieldsProp.put("type", "string");
         fieldsProp.put("description", "Field verbosity preset for element data. "
                 + "'minimal' returns only id and name. "
-                + "'standard' (default) returns id, name, type, layer, documentation, properties. "
+                + "'standard' (default) returns id, name, type, specialization, layer, documentation, properties. "
                 + "'full' returns all available fields.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
@@ -221,6 +229,8 @@ public class SearchHandler {
                         + "Use 'fields' to control response verbosity and 'exclude' to omit specific fields. "
                         + "Set dryRun=true to get a cost estimate without returning results. "
                         + "Set format=graph for node/edge structure, format=summary for condensed text overview. "
+                        + "Results include specialization field for each element. "
+                        + "Supports optional specialization filter for exact-match filtering by specialization name. "
                         + "Related: get-element (full details by ID), "
                         + "get-relationships (explore connections from a found element).")
                 .inputSchema(inputSchema)
@@ -290,6 +300,15 @@ public class SearchHandler {
                 return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
             }
 
+            // Extract optional specialization filter (blank treated as no filter)
+            String specializationFilter = null;
+            if (request.arguments() != null) {
+                Object specObj = request.arguments().get("specialization");
+                if (specObj instanceof String s && !s.isBlank()) {
+                    specializationFilter = s;
+                }
+            }
+
             // Extract field selection parameters
             String fieldsParam = null;
             List<String> excludeParam = null;
@@ -317,7 +336,7 @@ public class SearchHandler {
                                 "Invalid exclude field: '" + field + "'",
                                 null,
                                 "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata",
+                                        + "specialization, viewpointType, folderPath, visualMetadata",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -384,6 +403,7 @@ public class SearchHandler {
             String effectiveQuery = query;
             String effectiveType = typeFilter;
             String effectiveLayer = layerFilter;
+            String effectiveSpecialization = specializationFilter;
 
             if (cursorParam != null && !dryRun) {
                 PaginationCursor.CursorData cursorData;
@@ -417,6 +437,7 @@ public class SearchHandler {
                 effectiveQuery = cursorData.params().getOrDefault("query", query);
                 effectiveType = cursorData.params().get("type");
                 effectiveLayer = cursorData.params().get("layer");
+                effectiveSpecialization = cursorData.params().get("specialization");
                 logger.debug("Decoded pagination cursor: offset={}, limit={}, modelVersion={}",
                         offset, limit, cursorData.modelVersion());
             }
@@ -471,7 +492,8 @@ public class SearchHandler {
             // Cache check (Story 5.4) — includes offset/limit for pagination, format for different envelopes
             // Summary format ignores pagination, so use 0 for offset/limit to share cache entries
             String cacheKey = CacheKeyBuilder.buildCacheKey("search", effectiveQuery, "type", effectiveType,
-                    "layer", effectiveLayer, "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "layer", effectiveLayer, "specialization", effectiveSpecialization,
+                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
                     "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
                     "format", format.value());
@@ -491,7 +513,7 @@ public class SearchHandler {
 
             // Execute query (full result set)
             logger.debug("Search query: '{}', type: {}, layer: {}", effectiveQuery, effectiveType, effectiveLayer);
-            List<ElementDto> allMatches = accessor.searchElements(effectiveQuery, effectiveType, effectiveLayer);
+            List<ElementDto> allMatches = accessor.searchElements(effectiveQuery, effectiveType, effectiveLayer, effectiveSpecialization);
             int totalCount = allMatches.size();
 
             // Dry-run early return: estimate cost without data
@@ -641,6 +663,7 @@ public class SearchHandler {
                 cursorParams.put("query", effectiveQuery);
                 cursorParams.put("type", effectiveType);
                 cursorParams.put("layer", effectiveLayer);
+                cursorParams.put("specialization", effectiveSpecialization);
                 String nextCursor = PaginationCursor.encode(
                         modelVersion, offset + limit, limit, totalCount, cursorParams);
                 ResponseFormatter.addCursorToken(envelope, nextCursor);
@@ -726,12 +749,20 @@ public class SearchHandler {
                 + "(e.g., sourceLayer='Business', targetLayer='Application').");
         properties.put("targetLayer", targetLayerProp);
 
+        Map<String, Object> relSpecProp = new LinkedHashMap<>();
+        relSpecProp.put("type", "string");
+        relSpecProp.put("description",
+                "Optional specialization name filter (exact match, case-insensitive). "
+                + "Only relationships with this primary specialization are returned. "
+                + "Use list-specializations to see available specializations.");
+        properties.put("specialization", relSpecProp);
+
         Map<String, Object> fieldsProp = new LinkedHashMap<>();
         fieldsProp.put("type", "string");
         fieldsProp.put("description", "Field verbosity preset for relationship data. "
                 + "'minimal' returns only id and name. "
                 + "'standard' (default) returns id, name, type, sourceId, targetId. "
-                + "'full' returns all fields including documentation, properties, sourceName, targetName.");
+                + "'full' returns all fields including specialization, documentation, properties, sourceName, targetName.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
 
@@ -791,6 +822,7 @@ public class SearchHandler {
                         + "Results are paginated if they exceed the limit. "
                         + "Use fields='full' to include documentation, properties, and resolved source/target names. "
                         + "WHEN TO USE: Find relationships by text/type/layer across the entire model. "
+                        + "Supports optional specialization filter for exact-match filtering by specialization name. "
                         + "USE INSTEAD: get-relationships when you have a specific element ID and want its connections.")
                 .inputSchema(inputSchema)
                 .build();
@@ -882,6 +914,15 @@ public class SearchHandler {
                 return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
             }
 
+            // Extract optional specialization filter (blank treated as no filter)
+            String specializationFilter = null;
+            if (request.arguments() != null) {
+                Object specObj = request.arguments().get("specialization");
+                if (specObj instanceof String s && !s.isBlank()) {
+                    specializationFilter = s;
+                }
+            }
+
             // Extract field selection parameters
             String fieldsParam = null;
             List<String> excludeParam = null;
@@ -908,7 +949,7 @@ public class SearchHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, type",
+                                "Valid exclude fields: documentation, properties, type, specialization",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -976,6 +1017,7 @@ public class SearchHandler {
             String effectiveType = typeFilter;
             String effectiveSourceLayer = sourceLayerFilter;
             String effectiveTargetLayer = targetLayerFilter;
+            String effectiveSpecialization = specializationFilter;
 
             if (cursorParam != null && !dryRun) {
                 PaginationCursor.CursorData cursorData;
@@ -1009,6 +1051,7 @@ public class SearchHandler {
                 effectiveType = cursorData.params().get("type");
                 effectiveSourceLayer = cursorData.params().get("sourceLayer");
                 effectiveTargetLayer = cursorData.params().get("targetLayer");
+                effectiveSpecialization = cursorData.params().get("specialization");
                 logger.debug("Decoded pagination cursor: offset={}, limit={}, modelVersion={}",
                         offset, limit, cursorData.modelVersion());
             }
@@ -1065,6 +1108,7 @@ public class SearchHandler {
             String cacheKey = CacheKeyBuilder.buildCacheKey("search-rel", effectiveQuery,
                     "type", effectiveType,
                     "sourceLayer", effectiveSourceLayer, "targetLayer", effectiveTargetLayer,
+                    "specialization", effectiveSpecialization,
                     "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
                     "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
@@ -1087,7 +1131,8 @@ public class SearchHandler {
             logger.debug("Search relationships query: '{}', type: {}, sourceLayer: {}, targetLayer: {}",
                     effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer);
             List<RelationshipDto> allMatches = accessor.searchRelationships(
-                    effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer);
+                    effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer,
+                    effectiveSpecialization);
             int totalCount = allMatches.size();
 
             // Dry-run early return
@@ -1237,6 +1282,7 @@ public class SearchHandler {
                 cursorParams.put("type", effectiveType);
                 cursorParams.put("sourceLayer", effectiveSourceLayer);
                 cursorParams.put("targetLayer", effectiveTargetLayer);
+                cursorParams.put("specialization", effectiveSpecialization);
                 String nextCursor = PaginationCursor.encode(
                         modelVersion, offset + limit, limit, totalCount, cursorParams);
                 ResponseFormatter.addCursorToken(envelope, nextCursor);

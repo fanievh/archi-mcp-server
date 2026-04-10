@@ -2,7 +2,7 @@
 
 ## Recommended LLM Model Size
 
-This MCP server exposes 60 tools for ArchiMate model manipulation. Model size impacts reliability:
+This MCP server exposes 65 tools for ArchiMate model manipulation. Model size impacts reliability:
 
 - **8B+ parameters (minimum):** Handles basic queries (get-element, search-elements, get-views). May struggle with multi-step workflows or complex tool sequences.
 - **14B+ parameters (recommended):** Reliable tool calling, multi-tool workflows, view composition, and layout operations. Handles complex sequences like create-view → add elements → layout → assess → refine.
@@ -23,6 +23,7 @@ Smaller models may produce malformed tool arguments or lose context during multi
 | Motivation | `motivation` | Goals, requirements, and stakeholder concerns | Stakeholder, Goal, Requirement, Principle, InfluenceRelationship |
 | Information Structure | `information_structure` | Data objects and their relationships | DataObject, BusinessObject, AccessRelationship, AssociationRelationship |
 | Implementation & Migration | `implementation_migration` | Planned work and transition states | WorkPackage, Plateau, Gap, Deliverable |
+| Specialization Hierarchy | — (no formal viewpoint) | Visualise IS-A type hierarchies for a domain vocabulary (see `archimate-specializations.md`) | Any element type, `SpecializationRelationship` |
 
 Pass the `viewpoint` param value to `create-view` to set the formal ArchiMate viewpoint. Use "—" entries as general-purpose views (omit `viewpoint`).
 
@@ -37,6 +38,7 @@ Pass the `viewpoint` param value to `create-view` to set the formal ArchiMate vi
 | Cluster/organic | `spring` | `organic` | Force-directed finds natural groupings. Non-deterministic. |
 | Radial (central focus) | `radial` | — (use algorithm directly) | Central element radiates outward. Use for impact analysis views. |
 | Capability map | `grid` | `compact` | Regular grid. Use groups to represent capability domains. |
+| Specialization hierarchy | `tree` | `hierarchical` | Abstract parent at top, concrete specializations below. Use `SpecializationRelationship` for the IS-A edges. Pair with the inline `specialization` param on `create-element` to also tag elements with the catalog vocabulary. |
 
 ## Layout Algorithm Reference
 
@@ -93,6 +95,9 @@ Use `auto-connect-view` to batch-create visual connections for all existing mode
 - `relationshipTypes`: Only connect specific types (e.g., `["ServingRelationship", "FlowRelationship"]`)
 - `elementIds`: Only consider relationships involving specific elements
 - Both filters can be combined for precise control
+
+**Batch styling on `auto-connect-view`:**
+`auto-connect-view` accepts `lineColor`, `fontColor`, and `lineWidth` parameters that apply to every connection it creates. Combine with `relationshipTypes` to style connections by type in a single call — e.g., one call with `relationshipTypes: ["ServingRelationship"]` and `lineColor: "#0066CC"` for blue API calls, then a second call with `relationshipTypes: ["FlowRelationship"]` and `lineColor: "#FF8C00"` for orange domain events. This is more token-efficient than per-connection `update-view-connection` calls.
 
 Use `add-connection-to-view` as a **fallback** for individual connections — e.g., when you need to connect specific relationships one at a time. Both `add-connection-to-view` and `update-view-connection` accept optional styling (`lineColor`, `fontColor`, `lineWidth`), `showLabel: false` to suppress the relationship name label, and `labelPosition` (`"source"`, `"middle"`, or `"target"`) to control where the label sits along the connection path. Use `labelPosition` to reduce label overlaps on dense diagrams — e.g., place labels near the target end when source-end labels collide with nearby elements.
 
@@ -349,12 +354,13 @@ Let the ELK algorithm control element positioning. Use this when **no specific l
 
 ### Tips
 
-- Run `assess-layout` before and after layout changes to measure improvement
+- Run `assess-layout` before and after layout changes to measure improvement. Use `includeViolatorIds: true` to get the specific visual object IDs that violate each metric — this enables targeted fixes (e.g. moving only the overlapping pair, re-routing only the pass-through connection) instead of global re-layout
 - If quality is poor after one algorithm, try a different one — `spring` and `directed` often complement each other
 - Use `apply-positions` for fine-tuning individual element positions without re-running the full algorithm
 - When initial placement will be refined by routing iteration, use approximate coordinates — don't waste effort on precision that will be overridden
 - **Note placement:** Notes are excluded from layout algorithms (`compute-layout`, `auto-layout-and-route`, `layout-within-group`) and do not affect `assess-layout` quality scoring. Use `position: "above-content"` on `add-note-to-view` after layout is complete to place title notes automatically above diagram content. Note-element overlaps are reported informatively by `assess-layout` but do not penalize the rating
 - **View cloning for layout experiments:** Before trying a fundamentally different layout approach (switching algorithm, restructuring groups, changing direction), use `clone-view` to preserve the current state. Experiment on the clone — if the new approach is worse, delete the clone and keep the original. This is safer than relying on multiple `undo` operations across a complex layout sequence. Also useful for presenting alternative layouts to the user for comparison (e.g., clone a view, apply ELK to the clone, keep the original grouped layout — let the user choose)
+- **Tagging elements with specializations:** When creating elements that should carry a specialization (e.g., "Microservice", "Cloud Server"), pass the `specialization` parameter to `create-element` directly — the specialization is auto-created on first use, and the element + specialization land in one undo unit. For batch creation, use `bulk-mutate` to pre-register specializations with `create-specialization` followed by `create-element` operations referencing them. See `archimate://reference/archimate-specializations` for the full vocabulary management workflow.
 
 ## Images & Icons on Elements
 

@@ -124,10 +124,12 @@ public interface ArchiModelAccessor {
      * @param query the search text (case-insensitive substring match)
      * @param typeFilter ArchiMate element type to filter by (e.g., "ApplicationComponent"), or null for no type filtering
      * @param layerFilter ArchiMate layer to filter by (e.g., "Application"), or null for no layer filtering
+     * @param specializationFilter specialization name to filter by (exact match, case-insensitive), or null for no filtering
      * @return list of matching elements as DTOs (empty list if no matches, never null)
      * @throws NoModelLoadedException if no model is loaded
      */
-    List<ElementDto> searchElements(String query, String typeFilter, String layerFilter);
+    List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                    String specializationFilter);
 
     /**
      * Searches all relationships in the model by text, type, and source/target element layer.
@@ -140,11 +142,96 @@ public interface ArchiModelAccessor {
      * @param typeFilter ArchiMate relationship type to filter by (e.g., "FlowRelationship"), or null
      * @param sourceLayerFilter ArchiMate layer of source element (e.g., "Application"), or null
      * @param targetLayerFilter ArchiMate layer of target element (e.g., "Business"), or null
+     * @param specializationFilter specialization name to filter by (exact match, case-insensitive), or null for no filtering
      * @return list of matching relationships as DTOs (empty list if no matches, never null)
      * @throws NoModelLoadedException if no model is loaded
      */
     List<RelationshipDto> searchRelationships(String query, String typeFilter,
-                                              String sourceLayerFilter, String targetLayerFilter);
+                                              String sourceLayerFilter, String targetLayerFilter,
+                                              String specializationFilter);
+
+    // ---- Specialization listing (Story C3a) ----
+
+    /**
+     * Lists all specialization (profile) definitions in the model.
+     *
+     * <p>Each entry contains: name, conceptType (e.g., "Node"), conceptTypeLayer
+     * (e.g., "Technology"), and usageCount (number of concepts referencing this profile).</p>
+     *
+     * @param conceptTypeFilter optional concept type to filter by (e.g., "Node"), or null for all
+     * @return list of specialization maps (empty list if no profiles, never null)
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    List<Map<String, Object>> listSpecializations(String conceptTypeFilter);
+
+    // ---- Specialization mutations (Story C3c) ----
+
+    /**
+     * Creates a new specialization (profile) definition. Idempotent: if a profile
+     * with the same {@code (name, conceptType)} already exists (case-insensitive),
+     * the existing profile is returned and {@code created: false} is set.
+     *
+     * <p>Routed through the standard mutation pipeline (immediate / batch /
+     * approval modes).</p>
+     *
+     * @param sessionId   the session ID for operational mode/approval routing
+     * @param name        the profile name (required, non-blank)
+     * @param conceptType the ArchiMate concept EClass name (e.g., "Node", "BusinessActor")
+     * @return MutationResult containing a map with {@code name}, {@code conceptType},
+     *         {@code conceptTypeLayer}, {@code created} fields
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    MutationResult<Map<String, Object>> createSpecialization(String sessionId,
+            String name, String conceptType);
+
+    /**
+     * Renames an existing specialization (profile). Refuses to merge: if a
+     * profile with {@code (newName, conceptType)} already exists (and is not the
+     * same instance), the operation fails with {@code VALIDATION_ERROR}.
+     *
+     * @param sessionId   the session ID for operational mode/approval routing
+     * @param name        the current profile name (required)
+     * @param conceptType the ArchiMate concept EClass name (required)
+     * @param newName     the new profile name (required, non-blank)
+     * @return MutationResult containing the updated profile fields
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    MutationResult<Map<String, Object>> updateSpecialization(String sessionId,
+            String name, String conceptType, String newName);
+
+    /**
+     * Deletes a specialization (profile) definition. By default, refuses if the
+     * profile is in use; pass {@code force=true} to clear references and delete
+     * in one atomic operation.
+     *
+     * <p><strong>Multi-profile guard:</strong> when {@code force=true}, the
+     * operation refuses if any usage concept holds more than one profile, to
+     * prevent silent loss of co-existing specializations. The user must detach
+     * the other specializations manually first via update-element /
+     * update-relationship.</p>
+     *
+     * @param sessionId   the session ID for operational mode/approval routing
+     * @param name        the profile name (required)
+     * @param conceptType the ArchiMate concept EClass name (required)
+     * @param force       if true, clear references then delete; if false, refuse on usage
+     * @return MutationResult containing {@code deleted: true} and
+     *         {@code clearedFromConcepts} count
+     * @throws NoModelLoadedException if no model is loaded
+     */
+    MutationResult<Map<String, Object>> deleteSpecialization(String sessionId,
+            String name, String conceptType, boolean force);
+
+    /**
+     * Returns where a specialization is used in the model — pure query, no mutation.
+     *
+     * @param name        the profile name (required)
+     * @param conceptType the ArchiMate concept EClass name (required)
+     * @return a map containing {@code name}, {@code conceptType}, {@code conceptTypeLayer},
+     *         {@code totalUsageCount}, {@code elements}, {@code relationships}
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException with {@code NOT_FOUND} if the profile does not exist
+     */
+    Map<String, Object> getSpecializationUsage(String name, String conceptType);
 
     /**
      * Gets all relationships where the specified element is the source or target.
@@ -212,12 +299,24 @@ public interface ArchiModelAccessor {
      * Finds existing elements of the given type whose names are similar to the
      * specified name, scored above the duplicate detection threshold.
      *
-     * @param type the ArchiMate element type to filter by
-     * @param name the proposed element name to compare against
+     * <p>When {@code specialization} is non-null, only candidates whose <em>primary</em>
+     * profile name matches (case-insensitive) are returned. When {@code specialization}
+     * is null, only candidates without a primary profile match. Two elements with the
+     * same name and type but different specializations are NOT considered duplicates.
+     * (Story C3b)</p>
+     *
+     * <p><strong>Tier 1 limitation:</strong> Only the primary profile is considered.
+     * Concepts with multiple profiles where the requested specialization matches a
+     * non-primary profile will be treated as having a different specialization. This
+     * matches the single-specialization semantics of the Tier 1 inline tools.</p>
+     *
+     * @param type           the ArchiMate element type to filter by
+     * @param name           the proposed element name to compare against
+     * @param specialization the proposed specialization, or null for unspecialized
      * @return list of duplicate candidates sorted by similarity score descending, capped at 10
      * @throws NoModelLoadedException if no model is loaded
      */
-    List<DuplicateCandidate> findDuplicates(String type, String name);
+    List<DuplicateCandidate> findDuplicates(String type, String name, String specialization);
 
     /**
      * Finds an existing element matching the given type and name exactly (case-insensitive).
@@ -239,18 +338,23 @@ public interface ArchiModelAccessor {
      * CommandStack. Checks operational mode to dispatch immediately
      * (GUI-attached) or queue for batch.</p>
      *
-     * @param sessionId     the session identifier for mode detection
-     * @param type          ArchiMate element type (e.g., "BusinessActor")
-     * @param name          element name (required)
-     * @param documentation optional documentation text
-     * @param properties    optional key-value properties map
-     * @param folderId      optional target folder ID (null for type-default folder)
+     * @param sessionId      the session identifier for mode detection
+     * @param type           ArchiMate element type (e.g., "BusinessActor")
+     * @param name           element name (required)
+     * @param documentation  optional documentation text
+     * @param properties     optional key-value properties map
+     * @param folderId       optional target folder ID (null for type-default folder)
+     * @param specialization optional specialization name; if non-null, the named profile is
+     *                       resolved (case-insensitive) or auto-created and assigned as the
+     *                       primary profile. Profile creation + element creation are wrapped
+     *                       in a compound command for atomic undo. (Story C3b)
      * @return MutationResult containing the created ElementDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if type is invalid or folder not found
      */
     MutationResult<ElementDto> createElement(String sessionId, String type, String name,
-            String documentation, Map<String, String> properties, String folderId);
+            String documentation, Map<String, String> properties, String folderId,
+            String specialization);
 
     /**
      * Creates a new ArchiMate element with optional source traceability (Story 7-6).
@@ -259,20 +363,21 @@ public interface ArchiModelAccessor {
      * properties prefixed with "mcp.source." (e.g., source key "tool" becomes
      * property "mcp.source.tool").</p>
      *
-     * @param sessionId     the session identifier for mode detection
-     * @param type          ArchiMate element type (e.g., "BusinessActor")
-     * @param name          element name (required)
-     * @param documentation optional documentation text
-     * @param properties    optional key-value properties map
-     * @param folderId      optional target folder ID (null for type-default folder)
-     * @param source        optional source traceability map (keys auto-prefixed with "mcp.source.")
+     * @param sessionId      the session identifier for mode detection
+     * @param type           ArchiMate element type (e.g., "BusinessActor")
+     * @param name           element name (required)
+     * @param documentation  optional documentation text
+     * @param properties     optional key-value properties map
+     * @param folderId       optional target folder ID (null for type-default folder)
+     * @param source         optional source traceability map (keys auto-prefixed with "mcp.source.")
+     * @param specialization optional specialization name (Story C3b)
      * @return MutationResult containing the created ElementDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if type is invalid or folder not found
      */
     MutationResult<ElementDto> createElement(String sessionId, String type, String name,
             String documentation, Map<String, String> properties, String folderId,
-            Map<String, String> source);
+            Map<String, String> source, String specialization);
 
     /**
      * Creates a new ArchiMate relationship between two elements.
@@ -281,17 +386,18 @@ public interface ArchiModelAccessor {
      * exist, checks ArchiMate specification rules, and dispatches. Returns
      * structured error with valid alternatives if spec validation fails.</p>
      *
-     * @param sessionId the session identifier for mode detection
-     * @param type      ArchiMate relationship type (e.g., "ServingRelationship")
-     * @param sourceId  source element ID (required)
-     * @param targetId  target element ID (required)
-     * @param name      optional relationship name
+     * @param sessionId      the session identifier for mode detection
+     * @param type           ArchiMate relationship type (e.g., "ServingRelationship")
+     * @param sourceId       source element ID (required)
+     * @param targetId       target element ID (required)
+     * @param name           optional relationship name
+     * @param specialization optional specialization name; auto-creates profile if absent (Story C3b)
      * @return MutationResult containing the created RelationshipDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if type invalid, elements not found, or spec violation
      */
     MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
-            String sourceId, String targetId, String name);
+            String sourceId, String targetId, String name, String specialization);
 
     /**
      * Creates a new ArchiMate view (diagram) in the model.
@@ -336,17 +442,20 @@ public interface ArchiModelAccessor {
      * corresponding field unchanged. For properties, a merge semantic applies:
      * non-null values add/update, null values remove the property key.</p>
      *
-     * @param sessionId     the session identifier for mode detection
-     * @param id            element ID (required)
-     * @param name          new name, or null to leave unchanged
-     * @param documentation new documentation, or null to leave unchanged
-     * @param properties    property merge map (null value = remove key), or null to leave unchanged
+     * @param sessionId      the session identifier for mode detection
+     * @param id             element ID (required)
+     * @param name           new name, or null to leave unchanged
+     * @param documentation  new documentation, or null to leave unchanged
+     * @param properties     property merge map (null value = remove key), or null to leave unchanged
+     * @param specialization new specialization name, empty string to clear all profiles, or null
+     *                       to leave unchanged. Setting a value REPLACES any existing profiles
+     *                       (single-profile semantics for Tier 1 tools, Story C3b).
      * @return MutationResult containing the updated ElementDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if element not found or no fields to update
      */
     MutationResult<ElementDto> updateElement(String sessionId, String id, String name,
-            String documentation, Map<String, String> properties);
+            String documentation, Map<String, String> properties, String specialization);
 
     /**
      * Updates an existing ArchiMate relationship's mutable fields.
@@ -358,17 +467,19 @@ public interface ArchiModelAccessor {
      * <p>Source, target, and type are immutable — changing these fundamentally
      * alters the relationship's semantics and should be done via delete + create.</p>
      *
-     * @param sessionId     the session identifier for mode detection
-     * @param id            relationship ID (required)
-     * @param name          new name, or null to leave unchanged
-     * @param documentation new documentation, or null to leave unchanged
-     * @param properties    property merge map (null value = remove key), or null to leave unchanged
+     * @param sessionId      the session identifier for mode detection
+     * @param id             relationship ID (required)
+     * @param name           new name, or null to leave unchanged
+     * @param documentation  new documentation, or null to leave unchanged
+     * @param properties     property merge map (null value = remove key), or null to leave unchanged
+     * @param specialization new specialization name, empty string to clear, or null to leave
+     *                       unchanged (Story C3b)
      * @return MutationResult containing the updated RelationshipDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if relationship not found or no fields to update
      */
     MutationResult<RelationshipDto> updateRelationship(String sessionId, String id, String name,
-            String documentation, Map<String, String> properties);
+            String documentation, Map<String, String> properties, String specialization);
 
     /**
      * Updates an existing ArchiMate view's metadata fields.
@@ -628,6 +739,16 @@ public interface ArchiModelAccessor {
     AssessLayoutResultDto assessLayout(String viewId);
 
     /**
+     * Assesses layout quality with optional per-metric violator IDs (B55).
+     *
+     * @param viewId the view to assess
+     * @param includeViolatorIds if true, response includes violatorIds map
+     * @return assessment result DTO
+     * @throws ModelAccessException if view not found
+     */
+    AssessLayoutResultDto assessLayout(String viewId, boolean includeViolatorIds);
+
+    /**
      * Returns the content bounding box for a view, excluding notes.
      * Used by add-note-to-view to compute position-based placement.
      *
@@ -714,7 +835,7 @@ public interface ArchiModelAccessor {
     MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
             List<String> elementIds, List<String> relationshipTypes,
-            Boolean showLabel);
+            Boolean showLabel, StylingParams styling);
 
     // ---- Layout within group (Story 9-9) ----
 

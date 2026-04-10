@@ -319,8 +319,12 @@ The `resize-elements-to-fit` tool resizes all (or selected) elements on an exist
 **Algorithm:**
 
 1. **Child pass:** Identify all elements with children. Process leaf elements first — compute dimensions from label text using SWT font metrics with the same aspect-ratio-aware algorithm as `autoSize`
-2. **Parent pass:** For each parent element, compute the bounding box of all children, add padding (horizontal: 20px, vertical: 30px to accommodate label above children), and set the parent's dimensions to contain both its own label and all children
-3. Apply all size changes as a single compound command (atomic undo)
+2. **Parent pass:** For each parent element, compute the bounding box of all children, add padding (horizontal: 20px) plus a **dynamic containment label height** computed per parent from font metrics and word-wrap simulation, and set the parent's dimensions to contain both its own label and all children
+3. **Child shift:** When the parent's wrapped label height exceeds the previously assumed top margin, children are shifted down so they clear the multi-line label rather than being obscured by its lower lines
+4. **Parent height never shrinks** — only grows to accommodate the wrapped label and its children
+5. Apply all size changes as a single compound command (atomic undo)
+
+The dynamic label height (B50) replaces the previous fixed `CONTAINMENT_LABEL_TOP = 25` constant. Long parent labels that wrap across two or three lines now correctly reserve vertical space for every line, eliminating the failure mode where a multi-line parent label visually obscured its first child.
 
 **Parameters:**
 
@@ -407,7 +411,7 @@ Detects connections that cross through element rectangles. Clips connection path
 
 Also detects **self-element pass-throughs** — cases where non-terminal segments of a connection's route pass through the connection's own source or target element body (using 5px inset). This catches routes that enter endpoint elements through interior points rather than approaching cleanly from an edge.
 
-**Rating:** 0 = "pass", 1-3 = "fair", 4+ = "poor"
+**Rating:** counted from cross-element pass-throughs only — 0 = "pass", 1-3 = "fair", 4+ = "poor". Self-element pass-throughs are reported in the assessment output (informational) but **excluded from rating** (B54). Self-element geometry frequently cannot be resolved by re-routing alone, and penalising it masks the structural quality of cross-element routing.
 
 #### Coincident Segments
 
@@ -441,6 +445,40 @@ Map: 0 → "excellent", 1 → "good", 2 → "fair", 3+ → "poor"
 
 This prevents cosmetic issues (spacing, alignment) from masking structural quality. A view with perfect structure but poor alignment still achieves "good". Conversely, overlaps or excessive pass-throughs drive the rating to "poor" regardless of cosmetic scores.
 
+### Informational Detections (Non-Rating)
+
+Three additional detections appear in the assessment output but do **not** affect the overall rating. They give LLM agents actionable signals to fix label and image quality without entering the severity-tiered rating system.
+
+#### Label Truncation
+
+Word-wrap-aware vertical overflow check. For each element, the assessor estimates how many lines the label will wrap to at the element's current width using SWT font metrics, then compares the wrapped label height against the element's height. Elements where the wrapped label would not fit vertically are flagged.
+
+#### Parent Label Obscured by Child
+
+Flags parent elements whose label area at the top of the element is overlapped by a child element. Notes are excluded from this detection (notes are not subject to ArchiMate containment rules).
+
+#### Image Sibling Overlap
+
+Flags elements that carry a custom image (`imagePath` set) and visually overlap any sibling element at the same containment level. The check uses the element's full bounds, not the image rectangle alone, since custom images extend the visible footprint.
+
+### Violator IDs (B55)
+
+When `includeViolatorIds: true` is passed to `assess-layout`, the response includes a `violatorIds` map returning the specific visual object IDs that violate each metric. This enables targeted per-element fixes instead of global re-layout.
+
+| Metric | IDs Returned |
+|--------|-------------|
+| `overlaps` | Both element IDs from each overlapping pair |
+| `passThroughs` | Connection IDs (cross-element only) |
+| `coincidentSegments` | Connection IDs sharing corridor segments |
+| `nonOrthogonalTerminals` | Connection IDs with diagonal source/target entry |
+| `boundaryViolations` | Child element IDs extending outside parent group bounds |
+
+**Explicitly excluded:** Crossings are treated as an emergent property best addressed by global tools (e.g. `optimize-group-order`, `auto-route-connections`), not per-connection fixes.
+
+The complete ID set is returned for each metric (no cap), unlike descriptions which cap at 10. Empty metrics are omitted from the map. The parameter defaults to `false` for backward compatibility — existing consumers see no change.
+
+**Source:** `model/LayoutQualityAssessor.java`, `model/routing/CoincidentSegmentDetector.java`
+
 ### Suggestion Generation
 
 The assessor generates actionable suggestions when thresholds are exceeded:
@@ -450,6 +488,7 @@ The assessor generates actionable suggestions when thresholds are exceeded:
 - Spacing < 15px: suggest increasing spacing
 - Alignment < 30: suggest alignment tools
 - Boundary violations: list children extending outside parents
+- Containment overlaps > 0: informational note clarifying these are expected ancestor-descendant overlaps that need no action
 - Off-canvas elements: warn about negative or extreme coordinates
 
 ### Assessment Result Structure
@@ -476,10 +515,16 @@ The assessor generates actionable suggestions when thresholds are exceeded:
     "nonOrthogonalTerminals": "fair"
   },
   "suggestions": ["..."],
+  "violatorIds": {
+    "coincidentSegments": ["conn-abc", "conn-def"],
+    "nonOrthogonalTerminals": ["conn-xyz"]
+  },
   "contentBounds": {"x": 50, "y": 50, "width": 800, "height": 600},
   "crossingsPerConnection": 1.2
 }
 ```
+
+The `violatorIds` field is only present when `includeViolatorIds: true` is passed. Metrics with zero violations are omitted from the map.
 
 **Source:** `model/LayoutQualityAssessor.java`
 
@@ -501,6 +546,18 @@ Orchestrates the full Branch 2 grouped-view workflow in a single atomic tool cal
 4. `auto-route-connections` (obstacle-aware orthogonal routing)
 
 This replaces the manual 5-7 step grouped workflow with a single call. Requires the view to have groups with children. Produces obstacle-aware orthogonal routing between groups — best choice for views with ArchiMate groups (layered architecture, producer-consumer flows, etc.).
+
+#### Intra-Group Arrangement Heuristic
+
+`computeGroupedLayoutPass()` and `computeOptimizeGroupOrderPass()` choose the intra-group arrangement based on element count and the layout's flow direction:
+
+| Flow Direction | Element Count | Arrangement |
+|---|---|---|
+| Vertical (DOWN, UP) | 1–3 | row |
+| Vertical (DOWN, UP) | 4+ | grid |
+| Horizontal (RIGHT, LEFT) | any | column |
+
+This replaces the previous hardcoded column arrangement that produced very tall narrow groups (e.g. 1:12 aspect ratio strips) on vertical-flow views. The heuristic keeps groups roughly square on vertical-flow layouts while preserving the column orientation that horizontal-flow layouts need.
 
 ### Without targetRating
 

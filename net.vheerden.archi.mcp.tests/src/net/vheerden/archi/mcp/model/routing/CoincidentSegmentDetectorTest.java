@@ -681,6 +681,103 @@ public class CoincidentSegmentDetectorTest {
         assertTrue("Should handle gracefully", offsetCount >= 0);
     }
 
+    // ---- B55: detectCoincidentSegments with violator index collection ----
+
+    @Test
+    public void detectCoincidentSegments_shouldReturnCountAndViolatorIndices() {
+        // Two connections with overlapping horizontal segments
+        List<CoincidentSegmentDetector.CoincidentAssessable> connections = List.of(
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 50},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 200},
+                        new double[]{350, 250}),
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 150},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 300},
+                        new double[]{350, 350}));
+
+        CoincidentSegmentDetector.CoincidentSegmentResult result =
+                detector.detectCoincidentSegments(connections, true);
+        assertTrue("Should detect coincident segments", result.count() > 0);
+        assertTrue("Should contain connection index 0", result.violatorConnectionIndices().contains(0));
+        assertTrue("Should contain connection index 1", result.violatorConnectionIndices().contains(1));
+    }
+
+    @Test
+    public void detectCoincidentSegments_shouldReturnEmptyIndicesWhenNotCollecting() {
+        List<CoincidentSegmentDetector.CoincidentAssessable> connections = List.of(
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 50},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 200},
+                        new double[]{350, 250}),
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 150},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 300},
+                        new double[]{350, 350}));
+
+        CoincidentSegmentDetector.CoincidentSegmentResult result =
+                detector.detectCoincidentSegments(connections, false);
+        assertTrue("Should still detect coincident segments", result.count() > 0);
+        assertTrue("Violator indices should be empty when not collecting",
+                result.violatorConnectionIndices().isEmpty());
+    }
+
+    @Test
+    public void detectCoincidentSegments_shouldReturnZeroForSingleConnection() {
+        List<CoincidentSegmentDetector.CoincidentAssessable> connections = List.of(
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 50},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{350, 250}));
+
+        CoincidentSegmentDetector.CoincidentSegmentResult result =
+                detector.detectCoincidentSegments(connections, true);
+        assertEquals("Single connection should have no coincident segments", 0, result.count());
+        assertTrue("No violator indices for single connection",
+                result.violatorConnectionIndices().isEmpty());
+    }
+
+    @Test
+    public void detectCoincidentSegments_shouldNotIncludeNonCoincidentConnections() {
+        // Three connections: 0 and 1 coincide, 2 is completely separate
+        List<CoincidentSegmentDetector.CoincidentAssessable> connections = List.of(
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 50},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 200},
+                        new double[]{350, 250}),
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 150},
+                        new double[]{100, 100},
+                        new double[]{300, 100},
+                        new double[]{300, 300},
+                        new double[]{350, 350}),
+                // Connection 2: completely separate path at y=500
+                (CoincidentSegmentDetector.CoincidentAssessable) () -> List.of(
+                        new double[]{50, 450},
+                        new double[]{100, 500},
+                        new double[]{300, 500},
+                        new double[]{350, 550}));
+
+        CoincidentSegmentDetector.CoincidentSegmentResult result =
+                detector.detectCoincidentSegments(connections, true);
+        assertTrue("Should detect coincident segments", result.count() > 0);
+        assertTrue("Should contain index 0", result.violatorConnectionIndices().contains(0));
+        assertTrue("Should contain index 1", result.violatorConnectionIndices().contains(1));
+        assertFalse("Should NOT contain index 2 (non-coincident)",
+                result.violatorConnectionIndices().contains(2));
+    }
+
     // ---- Helpers ----
 
     private static List<AbsoluteBendpointDto> mutableList(AbsoluteBendpointDto... items) {

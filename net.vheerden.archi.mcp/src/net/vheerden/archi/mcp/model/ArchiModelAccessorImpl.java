@@ -27,6 +27,7 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -76,6 +77,7 @@ import com.archimatetool.model.IImplementationMigrationElement;
 import com.archimatetool.model.IMotivationElement;
 import com.archimatetool.model.ITextContent;
 import com.archimatetool.model.IPhysicalElement;
+import com.archimatetool.model.IProfile;
 import com.archimatetool.model.IProperty;
 import com.archimatetool.model.IStrategyElement;
 import com.archimatetool.model.ITechnologyElement;
@@ -164,6 +166,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private final MutationDispatcher mutationDispatcher;
     private final List<ModelChangeListener> changeListeners = new CopyOnWriteArrayList<>();
     private final AtomicLong versionCounter = new AtomicLong(0);
+
+    /**
+     * Thread-local cache of profiles resolved during a single bulk-mutate prepare phase.
+     * Set in {@link #executeBulk} before the prepare loop, cleared in {@code finally}.
+     *
+     * <p><strong>Why:</strong> {@code bulk-mutate} runs all prepare methods first
+     * (building commands) before dispatching any of them. Without this cache, the
+     * second and later prepares in a batch that all reference the same new specialization
+     * each call {@code getProfileByNameAndType()} which still returns {@code null}
+     * (the first prepare's command hasn't executed yet) and create their own duplicate
+     * {@link IProfile} instances. The result is N shadow profiles in {@code model.getProfiles()}
+     * where one was intended — breaking {@code list-specializations}, {@code update-specialization},
+     * {@code delete-specialization}, and {@code get-specialization-usage}.
+     *
+     * <p>Scoped per-thread because Phase 1 (validate + build commands) runs on the
+     * Jetty request thread, and multiple bulk-mutate calls may be in flight concurrently.
+     */
+    private final ThreadLocal<Map<String, IProfile>> bulkProfileCache = new ThreadLocal<>();
 
     // View placement constants (Story 7-7)
     private static final int DEFAULT_VIEW_OBJECT_WIDTH = 120;
@@ -286,6 +306,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
 
             int viewCount = countViews(model);
+            int specializationCount = model.getProfiles().size();
             Map<String, Integer> typeDistribution = buildTypeDistribution(allElements);
             Map<String, Integer> relTypeDistribution = buildRelationshipTypeDistribution(allRelationships);
             Map<String, Integer> layerDistribution = buildLayerDistribution(allElements);
@@ -295,6 +316,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     allElements.size(),
                     allRelationships.size(),
                     viewCount,
+                    specializationCount,
                     typeDistribution,
                     relTypeDistribution,
                     layerDistribution);
@@ -408,7 +430,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     // ---- Search methods (Story 3.1) ----
 
     @Override
-    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                           String specializationFilter) {
         IArchimateModel model = requireAndCaptureModel();
         try {
             String lowerQuery = query.toLowerCase();
@@ -428,6 +451,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (layerFilter != null && !resolveLayer(element).equals(layerFilter)) {
                     continue;
                 }
+                // Apply specialization filter (exact match, case-insensitive)
+                if (specializationFilter != null) {
+                    IProfile elemProfile = element.getPrimaryProfile();
+                    if (elemProfile == null || !specializationFilter.equalsIgnoreCase(elemProfile.getName())) {
+                        continue;
+                    }
+                }
                 if (matchesQuery(element, lowerQuery)) {
                     results.add(convertToElementDto(element));
                 }
@@ -444,6 +474,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     private boolean matchesQuery(IArchimateElement element, String lowerQuery) {
         if (containsIgnoreCase(element.getName(), lowerQuery)) {
+            return true;
+        }
+        IProfile profile = element.getPrimaryProfile();
+        if (profile != null && containsIgnoreCase(profile.getName(), lowerQuery)) {
             return true;
         }
         if (containsIgnoreCase(element.getDocumentation(), lowerQuery)) {
@@ -465,7 +499,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public List<RelationshipDto> searchRelationships(String query, String typeFilter,
-                                                      String sourceLayerFilter, String targetLayerFilter) {
+                                                      String sourceLayerFilter, String targetLayerFilter,
+                                                      String specializationFilter) {
         IArchimateModel model = requireAndCaptureModel();
         try {
             String lowerQuery = query.toLowerCase();
@@ -500,6 +535,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         continue;
                     }
                 }
+                // Apply specialization filter (exact match, case-insensitive)
+                if (specializationFilter != null) {
+                    IProfile relSpecProfile = rel.getPrimaryProfile();
+                    if (relSpecProfile == null || !specializationFilter.equalsIgnoreCase(relSpecProfile.getName())) {
+                        continue;
+                    }
+                }
                 if (matchesRelationshipQuery(rel, lowerQuery)) {
                     results.add(convertToSearchRelationshipDto(rel));
                 }
@@ -519,6 +561,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             return true; // wildcard: empty query matches all
         }
         if (containsIgnoreCase(relationship.getName(), lowerQuery)) {
+            return true;
+        }
+        IProfile relProfile = relationship.getPrimaryProfile();
+        if (relProfile != null && containsIgnoreCase(relProfile.getName(), lowerQuery)) {
             return true;
         }
         if (containsIgnoreCase(relationship.getDocumentation(), lowerQuery)) {
@@ -556,10 +602,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         String sourceName = relationship.getSource() != null ? relationship.getSource().getName() : null;
         String targetName = relationship.getTarget() != null ? relationship.getTarget().getName() : null;
 
+        IProfile searchRelProfile = relationship.getPrimaryProfile();
+        String searchRelSpec = (searchRelProfile != null) ? searchRelProfile.getName() : null;
+
         return new RelationshipDto(
                 relationship.getId(),
                 relationship.getName(),
                 relationship.eClass().getName(),
+                searchRelSpec,
                 relationship.getSource() != null ? relationship.getSource().getId() : null,
                 relationship.getTarget() != null ? relationship.getTarget().getId() : null,
                 false,
@@ -567,6 +617,556 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 properties,
                 sourceName,
                 targetName);
+    }
+
+    // ---- Specialization listing (Story C3a) ----
+
+    @Override
+    public List<Map<String, Object>> listSpecializations(String conceptTypeFilter) {
+        IArchimateModel model = requireAndCaptureModel();
+        try {
+            List<Map<String, Object>> results = new ArrayList<>();
+            for (IProfile profile : model.getProfiles()) {
+                String conceptType = profile.getConceptType();
+                if (conceptTypeFilter != null && !conceptTypeFilter.equals(conceptType)) {
+                    continue;
+                }
+
+                String layer = null;
+                EClass conceptClass = profile.getConceptClass();
+                if (conceptClass != null) {
+                    // Create a temporary instance to resolve the layer
+                    org.eclipse.emf.ecore.EObject temp =
+                            com.archimatetool.model.IArchimateFactory.eINSTANCE.create(conceptClass);
+                    if (temp instanceof IArchimateElement tempElement) {
+                        layer = resolveLayer(tempElement);
+                    } else {
+                        layer = "Relationship";
+                    }
+                }
+
+                int usageCount = ArchimateModelUtils.findProfileUsage(profile).size();
+
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("name", profile.getName());
+                entry.put("conceptType", conceptType);
+                entry.put("conceptTypeLayer", layer);
+                entry.put("usageCount", usageCount);
+                results.add(entry);
+            }
+            return results;
+        } catch (NoModelLoadedException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error listing specializations",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    // ---- Specialization mutations (Story C3c) ----
+
+    /**
+     * Resolves the layer string for a profile's concept type. Reuses the
+     * temporary-instance trick from {@link #listSpecializations(String)}.
+     * Returns null if the conceptType cannot be resolved to a concrete EClass.
+     */
+    private String resolveLayerForConceptType(String conceptType) {
+        EClassifier classifier = IArchimatePackage.eINSTANCE.getEClassifier(conceptType);
+        if (!(classifier instanceof EClass eClass) || eClass.isAbstract()) {
+            return null;
+        }
+        try {
+            EObject temp = IArchimateFactory.eINSTANCE.create(eClass);
+            if (temp instanceof IArchimateElement el) {
+                return resolveLayer(el);
+            }
+            return "Relationship";
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Validates that a concept-type string resolves to a concrete, non-abstract
+     * ArchiMate concept EClass. Throws {@link ModelAccessException} with
+     * {@code INVALID_PARAMETER} on rejection. Five reject branches:
+     * (1) null/blank, (2) unknown name, (3) not an EClass, (4) not a concept,
+     * (5) abstract.
+     */
+    private EClass requireValidConceptType(String conceptType) {
+        if (conceptType == null || conceptType.isBlank()) {
+            throw new ModelAccessException(
+                    "conceptType is required",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide a concrete ArchiMate concept type, e.g., 'Node', "
+                            + "'BusinessActor', 'ApplicationComponent', 'FlowRelationship'",
+                    null);
+        }
+        EClassifier classifier = IArchimatePackage.eINSTANCE.getEClassifier(conceptType);
+        if (classifier == null) {
+            throw new ModelAccessException(
+                    "Unknown ArchiMate concept type: '" + conceptType + "'",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Use a valid concrete EClass name, e.g., 'Node', 'BusinessActor', "
+                            + "'ApplicationComponent', 'FlowRelationship', 'ServingRelationship', 'AndJunction'",
+                    null);
+        }
+        if (!(classifier instanceof EClass eClass)) {
+            throw new ModelAccessException(
+                    "'" + conceptType + "' is not an EClass",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Use a valid concrete EClass name, e.g., 'Node', 'BusinessActor', "
+                            + "'FlowRelationship'",
+                    null);
+        }
+        Class<?> instanceClass = eClass.getInstanceClass();
+        if (instanceClass == null
+                || !IArchimateConcept.class.isAssignableFrom(instanceClass)) {
+            throw new ModelAccessException(
+                    "'" + conceptType + "' is not an ArchiMate concept type",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Specializations can only bind to concept types (elements, relationships, "
+                            + "junctions). Use e.g., 'Node', 'BusinessActor', 'FlowRelationship'",
+                    null);
+        }
+        if (eClass.isAbstract()) {
+            throw new ModelAccessException(
+                    "'" + conceptType + "' is an abstract concept type and cannot have specializations",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Use a concrete subtype, e.g., 'Node' instead of 'TechnologyElement', "
+                            + "'BusinessActor' instead of 'BusinessElement'",
+                    null);
+        }
+        return eClass;
+    }
+
+    /**
+     * Builds the standard profile DTO map returned by all specialization tools.
+     */
+    private Map<String, Object> buildProfileMap(String name, String conceptType,
+            String conceptTypeLayer, Boolean created) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("name", name);
+        map.put("conceptType", conceptType);
+        if (conceptTypeLayer != null) {
+            map.put("conceptTypeLayer", conceptTypeLayer);
+        }
+        if (created != null) {
+            map.put("created", created);
+        }
+        return map;
+    }
+
+    /**
+     * Prepares a create-specialization mutation. Idempotent: if the profile
+     * already exists (case-insensitive name + conceptType match), returns a
+     * NoOp command and {@code created: false}.
+     */
+    private PreparedMutation<Map<String, Object>> prepareCreateSpecialization(
+            String name, String conceptType) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (name == null || name.isBlank()) {
+            throw new ModelAccessException(
+                    "Specialization name is required",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide a non-blank name for the specialization",
+                    null);
+        }
+        EClass eClass = requireValidConceptType(conceptType);
+        // Use the canonical EClass name so the stored profile and the response DTO
+        // use the metamodel's case (e.g., "Node" not "node").
+        String canonicalConceptType = eClass.getName();
+        String layer = resolveLayerForConceptType(canonicalConceptType);
+
+        // Cache-aware existence check: also matches profiles created by prior ops
+        // in the same bulk-mutate batch (B50 follow-up — keeps create-spec idempotent
+        // even when bulked alongside another create-spec for the same name).
+        IProfile existing = findProfileForBulkPrepare(model, name, canonicalConceptType);
+        if (existing != null) {
+            // Idempotent: return existing profile, no-op command, created=false
+            Map<String, Object> dto = buildProfileMap(
+                    existing.getName(), canonicalConceptType, layer, false);
+            return new PreparedMutation<>(new NoOpCommand(), dto, existing.getId(), existing);
+        }
+
+        IProfile profile = IArchimateFactory.eINSTANCE.createProfile();
+        profile.setName(name);
+        profile.setConceptType(canonicalConceptType);
+        // Publish to the bulk profile cache so that update/delete-specialization or
+        // inline-specialization ops later in the same batch can find this in-flight
+        // profile before the CreateProfileCommand has actually executed. (B54)
+        Map<String, IProfile> cache = bulkProfileCache.get();
+        if (cache != null) {
+            cache.put(profileCacheKey(name, canonicalConceptType), profile);
+        }
+        Command cmd = new CreateProfileCommand(profile, model);
+        Map<String, Object> dto = buildProfileMap(name, canonicalConceptType, layer, true);
+        return new PreparedMutation<>(cmd, dto, profile.getId(), profile);
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> createSpecialization(String sessionId,
+            String name, String conceptType) {
+        logger.info("Creating specialization: name={}, conceptType={}", name, conceptType);
+        requireAndCaptureModel();
+        try {
+            PreparedMutation<Map<String, Object>> prepared = prepareCreateSpecialization(
+                    name, conceptType);
+
+            // If the profile already existed (NoOp), short-circuit without dispatch
+            // or approval — there is no change to commit.
+            if (prepared.command() instanceof NoOpCommand) {
+                return new MutationResult<>(prepared.entity(), null);
+            }
+
+            // Approval gate
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                String description = "Create specialization: " + name
+                        + " (" + conceptType + ")";
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                proposedChanges.put("name", name);
+                proposedChanges.put("conceptType", conceptType);
+                ProposalContext ctx = storeAsProposal(sessionId, "create-specialization",
+                        prepared.command(), prepared.entity(), description,
+                        null, proposedChanges, "Specialization prepared for creation.");
+                return new MutationResult<>(prepared.entity(), null, ctx);
+            }
+
+            Integer batchSeq = dispatchOrQueue(sessionId, prepared.command(),
+                    "Create specialization: " + name);
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+            return new MutationResult<>(prepared.entity(), batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error creating specialization '" + name + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Prepares an update-specialization (rename) mutation.
+     */
+    private PreparedMutation<Map<String, Object>> prepareUpdateSpecialization(
+            String name, String conceptType, String newName) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        if (newName == null || newName.isBlank()) {
+            throw new ModelAccessException(
+                    "newName is required",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide a non-blank newName for the rename",
+                    null);
+        }
+        EClass eClass = requireValidConceptType(conceptType);
+        String canonicalConceptType = eClass.getName();
+        String layer = resolveLayerForConceptType(canonicalConceptType);
+
+        // Cache-aware lookup: matches profiles created by earlier bulk ops in the
+        // same batch, before their commands have executed. (B54)
+        IProfile profile = findProfileForBulkPrepare(model, name, canonicalConceptType);
+        if (profile == null) {
+            throw new ModelAccessException(
+                    "Specialization not found: name='" + name + "', conceptType='"
+                            + canonicalConceptType + "'",
+                    ErrorCode.OBJECT_NOT_FOUND,
+                    null,
+                    "Use list-specializations to see defined specializations",
+                    null);
+        }
+
+        // Collision check: refuse to merge into another profile (cache-aware to
+        // catch in-flight collisions from the same bulk batch).
+        IProfile collision = findProfileForBulkPrepare(model, newName, canonicalConceptType);
+        if (collision != null && collision != profile) {
+            throw new ModelAccessException(
+                    "A specialization named '" + newName + "' already exists for "
+                            + canonicalConceptType,
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Choose a different newName, or manually re-assign concepts to "
+                            + "the existing specialization first if you intend to merge",
+                    null);
+        }
+
+        // Re-key the bulk cache so subsequent ops can find this profile under its
+        // new name. The IProfile object's actual name remains the old name until
+        // UpdateProfileCommand executes during phase 2, but the cache lookup keys
+        // off the *intended* state of the batch. (B54)
+        Map<String, IProfile> cache = bulkProfileCache.get();
+        if (cache != null) {
+            cache.remove(profileCacheKey(name, canonicalConceptType));
+            cache.put(profileCacheKey(newName, canonicalConceptType), profile);
+        }
+
+        Command cmd = new UpdateProfileCommand(profile, newName);
+        Map<String, Object> dto = buildProfileMap(newName, canonicalConceptType, layer, null);
+        return new PreparedMutation<>(cmd, dto, profile.getId(), profile);
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> updateSpecialization(String sessionId,
+            String name, String conceptType, String newName) {
+        logger.info("Renaming specialization: name={}, conceptType={}, newName={}",
+                name, conceptType, newName);
+        requireAndCaptureModel();
+        try {
+            PreparedMutation<Map<String, Object>> prepared = prepareUpdateSpecialization(
+                    name, conceptType, newName);
+
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                String description = "Rename specialization: " + name + " \u2192 " + newName
+                        + " (" + conceptType + ")";
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                proposedChanges.put("name", name);
+                proposedChanges.put("conceptType", conceptType);
+                proposedChanges.put("newName", newName);
+                ProposalContext ctx = storeAsProposal(sessionId, "update-specialization",
+                        prepared.command(), prepared.entity(), description,
+                        null, proposedChanges, "Specialization rename prepared.");
+                return new MutationResult<>(prepared.entity(), null, ctx);
+            }
+
+            Integer batchSeq = dispatchOrQueue(sessionId, prepared.command(),
+                    "Rename specialization: " + name + " \u2192 " + newName);
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+            return new MutationResult<>(prepared.entity(), batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error renaming specialization '" + name + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    /**
+     * Prepares a delete-specialization mutation. With {@code force=false},
+     * refuses if the profile is in use. With {@code force=true}, runs the
+     * multi-profile guard then builds a compound that clears references and
+     * deletes the profile atomically.
+     */
+    private PreparedMutation<Map<String, Object>> prepareDeleteSpecialization(
+            String name, String conceptType, boolean force) {
+        IArchimateModel model = requireAndCaptureModel();
+
+        EClass eClass = requireValidConceptType(conceptType);
+        String canonicalConceptType = eClass.getName();
+        String layer = resolveLayerForConceptType(canonicalConceptType);
+
+        // Cache-aware lookup: matches profiles created by earlier bulk ops in the
+        // same batch, before their commands have executed. (B54)
+        IProfile profile = findProfileForBulkPrepare(model, name, canonicalConceptType);
+        if (profile == null) {
+            throw new ModelAccessException(
+                    "Specialization not found: name='" + name + "', conceptType='"
+                            + canonicalConceptType + "'",
+                    ErrorCode.OBJECT_NOT_FOUND,
+                    null,
+                    "Use list-specializations to see defined specializations",
+                    null);
+        }
+
+        // ArchimateModelUtils.findProfileUsage returns a List<IProfiles> (Archi's
+        // mixin interface for things-that-have-profiles). In practice every result
+        // is also an IArchimateConcept since profiles only attach to concepts —
+        // we narrow at iteration time.
+        var rawUsages = ArchimateModelUtils.findProfileUsage(profile);
+        List<IArchimateConcept> usages = new ArrayList<>();
+        for (Object u : rawUsages) {
+            if (u instanceof IArchimateConcept c) {
+                usages.add(c);
+            }
+        }
+        int usageCount = usages.size();
+
+        if (usageCount > 0 && !force) {
+            throw new ModelAccessException(
+                    "Specialization '" + name + "' has " + usageCount + " usage"
+                            + (usageCount == 1 ? "" : "s") + " and cannot be deleted",
+                    ErrorCode.INVALID_PARAMETER,
+                    "usageCount=" + usageCount,
+                    "Pass force=true to clear references and delete in one undoable operation, "
+                            + "or use get-specialization-usage to inspect impact first, "
+                            + "or use update-specialization to rename instead",
+                    null);
+        }
+
+        Command cmd;
+        if (usages.isEmpty()) {
+            cmd = new DeleteProfileCommand(profile, model);
+        } else {
+            // Multi-profile guard: refuse force-delete if any usage concept holds
+            // more than one profile, to prevent silent loss of co-existing
+            // specializations. ClearSpecializationCommand wipes ALL profiles from
+            // a concept, so we can only safely reuse it when each victim concept
+            // holds exactly the one profile we're deleting.
+            List<String> multiProfileViolations = new ArrayList<>();
+            for (IArchimateConcept concept : usages) {
+                if (concept.getProfiles().size() > 1) {
+                    // Enumerate the *other* profiles that would be lost so the
+                    // user knows which ones to detach manually before retrying.
+                    List<String> otherProfileNames = new ArrayList<>();
+                    for (IProfile other : concept.getProfiles()) {
+                        if (other != profile) {
+                            otherProfileNames.add("'" + other.getName() + "'");
+                        }
+                    }
+                    multiProfileViolations.add("'" + concept.getName() + "' ("
+                            + concept.getId() + ") would lose: "
+                            + String.join(", ", otherProfileNames));
+                }
+            }
+            if (!multiProfileViolations.isEmpty()) {
+                String list = String.join("; ", multiProfileViolations);
+                throw new ModelAccessException(
+                        "Cannot force-delete: the following concepts have multiple "
+                                + "specializations and would lose other profiles: " + list,
+                        ErrorCode.INVALID_PARAMETER,
+                        "multiProfileConceptCount=" + multiProfileViolations.size(),
+                        "Detach the other specializations manually first via "
+                                + "update-element/update-relationship, then retry the delete",
+                        null);
+            }
+
+            NonNotifyingCompoundCommand compound = new NonNotifyingCompoundCommand(
+                    "Delete specialization: " + name);
+            for (IArchimateConcept concept : usages) {
+                compound.add(new ClearSpecializationCommand(concept));
+            }
+            compound.add(new DeleteProfileCommand(profile, model));
+            cmd = compound;
+        }
+
+        // Evict from the bulk profile cache so subsequent ops in the same batch
+        // can no longer find this profile. The DeleteProfileCommand will remove
+        // it from the model during phase 2 dispatch. (B54)
+        Map<String, IProfile> cache = bulkProfileCache.get();
+        if (cache != null) {
+            cache.remove(profileCacheKey(name, canonicalConceptType));
+        }
+
+        Map<String, Object> dto = buildProfileMap(name, canonicalConceptType, layer, null);
+        dto.put("deleted", true);
+        dto.put("clearedFromConcepts", usageCount);
+        return new PreparedMutation<>(cmd, dto, profile.getId(), profile);
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> deleteSpecialization(String sessionId,
+            String name, String conceptType, boolean force) {
+        logger.info("Deleting specialization: name={}, conceptType={}, force={}",
+                name, conceptType, force);
+        requireAndCaptureModel();
+        try {
+            PreparedMutation<Map<String, Object>> prepared = prepareDeleteSpecialization(
+                    name, conceptType, force);
+
+            if (mutationDispatcher.isApprovalRequired(sessionId)) {
+                String description = "Delete specialization: " + name + " (" + conceptType + ")"
+                        + (force ? " [force]" : "");
+                Map<String, Object> proposedChanges = new LinkedHashMap<>();
+                proposedChanges.put("name", name);
+                proposedChanges.put("conceptType", conceptType);
+                proposedChanges.put("force", force);
+                Object clearedCount = prepared.entity().get("clearedFromConcepts");
+                if (clearedCount != null) {
+                    proposedChanges.put("clearedFromConcepts", clearedCount);
+                }
+                ProposalContext ctx = storeAsProposal(sessionId, "delete-specialization",
+                        prepared.command(), prepared.entity(), description,
+                        null, proposedChanges, "Specialization deletion prepared.");
+                return new MutationResult<>(prepared.entity(), null, ctx);
+            }
+
+            Integer batchSeq = dispatchOrQueue(sessionId, prepared.command(),
+                    "Delete specialization: " + name);
+            if (batchSeq == null) {
+                versionCounter.incrementAndGet();
+            }
+            return new MutationResult<>(prepared.entity(), batchSeq);
+
+        } catch (NoModelLoadedException | ModelAccessException | MutationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error deleting specialization '" + name + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
+    }
+
+    @Override
+    public Map<String, Object> getSpecializationUsage(String name, String conceptType) {
+        logger.info("Getting specialization usage: name={}, conceptType={}", name, conceptType);
+        IArchimateModel model = requireAndCaptureModel();
+        try {
+            EClass eClass = requireValidConceptType(conceptType);
+            String canonicalConceptType = eClass.getName();
+            String layer = resolveLayerForConceptType(canonicalConceptType);
+
+            IProfile profile = ArchimateModelUtils.getProfileByNameAndType(
+                    model, name, canonicalConceptType);
+            if (profile == null) {
+                throw new ModelAccessException(
+                        "Specialization not found: name='" + name + "', conceptType='"
+                                + canonicalConceptType + "'",
+                        ErrorCode.OBJECT_NOT_FOUND,
+                        null,
+                        "Use list-specializations to see defined specializations",
+                        null);
+            }
+
+            // findProfileUsage returns a List<IProfiles>; narrow to IArchimateConcept.
+            var rawUsages = ArchimateModelUtils.findProfileUsage(profile);
+            List<Map<String, Object>> elements = new ArrayList<>();
+            List<Map<String, Object>> relationships = new ArrayList<>();
+            int totalUsageCount = 0;
+            for (Object u : rawUsages) {
+                if (!(u instanceof IArchimateConcept concept)) {
+                    continue;
+                }
+                totalUsageCount++;
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("id", concept.getId());
+                entry.put("name", concept.getName());
+                entry.put("type", concept.eClass().getName());
+                if (concept instanceof IArchimateRelationship) {
+                    relationships.add(entry);
+                } else {
+                    elements.add(entry);
+                }
+            }
+
+            Map<String, Object> result = buildProfileMap(
+                    profile.getName(), canonicalConceptType, layer, null);
+            result.put("totalUsageCount", totalUsageCount);
+            result.put("elements", elements);
+            result.put("relationships", relationships);
+            return result;
+
+        } catch (NoModelLoadedException | ModelAccessException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ModelAccessException(
+                    "Error retrieving specialization usage for '" + name + "'",
+                    e, ErrorCode.INTERNAL_ERROR);
+        }
     }
 
     // ---- Relationship methods (Story 4.1) ----
@@ -709,7 +1309,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     // This is acceptable at typical ArchiMate model scale (hundreds to low thousands
     // of elements). If models grow significantly larger, consider an indexed cache.
     @Override
-    public List<DuplicateCandidate> findDuplicates(String type, String name) {
+    public List<DuplicateCandidate> findDuplicates(String type, String name, String specialization) {
         IArchimateModel model = requireAndCaptureModel();
         try {
             List<IArchimateElement> allElements = new ArrayList<>();
@@ -720,6 +1320,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             List<DuplicateCandidate> candidates = new ArrayList<>();
             for (IArchimateElement element : allElements) {
                 if (!element.eClass().getName().equals(type)) {
+                    continue;
+                }
+                // Specialization-aware comparison (Story C3b):
+                // - Two elements with same name+type but different specializations are NOT duplicates
+                // - Null specialization matches only null specialization (not "any")
+                IProfile primaryProfile = element.getPrimaryProfile();
+                String elementSpec = (primaryProfile != null) ? primaryProfile.getName() : null;
+                if (!specializationsEqual(elementSpec, specialization)) {
                     continue;
                 }
                 double score = StringSimilarity.compositeSimilarity(element.getName(), name);
@@ -745,14 +1353,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     }
 
     /**
-     * Finds an existing relationship matching (type, source, target) exactly.
+     * Finds an existing relationship matching (type, source, target, specialization) exactly.
      * Used for idempotent create-relationship — returns existing instead of duplicating.
      * Efficient: only iterates source element's outgoing relationships, not the full model.
+     *
+     * <p>Specialization-aware (Story C3b): two relationships with the same type, source, and
+     * target but different primary-profile names are NOT considered duplicates. Null
+     * specialization matches only null specialization (case-insensitive when both non-null).</p>
      */
     private Optional<IArchimateRelationship> findDuplicateRelationship(
-            EClass relClass, IArchimateElement source, IArchimateElement target) {
+            EClass relClass, IArchimateElement source, IArchimateElement target,
+            String specialization) {
         for (IArchimateRelationship rel : source.getSourceRelationships()) {
-            if (rel.eClass() == relClass && rel.getTarget() == target) {
+            if (rel.eClass() != relClass || rel.getTarget() != target) {
+                continue;
+            }
+            IProfile primary = rel.getPrimaryProfile();
+            String relSpec = (primary != null) ? primary.getName() : null;
+            if (specializationsEqual(relSpec, specialization)) {
                 return Optional.of(rel);
             }
         }
@@ -794,14 +1412,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
-            String documentation, Map<String, String> properties, String folderId) {
-        return createElement(sessionId, type, name, documentation, properties, folderId, null);
+            String documentation, Map<String, String> properties, String folderId,
+            String specialization) {
+        return createElement(sessionId, type, name, documentation, properties, folderId, null, specialization);
     }
 
     @Override
     public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
             String documentation, Map<String, String> properties, String folderId,
-            Map<String, String> source) {
+            Map<String, String> source, String specialization) {
         logger.info("Creating element: type={}, name={}", type, name);
         requireAndCaptureModel();
         try {
@@ -809,7 +1428,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             Map<String, String> mergedProperties = mergeSourceProperties(properties, source);
 
             PreparedMutation<ElementDto> prepared = prepareCreateElement(type, name,
-                    documentation, mergedProperties, folderId);
+                    documentation, mergedProperties, folderId, specialization);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -820,6 +1439,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (documentation != null) proposedChanges.put("documentation", documentation);
                 if (folderId != null) proposedChanges.put("folderId", folderId);
                 if (source != null) proposedChanges.put("source", source);
+                if (specialization != null) proposedChanges.put("specialization", specialization);
                 ProposalContext ctx = storeAsProposal(sessionId, "create-element",
                         prepared.command(), prepared.entity(), description,
                         null, proposedChanges, "Type valid. Element prepared for creation.");
@@ -846,12 +1466,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
-            String sourceId, String targetId, String name) {
+            String sourceId, String targetId, String name, String specialization) {
         logger.info("Creating relationship: type={}, source={}, target={}", type, sourceId, targetId);
         requireAndCaptureModel();
         try {
             PreparedMutation<RelationshipDto> prepared = prepareCreateRelationship(
-                    type, sourceId, targetId, name);
+                    type, sourceId, targetId, name, specialization);
 
             // Duplicate detected: return existing relationship without dispatching
             if (prepared.entity().alreadyExisted()) {
@@ -866,6 +1486,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 proposedChanges.put("sourceId", sourceId);
                 proposedChanges.put("targetId", targetId);
                 if (name != null) proposedChanges.put("name", name);
+                if (specialization != null) proposedChanges.put("specialization", specialization);
                 ProposalContext ctx = storeAsProposal(sessionId, "create-relationship",
                         prepared.command(), prepared.entity(), description,
                         null, proposedChanges,
@@ -978,12 +1599,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<ElementDto> updateElement(String sessionId, String id, String name,
-            String documentation, Map<String, String> properties) {
+            String documentation, Map<String, String> properties, String specialization) {
         logger.info("Updating element: id={}", id);
         requireAndCaptureModel();
         try {
             PreparedMutation<ElementDto> prepared = prepareUpdateElement(id, name,
-                    documentation, properties);
+                    documentation, properties, specialization);
 
             // Approval gate (Story 7-6)
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -999,6 +1620,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (name != null) proposedChanges.put("name", name);
                 if (documentation != null) proposedChanges.put("documentation", documentation);
                 if (properties != null) proposedChanges.put("properties", properties);
+                if (specialization != null) proposedChanges.put("specialization", specialization);
                 ProposalContext ctx = storeAsProposal(sessionId, "update-element",
                         prepared.command(), prepared.entity(), description,
                         currentState, proposedChanges, "Element exists. All changes valid.");
@@ -1034,12 +1656,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
-            String name, String documentation, Map<String, String> properties) {
+            String name, String documentation, Map<String, String> properties, String specialization) {
         logger.info("Updating relationship: id={}", id);
         requireAndCaptureModel();
         try {
             PreparedMutation<RelationshipDto> prepared = prepareUpdateRelationship(id, name,
-                    documentation, properties);
+                    documentation, properties, specialization);
 
             // Approval gate
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -1054,6 +1676,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (name != null) proposedChanges.put("name", name);
                 if (documentation != null) proposedChanges.put("documentation", documentation);
                 if (properties != null) proposedChanges.put("properties", properties);
+                if (specialization != null) proposedChanges.put("specialization", specialization);
                 ProposalContext ctx = storeAsProposal(sessionId, "update-relationship",
                         prepared.command(), prepared.entity(), description,
                         currentState, proposedChanges, "Relationship exists. All changes valid.");
@@ -1944,7 +2567,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     @Override
     public AssessLayoutResultDto assessLayout(String viewId) {
-        logger.info("Assess layout: viewId={}", viewId);
+        return assessLayout(viewId, false);
+    }
+
+    @Override
+    public AssessLayoutResultDto assessLayout(String viewId, boolean includeViolatorIds) {
+        logger.info("Assess layout: viewId={}, includeViolatorIds={}", viewId, includeViolatorIds);
         IArchimateModel model = requireAndCaptureModel();
 
         EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
@@ -1969,6 +2597,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null, null, null, null, 0, null,
                     orphanResult.count(), emptyToNull(orphanResult.descriptions()),
                     0, null, false, 0, 0, null,
+                    0, null, 0, null, 0, null, null,
                     List.of("View has no elements — layout assessment is not applicable."));
         }
         if (nodes.size() == 1) {
@@ -1978,6 +2607,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null, null, null, null, 0, null,
                     orphanResult.count(), emptyToNull(orphanResult.descriptions()),
                     0, null, false, 0, 0, null,
+                    0, null, 0, null, 0, null, null,
                     List.of("View has only one element — layout assessment is not applicable."));
         }
 
@@ -1987,7 +2617,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         // 4. Run assessment
         LayoutAssessmentResult result =
-                layoutQualityAssessor.assess(nodes, connections);
+                layoutQualityAssessor.assess(nodes, connections, includeViolatorIds);
 
         // 5. Build DTO
         return new AssessLayoutResultDto(
@@ -2015,7 +2645,24 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 result.coincidentSegmentCount(),
                 result.nonOrthogonalTerminalCount(),
                 mapContentBounds(result.contentBounds()),
+                result.labelTruncationCount(),
+                emptyToNull(result.labelTruncations()),
+                result.parentLabelObscuredCount(),
+                emptyToNull(result.parentLabelObscuredDescriptions()),
+                result.imageSiblingOverlapCount(),
+                emptyToNull(result.imageSiblingOverlapDescriptions()),
+                mapViolatorIds(result.violatorIds()),
                 result.suggestions());
+    }
+
+    /** Maps internal violatorIds (Set) to DTO format (List). Returns null if input is null (B55). */
+    private Map<String, List<String>> mapViolatorIds(Map<String, java.util.Set<String>> violatorIds) {
+        if (violatorIds == null) return null;
+        Map<String, List<String>> result = new java.util.LinkedHashMap<>();
+        for (Map.Entry<String, java.util.Set<String>> entry : violatorIds.entrySet()) {
+            result.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+        }
+        return result;
     }
 
     /** Maps internal ContentBounds to DTO (Story 11-29). Returns null if input is null. */
@@ -2159,8 +2806,6 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
     // ---- Resize elements to fit (Story B48) ----
 
-    /** Label area top padding for parent elements containing children. */
-    private static final int CONTAINMENT_LABEL_TOP = 25;
     /** Bottom padding for parent elements containing children. */
     private static final int CONTAINMENT_PADDING_BOTTOM = 10;
     /** Left/right padding for parent elements containing children. */
@@ -2249,7 +2894,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
         }
 
-        // Pass 2: Size parent elements based on children bounds + own label
+        // Pass 2: Size parent elements based on children bounds + own label (B50: dynamic label height)
         for (IDiagramModelArchimateObject parent : parentElements) {
             String parentName = parent.getArchimateConcept() != null
                     ? parent.getArchimateConcept().getName() : "";
@@ -2262,6 +2907,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             List<IDiagramModelArchimateObject> children = childrenByParentId.get(parent.getId());
             int childMaxRight = 0;
             int childMaxBottom = 0;
+            int minChildY = Integer.MAX_VALUE;
             if (children != null) {
                 for (IDiagramModelArchimateObject child : children) {
                     IBounds cb = child.getBounds();
@@ -2271,19 +2917,41 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     int childBottom = cb.getY() + childSize[1];
                     childMaxRight = Math.max(childMaxRight, childRight);
                     childMaxBottom = Math.max(childMaxBottom, childBottom);
+                    minChildY = Math.min(minChildY, cb.getY());
                 }
             }
 
+            // Step 1: Compute width (needed for label height word-wrap calculation)
             int newWidth = Math.max(labelWidth, childMaxRight) + 2 * CONTAINMENT_PADDING_SIDE;
-            int newHeight = CONTAINMENT_LABEL_TOP + childMaxBottom + CONTAINMENT_PADDING_BOTTOM;
             newWidth = Math.max(newWidth, ElementSizer.DEFAULT_WIDTH);
+
+            // Step 2: Compute dynamic label height based on actual text wrapping (B50)
+            int dynamicLabelTop = ElementSizer.computeLabelHeight(parentName, newWidth);
+
+            // Step 3: Shift children down if topmost child overlaps label area (B50 AC2)
+            if (children != null && !children.isEmpty() && minChildY < dynamicLabelTop) {
+                int shiftDelta = dynamicLabelTop - minChildY;
+                for (IDiagramModelArchimateObject child : children) {
+                    IBounds cb = child.getBounds();
+                    int newY = cb.getY() + shiftDelta;
+                    PreparedMutation<ViewObjectDto> pm = prepareUpdateViewObjectDirect(
+                            child, null, newY, null, null);
+                    mutations.add(pm);
+                }
+                childMaxBottom += shiftDelta;
+            }
+
+            // Step 4: Compute height with dynamic label top
+            int newHeight = dynamicLabelTop + childMaxBottom + CONTAINMENT_PADDING_BOTTOM;
             newHeight = Math.max(newHeight, ElementSizer.DEFAULT_HEIGHT);
 
-            computedSizes.put(parent.getId(), new int[] { newWidth, newHeight });
-
+            // AC3: Never shrink parent height
             IBounds bounds = parent.getBounds();
             int oldW = bounds.getWidth();
             int oldH = bounds.getHeight();
+            newHeight = Math.max(newHeight, oldH);
+
+            computedSizes.put(parent.getId(), new int[] { newWidth, newHeight });
 
             if (newWidth != oldW || newHeight != oldH) {
                 PreparedMutation<ViewObjectDto> pm = prepareUpdateViewObjectDirect(
@@ -3138,7 +3806,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 adjusted.add(new AssessmentNode(
                         node.id(), node.x() + delta[0], node.y() + delta[1],
                         node.width(), node.height(),
-                        node.parentId(), node.isGroup(), node.isNote()));
+                        node.parentId(), node.isGroup(), node.isNote(),
+                        node.name(), node.labelTextWidth(),
+                        node.imagePath(), node.imagePosition()));
             } else {
                 adjusted.add(node);
             }
@@ -3208,7 +3878,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             if (delta != null || groupAdj != null) {
                 adjusted.add(new AssessmentNode(
                         node.id(), adjX, adjY, adjW, adjH,
-                        node.parentId(), node.isGroup(), node.isNote()));
+                        node.parentId(), node.isGroup(), node.isNote(),
+                        node.name(), node.labelTextWidth(),
+                        node.imagePath(), node.imagePosition()));
             } else {
                 adjusted.add(node);
             }
@@ -3723,10 +4395,29 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
             if (children.isEmpty()) continue;
 
-            // Compute column layout (default arrangement for grouped mode)
+            // Choose intra-group arrangement based on element count and flow direction (B51)
             boolean effectiveAutoWidth = true;
-            List<int[]> positions = computeColumnLayout(children, startX, startY,
-                    intraGroupSpacing, null, null, effectiveAutoWidth);
+            String intraArrangement = GroupLayoutCalculator.chooseIntraGroupArrangement(
+                    children.size(), direction);
+            List<int[]> positions;
+            switch (intraArrangement) {
+            case "row":
+                positions = computeRowLayout(children, startX, startY,
+                        intraGroupSpacing, null, null, effectiveAutoWidth);
+                break;
+            case "grid":
+                int gridCols = GroupLayoutCalculator.computeGridColumns(children.size());
+                GroupLayoutCalculator.GridLayoutResult gridResult =
+                        computeGridLayout(children, startX, startY,
+                                intraGroupSpacing, resolvedPadding, 0,
+                                null, null, effectiveAutoWidth, gridCols);
+                positions = gridResult.positions();
+                break;
+            default: // "column"
+                positions = computeColumnLayout(children, startX, startY,
+                        intraGroupSpacing, null, null, effectiveAutoWidth);
+                break;
+            }
 
             // Build update commands for each child
             for (int i = 0; i < children.size(); i++) {
@@ -4888,8 +5579,6 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         // 6. Build position commands for reordered elements
-        String arrangement = ("RIGHT".equalsIgnoreCase(direction)
-                || "LEFT".equalsIgnoreCase(direction)) ? "row" : "column";
         int resolvedSpacing = DEFAULT_GROUP_SPACING;
         int resolvedPadding = DEFAULT_GROUP_PADDING;
         int startX = resolvedPadding;
@@ -4922,14 +5611,27 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 }
             }
 
-            // Compute new positions using the arrangement
+            // Compute new positions using arrangement heuristic (B51)
+            String intraArrangement = GroupLayoutCalculator.chooseIntraGroupArrangement(
+                    orderedChildren.size(), direction);
             List<int[]> positions;
-            if ("row".equals(arrangement)) {
+            switch (intraArrangement) {
+            case "row":
                 positions = computeRowLayout(orderedChildren, startX, startY,
                         resolvedSpacing, null, null, true);
-            } else {
+                break;
+            case "grid":
+                int gridCols = GroupLayoutCalculator.computeGridColumns(orderedChildren.size());
+                GroupLayoutCalculator.GridLayoutResult gridResult =
+                        computeGridLayout(orderedChildren, startX, startY,
+                                resolvedSpacing, resolvedPadding, 0,
+                                null, null, true, gridCols);
+                positions = gridResult.positions();
+                break;
+            default: // "column"
                 positions = computeColumnLayout(orderedChildren, startX, startY,
                         resolvedSpacing, null, null, true);
+                break;
             }
 
             // Build update commands for each child
@@ -5250,13 +5952,17 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     public MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
             List<String> elementIds, List<String> relationshipTypes,
-            Boolean showLabel) {
+            Boolean showLabel, StylingParams styling) {
         logger.info("Auto-connect view: viewId={}, elementIds={}, relationshipTypes={}",
                 viewId, elementIds != null ? elementIds.size() : "all",
                 relationshipTypes != null ? relationshipTypes.size() : "all");
         IArchimateModel model = requireAndCaptureModel();
 
         try {
+            // Validate styling params early (AC4)
+            if (styling != null && styling.hasAnyValue()) {
+                StylingHelper.validateConnectionStylingParams(styling);
+            }
             // 1. Validate view
             EObject viewObj = ArchimateModelUtils.getObjectByID(model, viewId);
             if (!(viewObj instanceof IArchimateDiagramModel diagramModel)) {
@@ -5374,6 +6080,18 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     if (showLabel != null) {
                         conn.setNameVisible(showLabel);
                     }
+                    // Apply styling (B52)
+                    if (styling != null && styling.hasAnyValue()) {
+                        if (styling.lineColor() != null) {
+                            conn.setLineColor(styling.lineColor().isEmpty() ? null : styling.lineColor());
+                        }
+                        if (styling.fontColor() != null) {
+                            conn.setFontColor(styling.fontColor().isEmpty() ? null : styling.fontColor());
+                        }
+                        if (styling.lineWidth() != null) {
+                            conn.setLineWidth(styling.lineWidth());
+                        }
+                    }
                     commands.add(new AddConnectionToViewCommand(
                             conn, viewObject, targetViewObj));
                     connectedRelationshipIds.add(relId);
@@ -5421,6 +6139,18 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     conn.setArchimateRelationship(rel);
                     if (showLabel != null) {
                         conn.setNameVisible(showLabel);
+                    }
+                    // Apply styling (B52)
+                    if (styling != null && styling.hasAnyValue()) {
+                        if (styling.lineColor() != null) {
+                            conn.setLineColor(styling.lineColor().isEmpty() ? null : styling.lineColor());
+                        }
+                        if (styling.fontColor() != null) {
+                            conn.setFontColor(styling.fontColor().isEmpty() ? null : styling.fontColor());
+                        }
+                        if (styling.lineWidth() != null) {
+                            conn.setLineWidth(styling.lineWidth());
+                        }
                     }
                     commands.add(new AddConnectionToViewCommand(
                             conn, sourceViewObj, viewObject));
@@ -7450,6 +8180,116 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
     }
 
+    // ---- Specialization helpers (Story C3b) ----
+
+    /**
+     * Result of resolving a specialization name to a profile.
+     */
+    record ProfileResolution(IProfile profile, boolean isNew) {}
+
+    /**
+     * Resolves a specialization name to an existing or newly created profile.
+     *
+     * <p>Uses {@code ArchimateModelUtils.getProfileByNameAndType()} for case-insensitive
+     * name lookup. If no matching profile exists, creates a new one via
+     * {@code IArchimateFactory} but does NOT add it to the model — the
+     * {@link ApplySpecializationCommand} handles model addition.</p>
+     *
+     * <p><strong>Bulk batch deduplication:</strong> when called inside a
+     * {@link #executeBulk} prepare phase, consults {@link #bulkProfileCache} first
+     * so that multiple operations in the same batch referencing the same new
+     * specialization reuse one {@link IProfile} instance. The first call returns
+     * {@code isNew=true} (its command will add the profile to the model);
+     * subsequent calls return the cached profile with {@code isNew=false} so the
+     * profile is added exactly once. {@link ApplySpecializationCommand}'s undo
+     * logic already tolerates compound commands that share a new profile across
+     * multiple instances.</p>
+     *
+     * @param model          the ArchiMate model for profile lookup
+     * @param specialization the specialization name to resolve
+     * @param conceptType    the ArchiMate concept type (e.g., "BusinessActor", "Node")
+     * @return a ProfileResolution containing the profile and whether it's new
+     */
+    private ProfileResolution resolveOrCreateProfile(IArchimateModel model,
+            String specialization, String conceptType) {
+        Map<String, IProfile> cache = bulkProfileCache.get();
+        String cacheKey = (cache != null) ? profileCacheKey(specialization, conceptType) : null;
+        if (cache != null) {
+            IProfile cached = cache.get(cacheKey);
+            if (cached != null) {
+                return new ProfileResolution(cached, false);
+            }
+        }
+
+        IProfile existing = ArchimateModelUtils.getProfileByNameAndType(
+                model, specialization, conceptType);
+        if (existing != null) {
+            if (cache != null) {
+                cache.put(cacheKey, existing);
+            }
+            return new ProfileResolution(existing, false);
+        }
+
+        IProfile newProfile = IArchimateFactory.eINSTANCE.createProfile();
+        newProfile.setName(specialization);
+        newProfile.setConceptType(conceptType);
+        if (cache != null) {
+            cache.put(cacheKey, newProfile);
+        }
+        return new ProfileResolution(newProfile, true);
+    }
+
+    /**
+     * Builds a normalized key for {@link #bulkProfileCache} lookups. Lowercases
+     * the name (matching {@code getProfileByNameAndType}'s case-insensitive
+     * semantics) so that case variants of the same specialization name converge
+     * on a single cache entry within a bulk-mutate batch.
+     */
+    private static String profileCacheKey(String name, String conceptType) {
+        String n = (name != null) ? name.toLowerCase(java.util.Locale.ROOT) : "";
+        String t = (conceptType != null) ? conceptType : "";
+        return n + "\u0000" + t;
+    }
+
+    /**
+     * Cache-aware profile lookup used by prepare-phase methods that need to
+     * see profiles still in flight from earlier ops in the same bulk-mutate batch.
+     *
+     * <p>Order of resolution:
+     * <ol>
+     *   <li>{@link #bulkProfileCache} (in-flight from prior bulk prepare ops)</li>
+     *   <li>{@code ArchimateModelUtils.getProfileByNameAndType()} (committed in model)</li>
+     * </ol>
+     *
+     * <p>Returns {@code null} if neither source has the profile. Used by
+     * {@code prepareUpdateSpecialization} and {@code prepareDeleteSpecialization}
+     * so that within a single bulk-mutate batch, op N can rename or delete a
+     * specialization that op M&lt;N created. Outside of a bulk batch the cache
+     * is null and behaviour collapses to a plain model lookup.
+     */
+    private IProfile findProfileForBulkPrepare(IArchimateModel model,
+            String name, String conceptType) {
+        Map<String, IProfile> cache = bulkProfileCache.get();
+        if (cache != null) {
+            IProfile cached = cache.get(profileCacheKey(name, conceptType));
+            if (cached != null) {
+                return cached;
+            }
+        }
+        return ArchimateModelUtils.getProfileByNameAndType(model, name, conceptType);
+    }
+
+    /**
+     * Compares two specialization names for duplicate detection (case-insensitive).
+     * Null matches only null. Mirrors the lookup semantics of
+     * {@code ArchimateModelUtils.getProfileByNameAndType()}.
+     */
+    private boolean specializationsEqual(String a, String b) {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        return a.equalsIgnoreCase(b);
+    }
+
     // ---- Prepare methods for bulk support (Story 7-5) ----
 
     /**
@@ -7457,7 +8297,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      * Validates type, creates EMF object, configures properties, resolves folder, builds command.
      */
     private PreparedMutation<ElementDto> prepareCreateElement(String type, String name,
-            String documentation, Map<String, String> properties, String folderId) {
+            String documentation, Map<String, String> properties, String folderId,
+            String specialization) {
         IArchimateModel model = requireAndCaptureModel();
 
         EClass eClass = resolveElementType(type);
@@ -7477,16 +8318,61 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         IFolder targetFolder = resolveTargetFolder(model, element, folderId);
-        Command cmd = new CreateElementCommand(element, targetFolder);
 
-        return new PreparedMutation<>(cmd, convertToElementDto(element), element.getId(), element);
+        Command cmd;
+        String dtoSpecialization = null;
+        if (specialization != null && !specialization.isEmpty()) {
+            ProfileResolution resolution = resolveOrCreateProfile(
+                    model, specialization, eClass.getName());
+            NonNotifyingCompoundCommand compound =
+                    new NonNotifyingCompoundCommand("Create specialized element");
+            compound.add(new ApplySpecializationCommand(
+                    element, resolution.profile(), model, resolution.isNew()));
+            compound.add(new CreateElementCommand(element, targetFolder));
+            cmd = compound;
+            dtoSpecialization = resolution.profile().getName();
+        } else {
+            cmd = new CreateElementCommand(element, targetFolder);
+        }
+
+        // Build DTO manually when specialization is set, since the profile-assignment
+        // command has not yet executed and convertToElementDto would read null from
+        // element.getPrimaryProfile(). Mirrors prepareCreateRelationship pattern. (C3b H1)
+        ElementDto dto = (dtoSpecialization != null)
+                ? buildElementDtoWithSpecialization(element, dtoSpecialization)
+                : convertToElementDto(element);
+
+        return new PreparedMutation<>(cmd, dto, element.getId(), element);
+    }
+
+    /**
+     * Builds an ElementDto with an explicit specialization override, for use when the
+     * profile-assignment command has not yet executed (Story C3b).
+     */
+    private ElementDto buildElementDtoWithSpecialization(IArchimateElement element,
+            String specialization) {
+        String type = element.eClass().getName();
+        String layer = resolveLayer(element);
+        List<Map<String, String>> properties = convertProperties(element.getProperties());
+        String documentation = element.getDocumentation();
+        if (documentation != null && documentation.isEmpty()) {
+            documentation = null;
+        }
+        return ElementDto.standard(
+                element.getId(),
+                element.getName(),
+                type,
+                specialization,
+                layer,
+                documentation,
+                properties.isEmpty() ? null : properties);
     }
 
     /**
      * Prepares a create-relationship mutation by looking up source/target by ID.
      */
     private PreparedMutation<RelationshipDto> prepareCreateRelationship(
-            String type, String sourceId, String targetId, String name) {
+            String type, String sourceId, String targetId, String name, String specialization) {
         IArchimateModel model = requireAndCaptureModel();
 
         EClass relClass = resolveRelationshipType(type);
@@ -7505,7 +8391,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     ErrorCode.TARGET_ELEMENT_NOT_FOUND);
         }
 
-        return prepareCreateRelationship(type, relClass, sourceElement, targetElement, name, model);
+        return prepareCreateRelationship(type, relClass, sourceElement, targetElement, name, specialization, model);
     }
 
     /**
@@ -7515,10 +8401,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      */
     private PreparedMutation<RelationshipDto> prepareCreateRelationshipDirect(
             String type, IArchimateElement sourceElement, IArchimateElement targetElement,
-            String name) {
+            String name, String specialization) {
         IArchimateModel model = requireAndCaptureModel();
         EClass relClass = resolveRelationshipType(type);
-        return prepareCreateRelationship(type, relClass, sourceElement, targetElement, name, model);
+        return prepareCreateRelationship(type, relClass, sourceElement, targetElement, name, specialization, model);
     }
 
     /**
@@ -7526,7 +8412,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      */
     private PreparedMutation<RelationshipDto> prepareCreateRelationship(
             String type, EClass relClass, IArchimateElement sourceElement,
-            IArchimateElement targetElement, String name, IArchimateModel model) {
+            IArchimateElement targetElement, String name, String specialization, IArchimateModel model) {
 
         boolean valid = ArchimateModelUtils.isValidRelationship(
                 sourceElement, targetElement, relClass);
@@ -7547,15 +8433,21 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     "ArchiMate 3.2 specification, relationship rules");
         }
 
-        // Duplicate detection: return existing relationship if (type, source, target) match
+        // Duplicate detection: return existing relationship if (type, source, target,
+        // specialization) match. Specialization-aware so a "Data Flow" FlowRelationship and
+        // an unspecialized FlowRelationship between the same elements are NOT duplicates. (C3b H2)
         Optional<IArchimateRelationship> existing = findDuplicateRelationship(
-                relClass, sourceElement, targetElement);
+                relClass, sourceElement, targetElement, specialization);
         if (existing.isPresent()) {
             IArchimateRelationship existingRel = existing.get();
             RelationshipDto base = convertToRelationshipDto(existingRel);
+            // Preserve the existing relationship's specialization in the response DTO
+            // (the 6-arg convenience constructor would drop it). (C3b H2)
             RelationshipDto dto = new RelationshipDto(
                     base.id(), base.name(), base.type(),
-                    base.sourceId(), base.targetId(), true);
+                    base.specialization(),
+                    base.sourceId(), base.targetId(),
+                    true, null, null, null, null);
             // No-op command: nothing to execute on the command stack
             return new PreparedMutation<>(new NoOpCommand(), dto, existingRel.getId(), existingRel);
         }
@@ -7569,13 +8461,31 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // if the command never executes (partial failure, approval mode, concurrency race)
 
         IFolder relationsFolder = model.getFolder(FolderType.RELATIONS);
-        Command cmd = new CreateRelationshipCommand(relationship, relationsFolder,
+        Command createRelCmd = new CreateRelationshipCommand(relationship, relationsFolder,
                 sourceElement, targetElement);
+
+        Command cmd;
+        String dtoSpecialization = null;
+        if (specialization != null && !specialization.isEmpty()) {
+            ProfileResolution resolution = resolveOrCreateProfile(
+                    model, specialization, relClass.getName());
+            NonNotifyingCompoundCommand compound =
+                    new NonNotifyingCompoundCommand("Create specialized relationship");
+            compound.add(new ApplySpecializationCommand(
+                    relationship, resolution.profile(), model, resolution.isNew()));
+            compound.add(createRelCmd);
+            cmd = compound;
+            dtoSpecialization = resolution.profile().getName();
+        } else {
+            cmd = createRelCmd;
+        }
 
         // Build DTO manually since connect() hasn't been called yet (source/target not set on relationship)
         RelationshipDto dto = new RelationshipDto(
                 relationship.getId(), relationship.getName(), relationship.eClass().getName(),
-                sourceElement.getId(), targetElement.getId());
+                dtoSpecialization,
+                sourceElement.getId(), targetElement.getId(),
+                false, null, null, null, null);
 
         return new PreparedMutation<>(cmd, dto, relationship.getId(), relationship);
     }
@@ -7944,15 +8854,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      * Prepares an update-element mutation without dispatching.
      */
     private PreparedMutation<ElementDto> prepareUpdateElement(String id, String name,
-            String documentation, Map<String, String> properties) {
+            String documentation, Map<String, String> properties, String specialization) {
         IArchimateModel model = requireAndCaptureModel();
 
-        if (name == null && documentation == null && properties == null) {
+        if (name == null && documentation == null && properties == null && specialization == null) {
             throw new ModelAccessException(
-                    "No fields to update — provide at least one of: name, documentation, properties",
+                    "No fields to update — provide at least one of: name, documentation, properties, specialization",
                     ErrorCode.INVALID_PARAMETER,
                     null,
-                    "Specify name, documentation, or properties to update",
+                    "Specify name, documentation, properties, or specialization to update",
                     null);
         }
 
@@ -7966,24 +8876,73 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        Command cmd = new UpdateElementCommand(element, name, documentation, properties);
+        Command cmd = buildUpdateConceptCommand(element, model, name, documentation, properties,
+                specialization, element.eClass().getName(),
+                () -> new UpdateElementCommand(element, name, documentation, properties));
 
         return new PreparedMutation<>(cmd, convertToElementDto(element), element.getId(), element);
+    }
+
+    /**
+     * Builds the command for updating a concept (element or relationship), handling specialization
+     * assign/clear/no-change semantics. When specialization is non-null, wraps the base update
+     * command in a compound command together with profile commands for atomic undo.
+     */
+    private Command buildUpdateConceptCommand(IArchimateConcept concept, IArchimateModel model,
+            String name, String documentation, Map<String, String> properties,
+            String specialization, String conceptType,
+            Supplier<Command> baseCmdSupplier) {
+        boolean hasFieldUpdates = name != null || documentation != null || properties != null;
+
+        if (specialization == null) {
+            // No change to specialization — return base update command directly
+            return baseCmdSupplier.get();
+        }
+
+        NonNotifyingCompoundCommand compound =
+                new NonNotifyingCompoundCommand("Update concept with specialization");
+
+        // Always clear existing profiles when specialization is provided (replace semantics)
+        if (!concept.getProfiles().isEmpty()) {
+            compound.add(new ClearSpecializationCommand(concept));
+        }
+
+        if (!specialization.isEmpty()) {
+            // Assign new specialization
+            ProfileResolution resolution = resolveOrCreateProfile(model, specialization, conceptType);
+            compound.add(new ApplySpecializationCommand(
+                    concept, resolution.profile(), model, resolution.isNew()));
+        }
+        // else: empty string means clear-only (already handled above)
+
+        if (hasFieldUpdates) {
+            compound.add(baseCmdSupplier.get());
+        }
+
+        // Edge case: specialization="" (clear) on a concept with no profiles and no other
+        // field updates produces an empty compound. CompoundCommand.canExecute() returns
+        // false for empty compounds, which the dispatcher would treat as a hard failure.
+        // Return a NoOpCommand instead so the mutation reports cleanly. (C3b M2)
+        if (compound.getCommands().isEmpty()) {
+            return new NoOpCommand();
+        }
+
+        return compound;
     }
 
     /**
      * Prepares an update-relationship mutation without dispatching.
      */
     private PreparedMutation<RelationshipDto> prepareUpdateRelationship(String id, String name,
-            String documentation, Map<String, String> properties) {
+            String documentation, Map<String, String> properties, String specialization) {
         IArchimateModel model = requireAndCaptureModel();
 
-        if (name == null && documentation == null && properties == null) {
+        if (name == null && documentation == null && properties == null && specialization == null) {
             throw new ModelAccessException(
-                    "No fields to update — provide at least one of: name, documentation, properties",
+                    "No fields to update — provide at least one of: name, documentation, properties, specialization",
                     ErrorCode.INVALID_PARAMETER,
                     null,
-                    "Specify name, documentation, or properties to update",
+                    "Specify name, documentation, properties, or specialization to update",
                     null);
         }
 
@@ -7997,7 +8956,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        Command cmd = new UpdateRelationshipCommand(relationship, name, documentation, properties);
+        Command cmd = buildUpdateConceptCommand(relationship, model, name, documentation, properties,
+                specialization, relationship.eClass().getName(),
+                () -> new UpdateRelationshipCommand(relationship, name, documentation, properties));
 
         return new PreparedMutation<>(cmd, convertToRelationshipDto(relationship), relationship.getId(), relationship);
     }
@@ -10415,6 +11376,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 operations.size(), continueOnError);
         requireAndCaptureModel();
 
+        // Activate the bulk profile cache for the duration of this call. See
+        // bulkProfileCache field doc for the rationale: it prevents duplicate IProfile
+        // creation when multiple operations in one batch share a new specialization.
+        // Cleared in finally so the ThreadLocal cannot leak across Jetty requests.
+        bulkProfileCache.set(new HashMap<>());
         try {
             // Phase 1: Validate all operations and build commands (Jetty thread)
             List<PreparedMutation<?>> preparedMutations = new ArrayList<>();
@@ -10584,6 +11550,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             throw new ModelAccessException(
                     "Error executing bulk mutation",
                     e, ErrorCode.INTERNAL_ERROR);
+        } finally {
+            bulkProfileCache.remove();
         }
     }
 
@@ -10675,9 +11643,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 String documentation = optionalParam(params, "documentation");
                 Map<String, String> properties = optionalStringMap(params, "properties");
                 String folderId = optionalParam(params, "folderId");
+                String specialization = optionalParam(params, "specialization");
 
                 PreparedMutation<ElementDto> prepared = prepareCreateElement(
-                        type, name, documentation, properties, folderId);
+                        type, name, documentation, properties, folderId, specialization);
 
                 // Store raw EMF element for back-reference by create-relationship
                 if (prepared.rawObject() instanceof IArchimateElement element) {
@@ -10690,6 +11659,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 String sourceId = requireParam(params, "sourceId");
                 String targetId = requireParam(params, "targetId");
                 String name = optionalParam(params, "name");
+                String specialization = optionalParam(params, "specialization");
 
                 // Check if source/target are back-referenced elements (not yet in model)
                 IArchimateElement sourceElement = findBackReferencedElement(
@@ -10700,7 +11670,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 PreparedMutation<RelationshipDto> prepared;
                 if (sourceElement != null && targetElement != null) {
                     prepared = prepareCreateRelationshipDirect(
-                            type, sourceElement, targetElement, name);
+                            type, sourceElement, targetElement, name, specialization);
                 } else if (sourceElement != null) {
                     // Source is back-ref, target is in model — need to look up target
                     IArchimateModel model = requireAndCaptureModel();
@@ -10711,7 +11681,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                                 ErrorCode.TARGET_ELEMENT_NOT_FOUND);
                     }
                     prepared = prepareCreateRelationshipDirect(
-                            type, sourceElement, target, name);
+                            type, sourceElement, target, name, specialization);
                 } else if (targetElement != null) {
                     // Target is back-ref, source is in model
                     IArchimateModel model = requireAndCaptureModel();
@@ -10722,10 +11692,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                                 ErrorCode.SOURCE_ELEMENT_NOT_FOUND);
                     }
                     prepared = prepareCreateRelationshipDirect(
-                            type, source, targetElement, name);
+                            type, source, targetElement, name, specialization);
                 } else {
                     // Both are existing model elements — standard path
-                    prepared = prepareCreateRelationship(type, sourceId, targetId, name);
+                    prepared = prepareCreateRelationship(type, sourceId, targetId, name, specialization);
                 }
                 // Store raw relationship for cross-level back-reference (C1 fix)
                 if (prepared.rawObject() instanceof IArchimateRelationship rel) {
@@ -10751,14 +11721,23 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 String name = optionalParam(params, "name");
                 String documentation = optionalParam(params, "documentation");
                 Map<String, String> properties = optionalStringMapWithNulls(params, "properties");
-                yield prepareUpdateElement(id, name, documentation, properties);
+                // Specialization clear semantics: empty string means "clear all profiles".
+                String specialization = optionalParam(params, "specialization");
+                if (params.containsKey("specialization") && "".equals(params.get("specialization"))) {
+                    specialization = "";
+                }
+                yield prepareUpdateElement(id, name, documentation, properties, specialization);
             }
             case "update-relationship" -> {
                 String id = requireParam(params, "id");
                 String name = optionalParam(params, "name");
                 String documentation = optionalParam(params, "documentation");
                 Map<String, String> properties = optionalStringMapWithNulls(params, "properties");
-                yield prepareUpdateRelationship(id, name, documentation, properties);
+                String specialization = optionalParam(params, "specialization");
+                if (params.containsKey("specialization") && "".equals(params.get("specialization"))) {
+                    specialization = "";
+                }
+                yield prepareUpdateRelationship(id, name, documentation, properties, specialization);
             }
             case "update-view" -> {
                 String viewId = requireParam(params, "viewId");
@@ -11019,6 +11998,23 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 String objectId = requireParam(params, "objectId");
                 String targetFolderId = requireParam(params, "targetFolderId");
                 yield prepareMoveToFolder(objectId, targetFolderId);
+            }
+            case "create-specialization" -> {
+                String name = requireParam(params, "name");
+                String conceptType = requireParam(params, "conceptType");
+                yield prepareCreateSpecialization(name, conceptType);
+            }
+            case "update-specialization" -> {
+                String name = requireParam(params, "name");
+                String conceptType = requireParam(params, "conceptType");
+                String newName = requireParam(params, "newName");
+                yield prepareUpdateSpecialization(name, conceptType, newName);
+            }
+            case "delete-specialization" -> {
+                String name = requireParam(params, "name");
+                String conceptType = requireParam(params, "conceptType");
+                boolean force = Boolean.TRUE.equals(optionalBoolParam(params, "force"));
+                yield prepareDeleteSpecialization(name, conceptType, force);
             }
             default -> throw new ModelAccessException(
                     "Unsupported tool '" + tool + "'. Supported: "
@@ -11532,8 +12528,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             case "add-connection-to-view" -> "connected";
             case "remove-from-view" -> "removed";
             case "clear-view" -> "cleared";
-            case "update-view", "update-view-object", "update-view-connection", "update-element", "update-relationship" -> "updated";
-            case "delete-element", "delete-relationship", "delete-view", "delete-folder" -> "deleted";
+            case "update-view", "update-view-object", "update-view-connection", "update-element", "update-relationship", "update-specialization" -> "updated";
+            case "delete-element", "delete-relationship", "delete-view", "delete-folder", "delete-specialization" -> "deleted";
             default -> "created";
         };
     }
@@ -11577,6 +12573,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         } else if (entity instanceof ViewNoteDto dto) {
             entityType = "DiagramModelNote";
             entityName = null;
+        } else if (entity instanceof Map<?, ?> map) {
+            // Specialization tools (Story C3c) return Map<String,Object>
+            Object ct = map.get("conceptType");
+            Object nm = map.get("name");
+            entityType = ct instanceof String s ? "Specialization:" + s : "Specialization";
+            entityName = nm instanceof String s ? s : null;
         }
 
         return new BulkOperationResult(index, tool, action,
@@ -11977,10 +12979,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             documentation = null;
         }
 
+        IProfile primaryProfile = element.getPrimaryProfile();
+        String specialization = (primaryProfile != null) ? primaryProfile.getName() : null;
+
         return ElementDto.standard(
                 element.getId(),
                 element.getName(),
                 type,
+                specialization,
                 layer,
                 documentation,
                 properties.isEmpty() ? null : properties);
@@ -11990,12 +12996,16 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      * Converts an EMF {@link IArchimateRelationship} to a {@link RelationshipDto}.
      */
     RelationshipDto convertToRelationshipDto(IArchimateRelationship relationship) {
+        IProfile primaryProfile = relationship.getPrimaryProfile();
+        String specialization = (primaryProfile != null) ? primaryProfile.getName() : null;
         return new RelationshipDto(
                 relationship.getId(),
                 relationship.getName(),
                 relationship.eClass().getName(),
+                specialization,
                 relationship.getSource() != null ? relationship.getSource().getId() : null,
-                relationship.getTarget() != null ? relationship.getTarget().getId() : null);
+                relationship.getTarget() != null ? relationship.getTarget().getId() : null,
+                false, null, null, null, null);
     }
 
     /**

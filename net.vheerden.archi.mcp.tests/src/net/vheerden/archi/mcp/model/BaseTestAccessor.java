@@ -93,16 +93,69 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
-    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                           String specializationFilter) {
         if (!modelLoaded) throw new NoModelLoadedException();
         return Collections.emptyList();
     }
 
     @Override
     public List<RelationshipDto> searchRelationships(String query, String typeFilter,
-                                                      String sourceLayerFilter, String targetLayerFilter) {
+                                                      String sourceLayerFilter, String targetLayerFilter,
+                                                      String specializationFilter) {
         if (!modelLoaded) throw new NoModelLoadedException();
         return Collections.emptyList();
+    }
+
+    @Override
+    public List<Map<String, Object>> listSpecializations(String conceptTypeFilter) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        return Collections.emptyList();
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> createSpecialization(String sessionId,
+            String name, String conceptType) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        Map<String, Object> dto = new java.util.LinkedHashMap<>();
+        dto.put("name", name);
+        dto.put("conceptType", conceptType);
+        dto.put("created", true);
+        return new MutationResult<>(dto, null);
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> updateSpecialization(String sessionId,
+            String name, String conceptType, String newName) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        Map<String, Object> dto = new java.util.LinkedHashMap<>();
+        dto.put("name", newName);
+        dto.put("conceptType", conceptType);
+        return new MutationResult<>(dto, null);
+    }
+
+    @Override
+    public MutationResult<Map<String, Object>> deleteSpecialization(String sessionId,
+            String name, String conceptType, boolean force) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        Map<String, Object> dto = new java.util.LinkedHashMap<>();
+        dto.put("name", name);
+        dto.put("conceptType", conceptType);
+        dto.put("deleted", true);
+        dto.put("clearedFromConcepts", 0);
+        return new MutationResult<>(dto, null);
+    }
+
+    @Override
+    public Map<String, Object> getSpecializationUsage(String name, String conceptType) {
+        if (!modelLoaded) throw new NoModelLoadedException();
+        Map<String, Object> dto = new java.util.LinkedHashMap<>();
+        dto.put("name", name);
+        dto.put("conceptType", conceptType);
+        dto.put("totalUsageCount", 0);
+        dto.put("elements", java.util.Collections.emptyList());
+        dto.put("relationships", java.util.Collections.emptyList());
+        return dto;
     }
 
     @Override
@@ -154,7 +207,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
-    public List<DuplicateCandidate> findDuplicates(String type, String name) {
+    public List<DuplicateCandidate> findDuplicates(String type, String name, String specialization) {
         if (!modelLoaded) throw new NoModelLoadedException();
         return Collections.emptyList();
     }
@@ -173,20 +226,21 @@ public class BaseTestAccessor implements ArchiModelAccessor {
 
     @Override
     public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
-            String documentation, Map<String, String> properties, String folderId) {
+            String documentation, Map<String, String> properties, String folderId,
+            String specialization) {
         throw new UnsupportedOperationException("createElement not implemented in test accessor");
     }
 
     @Override
     public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
             String documentation, Map<String, String> properties, String folderId,
-            Map<String, String> source) {
+            Map<String, String> source, String specialization) {
         throw new UnsupportedOperationException("createElement not implemented in test accessor");
     }
 
     @Override
     public MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
-            String sourceId, String targetId, String name) {
+            String sourceId, String targetId, String name, String specialization) {
         throw new UnsupportedOperationException("createRelationship not implemented in test accessor");
     }
 
@@ -204,13 +258,13 @@ public class BaseTestAccessor implements ArchiModelAccessor {
 
     @Override
     public MutationResult<ElementDto> updateElement(String sessionId, String id, String name,
-            String documentation, Map<String, String> properties) {
+            String documentation, Map<String, String> properties, String specialization) {
         throw new UnsupportedOperationException("updateElement not implemented in test accessor");
     }
 
     @Override
     public MutationResult<RelationshipDto> updateRelationship(String sessionId, String id,
-            String name, String documentation, Map<String, String> properties) {
+            String name, String documentation, Map<String, String> properties, String specialization) {
         throw new UnsupportedOperationException("updateRelationship not implemented in test accessor");
     }
 
@@ -301,6 +355,12 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
+    public AssessLayoutResultDto assessLayout(String viewId, boolean includeViolatorIds) {
+        throw new UnsupportedOperationException(
+                "assessLayout not implemented in test accessor");
+    }
+
+    @Override
     public ContentBounds getContentBounds(String viewId) {
         throw new UnsupportedOperationException(
                 "getContentBounds not implemented in test accessor");
@@ -350,7 +410,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     public MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
             List<String> elementIds, List<String> relationshipTypes,
-            Boolean showLabel) {
+            Boolean showLabel, StylingParams styling) {
         throw new UnsupportedOperationException(
                 "autoConnectView not implemented in test accessor");
     }

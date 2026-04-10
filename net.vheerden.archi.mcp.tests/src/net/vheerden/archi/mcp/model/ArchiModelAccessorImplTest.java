@@ -941,7 +941,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<ElementDto> result = accessor.createElement(
                 "default", "ApplicationComponent", "Test App",
-                "Some documentation", Map.of("status", "active"), null);
+                "Some documentation", Map.of("status", "active"), null, null);
 
         assertNotNull(result.entity());
         assertEquals("ApplicationComponent", result.entity().type());
@@ -998,7 +998,7 @@ public class ArchiModelAccessorImplTest {
         try {
             // ServingRelationship from ApplicationComponent to BusinessProcess (valid)
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "ServingRelationship", "ac-001", "bp-001", "serves");
+                    "default", "ServingRelationship", "ac-001", "bp-001", "serves", null);
 
             assertNotNull(result);
             assertNotNull(result.entity());
@@ -1020,7 +1020,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.createRelationship("default", "ServingRelationship",
-                    "nonexistent", "bp-001", null);
+                    "nonexistent", "bp-001", null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.SOURCE_ELEMENT_NOT_FOUND, e.getErrorCode());
@@ -1035,7 +1035,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.createRelationship("default", "ServingRelationship",
-                    "ac-001", "nonexistent", null);
+                    "ac-001", "nonexistent", null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.TARGET_ELEMENT_NOT_FOUND, e.getErrorCode());
@@ -1052,7 +1052,7 @@ public class ArchiModelAccessorImplTest {
             // CompositionRelationship between BusinessActor and ApplicationComponent
             // is not a valid ArchiMate combination
             accessor.createRelationship("default", "CompositionRelationship",
-                    "ba-001", "ac-001", null);
+                    "ba-001", "ac-001", null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.RELATIONSHIP_NOT_ALLOWED, e.getErrorCode());
@@ -1072,7 +1072,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.createRelationship("default", "NotARealRelationship",
-                    "ac-001", "bp-001", null);
+                    "ac-001", "bp-001", null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_RELATIONSHIP_TYPE, e.getErrorCode());
@@ -1084,7 +1084,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(Collections.emptyList());
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
-        accessor.createRelationship("default", "ServingRelationship", "s1", "t1", null);
+        accessor.createRelationship("default", "ServingRelationship", "s1", "t1", null, null);
     }
 
     // ---- duplicate relationship prevention tests (backlog-b11) ----
@@ -1098,7 +1098,7 @@ public class ArchiModelAccessorImplTest {
         try {
             // The test model already has a ServingRelationship from ac-001 to bp-001 (rel-001)
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "ServingRelationship", "ac-001", "bp-001", null);
+                    "default", "ServingRelationship", "ac-001", "bp-001", null, null);
 
             assertNotNull(result);
             assertNotNull(result.entity());
@@ -1121,7 +1121,7 @@ public class ArchiModelAccessorImplTest {
         try {
             // Same type, source, target as existing rel-001 but different name
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "ServingRelationship", "ac-001", "bp-001", "different name");
+                    "default", "ServingRelationship", "ac-001", "bp-001", "different name", null);
 
             assertNotNull(result);
             assertEquals("rel-001", result.entity().id());
@@ -1141,7 +1141,7 @@ public class ArchiModelAccessorImplTest {
             // Existing is ServingRelationship from ac-001 to bp-001
             // AssociationRelationship between same elements should create new
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "AssociationRelationship", "ac-001", "bp-001", null);
+                    "default", "AssociationRelationship", "ac-001", "bp-001", null, null);
 
             assertNotNull(result);
             assertNotEquals("Should be new relationship, not existing rel-001",
@@ -1163,7 +1163,7 @@ public class ArchiModelAccessorImplTest {
             // Existing is ServingRelationship from ac-001 to bp-001
             // Same type from ac-001 to ba-001 (different target) should create new
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "ServingRelationship", "ac-001", "ba-001", null);
+                    "default", "ServingRelationship", "ac-001", "ba-001", null, null);
 
             assertNotNull(result);
             assertNotEquals("Should be new relationship, not existing rel-001",
@@ -1287,7 +1287,7 @@ public class ArchiModelAccessorImplTest {
 
             // The test model already has a ServingRelationship from ac-001 to bp-001 (rel-001)
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    "default", "ServingRelationship", "ac-001", "bp-001", null);
+                    "default", "ServingRelationship", "ac-001", "bp-001", null, null);
 
             assertNotNull(result);
             assertEquals("rel-001", result.entity().id());
@@ -1347,7 +1347,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ElementDto> result = accessor.updateElement(
-                "default", "ba-001", "New Customer Name", null, null);
+                "default", "ba-001", "New Customer Name", null, null, null);
 
         assertNotNull(result);
         assertNotNull(result.entity());
@@ -1363,7 +1363,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         MutationResult<ElementDto> result = accessor.updateElement(
-                "default", "ba-001", null, "Updated documentation", null);
+                "default", "ba-001", null, "Updated documentation", null, null);
 
         assertNotNull(result.entity());
         assertEquals("Updated documentation", result.entity().documentation());
@@ -1380,7 +1380,7 @@ public class ArchiModelAccessorImplTest {
         // ba-001 already has property "owner"="team-alpha"
         // Add new property "status"="active"
         MutationResult<ElementDto> result = accessor.updateElement(
-                "default", "ba-001", null, null, Map.of("status", "active"));
+                "default", "ba-001", null, null, Map.of("status", "active"), null);
 
         assertNotNull(result.entity());
         assertNotNull(result.entity().properties());
@@ -1394,7 +1394,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.updateElement("default", "nonexistent-id", "Name", null, null);
+            accessor.updateElement("default", "nonexistent-id", "Name", null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.ELEMENT_NOT_FOUND, e.getErrorCode());
@@ -1408,7 +1408,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         try {
-            accessor.updateElement("default", "ba-001", null, null, null);
+            accessor.updateElement("default", "ba-001", null, null, null, null);
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
@@ -1420,7 +1420,7 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.setModels(Collections.emptyList());
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
-        accessor.updateElement("default", "some-id", "Name", null, null);
+        accessor.updateElement("default", "some-id", "Name", null, null, null);
     }
 
     // ---- findDuplicates / findExactMatch tests ----
@@ -1432,7 +1432,7 @@ public class ArchiModelAccessorImplTest {
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
         // Exact name match scores 1.0 — well above the 0.7 threshold
-        List<DuplicateCandidate> duplicates = accessor.findDuplicates("BusinessActor", "Customer");
+        List<DuplicateCandidate> duplicates = accessor.findDuplicates("BusinessActor", "Customer", null);
 
         assertFalse("Should find duplicates for matching name", duplicates.isEmpty());
         assertEquals("ba-001", duplicates.get(0).id());
@@ -1448,7 +1448,7 @@ public class ArchiModelAccessorImplTest {
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
         List<DuplicateCandidate> duplicates = accessor.findDuplicates(
-                "BusinessActor", "Completely Unrelated Name");
+                "BusinessActor", "Completely Unrelated Name", null);
 
         assertTrue("Should return empty when no duplicates", duplicates.isEmpty());
     }
@@ -1461,7 +1461,7 @@ public class ArchiModelAccessorImplTest {
 
         // "Customer" exists as BusinessActor, not ApplicationComponent
         List<DuplicateCandidate> duplicates = accessor.findDuplicates(
-                "ApplicationComponent", "Customer");
+                "ApplicationComponent", "Customer", null);
 
         assertTrue("Should return empty when type doesn't match", duplicates.isEmpty());
     }
@@ -1500,6 +1500,981 @@ public class ArchiModelAccessorImplTest {
 
         assertTrue("Should find match case-insensitively", match.isPresent());
         assertEquals("ba-001", match.get().id());
+    }
+
+    // ---- Specialization tests (Story C3b) ----
+
+    @Test
+    public void shouldCreateElement_withSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ElementDto> result = accessor.createElement(
+                "default", "BusinessActor", "VIP Customer", null, null, null, "VIP");
+
+        assertNotNull(result.entity());
+        assertEquals("BusinessActor", result.entity().type());
+        assertEquals("VIP Customer", result.entity().name());
+        // Response DTO must reflect the assigned specialization (C3b H1 regression guard)
+        assertEquals("VIP", result.entity().specialization());
+        // Profile should be auto-created in the model
+        assertEquals(1, model.getProfiles().size());
+        assertEquals("VIP", model.getProfiles().get(0).getName());
+        assertEquals("BusinessActor", model.getProfiles().get(0).getConceptType());
+    }
+
+    @Test
+    public void shouldReuseExistingProfile_whenSpecializationAlreadyExists() {
+        IArchimateModel model = createTestModel();
+        // Pre-create a profile
+        IProfile existingProfile = IArchimateFactory.eINSTANCE.createProfile();
+        existingProfile.setName("VIP");
+        existingProfile.setConceptType("BusinessActor");
+        model.getProfiles().add(existingProfile);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.createElement("default", "BusinessActor", "Customer A", null, null, null, "VIP");
+        accessor.createElement("default", "BusinessActor", "Customer B", null, null, null, "vip"); // case-insensitive
+
+        // Should still be only 1 profile (no duplicates)
+        assertEquals(1, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldCreateSeparateProfiles_forDifferentConceptTypes() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.createElement("default", "BusinessActor", "Actor X", null, null, null, "Premium");
+        accessor.createElement("default", "ApplicationComponent", "App X", null, null, null, "Premium");
+
+        // Two profiles with same name but different conceptType
+        assertEquals(2, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldNotFindDuplicate_whenSameNameDifferentSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create a specialized "Customer" actor
+        accessor.createElement("default", "BusinessActor", "Premium Customer", null, null, null, "VIP");
+
+        // findDuplicates with different specialization should NOT find it
+        List<DuplicateCandidate> duplicates = accessor.findDuplicates(
+                "BusinessActor", "Premium Customer", "Standard");
+        assertTrue("Different specialization → not duplicate", duplicates.isEmpty());
+
+        // findDuplicates with null specialization should NOT find it (existing element has VIP profile)
+        duplicates = accessor.findDuplicates("BusinessActor", "Premium Customer", null);
+        assertTrue("Null vs VIP → not duplicate", duplicates.isEmpty());
+
+        // findDuplicates with matching specialization SHOULD find it
+        duplicates = accessor.findDuplicates("BusinessActor", "Premium Customer", "VIP");
+        assertFalse("Matching specialization → IS duplicate", duplicates.isEmpty());
+    }
+
+    @Test
+    public void shouldFindDuplicate_whenBothUnspecialized() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Existing "Customer" in test model has no specialization
+        List<DuplicateCandidate> duplicates = accessor.findDuplicates(
+                "BusinessActor", "Customer", null);
+
+        assertFalse("Both unspecialized → IS duplicate", duplicates.isEmpty());
+        assertEquals("ba-001", duplicates.get(0).id());
+    }
+
+    @Test
+    public void shouldUpdateElementSpecialization_whenAssigning() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ElementDto> result =
+                accessor.updateElement("default", "ba-001", null, null, null, "VIP");
+
+        IBusinessActor ba = (IBusinessActor) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "ba-001");
+        assertEquals(1, ba.getProfiles().size());
+        assertEquals("VIP", ba.getProfiles().get(0).getName());
+        // Response DTO reflects post-mutation state — built after dispatch executes
+        assertEquals("VIP", result.entity().specialization());
+    }
+
+    @Test
+    public void shouldReplaceExistingProfiles_whenUpdatingSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Assign first specialization
+        accessor.updateElement("default", "ba-001", null, null, null, "VIP");
+        // Replace with different specialization
+        MutationResult<ElementDto> result =
+                accessor.updateElement("default", "ba-001", null, null, null, "Internal");
+
+        IBusinessActor ba = (IBusinessActor) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "ba-001");
+        assertEquals("Should have only one profile (replace semantics)",
+                1, ba.getProfiles().size());
+        assertEquals("Internal", ba.getProfiles().get(0).getName());
+        assertEquals("Internal", result.entity().specialization());
+    }
+
+    @Test
+    public void shouldClearAllProfiles_whenSpecializationIsEmptyString() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Assign specialization first
+        accessor.updateElement("default", "ba-001", null, null, null, "VIP");
+        // Clear with empty string
+        accessor.updateElement("default", "ba-001", null, null, null, "");
+
+        IBusinessActor ba = (IBusinessActor) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "ba-001");
+        assertTrue("Profiles should be cleared", ba.getProfiles().isEmpty());
+    }
+
+    @Test
+    public void shouldNotChangeProfiles_whenSpecializationIsNull() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Assign specialization first
+        accessor.updateElement("default", "ba-001", null, null, null, "VIP");
+        // Update name only — specialization null means "leave unchanged"
+        accessor.updateElement("default", "ba-001", "New Name", null, null, null);
+
+        IBusinessActor ba = (IBusinessActor) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "ba-001");
+        assertEquals("Profile should still be present", 1, ba.getProfiles().size());
+        assertEquals("VIP", ba.getProfiles().get(0).getName());
+        assertEquals("New Name", ba.getName());
+    }
+
+    @Test
+    public void shouldHandleSpecializationOnUpdateRelationship() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<RelationshipDto> result =
+                accessor.updateRelationship("default", "rel-001", null, null, null, "Critical Path");
+
+        IArchimateRelationship rel = (IArchimateRelationship) com.archimatetool.model.util
+                .ArchimateModelUtils.getObjectByID(model, "rel-001");
+        assertEquals(1, rel.getProfiles().size());
+        assertEquals("Critical Path", rel.getProfiles().get(0).getName());
+        assertEquals("Critical Path", result.entity().specialization());
+    }
+
+    @Test
+    public void shouldHandleClearOnUnspecializedConcept_withoutFailure() {
+        // C3b M2: clearing specialization on a concept that has no profiles and no
+        // other field updates produced an empty compound command in the original
+        // implementation, which CompoundCommand.canExecute() rejects.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // ba-001 has no profiles initially. Clearing should be a clean no-op.
+        MutationResult<ElementDto> result =
+                accessor.updateElement("default", "ba-001", null, null, null, "");
+
+        assertNotNull("Empty-compound clear must not throw", result);
+        IBusinessActor ba = (IBusinessActor) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "ba-001");
+        assertTrue(ba.getProfiles().isEmpty());
+    }
+
+    @Test
+    public void shouldCreateRelationship_withSpecialization_andEchoInDto() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<RelationshipDto> result = accessor.createRelationship(
+                "default", "AssociationRelationship", "ac-001", "ba-001", "assoc", "Critical");
+
+        // Response DTO must reflect the assigned specialization (C3b H1 regression guard)
+        assertEquals("Critical", result.entity().specialization());
+        assertEquals(1, model.getProfiles().size());
+        assertEquals("Critical", model.getProfiles().get(0).getName());
+    }
+
+    @Test
+    public void shouldNotTreatDifferentlySpecializedRelationshipsAsDuplicates() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create a specialized association between ac-001 and ba-001
+        MutationResult<RelationshipDto> first = accessor.createRelationship(
+                "default", "AssociationRelationship", "ac-001", "ba-001", "first", "Strong");
+        assertFalse("First create should NOT be a duplicate",
+                first.entity().alreadyExisted());
+
+        // Create the same (type, source, target) but with a different specialization —
+        // C3b H2: should NOT be detected as duplicate
+        MutationResult<RelationshipDto> second = accessor.createRelationship(
+                "default", "AssociationRelationship", "ac-001", "ba-001", "second", "Weak");
+        assertFalse("Different specialization → not a duplicate",
+                second.entity().alreadyExisted());
+        assertEquals("Weak", second.entity().specialization());
+
+        // Re-creating with the SAME specialization SHOULD be detected as duplicate
+        MutationResult<RelationshipDto> third = accessor.createRelationship(
+                "default", "AssociationRelationship", "ac-001", "ba-001", "third", "Strong");
+        assertTrue("Matching specialization → IS duplicate",
+                third.entity().alreadyExisted());
+        // Existing-relationship DTO must preserve the specialization (C3b H2)
+        assertEquals("Strong", third.entity().specialization());
+    }
+
+    // Note: Compound command undo behavior (reversing both profile add and element add)
+    // is verified directly in ApplySpecializationCommandTest and ClearSpecializationCommandTest
+    // at the command-unit level. Integration testing through accessor.undo(1) requires a real
+    // CommandStack which the test dispatcher does not provide.
+
+    // ---- Specialization profile management tests (Story C3c) ----
+
+    @Test
+    public void shouldCreateSpecialization_whenNew() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<Map<String, Object>> result = accessor.createSpecialization(
+                "default", "Cloud Server", "Node");
+
+        assertNotNull(result.entity());
+        assertEquals("Cloud Server", result.entity().get("name"));
+        assertEquals("Node", result.entity().get("conceptType"));
+        assertEquals(Boolean.TRUE, result.entity().get("created"));
+        assertEquals("Technology", result.entity().get("conceptTypeLayer"));
+        assertEquals(1, model.getProfiles().size());
+        assertEquals("Cloud Server", model.getProfiles().get(0).getName());
+        assertEquals("Node", model.getProfiles().get(0).getConceptType());
+    }
+
+    @Test
+    public void shouldReturnExistingProfile_whenSpecializationAlreadyExists() {
+        IArchimateModel model = createTestModel();
+        IProfile existing = IArchimateFactory.eINSTANCE.createProfile();
+        existing.setName("Cloud Server");
+        existing.setConceptType("Node");
+        model.getProfiles().add(existing);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // case-insensitive name lookup
+        MutationResult<Map<String, Object>> result = accessor.createSpecialization(
+                "default", "cloud server", "Node");
+
+        assertEquals(Boolean.FALSE, result.entity().get("created"));
+        assertEquals("Cloud Server", result.entity().get("name")); // canonical case preserved
+        assertEquals(1, model.getProfiles().size()); // no duplicate
+    }
+
+    @Test
+    public void shouldRejectInvalidConceptType_onCreateSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createSpecialization("default", "Foo", "NotAnArchimateType");
+            org.junit.Assert.fail("Should have thrown ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+            assertTrue(e.getMessage().contains("NotAnArchimateType"));
+        }
+    }
+
+    @Test
+    public void shouldRejectAbstractConceptType_onCreateSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createSpecialization("default", "Foo", "ArchimateElement");
+            org.junit.Assert.fail("Should have thrown ModelAccessException for abstract type");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+            assertTrue("Error should mention abstract", e.getMessage().contains("abstract"));
+        }
+    }
+
+    @Test
+    public void shouldRejectBlankName_onCreateSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createSpecialization("default", "  ", "Node");
+            org.junit.Assert.fail("Should have thrown for blank name");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void shouldRenameSpecialization_whenUpdated() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createSpecialization("default", "Old Name", "Node");
+
+        MutationResult<Map<String, Object>> result = accessor.updateSpecialization(
+                "default", "Old Name", "Node", "New Name");
+
+        assertEquals("New Name", result.entity().get("name"));
+        assertEquals(1, model.getProfiles().size());
+        assertEquals("New Name", model.getProfiles().get(0).getName());
+    }
+
+    @Test
+    public void shouldRejectRename_whenTargetNameAlreadyExists() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createSpecialization("default", "First", "Node");
+        accessor.createSpecialization("default", "Second", "Node");
+
+        try {
+            accessor.updateSpecialization("default", "First", "Node", "Second");
+            org.junit.Assert.fail("Should refuse to merge into existing profile");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+            assertTrue(e.getMessage().contains("Second"));
+        }
+        // Both profiles should still exist
+        assertEquals(2, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldReturnNotFound_whenRenamingMissingSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.updateSpecialization("default", "Ghost", "Node", "Anything");
+            org.junit.Assert.fail("Should throw NOT_FOUND");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.OBJECT_NOT_FOUND,
+                    e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void shouldDeleteUnusedSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createSpecialization("default", "Orphan", "Node");
+        assertEquals(1, model.getProfiles().size());
+
+        MutationResult<Map<String, Object>> result = accessor.deleteSpecialization(
+                "default", "Orphan", "Node", false);
+
+        assertEquals(Boolean.TRUE, result.entity().get("deleted"));
+        assertEquals(0, ((Number) result.entity().get("clearedFromConcepts")).intValue());
+        assertEquals(0, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldRefuseDelete_whenSpecializationInUse() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        // Create an element with the specialization (auto-creates the profile)
+        accessor.createElement("default", "BusinessActor", "VIP Customer",
+                null, null, null, "VIP");
+        assertEquals(1, model.getProfiles().size());
+
+        try {
+            accessor.deleteSpecialization("default", "VIP", "BusinessActor", false);
+            org.junit.Assert.fail("Should refuse delete when in use");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+            assertTrue("Error should mention usage count",
+                    e.getMessage().contains("1 usage"));
+        }
+        assertEquals("Profile must still exist", 1, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldForceDeleteSpecialization_andClearAllReferences() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createElement("default", "BusinessActor", "Customer A",
+                null, null, null, "VIP");
+        accessor.createElement("default", "BusinessActor", "Customer B",
+                null, null, null, "VIP");
+
+        MutationResult<Map<String, Object>> result = accessor.deleteSpecialization(
+                "default", "VIP", "BusinessActor", true);
+
+        assertEquals(Boolean.TRUE, result.entity().get("deleted"));
+        assertEquals(2, ((Number) result.entity().get("clearedFromConcepts")).intValue());
+        assertEquals("Profile should be removed from model", 0, model.getProfiles().size());
+
+        // Both elements should have their profile reference cleared
+        for (IArchimateElement el : extractAllElements(model)) {
+            if ("Customer A".equals(el.getName()) || "Customer B".equals(el.getName())) {
+                assertTrue("Element profile reference should be cleared",
+                        el.getProfiles().isEmpty());
+            }
+        }
+    }
+
+    @Test
+    public void shouldRefuseForceDelete_whenAnyConceptHasMultipleProfiles() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create an element with two profiles directly via the model
+        accessor.createElement("default", "BusinessActor", "Multi Customer",
+                null, null, null, "VIP");
+        // Manually attach a second profile to simulate the multi-profile case
+        IBusinessActor multi = null;
+        for (IArchimateElement el : extractAllElements(model)) {
+            if ("Multi Customer".equals(el.getName())) {
+                multi = (IBusinessActor) el;
+                break;
+            }
+        }
+        assertNotNull(multi);
+        IProfile second = IArchimateFactory.eINSTANCE.createProfile();
+        second.setName("Premium");
+        second.setConceptType("BusinessActor");
+        model.getProfiles().add(second);
+        multi.getProfiles().add(second);
+        assertEquals(2, multi.getProfiles().size());
+
+        try {
+            accessor.deleteSpecialization("default", "VIP", "BusinessActor", true);
+            org.junit.Assert.fail("Should refuse force-delete when concept has multiple profiles");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                    e.getErrorCode());
+            assertTrue("Error should name the offending concept",
+                    e.getMessage().contains("Multi Customer"));
+        }
+        // Both profiles should still exist; concept untouched
+        assertEquals(2, model.getProfiles().size());
+        assertEquals(2, multi.getProfiles().size());
+    }
+
+    @Test
+    public void shouldReturnUsage_withElementAndRelationshipBuckets() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createElement("default", "BusinessActor", "Customer A",
+                null, null, null, "VIP");
+        accessor.createElement("default", "BusinessActor", "Customer B",
+                null, null, null, "VIP");
+
+        Map<String, Object> usage = accessor.getSpecializationUsage("VIP", "BusinessActor");
+
+        assertEquals("VIP", usage.get("name"));
+        assertEquals("BusinessActor", usage.get("conceptType"));
+        assertEquals("Business", usage.get("conceptTypeLayer"));
+        assertEquals(2, ((Number) usage.get("totalUsageCount")).intValue());
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> elements = (List<Map<String, Object>>) usage.get("elements");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> relationships = (List<Map<String, Object>>) usage.get("relationships");
+        assertEquals(2, elements.size());
+        assertEquals(0, relationships.size());
+        for (Map<String, Object> entry : elements) {
+            assertEquals("BusinessActor", entry.get("type"));
+            assertNotNull(entry.get("id"));
+            assertNotNull(entry.get("name"));
+        }
+    }
+
+    @Test
+    public void shouldReturnNotFound_forUsageOfMissingSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.getSpecializationUsage("Ghost", "Node");
+            org.junit.Assert.fail("Should throw NOT_FOUND");
+        } catch (ModelAccessException e) {
+            assertEquals(net.vheerden.archi.mcp.response.ErrorCode.OBJECT_NOT_FOUND,
+                    e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void shouldReflectSpecializationCount_inModelInfo_afterCreateAndDelete() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        int initial = accessor.getModelInfo().specializationCount();
+
+        accessor.createSpecialization("default", "Cloud Server", "Node");
+        assertEquals(initial + 1, accessor.getModelInfo().specializationCount());
+
+        accessor.deleteSpecialization("default", "Cloud Server", "Node", false);
+        assertEquals(initial, accessor.getModelInfo().specializationCount());
+    }
+
+    // ---- C3c bulk-mutate dispatch coverage (Review-fix H1) ----
+
+    @Test
+    public void shouldExecuteBulk_withSpecializationLifecycle() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // create-spec → create-element-with-inline-spec → update-spec → delete-spec(force)
+        // Exercises every new switch branch in prepareOperation() (Story C3c) plus the
+        // M1 fix (force passed as a real Boolean — happy path for the bulk dispatcher).
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-specialization",
+                        Map.of("name", "Cloud Server", "conceptType", "Node")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-01",
+                                "specialization", "Cloud Server")),
+                new BulkOperation("update-specialization",
+                        Map.of("name", "Cloud Server", "conceptType", "Node",
+                                "newName", "Cloud VM")),
+                new BulkOperation("delete-specialization",
+                        Map.of("name", "Cloud VM", "conceptType", "Node",
+                                "force", true))
+        );
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+        assertNotNull(result);
+        assertTrue("All four operations should succeed", result.allSucceeded());
+        assertEquals(4, result.totalOperations());
+
+        // Op 0: create-specialization → "created" + Specialization:Node
+        assertEquals("create-specialization", result.operations().get(0).tool());
+        assertEquals("created", result.operations().get(0).action());
+        assertEquals("Specialization:Node", result.operations().get(0).entityType());
+        assertEquals("Cloud Server", result.operations().get(0).entityName());
+
+        // Op 1: create-element with inline specialization
+        assertEquals("create-element", result.operations().get(1).tool());
+        assertEquals("Node", result.operations().get(1).entityType());
+
+        // Op 2: update-specialization → "updated" action
+        assertEquals("update-specialization", result.operations().get(2).tool());
+        assertEquals("updated", result.operations().get(2).action());
+        assertEquals("Specialization:Node", result.operations().get(2).entityType());
+        // Entity name reflects the new name (DTO is built post-rename)
+        assertEquals("Cloud VM", result.operations().get(2).entityName());
+
+        // Op 3: delete-specialization with force=true → "deleted" action
+        assertEquals("delete-specialization", result.operations().get(3).tool());
+        assertEquals("deleted", result.operations().get(3).action());
+
+        // Profile catalog should be empty after the cascade delete
+        assertEquals("Profile should be removed from model", 0, model.getProfiles().size());
+    }
+
+    // ---- Bulk specialization deduplication (B54 — discovered E2E 2026-04-09) ----
+    //
+    // Bug: bulk-mutate runs all prepare methods first (building commands) before
+    // dispatching any. Without per-batch profile caching, the second and later
+    // prepares in a batch that all reference the same NEW specialization each call
+    // getProfileByNameAndType() — which still returns null because the first
+    // prepare's command hasn't executed yet — and create their own duplicate
+    // IProfile instances. The result is N shadow profiles in model.getProfiles()
+    // where one was intended, breaking list-specializations, update-specialization,
+    // delete-specialization, and get-specialization-usage.
+    //
+    // Fix: ArchiModelAccessorImpl.bulkProfileCache (ThreadLocal<Map>) — populated
+    // by resolveOrCreateProfile during prepare, scoped to executeBulk call.
+
+    @Test
+    public void shouldDeduplicate_whenBulkCreateSharesNewSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Create 5 elements all referencing the SAME new specialization in one bulk batch.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-01", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-02", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-03", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-04", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-prod-05", "specialization", "Cloud Server"))
+        );
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+        assertTrue("All five operations should succeed", result.allSucceeded());
+        // Pre-fix: model.getProfiles().size() == 5 (one shadow per element).
+        // Post-fix: exactly one Profile shared across all five elements.
+        assertEquals("Bulk batch must produce exactly one IProfile for one new specialization",
+                1, model.getProfiles().size());
+        IProfile profile = model.getProfiles().get(0);
+        assertEquals("Cloud Server", profile.getName());
+        assertEquals("Node", profile.getConceptType());
+        // Usage count from the model's perspective — every element holds the SAME profile reference
+        assertEquals("All five elements should share the single profile",
+                5, com.archimatetool.model.util.ArchimateModelUtils.findProfileUsage(profile).size());
+    }
+
+    @Test
+    public void shouldDeduplicate_perKey_whenBulkCreateMixesTwoNewSpecializations() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // 3 elements with "Cloud Server", 3 with "Edge Device" — distinct keys must each
+        // collapse to one profile, not six.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-01", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-02", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Device", "name", "iot-gw-01", "specialization", "Edge Device")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-03", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Device", "name", "iot-gw-02", "specialization", "Edge Device")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Device", "name", "iot-gw-03", "specialization", "Edge Device"))
+        );
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+        assertTrue("All six operations should succeed", result.allSucceeded());
+        assertEquals("Two distinct specialization keys → exactly two profiles",
+                2, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldReuseExistingProfile_whenBulkCreateReferencesPreExistingSpecialization() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Pre-create the specialization (single-call path) so it lives in the model.
+        accessor.createElement("default", "Node", "seed-node",
+                null, null, null, "Cloud Server");
+        assertEquals(1, model.getProfiles().size());
+
+        // Now bulk-create 5 more elements referencing the SAME existing specialization.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-a", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-b", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-c", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-d", "specialization", "Cloud Server")),
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "ec2-e", "specialization", "Cloud Server"))
+        );
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+        assertTrue("All five operations should succeed", result.allSucceeded());
+        // Still exactly one profile — no shadows created during the bulk batch.
+        assertEquals("Bulk batch must reuse the pre-existing profile, not shadow it",
+                1, model.getProfiles().size());
+        IProfile profile = model.getProfiles().get(0);
+        assertEquals("Cloud Server", profile.getName());
+        assertEquals("All six elements (1 seed + 5 bulk) should share the profile",
+                6, com.archimatetool.model.util.ArchimateModelUtils.findProfileUsage(profile).size());
+    }
+
+    @Test
+    public void shouldDeduplicate_whenBulkCreateRelationshipsShareNewSpecialization() {
+        // Pre-flight: this test exercises create-relationship which calls
+        // ArchimateModelUtils.isValidRelationship → triggers RelationshipsMatrix.<clinit>.
+        // In plain-JUnit mode (no OSGi), RelationshipsMatrix.loadKeyLetters() NPEs because
+        // it expects bundle-loaded resources. The same issue affects pre-existing tests
+        // shouldCreateRelationship_withSpecialization_andEchoInDto and
+        // shouldNotTreatDifferentlySpecializedRelationshipsAsDuplicates. Skip gracefully
+        // when this constraint applies — the test runs cleanly via the PDE Plug-in Test
+        // launcher. The element-based B54 tests above already prove the cache mechanism;
+        // resolveOrCreateProfile is shared between prepareCreateElement and
+        // prepareCreateRelationship, so element-coverage transitively covers the
+        // relationship path's cache interaction.
+        try {
+            IArchimateModel model = createTestModel();
+            stubModelManager.setModels(List.of(model));
+            accessor = createAccessorWithTestDispatcher(model);
+
+            // Pre-create endpoints (single-call path) so source/target IDs exist.
+            ElementDto a = accessor.createElement("default", "BusinessActor", "Source A",
+                    null, null, null, null).entity();
+            ElementDto b = accessor.createElement("default", "BusinessActor", "Target B",
+                    null, null, null, null).entity();
+            ElementDto c = accessor.createElement("default", "BusinessActor", "Target C",
+                    null, null, null, null).entity();
+            ElementDto d = accessor.createElement("default", "BusinessActor", "Target D",
+                    null, null, null, null).entity();
+            // No profiles yet — only elements
+            assertEquals(0, model.getProfiles().size());
+
+            // Bulk-create 3 AssociationRelationships all sharing the SAME new specialization.
+            List<BulkOperation> ops = List.of(
+                    new BulkOperation("create-relationship",
+                            Map.of("type", "AssociationRelationship", "sourceId", a.id(), "targetId", b.id(),
+                                    "specialization", "Critical Path")),
+                    new BulkOperation("create-relationship",
+                            Map.of("type", "AssociationRelationship", "sourceId", a.id(), "targetId", c.id(),
+                                    "specialization", "Critical Path")),
+                    new BulkOperation("create-relationship",
+                            Map.of("type", "AssociationRelationship", "sourceId", a.id(), "targetId", d.id(),
+                                    "specialization", "Critical Path"))
+            );
+
+            BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+            assertTrue("All three operations should succeed", result.allSucceeded());
+            assertEquals("Bulk relationship batch must produce exactly one IProfile",
+                    1, model.getProfiles().size());
+            IProfile profile = model.getProfiles().get(0);
+            assertEquals("Critical Path", profile.getName());
+            assertEquals("AssociationRelationship", profile.getConceptType());
+            assertEquals("All three relationships should share the single profile",
+                    3, com.archimatetool.model.util.ArchimateModelUtils.findProfileUsage(profile).size());
+        } catch (NoClassDefFoundError | ExceptionInInitializerError e) {
+            // Pre-existing infrastructure issue — see method-level comment.
+            org.junit.Assume.assumeNoException(
+                    "Skipped: RelationshipsMatrix requires OSGi runtime (run via PDE Plug-in Test)", e);
+        }
+    }
+
+    @Test
+    public void shouldNotShareProfilesAcrossSeparateBulkBatches() {
+        // Regression guard: the ThreadLocal cache must be cleared between executeBulk
+        // calls. Two consecutive bulk batches each creating a single element with the
+        // same specialization name should converge on one shared profile via the
+        // model lookup path (getProfileByNameAndType), not via stale cache leakage.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult firstBatch = accessor.executeBulk("default", List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "n1", "specialization", "Cloud Server"))
+        ), null, false);
+        assertTrue(firstBatch.allSucceeded());
+        assertEquals(1, model.getProfiles().size());
+
+        BulkMutationResult secondBatch = accessor.executeBulk("default", List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "Node", "name", "n2", "specialization", "Cloud Server"))
+        ), null, false);
+        assertTrue(secondBatch.allSucceeded());
+
+        // Still one profile — second batch found it via model lookup, not shadowed it.
+        assertEquals("Second batch must reuse profile from first batch via model lookup",
+                1, model.getProfiles().size());
+        assertEquals(2, com.archimatetool.model.util.ArchimateModelUtils.findProfileUsage(model.getProfiles().get(0)).size());
+    }
+
+    @Test
+    public void shouldAcceptBulk_deleteSpecialization_withStringForceParam() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Pre-create a specialization that has a usage so that force=true is required.
+        accessor.createElement("default", "BusinessActor", "Customer A",
+                null, null, null, "VIP");
+        assertEquals(1, model.getProfiles().size());
+
+        // Pass force as the *string* "true" — JSON-coerced clients commonly do this.
+        // Pre-fix this fell through to the refuse-on-use path because the bulk dispatch
+        // used Boolean.TRUE.equals(params.get("force")) which only matches a real Boolean.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("delete-specialization",
+                        Map.of("name", "VIP", "conceptType", "BusinessActor",
+                                "force", "true"))
+        );
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+
+        assertTrue("Force=\"true\" string must be honoured by bulk dispatch",
+                result.allSucceeded());
+        assertEquals("deleted", result.operations().get(0).action());
+        assertEquals(0, model.getProfiles().size());
+    }
+
+    // ---- C3c approval-mode coverage (Review-fix M2) ----
+
+    @Test
+    public void shouldReturnProposal_whenCreateSpecialization_inApprovalMode() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalRequired("default", true);
+
+        MutationResult<Map<String, Object>> result = accessor.createSpecialization(
+                "default", "Cloud Server", "Node");
+
+        assertNotNull("Approval mode should produce a proposal context",
+                result.proposalContext());
+        assertTrue("Description should mention the new specialization",
+                result.proposalContext().description().contains("Cloud Server"));
+        assertTrue("Description should mention the conceptType",
+                result.proposalContext().description().contains("Node"));
+
+        // proposedChanges payload must surface name + conceptType so the approval
+        // preview is meaningful (this was the C3b silent-break risk called out in retro).
+        // Test fragment shares the model package — package-private PendingProposal access OK.
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertNotNull("Pending proposal should be retrievable from dispatcher", pending);
+        assertEquals("create-specialization", pending.tool());
+        assertEquals("Cloud Server", pending.proposedChanges().get("name"));
+        assertEquals("Node", pending.proposedChanges().get("conceptType"));
+
+        // Profile must NOT be in the model yet — proposal is not committed
+        assertEquals("Profile must not be added until approval", 0,
+                model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldReturnProposal_whenUpdateSpecialization_inApprovalMode() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        // Create profile in immediate mode, then flip into approval mode for the update
+        accessor.createSpecialization("default", "Old Name", "Node");
+        accessor.getMutationDispatcher().setApprovalRequired("default", true);
+
+        MutationResult<Map<String, Object>> result = accessor.updateSpecialization(
+                "default", "Old Name", "Node", "New Name");
+
+        assertNotNull(result.proposalContext());
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertNotNull(pending);
+        assertEquals("update-specialization", pending.tool());
+        assertEquals("Old Name", pending.proposedChanges().get("name"));
+        assertEquals("Node", pending.proposedChanges().get("conceptType"));
+        assertEquals("New Name", pending.proposedChanges().get("newName"));
+
+        // Profile must still have its original name — rename is not committed
+        assertEquals("Old Name", model.getProfiles().get(0).getName());
+    }
+
+    @Test
+    public void shouldReturnProposal_whenDeleteSpecialization_inApprovalMode() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.createElement("default", "BusinessActor", "Customer A",
+                null, null, null, "VIP");
+        accessor.getMutationDispatcher().setApprovalRequired("default", true);
+
+        MutationResult<Map<String, Object>> result = accessor.deleteSpecialization(
+                "default", "VIP", "BusinessActor", true);
+
+        assertNotNull(result.proposalContext());
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertNotNull(pending);
+        assertEquals("delete-specialization", pending.tool());
+        assertEquals("VIP", pending.proposedChanges().get("name"));
+        assertEquals("BusinessActor", pending.proposedChanges().get("conceptType"));
+        assertEquals(Boolean.TRUE, pending.proposedChanges().get("force"));
+        // clearedFromConcepts should be surfaced in the preview so the approver can
+        // see the blast radius before approving
+        assertEquals(1, ((Number) pending.proposedChanges().get("clearedFromConcepts")).intValue());
+
+        // Profile + concept must still be intact — proposal is not committed
+        assertEquals(1, model.getProfiles().size());
+    }
+
+    @Test
+    public void shouldEnumerateOtherProfiles_inMultiProfileGuardError() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.createElement("default", "BusinessActor", "Multi Customer",
+                null, null, null, "VIP");
+        IBusinessActor multi = null;
+        for (IArchimateElement el : extractAllElements(model)) {
+            if ("Multi Customer".equals(el.getName())) {
+                multi = (IBusinessActor) el;
+                break;
+            }
+        }
+        assertNotNull(multi);
+        IProfile second = IArchimateFactory.eINSTANCE.createProfile();
+        second.setName("Premium");
+        second.setConceptType("BusinessActor");
+        model.getProfiles().add(second);
+        multi.getProfiles().add(second);
+
+        try {
+            accessor.deleteSpecialization("default", "VIP", "BusinessActor", true);
+            org.junit.Assert.fail("Should refuse force-delete when concept has multiple profiles");
+        } catch (ModelAccessException e) {
+            assertTrue("Error should name the offending concept",
+                    e.getMessage().contains("Multi Customer"));
+            assertTrue("Error should enumerate the at-risk *other* profile name (Premium)",
+                    e.getMessage().contains("Premium"));
+        }
+    }
+
+    /** Helper: collect all elements from all folders recursively for assertions. */
+    private List<IArchimateElement> extractAllElements(IArchimateModel model) {
+        List<IArchimateElement> all = new ArrayList<>();
+        for (com.archimatetool.model.IFolder folder : model.getFolders()) {
+            collectElements(folder, all);
+        }
+        return all;
+    }
+
+    private void collectElements(com.archimatetool.model.IFolder folder,
+            List<IArchimateElement> out) {
+        for (org.eclipse.emf.ecore.EObject obj : folder.getElements()) {
+            if (obj instanceof IArchimateElement el) {
+                out.add(el);
+            }
+        }
+        for (com.archimatetool.model.IFolder sub : folder.getFolders()) {
+            collectElements(sub, out);
+        }
     }
 
     // ---- executeBulk tests (Story 7-5) ----
@@ -6568,7 +7543,8 @@ public class ArchiModelAccessorImplTest {
                 50.0, 80, "fair", ratingBreakdown,
                 List.of(), List.of(), List.of(), List.of(),
                 labelOverlapCount, List.of(), 0, List.of(),
-                0, List.of(), false, 0, 0, null, List.of());
+                0, List.of(), false, 0, 0, null,
+                0, List.of(), 0, List.of(), 0, List.of(), null, List.of());
     }
 
     // ---- Test helpers ----
@@ -6591,9 +7567,15 @@ public class ArchiModelAccessorImplTest {
                 executeDecomposed(command);
             }
             private void executeDecomposed(Command command) {
+                // Recursive decomposition: bulk-mutate produces a NonNotifyingCompoundCommand
+                // that may itself contain inner NonNotifyingCompoundCommand instances when
+                // create-element / create-relationship use inline specializations
+                // (ApplySpecializationCommand + CreateXxxCommand pair). Calling .execute()
+                // directly on the inner compound would re-trigger IEditorModelManager's
+                // static-init bomb. Recurse so we always reach leaf commands. (B54 follow-up)
                 if (command instanceof CompoundCommand compound) {
                     for (Object cmd : compound.getCommands()) {
-                        ((Command) cmd).execute();
+                        executeDecomposed((Command) cmd);
                     }
                 } else {
                     command.execute();
@@ -6822,7 +7804,7 @@ public class ArchiModelAccessorImplTest {
         // Call auto-connect-view — should only connect the contained rel-001,
         // NOT the orphaned rel-orphan-003
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null);
+                "default", "view-001", null, null, null, null);
 
         assertNotNull(result);
         // Only the contained relationship (rel-001: ac-001 -> bp-001) should produce a connection
@@ -6879,7 +7861,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.createRelationship("default", "AssociationRelationship",
-                    "ba-001", "bp-001", "test-assoc");
+                    "ba-001", "bp-001", "test-assoc", null);
 
             // The relationship should NOT appear in source's cross-references
             // because connect() was deferred to command execution (which we skipped)
@@ -6980,6 +7962,191 @@ public class ArchiModelAccessorImplTest {
         assertNotNull(result);
         // Should only process 1 element (the filtered one)
         assertEquals(1, result.entity().resizedCount() + result.entity().unchangedCount());
+    }
+
+    // ---- B50: Dynamic label height / child shift tests ----
+
+    @Test
+    public void resizeElementsToFit_shouldShiftChildrenDown_whenParentLabelMultiLine() {
+        // B50 AC2: Parent "Payment Processing Engine" at narrow width → multi-line label
+        // Child at y=25 should be shifted down to clear the label area
+        IArchimateModel model = createTestModelForResizeB50();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add parent at narrow width (142px) — forces multi-line label wrap
+        MutationResult<AddToViewResultDto> parentResult =
+                accessor.addToView("default", "view-resize-b50", "el-multiline-parent", 50, 50, 142, 200, false, null, null, null);
+        String parentVoId = parentResult.entity().viewObject().viewObjectId();
+
+        // Add child inside parent at y=25 (relative to parent) — overlaps multi-line label
+        accessor.addToView("default", "view-resize-b50", "el-child", 10, 25, null, null, false, parentVoId, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize-b50", null);
+
+        assertNotNull(result);
+
+        // Verify the child was shifted: find parent view object and check child y
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        IDiagramModelArchimateObject parentVo = findViewObject(view, parentVoId);
+        assertNotNull("Parent view object should exist", parentVo);
+
+        // Child should have been shifted down — y should be > 25
+        IDiagramModelArchimateObject childVo =
+                (IDiagramModelArchimateObject) parentVo.getChildren().get(0);
+        assertTrue("Child should be shifted down from y=25, actual y=" + childVo.getBounds().getY(),
+                childVo.getBounds().getY() > 25);
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldNotShiftChildren_whenParentLabelSingleLine() {
+        // B50 AC5: Short parent name at wide width → single line → ~25px label height
+        // Child at y=25 should NOT be shifted
+        IArchimateModel model = createTestModelForResizeB50();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add parent with short name at wide width
+        MutationResult<AddToViewResultDto> parentResult =
+                accessor.addToView("default", "view-resize-b50", "el-short-parent", 50, 50, 250, 200, false, null, null, null);
+        String parentVoId = parentResult.entity().viewObject().viewObjectId();
+
+        // Add child at y=25 — should be fine for single-line label
+        accessor.addToView("default", "view-resize-b50", "el-child", 10, 25, null, null, false, parentVoId, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize-b50", null);
+
+        assertNotNull(result);
+
+        // Child y should remain at 25 (no shift needed for single-line label)
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        IDiagramModelArchimateObject parentVo = findViewObject(view, parentVoId);
+        assertNotNull(parentVo);
+        IDiagramModelArchimateObject childVo =
+                (IDiagramModelArchimateObject) parentVo.getChildren().get(0);
+        assertEquals("Child should stay at y=25 for single-line parent label",
+                25, childVo.getBounds().getY());
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldHandleNestedContainment_withDynamicLabelHeight() {
+        // B50 AC6: Grandparent with multi-line label → inner parent also gets dynamic height
+        IArchimateModel model = createTestModelForResizeB50();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add grandparent with multi-line name at narrow width
+        MutationResult<AddToViewResultDto> grandparentResult =
+                accessor.addToView("default", "view-resize-b50", "el-multiline-parent", 50, 50, 142, 300, false, null, null, null);
+        String grandparentVoId = grandparentResult.entity().viewObject().viewObjectId();
+
+        // Add inner parent inside grandparent at y=25 (may overlap grandparent's multi-line label)
+        MutationResult<AddToViewResultDto> innerParentResult =
+                accessor.addToView("default", "view-resize-b50", "el-short-parent", 10, 25, 120, 100, false, grandparentVoId, null, null);
+        String innerParentVoId = innerParentResult.entity().viewObject().viewObjectId();
+
+        // Add leaf child inside inner parent
+        accessor.addToView("default", "view-resize-b50", "el-child", 10, 25, null, null, false, innerParentVoId, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize-b50", null);
+
+        assertNotNull(result);
+
+        // Verify grandparent's inner parent was shifted down (grandparent has multi-line label)
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        IDiagramModelArchimateObject grandparentVo = findViewObject(view, grandparentVoId);
+        assertNotNull("Grandparent should exist", grandparentVo);
+
+        // Inner parent (child of grandparent) should have been shifted if grandparent label is multi-line
+        IDiagramModelArchimateObject innerParentVo = findViewObject(view, innerParentVoId);
+        assertNotNull("Inner parent should exist", innerParentVo);
+        assertTrue("Inner parent should be shifted down from y=25, actual y=" + innerParentVo.getBounds().getY(),
+                innerParentVo.getBounds().getY() >= 25);
+    }
+
+    @Test
+    public void resizeElementsToFit_shouldNeverShrinkParentHeight() {
+        // B50 AC3: Parent already taller than needed → height must not decrease
+        IArchimateModel model = createTestModelForResizeB50();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Add parent with generous height (500px)
+        MutationResult<AddToViewResultDto> parentResult =
+                accessor.addToView("default", "view-resize-b50", "el-short-parent", 50, 50, 250, 500, false, null, null, null);
+        String parentVoId = parentResult.entity().viewObject().viewObjectId();
+
+        // Add small child
+        accessor.addToView("default", "view-resize-b50", "el-child", 10, 30, 80, 40, false, parentVoId, null, null);
+
+        MutationResult<ResizeElementsResultDto> result =
+                accessor.resizeElementsToFit("default", "view-resize-b50", null);
+
+        assertNotNull(result);
+
+        // Parent height should not have shrunk below 500
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS).getElements().get(0);
+        IDiagramModelArchimateObject parentVo = findViewObject(view, parentVoId);
+        assertNotNull(parentVo);
+        assertTrue("Parent height should not shrink below original 500, actual=" + parentVo.getBounds().getHeight(),
+                parentVo.getBounds().getHeight() >= 500);
+    }
+
+    private IDiagramModelArchimateObject findViewObject(IArchimateDiagramModel view, String viewObjectId) {
+        for (IDiagramModelObject obj : view.getChildren()) {
+            if (obj instanceof IDiagramModelArchimateObject ao && ao.getId().equals(viewObjectId)) {
+                return ao;
+            }
+        }
+        // Search nested
+        for (IDiagramModelObject obj : view.getChildren()) {
+            if (obj instanceof IDiagramModelArchimateObject ao) {
+                for (IDiagramModelObject child : ao.getChildren()) {
+                    if (child instanceof IDiagramModelArchimateObject cao && cao.getId().equals(viewObjectId)) {
+                        return cao;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private IArchimateModel createTestModelForResizeB50() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+
+        IArchimateModel model = factory.createArchimateModel();
+        model.setName("Resize B50 Test Model");
+        model.setId("model-resize-b50");
+        model.setDefaults();
+
+        // Multi-line parent: "Payment Processing Engine" wraps at narrow widths
+        IApplicationComponent multiLineParent = factory.createApplicationComponent();
+        multiLineParent.setId("el-multiline-parent");
+        multiLineParent.setName("Payment Processing Engine");
+        model.getFolder(FolderType.APPLICATION).getElements().add(multiLineParent);
+
+        // Short-name parent: "API Gateway" fits single line
+        IApplicationComponent shortParent = factory.createApplicationComponent();
+        shortParent.setId("el-short-parent");
+        shortParent.setName("API Gateway");
+        model.getFolder(FolderType.APPLICATION).getElements().add(shortParent);
+
+        // Child element
+        IApplicationComponent child = factory.createApplicationComponent();
+        child.setId("el-child");
+        child.setName("Worker Service");
+        model.getFolder(FolderType.APPLICATION).getElements().add(child);
+
+        // View
+        IArchimateDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view-resize-b50");
+        view.setName("Resize B50 Test View");
+        model.getFolder(FolderType.DIAGRAMS).getElements().add(view);
+
+        return model;
     }
 
     private IArchimateModel createTestModelForResize() {

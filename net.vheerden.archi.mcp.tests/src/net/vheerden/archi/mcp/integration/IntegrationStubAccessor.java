@@ -41,7 +41,7 @@ class IntegrationStubAccessor extends BaseTestAccessor {
         relTypeDist.put("ServingRelationship", 1);
         Map<String, Integer> layerDist = new LinkedHashMap<>();
         layerDist.put("Application", 2);
-        return new ModelInfoDto("Integration Test Model", 2, 1, 1,
+        return new ModelInfoDto("Integration Test Model", 2, 1, 1, 0,
                 typeDist, relTypeDist, layerDist);
     }
 
@@ -51,12 +51,12 @@ class IntegrationStubAccessor extends BaseTestAccessor {
         if ("elem-int-1".equals(id)) {
             return Optional.of(ElementDto.standard(
                     "elem-int-1", "Customer Portal", "ApplicationComponent",
-                    "Application", "Main web portal", List.of()));
+                    null, "Application", "Main web portal", List.of()));
         }
         if ("elem-int-2".equals(id)) {
             return Optional.of(ElementDto.standard(
                     "elem-int-2", "API Gateway", "ApplicationComponent",
-                    "Application", "REST API gateway", List.of()));
+                    null, "Application", "REST API gateway", List.of()));
         }
         return Optional.empty();
     }
@@ -73,9 +73,9 @@ class IntegrationStubAccessor extends BaseTestAccessor {
         if ("view-int-1".equals(viewId)) {
             List<ElementDto> elements = List.of(
                     ElementDto.standard("elem-int-1", "Customer Portal",
-                            "ApplicationComponent", "Application", "Main web portal", List.of()),
+                            "ApplicationComponent", null, "Application", "Main web portal", List.of()),
                     ElementDto.standard("elem-int-2", "API Gateway",
-                            "ApplicationComponent", "Application", "REST API gateway", List.of()));
+                            "ApplicationComponent", null, "Application", "REST API gateway", List.of()));
             List<RelationshipDto> relationships = List.of(
                     new RelationshipDto("rel-int-1", "Serves", "ServingRelationship",
                             "elem-int-1", "elem-int-2"));
@@ -115,7 +115,8 @@ class IntegrationStubAccessor extends BaseTestAccessor {
 
     @Override
     public List<RelationshipDto> searchRelationships(String query, String typeFilter,
-                                                      String sourceLayerFilter, String targetLayerFilter) {
+                                                      String sourceLayerFilter, String targetLayerFilter,
+                                                      String specializationFilter) {
         if (!isModelLoaded()) throw new NoModelLoadedException();
         String lowerQuery = query.toLowerCase();
         RelationshipDto rel = new RelationshipDto("rel-int-1", "Serves",
@@ -129,14 +130,15 @@ class IntegrationStubAccessor extends BaseTestAccessor {
     }
 
     @Override
-    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+    public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                           String specializationFilter) {
         if (!isModelLoaded()) throw new NoModelLoadedException();
         String lowerQuery = query.toLowerCase();
         List<ElementDto> all = List.of(
                 ElementDto.standard("elem-int-1", "Customer Portal",
-                        "ApplicationComponent", "Application", "Main web portal", List.of()),
+                        "ApplicationComponent", null, "Application", "Main web portal", List.of()),
                 ElementDto.standard("elem-int-2", "API Gateway",
-                        "ApplicationComponent", "Application", "REST API gateway", List.of()));
+                        "ApplicationComponent", null, "Application", "REST API gateway", List.of()));
         return all.stream()
                 .filter(e -> typeFilter == null || typeFilter.equals(e.type()))
                 .filter(e -> layerFilter == null || layerFilter.equals(e.layer()))

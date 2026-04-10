@@ -1743,8 +1743,21 @@ public class ViewPlacementHandler {
         viewIdProp.put("type", "string");
         viewIdProp.put("description", "ID of the view to assess");
 
+        Map<String, Object> includeViolatorIdsProp = new LinkedHashMap<>();
+        includeViolatorIdsProp.put("type", "boolean");
+        includeViolatorIdsProp.put("description",
+                "If true, includes a violatorIds map with per-metric visual object IDs "
+                + "of elements/connections that violate each metric. Enables targeted "
+                + "surgical fixes instead of global re-layout. Covers: overlaps (both "
+                + "element IDs), passThroughs (connection IDs, cross-element only), "
+                + "coincidentSegments (connection IDs), nonOrthogonalTerminals (connection "
+                + "IDs), boundaryViolations (child element IDs). Crossings excluded "
+                + "(emergent property, not per-connection fixable). Empty metrics omitted. "
+                + "Default: false.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
+        properties.put("includeViolatorIds", includeViolatorIdsProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("viewId"), null, null, null);
@@ -1790,7 +1803,26 @@ public class ViewPlacementHandler {
                         + "of all visual content (elements, groups, notes) in absolute canvas coordinates. "
                         + "Use this for safe placement calculations — e.g., place a title note at "
                         + "(contentBounds.x, contentBounds.y - 40) without inspecting individual elements. "
-                        + "Null/omitted on empty views.")
+                        + "Null/omitted on empty views.\n\n"
+                        + "INFORMATIONAL DETECTIONS (no rating impact): "
+                        + "`labelTruncationCount` / `labelTruncations` — elements whose label text "
+                        + "exceeds the available display width (element width minus type-icon area). "
+                        + "Use resize-elements-to-fit or increase element width to fix. "
+                        + "`parentLabelObscuredCount` / `parentLabelObscuredDescriptions` — parent "
+                        + "elements (groups) whose label text area is overlapped by the topmost child. "
+                        + "Move children down or increase parent top padding. "
+                        + "`imageSiblingOverlapCount` / `imageSiblingOverlapDescriptions` — elements "
+                        + "with images whose image area is overlapped by a sibling element. "
+                        + "Increase element spacing or reposition the image.\n\n"
+                        + "VIOLATOR IDS (opt-in via includeViolatorIds=true): "
+                        + "Returns a `violatorIds` map keyed by metric name, each value a list "
+                        + "of visual object IDs. Use these IDs with update-view-object or "
+                        + "remove-from-view for targeted per-element/per-connection fixes. "
+                        + "Metrics: overlaps (both element IDs from each pair), passThroughs "
+                        + "(connection IDs, cross-element only), coincidentSegments (connection "
+                        + "IDs), nonOrthogonalTerminals (connection IDs), boundaryViolations "
+                        + "(child element IDs). Crossings excluded — use auto-route-connections "
+                        + "for crossing reduction. Empty metrics omitted from map.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -1808,8 +1840,9 @@ public class ViewPlacementHandler {
 
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
+            boolean includeViolatorIds = Boolean.TRUE.equals(args.get("includeViolatorIds"));
 
-            AssessLayoutResultDto dto = accessor.assessLayout(viewId);
+            AssessLayoutResultDto dto = accessor.assessLayout(viewId, includeViolatorIds);
 
             List<String> nextSteps = buildAssessLayoutNextSteps(dto);
             String modelVersion = accessor.getModelVersion();
@@ -2228,6 +2261,7 @@ public class ViewPlacementHandler {
         properties.put("elementIds", elementIdsProp);
         properties.put("relationshipTypes", relTypesProp);
         properties.put("showLabel", showLabelProp);
+        addConnectionStylingProperties(properties);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("viewId"), null, null, null);
@@ -2244,6 +2278,11 @@ public class ViewPlacementHandler {
                         + "omitting the filter connects ALL relationship types which can "
                         + "clutter the diagram. "
                         + "Optional: showLabel (false to suppress labels on all created connections). "
+                        + "Optional: lineColor (#RRGGBB hex, empty string clears), "
+                        + "fontColor (#RRGGBB hex, empty string clears), "
+                        + "lineWidth (1-3) — applied to all created connections. "
+                        + "TIP: Call multiple times with different relationshipTypes + lineColor "
+                        + "to colour-code connections by type (e.g. blue for API calls, orange for events). "
                         + "Related: add-connection-to-view (single connection), "
                         + "auto-route-connections (compute bendpoints for existing connections).")
                 .inputSchema(inputSchema)
@@ -2268,10 +2307,11 @@ public class ViewPlacementHandler {
             List<String> elementIds = extractStringList(args, "elementIds");
             List<String> relationshipTypes = extractStringList(args, "relationshipTypes");
             Boolean showLabel = (args.get("showLabel") instanceof Boolean b) ? b : null;
+            StylingParams styling = extractStylingParams(args);
 
             MutationResult<AutoConnectResultDto> result =
                     accessor.autoConnectView(sessionId, viewId, elementIds,
-                            relationshipTypes, showLabel);
+                            relationshipTypes, showLabel, styling);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildAutoConnectNextSteps(result), accessor, formatter);

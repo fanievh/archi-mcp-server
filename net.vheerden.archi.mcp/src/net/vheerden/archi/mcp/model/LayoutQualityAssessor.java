@@ -87,9 +87,12 @@ class LayoutQualityAssessor {
 
     /**
      * Runs full layout quality assessment on the given nodes and connections.
+     *
+     * @param includeViolatorIds if true, collects per-metric violator IDs (B55)
      */
     LayoutAssessmentResult assess(List<AssessmentNode> nodes,
-                                   List<AssessmentConnection> connections) {
+                                   List<AssessmentConnection> connections,
+                                   boolean includeViolatorIds) {
         // Story 11-15: Separate notes from layout nodes.
         // Notes are excluded from all scoring metrics but used for informational overlap detection.
         List<AssessmentNode> layoutNodes = new ArrayList<>();
@@ -106,14 +109,14 @@ class LayoutQualityAssessor {
         Set<String> containmentPairs = buildContainmentPairs(layoutNodes);
 
         // Single-pass overlap detection: sibling + containment counts (notes excluded)
-        OverlapResult overlapResult = computeOverlaps(layoutNodes, containmentPairs);
+        OverlapResult overlapResult = computeOverlaps(layoutNodes, containmentPairs, includeViolatorIds);
         int crossingCount = countEdgeCrossings(connections);
         double avgSpacing = computeAverageSpacing(layoutNodes, containmentPairs);
         int alignment = computeAlignmentScore(layoutNodes);
         // Label overlap detection (Story 10-8) — must precede rating/suggestions
         LabelOverlapResult labelResult = countLabelOverlaps(connections, layoutNodes);
-        List<String> boundaryViolations = detectBoundaryViolations(layoutNodes);
-        List<String> passThroughs = detectPassThroughs(connections, layoutNodes);
+        BoundaryViolationResult boundaryResult = detectBoundaryViolations(layoutNodes, includeViolatorIds);
+        PassThroughResult passThroughResult = detectPassThroughs(connections, layoutNodes, includeViolatorIds);
         // Story 11-12: count groups for group-aware suggestions
         boolean hasGroups = false;
         for (AssessmentNode node : layoutNodes) {
@@ -122,25 +125,31 @@ class LayoutQualityAssessor {
                 break;
             }
         }
-        // Story 11-23: Coincident segment detection
-        int coincidentSegmentCount = coincidentDetector.countCoincidentSegments(connections);
-        // B38: Non-orthogonal terminal detection
-        int nonOrthogonalTerminalCount = countNonOrthogonalTerminals(connections);
+        // Story 11-23: Coincident segment detection (B55: optional violator IDs)
+        CoincidentSegmentDetector.CoincidentSegmentResult coincidentResult =
+                coincidentDetector.detectCoincidentSegments(connections, includeViolatorIds);
+        int coincidentSegmentCount = coincidentResult.count();
+        // B38: Non-orthogonal terminal detection (B55: optional violator IDs)
+        NonOrthogonalTerminalResult nonOrthResult =
+                countNonOrthogonalTerminals(connections, includeViolatorIds);
+        int nonOrthogonalTerminalCount = nonOrthResult.count();
 
         // Rating and suggestions use sibling overlaps only (Story 9-0d)
         // Story 11-19, B38: use breakdown-aware rating with grouped-view leniency and tiered model
+        // B54: Rating uses cross-element PT count only (self-element PTs don't penalise)
         RatingResult ratingResult = computeRatingWithBreakdown(
                 overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
-                labelResult.count(), passThroughs.size(), coincidentSegmentCount,
+                labelResult.count(), passThroughResult.crossElementCount(), coincidentSegmentCount,
                 nonOrthogonalTerminalCount, connections.size(), hasGroups);
         String rating = ratingResult.rating();
         Map<String, String> ratingBreakdown = ratingResult.breakdown();
         List<String> offCanvas = detectOffCanvas(layoutNodes);
         List<String> suggestions = generateSuggestions(
                 overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
-                boundaryViolations.size(), offCanvas.size(), layoutNodes.size(),
+                boundaryResult.descriptions().size(), offCanvas.size(), layoutNodes.size(),
                 labelResult.count(), hasGroups, connections.size(), coincidentSegmentCount,
-                nonOrthogonalTerminalCount, labelResult.shortSegmentCount());
+                nonOrthogonalTerminalCount, labelResult.shortSegmentCount(),
+                overlapResult.containmentCount());
 
         // Story 11-12: density-aware crossing metric
         double crossingsPerConnection = connections.size() > 0
@@ -152,17 +161,61 @@ class LayoutQualityAssessor {
         // Story 11-29: Compute bounding box of ALL visual content (elements + groups + notes)
         ContentBounds contentBounds = computeContentBounds(nodes);
 
+        // B53: Informational detection (label truncation, parent label obscured, image sibling overlap)
+        LabelTruncationResult labelTruncResult = detectLabelTruncation(layoutNodes);
+        ParentLabelObscuredResult parentLabelResult = detectParentLabelObscuredByChild(layoutNodes);
+        ImageSiblingOverlapResult imageSiblingResult = detectImageSiblingOverlap(layoutNodes);
+
+        // B55: Build violator IDs map (only when requested, omit empty metrics)
+        Map<String, Set<String>> violatorIds = null;
+        if (includeViolatorIds) {
+            violatorIds = new LinkedHashMap<>();
+            if (!overlapResult.violatorIds().isEmpty()) {
+                violatorIds.put("overlaps", overlapResult.violatorIds());
+            }
+            if (!passThroughResult.violatorIds().isEmpty()) {
+                violatorIds.put("passThroughs", passThroughResult.violatorIds());
+            }
+            // Map coincident connection indices back to IDs
+            if (!coincidentResult.violatorConnectionIndices().isEmpty()) {
+                Set<String> coincidentIds = new HashSet<>();
+                for (int idx : coincidentResult.violatorConnectionIndices()) {
+                    if (idx >= 0 && idx < connections.size()) {
+                        coincidentIds.add(connections.get(idx).id());
+                    }
+                }
+                if (!coincidentIds.isEmpty()) {
+                    violatorIds.put("coincidentSegments", coincidentIds);
+                }
+            }
+            if (!nonOrthResult.violatorIds().isEmpty()) {
+                violatorIds.put("nonOrthogonalTerminals", nonOrthResult.violatorIds());
+            }
+            if (!boundaryResult.violatorIds().isEmpty()) {
+                violatorIds.put("boundaryViolations", boundaryResult.violatorIds());
+            }
+            if (violatorIds.isEmpty()) {
+                violatorIds = null;
+            }
+        }
+
         // Orphan detection is done at EMF level in ArchiModelAccessorImpl, not here.
         // Pass 0/empty — the accessor merges orphan data into the DTO directly.
         return new LayoutAssessmentResult(
                 overlapResult.siblingCount(), overlapResult.containmentCount(),
                 crossingCount, avgSpacing, alignment, rating, ratingBreakdown,
-                overlapResult.siblingDescriptions(), boundaryViolations, passThroughs,
+                overlapResult.siblingDescriptions(), boundaryResult.descriptions(),
+                passThroughResult.descriptions(),
                 offCanvas, labelResult.count(), labelResult.descriptions(),
                 0, List.of(), connections.size(), crossingsPerConnection,
                 noteOverlapResult.count(), noteOverlapResult.descriptions(),
                 hasGroups, coincidentSegmentCount, nonOrthogonalTerminalCount,
-                contentBounds, suggestions);
+                contentBounds,
+                labelTruncResult.count(), labelTruncResult.descriptions(),
+                parentLabelResult.count(), parentLabelResult.descriptions(),
+                imageSiblingResult.count(), imageSiblingResult.descriptions(),
+                violatorIds,
+                suggestions);
     }
 
     // ---- Containment relationship helpers (Story 9-0d: transitive closure) ----
@@ -243,13 +296,15 @@ class LayoutQualityAssessor {
 
     /** Combined sibling + containment counts and descriptions from a single pass. */
     record OverlapResult(int siblingCount, int containmentCount,
-                         List<String> siblingDescriptions) {}
+                         List<String> siblingDescriptions, Set<String> violatorIds) {}
 
     OverlapResult computeOverlaps(List<AssessmentNode> nodes,
-                                   Set<String> containmentPairs) {
+                                   Set<String> containmentPairs,
+                                   boolean collectViolatorIds) {
         int siblingCount = 0;
         int containmentCount = 0;
         List<String> siblingDescriptions = new ArrayList<>();
+        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
         for (int i = 0; i < nodes.size(); i++) {
             for (int j = i + 1; j < nodes.size(); j++) {
                 AssessmentNode a = nodes.get(i);
@@ -269,10 +324,14 @@ class LayoutQualityAssessor {
                         siblingDescriptions.add("Element '" + a.id()
                                 + "' overlaps with element '" + b.id() + "'");
                     }
+                    if (collectViolatorIds) {
+                        violatorIds.add(a.id());
+                        violatorIds.add(b.id());
+                    }
                 }
             }
         }
-        return new OverlapResult(siblingCount, containmentCount, siblingDescriptions);
+        return new OverlapResult(siblingCount, containmentCount, siblingDescriptions, violatorIds);
     }
 
     private boolean rectanglesOverlap(AssessmentNode a, AssessmentNode b) {
@@ -505,7 +564,7 @@ class LayoutQualityAssessor {
      * logic (B38): Tier 1 (critical) can produce "poor", Tier 2 (moderate) caps at "fair",
      * Tier 3 (cosmetic) caps at "good".</p>
      *
-     * @param hasGroups when true, crossing leniency applies if passThroughs &lt;= FAIR_MAX_PASS_THROUGHS
+     * @param hasGroups when true, crossing leniency applies if passThroughCount (cross-element only, B54) &lt;= FAIR_MAX_PASS_THROUGHS
      */
     RatingResult computeRatingWithBreakdown(int overlaps, int crossings,
                                              double avgSpacing, int alignmentScore,
@@ -675,22 +734,33 @@ class LayoutQualityAssessor {
      * (or last two) path points is neither horizontal nor vertical (within tolerance).
      * Counts per-connection, not per-segment, to avoid over-counting.
      */
-    int countNonOrthogonalTerminals(List<AssessmentConnection> connections) {
+    /** Result of non-orthogonal terminal detection (B55: adds violator IDs). */
+    record NonOrthogonalTerminalResult(int count, Set<String> violatorIds) {}
+
+    NonOrthogonalTerminalResult countNonOrthogonalTerminals(
+            List<AssessmentConnection> connections, boolean collectViolatorIds) {
         int count = 0;
+        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
         for (AssessmentConnection conn : connections) {
             List<double[]> path = conn.pathPoints();
             if (path.size() < 2) continue;
             // Check source terminal (first two points)
             if (isNonOrthogonal(path.get(0), path.get(1))) {
                 count++;
+                if (collectViolatorIds) {
+                    violatorIds.add(conn.id());
+                }
                 continue;
             }
             // Check target terminal (last two points)
             if (isNonOrthogonal(path.get(path.size() - 2), path.get(path.size() - 1))) {
                 count++;
+                if (collectViolatorIds) {
+                    violatorIds.add(conn.id());
+                }
             }
         }
-        return count;
+        return new NonOrthogonalTerminalResult(count, violatorIds);
     }
 
     private boolean isNonOrthogonal(double[] p1, double[] p2) {
@@ -702,13 +772,18 @@ class LayoutQualityAssessor {
 
     // ---- Boundary Violation Detection ----
 
-    List<String> detectBoundaryViolations(List<AssessmentNode> nodes) {
+    /** Result of boundary violation detection (B55: adds violator IDs). */
+    record BoundaryViolationResult(List<String> descriptions, Set<String> violatorIds) {}
+
+    BoundaryViolationResult detectBoundaryViolations(List<AssessmentNode> nodes,
+                                                      boolean collectViolatorIds) {
         Map<String, AssessmentNode> nodeMap = new HashMap<>();
         for (AssessmentNode node : nodes) {
             nodeMap.put(node.id(), node);
         }
 
         List<String> violations = new ArrayList<>();
+        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
         for (AssessmentNode child : nodes) {
             if (child.parentId() == null) continue;
 
@@ -721,19 +796,33 @@ class LayoutQualityAssessor {
                     || child.y() < parent.y()
                     || child.x() + child.width() > parent.x() + parent.width()
                     || child.y() + child.height() > parent.y() + parent.height()) {
-                violations.add("Element '" + child.id()
-                        + "' extends outside parent group '" + parent.id() + "'");
+                if (violations.size() < MAX_DESCRIPTIONS) {
+                    violations.add("Element '" + child.id()
+                            + "' extends outside parent group '" + parent.id() + "'");
+                }
+                if (collectViolatorIds) {
+                    violatorIds.add(child.id());
+                }
             }
-
-            if (violations.size() >= MAX_DESCRIPTIONS) break;
         }
-        return violations;
+        return new BoundaryViolationResult(violations, violatorIds);
     }
 
     // ---- Connection Pass-Through Detection (Finding #3: exclude ancestor groups) ----
 
-    List<String> detectPassThroughs(List<AssessmentConnection> connections,
-                                     List<AssessmentNode> nodes) {
+    /**
+     * Result of pass-through detection separating cross-element and self-element counts (B54).
+     * The descriptions list contains both types for informational reporting.
+     * The crossElementCount is used for rating penalty calculation.
+     */
+    record PassThroughResult(List<String> descriptions, int crossElementCount,
+                             Set<String> violatorIds) {
+        int totalCount() { return descriptions.size(); }
+    }
+
+    PassThroughResult detectPassThroughs(List<AssessmentConnection> connections,
+                                     List<AssessmentNode> nodes,
+                                     boolean collectViolatorIds) {
         // Build node map for ancestor lookups
         Map<String, AssessmentNode> nodeMap = new HashMap<>();
         for (AssessmentNode node : nodes) {
@@ -741,9 +830,11 @@ class LayoutQualityAssessor {
         }
 
         List<String> descriptions = new ArrayList<>();
+        int crossElementCount = 0;
+        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
 
         for (AssessmentConnection conn : connections) {
-            if (descriptions.size() >= MAX_DESCRIPTIONS) break;
+            boolean descriptionsCapped = descriptions.size() >= MAX_DESCRIPTIONS;
 
             // Collect IDs to exclude: source, target, ancestors, and ALL descendants of source/target
             Set<String> excludeIds = new HashSet<>();
@@ -763,16 +854,20 @@ class LayoutQualityAssessor {
                     nodeMap.get(conn.targetNodeId()));
 
             for (AssessmentNode node : nodes) {
-                if (descriptions.size() >= MAX_DESCRIPTIONS) break;
-
                 // Skip source, target, ancestors, descendants, and groups (transparent containers, Story 10-22)
                 if (excludeIds.contains(node.id()) || node.isGroup()) {
                     continue;
                 }
 
                 if (pathPassesThroughNode(clippedPath, node)) {
-                    descriptions.add("Connection '" + conn.id()
-                            + "' passes through element '" + node.id() + "'");
+                    if (!descriptionsCapped) {
+                        descriptions.add("Connection '" + conn.id()
+                                + "' passes through element '" + node.id() + "'");
+                    }
+                    crossElementCount++;
+                    if (collectViolatorIds) {
+                        violatorIds.add(conn.id());
+                    }
                     break; // Only report each connection once per element
                 }
             }
@@ -781,7 +876,8 @@ class LayoutQualityAssessor {
             // Check if any non-terminal segment of the clipped path passes through
             // the connection's own source or target element. Terminal segments naturally
             // touch the endpoints, but intermediate segments should not cross them.
-            if (descriptions.size() < MAX_DESCRIPTIONS && clippedPath.size() >= 3) {
+            // B54: Self-element PTs are tracked in descriptions but NOT counted as cross-element.
+            if (!descriptionsCapped && clippedPath.size() >= 3) {
                 AssessmentNode tgtNode = nodeMap.get(conn.targetNodeId());
                 if (tgtNode != null && !tgtNode.isGroup()) {
                     if (nonTerminalPassesThroughNode(clippedPath, tgtNode, true)) {
@@ -800,7 +896,7 @@ class LayoutQualityAssessor {
                 }
             }
         }
-        return descriptions;
+        return new PassThroughResult(descriptions, crossElementCount, violatorIds);
     }
 
     /**
@@ -1374,6 +1470,182 @@ class LayoutQualityAssessor {
         return new NoteOverlapResult(count, descriptions);
     }
 
+    // ---- B53: Informational Detection (label truncation, parent label obscured, image sibling overlap) ----
+
+    /** Estimated type icon width in pixels (right-aligned in Archi elements). */
+    static final double TYPE_ICON_WIDTH = 16.0;
+    /** Estimated label area height for single-line labels. */
+    static final double ESTIMATED_LABEL_HEIGHT = LABEL_CHAR_HEIGHT + LABEL_PADDING_Y; // 20px
+    /** Estimated image icon size (width and height) for non-fill positions. */
+    static final double IMAGE_ICON_SIZE = 24.0;
+
+    record LabelTruncationResult(int count, List<String> descriptions) {}
+    record ParentLabelObscuredResult(int count, List<String> descriptions) {}
+    record ImageSiblingOverlapResult(int count, List<String> descriptions) {}
+
+    /**
+     * Detects element labels that are truncated after word wrapping.
+     * Archi word-wraps labels, so a label wider than the element can still fit
+     * if it wraps to multiple lines within the available height.
+     * Truncation is detected when the estimated wrapped height exceeds the element height.
+     * Skips groups, notes, and elements with null/empty names.
+     * Informational only — does NOT affect rating.
+     */
+    LabelTruncationResult detectLabelTruncation(List<AssessmentNode> nodes) {
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        for (AssessmentNode node : nodes) {
+            if (node.isGroup() || node.isNote() || node.name() == null || node.name().isEmpty()) {
+                continue;
+            }
+            double availableWidth = node.width() - TYPE_ICON_WIDTH;
+            if (availableWidth <= 0) {
+                continue;
+            }
+            double textWidth = node.labelTextWidth();
+            if (textWidth <= 0 || textWidth <= availableWidth) {
+                continue; // fits on single line
+            }
+            // Archi word-wraps labels — estimate whether wrapped text overflows vertically
+            int estimatedLines = (int) Math.ceil(textWidth / availableWidth);
+            double neededHeight = estimatedLines * LABEL_CHAR_HEIGHT + LABEL_PADDING_Y;
+            if (neededHeight > node.height()) {
+                count++;
+                if (descriptions.size() < MAX_DESCRIPTIONS) {
+                    descriptions.add(String.format(
+                            "Element '%s' label (~%d lines, %.0fpx wide) may be truncated in %dx%d element at (%.0f,%.0f)",
+                            node.name(), estimatedLines, textWidth,
+                            (int) node.width(), (int) node.height(),
+                            node.x(), node.y()));
+                }
+            }
+        }
+        return new LabelTruncationResult(count, descriptions);
+    }
+
+    /**
+     * Detects parents whose label text area is overlapped by their first (topmost) child.
+     * Informational only — does NOT affect rating.
+     */
+    ParentLabelObscuredResult detectParentLabelObscuredByChild(List<AssessmentNode> nodes) {
+        // Build parent→children map from parentId back-references
+        Map<String, List<AssessmentNode>> childrenByParent = new LinkedHashMap<>();
+        Map<String, AssessmentNode> nodeById = new LinkedHashMap<>();
+        for (AssessmentNode node : nodes) {
+            nodeById.put(node.id(), node);
+            if (node.parentId() != null) {
+                childrenByParent.computeIfAbsent(node.parentId(), k -> new ArrayList<>()).add(node);
+            }
+        }
+
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        for (Map.Entry<String, List<AssessmentNode>> entry : childrenByParent.entrySet()) {
+            AssessmentNode parent = nodeById.get(entry.getKey());
+            if (parent == null || parent.name() == null || parent.name().isEmpty()) {
+                continue;
+            }
+            // Find child with smallest absolute y
+            List<AssessmentNode> children = entry.getValue();
+            double minChildY = Double.MAX_VALUE;
+            for (AssessmentNode child : children) {
+                if (child.y() < minChildY) {
+                    minChildY = child.y();
+                }
+            }
+            // Estimate label height — doubles for multi-line wrapping
+            double labelHeight = ESTIMATED_LABEL_HEIGHT;
+            double availableWidth = parent.width() - TYPE_ICON_WIDTH;
+            if (availableWidth > 0 && parent.labelTextWidth() > availableWidth) {
+                labelHeight *= 2; // multi-line wrap
+            }
+            double labelBottom = parent.y() + labelHeight;
+            if (minChildY < labelBottom) {
+                count++;
+                if (descriptions.size() < MAX_DESCRIPTIONS) {
+                    double relativeChildY = minChildY - parent.y();
+                    descriptions.add(String.format(
+                            "Parent '%s' label obscured by child at y=%.0f (label needs %.0fpx, child starts at %.0fpx relative)",
+                            parent.name(), minChildY, labelHeight, relativeChildY));
+                }
+            }
+        }
+        return new ParentLabelObscuredResult(count, descriptions);
+    }
+
+    /**
+     * Detects elements with images whose image bounding box overlaps a sibling element.
+     * Informational only — does NOT affect rating.
+     */
+    ImageSiblingOverlapResult detectImageSiblingOverlap(List<AssessmentNode> nodes) {
+        // Build sibling groups: nodes with same parentId (null = top-level)
+        Map<String, List<AssessmentNode>> siblingGroups = new LinkedHashMap<>();
+        for (AssessmentNode node : nodes) {
+            String key = node.parentId() != null ? node.parentId() : "__top__";
+            siblingGroups.computeIfAbsent(key, k -> new ArrayList<>()).add(node);
+        }
+
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        for (List<AssessmentNode> siblings : siblingGroups.values()) {
+            for (AssessmentNode node : siblings) {
+                if (node.imagePath() == null) continue;
+                double[] imgBounds = estimateImageBounds(node);
+                if (imgBounds == null) continue;
+
+                for (AssessmentNode sibling : siblings) {
+                    if (sibling.id().equals(node.id())) continue;
+                    if (rectanglesOverlap(imgBounds[0], imgBounds[1], imgBounds[2], imgBounds[3],
+                            sibling.x(), sibling.y(), sibling.width(), sibling.height())) {
+                        count++;
+                        if (descriptions.size() < MAX_DESCRIPTIONS) {
+                            descriptions.add(String.format(
+                                    "Element '%s' image (%s) overlapped by sibling '%s' at (%.0f,%.0f)",
+                                    node.name() != null ? node.name() : node.id(),
+                                    node.imagePosition(), sibling.id(),
+                                    sibling.x(), sibling.y()));
+                        }
+                        break; // one overlap per image element is enough
+                    }
+                }
+            }
+        }
+        return new ImageSiblingOverlapResult(count, descriptions);
+    }
+
+    /**
+     * Estimates the absolute image bounding box for an element based on imagePosition.
+     * Returns {x, y, width, height} in absolute coordinates, or null if position unknown.
+     */
+    private double[] estimateImageBounds(AssessmentNode node) {
+        String pos = node.imagePosition();
+        if (pos == null) return null;
+        double ex = node.x(), ey = node.y(), ew = node.width(), eh = node.height();
+        double iw = IMAGE_ICON_SIZE, ih = IMAGE_ICON_SIZE;
+
+        return switch (pos) {
+            case "fill" -> new double[]{ex, ey, ew, eh};
+            case "top-left" -> new double[]{ex, ey, iw, ih};
+            case "top-centre" -> new double[]{ex + ew / 2 - iw / 2, ey, iw, ih};
+            case "top-right" -> new double[]{ex + ew - iw, ey, iw, ih};
+            case "middle-left" -> new double[]{ex, ey + eh / 2 - ih / 2, iw, ih};
+            case "middle-centre" -> new double[]{ex + ew / 2 - iw / 2, ey + eh / 2 - ih / 2, iw, ih};
+            case "middle-right" -> new double[]{ex + ew - iw, ey + eh / 2 - ih / 2, iw, ih};
+            case "bottom-left" -> new double[]{ex, ey + eh - ih, iw, ih};
+            case "bottom-centre" -> new double[]{ex + ew / 2 - iw / 2, ey + eh - ih, iw, ih};
+            case "bottom-right" -> new double[]{ex + ew - iw, ey + eh - ih, iw, ih};
+            default -> null;
+        };
+    }
+
+    /**
+     * Checks if two rectangles overlap (axis-aligned, specified by x, y, width, height).
+     */
+    private boolean rectanglesOverlap(double x1, double y1, double w1, double h1,
+                                      double x2, double y2, double w2, double h2) {
+        return x1 < x2 + w2 && x1 + w1 > x2 && y1 < y2 + h2 && y1 + h1 > y2;
+    }
+
     // ---- Suggestion Generation (Finding #7: performance warning, #11: named constants) ----
 
     private List<String> generateSuggestions(int overlaps, int crossings,
@@ -1383,7 +1655,8 @@ class LayoutQualityAssessor {
                                               boolean hasGroups, int connectionCount,
                                               int coincidentSegmentCount,
                                               int nonOrthogonalTerminalCount,
-                                              int shortSegmentCount) {
+                                              int shortSegmentCount,
+                                              int containmentOverlapCount) {
         List<String> suggestions = new ArrayList<>();
 
         // Finding #7: performance warning for large views
@@ -1492,6 +1765,14 @@ class LayoutQualityAssessor {
                         + " — increase element spacing or use auto-layout-and-route"
                         + " to separate coincident paths");
             }
+        }
+
+        // §10.4: Informational containment overlap note — clarifies that these are expected
+        // ancestor-descendant overlaps (elements inside groups), not layout problems.
+        if (containmentOverlapCount > 0) {
+            suggestions.add(containmentOverlapCount
+                    + " containment overlaps detected (expected — ancestor-descendant"
+                    + " overlaps from elements inside groups, not layout problems). No action needed.");
         }
 
         if (suggestions.isEmpty()) {

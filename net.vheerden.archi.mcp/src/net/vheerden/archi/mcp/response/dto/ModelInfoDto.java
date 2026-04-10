@@ -14,6 +14,7 @@ public record ModelInfoDto(
     int elementCount,
     int relationshipCount,
     int viewCount,
+    int specializationCount,
     Map<String, Integer> elementTypeDistribution,
     Map<String, Integer> relationshipTypeDistribution,
     Map<String, Integer> layerDistribution

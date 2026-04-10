@@ -80,6 +80,7 @@ public class ModelQueryHandler {
     public void registerTools() {
         registry.registerTool(buildGetModelInfoSpec());
         registry.registerTool(buildGetElementSpec());
+        registry.registerTool(buildListSpecializationsSpec());
     }
 
     private McpServerFeatures.SyncToolSpecification buildGetModelInfoSpec() {
@@ -89,7 +90,7 @@ public class ModelQueryHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("get-model-info")
                 .description("[Query] Get summary information about the loaded ArchiMate model "
-                        + "including name, element/relationship/view counts, element type distribution, "
+                        + "including name, element/relationship/view/specialization counts, element type distribution, "
                         + "relationship type distribution, and layer distribution. "
                         + "This is the FIRST tool to call when exploring a new model — "
                         + "it provides the statistics needed to plan an efficient exploration strategy. "
@@ -230,6 +231,7 @@ public class ModelQueryHandler {
                         + "or 'ids' for batch retrieval of multiple elements in one call. "
                         + "Use 'fields' to control response verbosity and 'exclude' to omit specific fields. "
                         + "Get element IDs from search-elements or get-view-contents. "
+                        + "Response includes specialization field showing the element's primary specialization name (null if none). "
                         + "Related: get-relationships (explore connections), get-view-contents (see in diagrams).")
                 .inputSchema(inputSchema)
                 .build();
@@ -286,7 +288,7 @@ public class ModelQueryHandler {
                                 "Invalid exclude field: '" + field + "'",
                                 null,
                                 "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata",
+                                        + "specialization, viewpointType, folderPath, visualMetadata",
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -562,6 +564,92 @@ public class ModelQueryHandler {
         nextSteps.add("Note: This MCP server works best with 14B+ parameter models for reliable tool calling. 8B+ models can handle basic queries but may struggle with complex multi-tool workflows.");
 
         return nextSteps;
+    }
+
+    // ---- list-specializations tool (Story C3a) ----
+
+    private McpServerFeatures.SyncToolSpecification buildListSpecializationsSpec() {
+        Map<String, Object> properties = new LinkedHashMap<>();
+
+        Map<String, Object> conceptTypeProp = new LinkedHashMap<>();
+        conceptTypeProp.put("type", "string");
+        conceptTypeProp.put("description",
+                "Optional ArchiMate concept type filter (e.g., 'Node', 'BusinessActor', "
+                + "'FlowRelationship'). Only specializations applicable to this concept type "
+                + "are returned. Omit to list all specializations.");
+        properties.put("conceptType", conceptTypeProp);
+
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("properties", properties);
+
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", properties, null, null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("list-specializations")
+                .description("[Query] List all specialization (profile) definitions in the model. "
+                        + "Returns each specialization's name, applicable concept type, "
+                        + "concept type layer, and usage count (how many elements/relationships "
+                        + "reference it). Use the optional conceptType filter to narrow results. "
+                        + "Specializations are IS-A subtypes of ArchiMate concepts — e.g., "
+                        + "a Node specialized as 'Cloud Server' inherits all Node relationships "
+                        + "but adds domain-specific semantics. "
+                        + "Related: create-specialization (define new), update-specialization "
+                        + "(rename), delete-specialization (remove), get-specialization-usage "
+                        + "(audit usage), search-elements (filter by specialization), "
+                        + "get-element (see specialization field), create-element with inline "
+                        + "specialization param (auto-create profile + element in one step).")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleListSpecializations)
+                .build();
+    }
+
+    private McpSchema.CallToolResult handleListSpecializations(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling list-specializations request");
+        try {
+            String conceptTypeFilter = null;
+            if (request.arguments() != null) {
+                Object ctObj = request.arguments().get("conceptType");
+                if (ctObj instanceof String ct && !ct.isBlank()) {
+                    conceptTypeFilter = ct;
+                }
+            }
+
+            List<Map<String, Object>> specializations = accessor.listSpecializations(conceptTypeFilter);
+            String modelVersion = accessor.getModelVersion();
+
+            List<String> nextSteps = new ArrayList<>();
+            if (specializations.isEmpty()) {
+                nextSteps.add("No specializations defined in this model");
+                nextSteps.add("Specializations can be created in Archi via Edit > Specializations");
+            } else {
+                nextSteps.add("Use search-elements with specialization filter to find elements of a specific specialization");
+                nextSteps.add("Use search-relationships with specialization filter for relationship specializations");
+            }
+
+            Map<String, Object> envelope = formatter.formatSuccess(
+                    specializations, nextSteps, modelVersion,
+                    specializations.size(), specializations.size(), false);
+
+            String jsonResult = formatter.toJsonString(envelope);
+            return buildResult(jsonResult, false);
+        } catch (NoModelLoadedException e) {
+            ErrorResponse error = new ErrorResponse(
+                    ErrorCode.MODEL_NOT_LOADED, e.getMessage(), null, "Open a model in Archi first", null);
+            return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        } catch (Exception e) {
+            logger.error("Error in list-specializations", e);
+            ErrorResponse error = new ErrorResponse(
+                    ErrorCode.INTERNAL_ERROR, "Error listing specializations: " + e.getMessage(),
+                    null, null, null);
+            return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        }
     }
 
     private McpSchema.CallToolResult buildResult(String json, boolean isError) {

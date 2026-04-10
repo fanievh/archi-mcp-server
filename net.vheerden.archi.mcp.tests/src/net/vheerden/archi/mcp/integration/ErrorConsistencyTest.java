@@ -682,13 +682,13 @@ public class ErrorConsistencyTest {
             }
         };
         @Override public ModelInfoDto getModelInfo() {
-            return new ModelInfoDto("Error Test Model", 0, 0, 0, Map.of(), Map.of(), Map.of());
+            return new ModelInfoDto("Error Test Model", 0, 0, 0, 0, Map.of(), Map.of(), Map.of());
         }
         @Override public MutationDispatcher getMutationDispatcher() { return dispatcher; }
         @Override public String getModelVersion() { return "test-v1"; }
         @Override public Optional<String> getCurrentModelName() { return Optional.of("Error Test Model"); }
         @Override public Optional<String> getCurrentModelId() { return Optional.of("error-test-id"); }
-        @Override public List<DuplicateCandidate> findDuplicates(String type, String name) {
+        @Override public List<DuplicateCandidate> findDuplicates(String type, String name, String specialization) {
             return List.of(new DuplicateCandidate("dup-1", "Existing Element", type, 0.85));
         }
         @Override public BulkMutationResult executeBulk(String sessionId,
@@ -710,7 +710,7 @@ public class ErrorConsistencyTest {
         @Override public ModelInfoDto getModelInfo() { throw new RuntimeException("Boom"); }
         @Override public Optional<ElementDto> getElementById(String id) { throw new RuntimeException("Boom"); }
         @Override public List<ElementDto> getElementsByIds(List<String> ids) { throw new RuntimeException("Boom"); }
-        @Override public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) { throw new RuntimeException("Boom"); }
+        @Override public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter, String specializationFilter) { throw new RuntimeException("Boom"); }
         @Override public List<RelationshipDto> getRelationshipsForElement(String elementId) { throw new RuntimeException("Boom"); }
         @Override public List<ViewDto> getViews(String filter) { throw new RuntimeException("Boom"); }
         @Override public Optional<ViewContentsDto> getViewContents(String viewId) { throw new RuntimeException("Boom"); }

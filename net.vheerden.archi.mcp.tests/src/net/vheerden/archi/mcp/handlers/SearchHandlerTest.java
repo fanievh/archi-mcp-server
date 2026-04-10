@@ -2200,15 +2200,15 @@ public class SearchHandlerTest {
 
         private static final List<RelationshipDto> ALL_RELATIONSHIPS = List.of(
                 new RelationshipDto("rel-1", "data transfer", "FlowRelationship",
-                        "elem-1", "elem-2", false,
+                        null, "elem-1", "elem-2", false,
                         "Data flows from portal to service", null,
                         "Customer Portal", "Order Service"),
                 new RelationshipDto("rel-2", "uses api", "ServingRelationship",
-                        "elem-2", "elem-3", false,
+                        null, "elem-2", "elem-3", false,
                         null, null,
                         "Order Service", "Billing Process"),
                 new RelationshipDto("rel-3", "", "AccessRelationship",
-                        "elem-3", "elem-1", false,
+                        null, "elem-3", "elem-1", false,
                         null, List.of(Map.of("key", "frequency", "value", "daily")),
                         "Billing Process", "Customer Portal")
         );
@@ -2219,13 +2219,13 @@ public class SearchHandlerTest {
 
         private static final List<ElementDto> ALL_ELEMENTS = List.of(
                 ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
-                        "Application", "Main customer-facing web application",
+                        null, "Application", "Main customer-facing web application",
                         List.of(Map.of("key", "owner", "value", "Digital Team"))),
                 ElementDto.standard("elem-2", "Order Service", "ApplicationComponent",
-                        "Application", "Handles order processing",
+                        null, "Application", "Handles order processing",
                         List.of(Map.of("key", "owner", "value", "Backend Team"))),
                 ElementDto.standard("elem-3", "Billing Process", "BusinessProcess",
-                        "Business", null, null)
+                        null, "Business", null, null)
         );
 
         StubAccessor(boolean modelLoaded) {
@@ -2233,7 +2233,7 @@ public class SearchHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter, String specializationFilter) {
             if (!isModelLoaded()) {
                 throw new NoModelLoadedException();
             }
@@ -2267,7 +2267,7 @@ public class SearchHandlerTest {
 
         @Override
         public List<RelationshipDto> searchRelationships(String query, String typeFilter,
-                                                          String sourceLayerFilter, String targetLayerFilter) {
+                                                          String sourceLayerFilter, String targetLayerFilter, String specializationFilter) {
             if (!isModelLoaded()) throw new NoModelLoadedException();
             String lowerQuery = query.toLowerCase();
             return ALL_RELATIONSHIPS.stream()
@@ -2296,7 +2296,7 @@ public class SearchHandlerTest {
         @Override
         public ModelInfoDto getModelInfo() {
             if (!isModelLoaded()) throw new NoModelLoadedException();
-            return new ModelInfoDto("Test Model", 3, 0, 0, Map.of(), Map.of(), Map.of());
+            return new ModelInfoDto("Test Model", 3, 0, 0, 0, Map.of(), Map.of(), Map.of());
         }
 
         @Override
@@ -2357,7 +2357,7 @@ public class SearchHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter, String specializationFilter) {
             throw new RuntimeException("Simulated EMF explosion");
         }
     }
@@ -2371,12 +2371,12 @@ public class SearchHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter, String specializationFilter) {
             List<ElementDto> largeList = new java.util.ArrayList<>();
             for (int i = 0; i < 250; i++) {
                 largeList.add(ElementDto.standard(
                         "elem-" + i, "Element " + i, "ApplicationComponent",
-                        "Application", null, null));
+                        null, "Application", null, null));
             }
             return largeList;
         }
@@ -2393,9 +2393,10 @@ public class SearchHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                               String specializationFilter) {
             searchCount++;
-            return super.searchElements(query, typeFilter, layerFilter);
+            return super.searchElements(query, typeFilter, layerFilter, specializationFilter);
         }
     }
 }

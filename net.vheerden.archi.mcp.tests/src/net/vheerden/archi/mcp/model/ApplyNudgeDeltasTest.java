@@ -22,25 +22,25 @@ public class ApplyNudgeDeltasTest {
 	// --- Helper ---
 
 	private static AssessmentNode element(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, false, false);
+		return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
 	}
 
 	private static AssessmentNode group(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, true, false);
+		return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null);
 	}
 
 	private static AssessmentNode note(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, false, true);
+		return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null);
 	}
 
 	private static AssessmentNode elementInGroup(String id, double x, double y, double w, double h,
 			String parentId) {
-		return new AssessmentNode(id, x, y, w, h, parentId, false, false);
+		return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null);
 	}
 
 	private static AssessmentNode groupInGroup(String id, double x, double y, double w, double h,
 			String parentId) {
-		return new AssessmentNode(id, x, y, w, h, parentId, true, false);
+		return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null);
 	}
 
 	// --- Tests (2-param overload) ---
@@ -112,7 +112,7 @@ public class ApplyNudgeDeltasTest {
 	@Test
 	public void shouldPreserveParentIdAndFlags() {
 		List<AssessmentNode> nodes = List.of(
-				new AssessmentNode("e1", 100, 200, 120, 55, "g1", false, false));
+				new AssessmentNode("e1", 100, 200, 120, 55, "g1", false, false, null, 0.0, null, null));
 		Map<String, int[]> deltas = new LinkedHashMap<>();
 		deltas.put("e1", new int[]{10, 20});
 

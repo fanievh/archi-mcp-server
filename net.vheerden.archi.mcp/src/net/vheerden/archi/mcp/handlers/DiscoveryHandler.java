@@ -156,7 +156,7 @@ public class DiscoveryHandler {
             Map<String, String> source = HandlerUtils.optionalMapParam(args, "source");
 
             MutationResult<ElementDto> result = accessor.createElement(
-                    sessionId, type, name, documentation, propertiesMap, folderId, source);
+                    sessionId, type, name, documentation, propertiesMap, folderId, source, null);
 
             return buildCreatedNewResponse(result);
 
@@ -341,7 +341,7 @@ public class DiscoveryHandler {
             String createName = HandlerUtils.requireStringParam(args, "createName");
 
             // Search phase (always immediate, read-only)
-            List<ElementDto> searchResults = accessor.searchElements(query, typeFilter, null);
+            List<ElementDto> searchResults = accessor.searchElements(query, typeFilter, null, null);
 
             if (!searchResults.isEmpty()) {
                 return buildSearchFoundResponse(searchResults, query);
@@ -355,7 +355,7 @@ public class DiscoveryHandler {
 
             MutationResult<ElementDto> result = accessor.createElement(
                     sessionId, createType, createName, createDoc, createProps,
-                    createFolderId, createSource);
+                    createFolderId, createSource, null);
 
             return buildSearchCreatedResponse(result, query);
 

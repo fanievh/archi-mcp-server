@@ -61,7 +61,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldReturnMinimalFields_whenMinimalPreset() {
         ElementDto element = new ElementDto("e1", "Test Element", "ApplicationComponent",
-                "Application", "Some docs", List.of(Map.of("key", "val")));
+                null, "Application", "Some docs", List.of(Map.of("key", "val")));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -77,7 +77,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldReturnStandardFields_whenStandardPreset() {
         ElementDto element = new ElementDto("e1", "Test Element", "ApplicationComponent",
-                "Application", "Some docs", List.of(Map.of("key", "val")));
+                null, "Application", "Some docs", List.of(Map.of("key", "val")));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -95,7 +95,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldReturnFullFields_whenFullPreset() {
         ElementDto element = new ElementDto("e1", "Test Element", "ApplicationComponent",
-                "Application", "Some docs", List.of(Map.of("key", "val")));
+                null, "Application", "Some docs", List.of(Map.of("key", "val")));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -111,7 +111,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldExcludeDocumentation_whenExcludeContainsDocumentation() {
         ElementDto element = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Remove this", null);
+                null, "Application", "Remove this", null);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -126,7 +126,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldExcludeProperties_whenExcludeContainsProperties() {
         ElementDto element = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Docs", List.of(Map.of("k", "v")));
+                null, "Application", "Docs", List.of(Map.of("k", "v")));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -139,7 +139,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldExcludeMultipleFields_whenMultipleExcludeProvided() {
         ElementDto element = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Docs", List.of(Map.of("k", "v")));
+                null, "Application", "Docs", List.of(Map.of("k", "v")));
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -157,7 +157,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldCombinePresetAndExclude_whenBothProvided() {
         ElementDto element = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Docs", List.of(Map.of("k", "v")));
+                null, "Application", "Docs", List.of(Map.of("k", "v")));
 
         // Standard preset + exclude documentation → 5 fields (all except documentation)
         @SuppressWarnings("unchecked")
@@ -173,7 +173,7 @@ public class FieldSelectorTest {
 
     @Test
     public void shouldNeverExcludeId_whenIdInExcludeList() {
-        ElementDto element = new ElementDto("e1", "Test", "AppComp", null, null, null);
+        ElementDto element = new ElementDto("e1", "Test", "AppComp", null, null, null, null);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -184,7 +184,7 @@ public class FieldSelectorTest {
 
     @Test
     public void shouldNeverExcludeName_whenNameInExcludeList() {
-        ElementDto element = new ElementDto("e1", "Test", "AppComp", null, null, null);
+        ElementDto element = new ElementDto("e1", "Test", "AppComp", null, null, null, null);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -199,8 +199,8 @@ public class FieldSelectorTest {
     @SuppressWarnings("unchecked")
     public void shouldHandleElementDtoList_whenListProvided() {
         List<ElementDto> elements = List.of(
-                new ElementDto("e1", "First", "AppComp", "Application", "Doc1", null),
-                new ElementDto("e2", "Second", "Node", "Technology", "Doc2", null));
+                new ElementDto("e1", "First", "AppComp", null, "Application", "Doc1", null),
+                new ElementDto("e2", "Second", "Node", null, "Technology", "Doc2", null));
 
         List<Object> result = (List<Object>) FieldSelector.applyFieldSelection(
                 elements, FieldPreset.MINIMAL, null);
@@ -305,7 +305,7 @@ public class FieldSelectorTest {
     @SuppressWarnings("unchecked")
     public void shouldHandleViewContentsDto_whenViewContentsDtoProvided() {
         List<ElementDto> elements = List.of(
-                new ElementDto("e1", "Elem", "AppComp", "Application", "Doc", null));
+                new ElementDto("e1", "Elem", "AppComp", null, "Application", "Doc", null));
         List<RelationshipDto> rels = List.of(
                 new RelationshipDto("r1", "Rel", "ServingRelationship", "e1", "e2"));
         List<ViewNodeDto> nodes = List.of(
@@ -335,7 +335,7 @@ public class FieldSelectorTest {
     @SuppressWarnings("unchecked")
     public void shouldExcludeVisualMetadata_whenExcludeContainsVisualMetadata() {
         List<ElementDto> elements = List.of(
-                new ElementDto("e1", "Elem", "AppComp", "Application", null, null));
+                new ElementDto("e1", "Elem", "AppComp", null, "Application", null, null));
         List<ViewNodeDto> nodes = List.of(new ViewNodeDto("vo-1", "e1", 10, 20, 100, 50));
 
         ViewContentsDto contents = new ViewContentsDto("v1", "View1", null, elements, List.of(), nodes, List.of());
@@ -352,7 +352,7 @@ public class FieldSelectorTest {
     @SuppressWarnings("unchecked")
     public void shouldExcludeConnections_whenExcludeContainsConnections() {
         List<ElementDto> elements = List.of(
-                new ElementDto("e1", "Elem", "AppComp", "Application", null, null));
+                new ElementDto("e1", "Elem", "AppComp", null, "Application", null, null));
         List<ViewConnectionDto> connections = List.of(
                 new ViewConnectionDto("vc-1", "r1", "ServingRelationship", "vo-1", "vo-2", List.of()));
 
@@ -370,7 +370,7 @@ public class FieldSelectorTest {
     @SuppressWarnings("unchecked")
     public void shouldExcludeBothVisualMetadataAndConnections() {
         List<ElementDto> elements = List.of(
-                new ElementDto("e1", "Elem", "AppComp", "Application", null, null));
+                new ElementDto("e1", "Elem", "AppComp", null, "Application", null, null));
         List<ViewNodeDto> nodes = List.of(new ViewNodeDto("vo-1", "e1", 10, 20, 100, 50));
         List<ViewConnectionDto> connections = List.of(
                 new ViewConnectionDto("vc-1", "r1", "ServingRelationship", "vo-1", "vo-2", List.of()));
@@ -389,7 +389,7 @@ public class FieldSelectorTest {
 
     @Test
     public void shouldReturnModelInfoUnchanged_whenModelInfoDtoProvided() {
-        ModelInfoDto info = new ModelInfoDto("TestModel", 100, 50, 10,
+        ModelInfoDto info = new ModelInfoDto("TestModel", 100, 50, 10, 0,
                 Map.of("ApplicationComponent", 30, "Node", 20),
                 Map.of("ServingRelationship", 25, "FlowRelationship", 25),
                 Map.of("Application", 30, "Technology", 20));
@@ -437,7 +437,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldDefaultToStandard_whenNullPreset() {
         ElementDto element = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Docs", null);
+                null, "Application", "Docs", null);
 
         @SuppressWarnings("unchecked")
         Map<String, Object> result = (Map<String, Object>) FieldSelector.applyFieldSelection(
@@ -454,7 +454,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldConvertElementDtoToMap_withNonNullFields() {
         ElementDto dto = new ElementDto("e1", "Test", "AppComp",
-                "Application", "Docs", List.of(Map.of("k", "v")));
+                null, "Application", "Docs", List.of(Map.of("k", "v")));
 
         Map<String, Object> map = FieldSelector.elementDtoToMap(dto);
         assertEquals(6, map.size());
@@ -464,12 +464,80 @@ public class FieldSelectorTest {
 
     @Test
     public void shouldOmitNullFieldsFromElementDtoMap() {
-        ElementDto dto = new ElementDto("e1", "Test", null, null, null, null);
+        ElementDto dto = new ElementDto("e1", "Test", null, null, null, null, null);
 
         Map<String, Object> map = FieldSelector.elementDtoToMap(dto);
         assertEquals(2, map.size()); // Only id and name
         assertFalse(map.containsKey("type"));
         assertFalse(map.containsKey("layer"));
+    }
+
+    @Test
+    public void shouldIncludeSpecializationInElementStandardPreset() {
+        ElementDto dto = new ElementDto("e1", "Cloud Server", "Node", "Cloud Server",
+                "Technology", null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) FieldSelector.applyFieldSelection(
+                dto, FieldSelector.FieldPreset.STANDARD, null);
+        assertTrue(map.containsKey("specialization"));
+        assertEquals("Cloud Server", map.get("specialization"));
+    }
+
+    @Test
+    public void shouldExcludeSpecializationWhenInExcludeList() {
+        ElementDto dto = new ElementDto("e1", "Cloud Server", "Node", "Cloud Server",
+                "Technology", null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) FieldSelector.applyFieldSelection(
+                dto, FieldSelector.FieldPreset.STANDARD, Set.of("specialization"));
+        assertFalse(map.containsKey("specialization"));
+    }
+
+    @Test
+    public void shouldNotIncludeSpecializationInElementMinimalPreset() {
+        ElementDto dto = new ElementDto("e1", "Cloud Server", "Node", "Cloud Server",
+                "Technology", null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) FieldSelector.applyFieldSelection(
+                dto, FieldSelector.FieldPreset.MINIMAL, null);
+        assertFalse(map.containsKey("specialization"));
+    }
+
+    @Test
+    public void shouldIncludeSpecializationInRelationshipFullPreset() {
+        RelationshipDto dto = new RelationshipDto(
+                "r1", "Data Flow", "FlowRelationship", "Material Flow",
+                "e1", "e2", false, null, null, null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) FieldSelector.applyFieldSelection(
+                dto, FieldSelector.FieldPreset.FULL, null);
+        assertTrue(map.containsKey("specialization"));
+        assertEquals("Material Flow", map.get("specialization"));
+    }
+
+    @Test
+    public void shouldNotIncludeSpecializationInRelationshipStandardPreset() {
+        RelationshipDto dto = new RelationshipDto(
+                "r1", "Data Flow", "FlowRelationship", "Material Flow",
+                "e1", "e2", false, null, null, null, null);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> map = (Map<String, Object>) FieldSelector.applyFieldSelection(
+                dto, FieldSelector.FieldPreset.STANDARD, null);
+        assertFalse(map.containsKey("specialization"));
+    }
+
+    @Test
+    public void shouldOmitNullSpecializationFromElementMap() {
+        ElementDto dto = new ElementDto("e1", "Server", "Node", null,
+                "Technology", null, null);
+
+        Map<String, Object> map = FieldSelector.elementDtoToMap(dto);
+        assertFalse(map.containsKey("specialization"));
     }
 
     @Test
@@ -530,7 +598,7 @@ public class FieldSelectorTest {
     @Test
     public void shouldContainAllValidExcludeFields() {
         Set<String> expected = Set.of("documentation", "properties", "layer", "type",
-                "viewpointType", "connectionRouterType", "folderPath",
+                "specialization", "viewpointType", "connectionRouterType", "folderPath",
                 "visualMetadata", "connections", "groups", "notes");
         assertEquals(expected, FieldSelector.VALID_EXCLUDE_FIELDS);
     }

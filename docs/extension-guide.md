@@ -210,6 +210,16 @@ Your handler class **must not** import:
 
 All model access goes through the `ArchiModelAccessor` interface. This boundary ensures handlers are testable with mocks.
 
+### Real-World Example: SpecializationHandler
+
+`handlers/SpecializationHandler.java` is a small, focused handler that registers four related tools (`create-specialization`, `update-specialization`, `delete-specialization`, `get-specialization-usage`). It is a good template for adding a new domain-focused handler:
+
+- All four tools share the same constructor pattern (accessor + formatter + registry + nullable session manager)
+- Each `build*Spec()` method defines its own input schema and wires the handler method
+- Mutation tools route through the standard mutation pipeline (immediate / batch / approval) — the handler does not call the SWT thread directly
+- Pure-query tools (`get-specialization-usage`) call the accessor and format the result without entering the mutation pipeline at all
+- The class doc string explicitly notes the architecture boundary and the relationship to inline mutation parameters declared on other handlers
+
 ## Adding a Layout Algorithm
 
 ### Step 1: Add Algorithm Description

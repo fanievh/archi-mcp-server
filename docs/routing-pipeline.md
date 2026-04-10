@@ -357,6 +357,8 @@ After path cleanup and endpoint pass-through correction, four post-processing st
 
 Re-runs `correctSelfElementPassThrough()` for both source and target elements. This catches pass-throughs introduced by edge attachment (Stage 4) that were not addressed by the initial endpoint correction. While often ineffective for self-element geometry (detours loop back to the source face), it is retained as defense-in-depth.
 
+> **Rating note (B54):** Self-element pass-throughs that survive this safety net are reported by `assess-layout` for visibility but **excluded from the overall rating**. Cross-element pass-throughs continue to penalise the rating as before. See [Layout Engine — Pass-Throughs](layout-engine.md#pass-throughs).
+
 ### Stage 4.7g: Late-Stage Path Simplification
 
 `simplifyFinalPath()` performs greedy shortcutting after all post-processing. The algorithm:

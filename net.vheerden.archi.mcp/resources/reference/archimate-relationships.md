@@ -95,6 +95,27 @@ Dynamic relationships model behaviour and interaction over time.
 - **Valid between:** Any element to any element
 - **Key rule:** Use when no more specific relationship type applies; weakest semantic meaning
 
+## Relationship Specializations
+
+Any relationship type can carry a **specialization** name to differentiate semantically meaningful subtypes (e.g. distinguishing a "Data Flow" from an "Event Flow" without inventing new relationship types). The inline `specialization` param on `create-relationship` and `update-relationship` auto-creates the specialization if it does not yet exist.
+
+Use `list-specializations` to browse the catalog, `create-specialization` to pre-register a vocabulary, and `get-specialization-usage` to audit before renaming or deleting. See `archimate-specializations.md` for the full reference.
+
+### FlowRelationship
+Data Flow, Event Flow, Material Flow, Financial Flow, Message Flow
+
+### AccessRelationship
+Read Access, Write Access, Read-Write Access
+
+### ServingRelationship
+API Serving, UI Serving, Batch Serving
+
+### TriggeringRelationship
+Synchronous Trigger, Asynchronous Trigger
+
+### AssociationRelationship
+Owns, Depends On, Operated By (use only when no more specific relationship type fits)
+
 ## Junction Elements
 
 Junctions are not relationships but connectors used to combine or split relationships.

@@ -24,6 +24,7 @@ import net.vheerden.archi.mcp.handlers.MutationHandler;
 import net.vheerden.archi.mcp.handlers.SearchHandler;
 import net.vheerden.archi.mcp.handlers.TraversalHandler;
 import net.vheerden.archi.mcp.handlers.SessionHandler;
+import net.vheerden.archi.mcp.handlers.SpecializationHandler;
 import net.vheerden.archi.mcp.handlers.RenderHandler;
 import net.vheerden.archi.mcp.handlers.ViewHandler;
 import net.vheerden.archi.mcp.handlers.CommandStackHandler;
@@ -68,6 +69,8 @@ public class ToolDiscoveryIntegrationTest {
         mh.registerTools();
         ElementCreationHandler ech = new ElementCreationHandler(accessor, formatter, registry, sm);
         ech.registerTools();
+        SpecializationHandler spec = new SpecializationHandler(accessor, formatter, registry, sm);
+        spec.registerTools();
         ElementUpdateHandler euh = new ElementUpdateHandler(accessor, formatter, registry, sm);
         euh.registerTools();
         DiscoveryHandler dh = new DiscoveryHandler(accessor, formatter, registry, sm);
@@ -89,7 +92,7 @@ public class ToolDiscoveryIntegrationTest {
     @Test
     public void shouldDiscoverAllRegisteredTools() {
         List<McpServerFeatures.SyncToolSpecification> tools = registry.getToolSpecifications();
-        assertEquals("Expected exactly 56 tools (2 ModelQuery + 3 View + 2 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 4 Creation + 2 Update + 2 Discovery + 3 Approval + 19 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 56, tools.size());
+        assertEquals("Expected exactly 62 tools (3 ModelQuery + 3 View + 2 Search + 1 Traversal + 2 Session + 2 Folder + 4 Mutation + 4 Creation + 4 Specialization + 2 Update + 2 Discovery + 3 Approval + 20 ViewPlacement + 1 Render + 4 Deletion + 3 FolderMutation + 2 CommandStack)", 62, tools.size());
     }
 
     @Test
@@ -173,6 +176,13 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing detect-hub-elements", toolNames.contains("detect-hub-elements"));
         // Story 13-6: Flat view layout tool
         assertTrue("Missing layout-flat-view", toolNames.contains("layout-flat-view"));
+        // Story C3a: read-only specialization listing
+        assertTrue("Missing list-specializations", toolNames.contains("list-specializations"));
+        // Story C3c: specialization profile management
+        assertTrue("Missing create-specialization", toolNames.contains("create-specialization"));
+        assertTrue("Missing update-specialization", toolNames.contains("update-specialization"));
+        assertTrue("Missing delete-specialization", toolNames.contains("delete-specialization"));
+        assertTrue("Missing get-specialization-usage", toolNames.contains("get-specialization-usage"));
     }
 
     @SuppressWarnings("unchecked")

@@ -127,6 +127,16 @@ public class ElementCreationHandler {
                 + "'mcp.source.tool' = 'import-script').");
         sourceProp.put("additionalProperties", sourceStringValues);
 
+        Map<String, Object> specializationProp = new LinkedHashMap<>();
+        specializationProp.put("type", "string");
+        specializationProp.put("description",
+                "Optional specialization (profile) name to assign as the element's primary "
+                + "specialization (e.g., 'Cloud Server' for a Node, 'Microservice' for an "
+                + "ApplicationComponent). Profile lookup is case-insensitive and scoped by "
+                + "element type. If a profile with this name and type does not exist in the "
+                + "model, it is auto-created. Profile creation and element creation are "
+                + "wrapped in a single undoable operation.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("type", typeProp);
         properties.put("name", nameProp);
@@ -135,6 +145,7 @@ public class ElementCreationHandler {
         properties.put("folderId", folderIdProp);
         properties.put("force", forceProp);
         properties.put("source", sourceProp);
+        properties.put("specialization", specializationProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("type", "name"), null, null, null);
@@ -145,12 +156,18 @@ public class ElementCreationHandler {
                         + "Checks for potential duplicates of the same type before creating "
                         + "— if similar elements are found, returns them for review instead of "
                         + "creating. Use force: true to skip duplicate detection. "
-                        + "Required: type, name. Optional: documentation, properties, folderId, force, source. "
+                        + "Required: type, name. Optional: documentation, properties, folderId, "
+                        + "force, source, specialization. "
                         + "Source traceability: provide source map to tag the element with "
                         + "provenance metadata (keys auto-prefixed with 'mcp.source.'). "
+                        + "Specialization: provide a profile name to create the element as a "
+                        + "domain-specific subtype (e.g., 'Cloud Server' Node). The profile is "
+                        + "auto-created on first use and reused (case-insensitive) thereafter. "
+                        + "Two elements with the same name but different specializations are "
+                        + "NOT considered duplicates. "
                         + "Related: get-or-create-element (idempotent creation), "
                         + "search-elements (find existing), get-folders (discover folder IDs), "
-                        + "create-relationship (connect elements).")
+                        + "create-relationship (connect elements), list-specializations.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -175,17 +192,19 @@ public class ElementCreationHandler {
             String folderId = HandlerUtils.optionalStringParam(args, "folderId");
             boolean force = HandlerUtils.optionalBooleanParam(args, "force");
             Map<String, String> source = HandlerUtils.optionalMapParam(args, "source");
+            String specialization = HandlerUtils.optionalStringParam(args, "specialization");
 
-            // Duplicate detection (skip if force=true)
+            // Duplicate detection (skip if force=true). Specialization-aware:
+            // same name+type with different specialization is NOT a duplicate.
             if (!force) {
-                List<DuplicateCandidate> duplicates = accessor.findDuplicates(type, name);
+                List<DuplicateCandidate> duplicates = accessor.findDuplicates(type, name, specialization);
                 if (!duplicates.isEmpty()) {
                     return buildDuplicateDetectionResponse(type, name, duplicates);
                 }
             }
 
             MutationResult<ElementDto> result = accessor.createElement(
-                    sessionId, type, name, documentation, properties, folderId, source);
+                    sessionId, type, name, documentation, properties, folderId, source, specialization);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildCreateElementNextSteps(result), accessor, formatter);
@@ -239,11 +258,21 @@ public class ElementCreationHandler {
         nameProp.put("type", "string");
         nameProp.put("description", "Optional name for the relationship");
 
+        Map<String, Object> specializationProp = new LinkedHashMap<>();
+        specializationProp.put("type", "string");
+        specializationProp.put("description",
+                "Optional specialization (profile) name to assign as the relationship's primary "
+                + "specialization (e.g., 'Data Flow' for a FlowRelationship). Profile lookup is "
+                + "case-insensitive and scoped by relationship type. If a profile with this name "
+                + "and type does not exist in the model, it is auto-created. Profile creation "
+                + "and relationship creation are wrapped in a single undoable operation.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("type", typeProp);
         properties.put("sourceId", sourceIdProp);
         properties.put("targetId", targetIdProp);
         properties.put("name", nameProp);
+        properties.put("specialization", specializationProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("type", "sourceId", "targetId"), null, null, null);
@@ -254,9 +283,13 @@ public class ElementCreationHandler {
                         + "Requires type (e.g., 'ServingRelationship', 'CompositionRelationship'), "
                         + "sourceId, and targetId. ArchiMate specification rules are enforced "
                         + "— invalid source/target/type combinations return detailed errors with "
-                        + "valid alternatives. Optional: name. "
+                        + "valid alternatives. Optional: name, specialization. "
+                        + "Specialization: provide a profile name to create the relationship as a "
+                        + "domain-specific subtype (e.g., 'Data Flow' FlowRelationship). The "
+                        + "profile is auto-created on first use and reused (case-insensitive) "
+                        + "thereafter. "
                         + "Related: get-relationships (verify), get-element (check endpoints), "
-                        + "create-element (create endpoints first).")
+                        + "create-element (create endpoints first), list-specializations.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -278,9 +311,10 @@ public class ElementCreationHandler {
             String sourceId = HandlerUtils.requireStringParam(args, "sourceId");
             String targetId = HandlerUtils.requireStringParam(args, "targetId");
             String name = HandlerUtils.optionalStringParam(args, "name");
+            String specialization = HandlerUtils.optionalStringParam(args, "specialization");
 
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    sessionId, type, sourceId, targetId, name);
+                    sessionId, type, sourceId, targetId, name, specialization);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildCreateRelationshipNextSteps(result), accessor, formatter);

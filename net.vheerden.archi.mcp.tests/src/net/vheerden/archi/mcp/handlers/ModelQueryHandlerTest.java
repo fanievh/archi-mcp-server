@@ -52,7 +52,7 @@ public class ModelQueryHandlerTest {
         ModelQueryHandler handler = new ModelQueryHandler(accessor, formatter, registry, null);
         handler.registerTools();
 
-        assertEquals(2, registry.getToolCount());
+        assertEquals(3, registry.getToolCount());
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("get-model-info");
         assertEquals("get-model-info", spec.tool().name());
     }
@@ -1246,6 +1246,82 @@ public class ModelQueryHandlerTest {
                 new TypeReference<Map<String, Object>>() {});
     }
 
+    // ---- list-specializations tests (Story C3a) ----
+
+    @Test
+    public void shouldListAllSpecializations() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
+
+        McpSchema.CallToolResult result = invokeListSpecializations(Collections.emptyMap());
+        Map<String, Object> envelope = parseJson(result);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> specs = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(3, specs.size());
+        assertEquals("Cloud Server", specs.get(0).get("name"));
+        assertEquals("Node", specs.get(0).get("conceptType"));
+        assertEquals("Technology", specs.get(0).get("conceptTypeLayer"));
+        assertEquals(3, specs.get(0).get("usageCount"));
+    }
+
+    @Test
+    public void shouldFilterSpecializationsByConceptType() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
+
+        McpSchema.CallToolResult result = invokeListSpecializations(
+                Map.of("conceptType", "Node"));
+        Map<String, Object> envelope = parseJson(result);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> specs = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(1, specs.size());
+        assertEquals("Cloud Server", specs.get(0).get("name"));
+    }
+
+    @Test
+    public void shouldReturnEmptyListWhenNoSpecializationsMatch() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
+
+        McpSchema.CallToolResult result = invokeListSpecializations(
+                Map.of("conceptType", "Nonexistent"));
+        Map<String, Object> envelope = parseJson(result);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> specs = (List<Map<String, Object>>) envelope.get("result");
+        assertEquals(0, specs.size());
+    }
+
+    @Test
+    public void shouldReturnErrorWhenNoModelForListSpecializations() throws Exception {
+        StubAccessor accessor = new StubAccessor(false);
+        new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
+
+        McpSchema.CallToolResult result = invokeListSpecializations(Collections.emptyMap());
+        assertTrue(result.isError());
+    }
+
+    @Test
+    public void shouldIncludeTotalCountInListSpecializationsMeta() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
+
+        McpSchema.CallToolResult result = invokeListSpecializations(Collections.emptyMap());
+        Map<String, Object> envelope = parseJson(result);
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+        assertEquals(3, meta.get("totalCount"));
+    }
+
+    private McpSchema.CallToolResult invokeListSpecializations(Map<String, Object> args) {
+        McpServerFeatures.SyncToolSpecification spec = findToolSpec("list-specializations");
+        McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("list-specializations", args);
+        return spec.callHandler().apply(null, request);
+    }
+
     // ---- Stub Implementations ----
 
     /**
@@ -1264,7 +1340,7 @@ public class ModelQueryHandlerTest {
                 throw new NoModelLoadedException();
             }
             return new ModelInfoDto(
-                    "Test Model", 10, 5, 3,
+                    "Test Model", 10, 5, 3, 3,
                     Map.of("ApplicationComponent", 4, "BusinessProcess", 6),
                     Map.of("ServingRelationship", 3, "FlowRelationship", 2),
                     Map.of("Application", 4, "Business", 6));
@@ -1278,15 +1354,33 @@ public class ModelQueryHandlerTest {
             if ("test-element-id".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "test-element-id", "Test Component", "ApplicationComponent",
-                        "Application", "A test component for unit testing",
+                        null, "Application", "A test component for unit testing",
                         List.of(Map.of("key", "version", "value", "1.0"))));
             }
             if ("second-element-id".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "second-element-id", "Second Component", "BusinessProcess",
-                        "Business", "A second test component", List.of()));
+                        null, "Business", "A second test component", List.of()));
             }
             return Optional.empty();
+        }
+
+        @Override
+        public List<Map<String, Object>> listSpecializations(String conceptTypeFilter) {
+            if (!isModelLoaded()) throw new NoModelLoadedException();
+            List<Map<String, Object>> all = List.of(
+                    Map.of("name", "Cloud Server", "conceptType", "Node",
+                            "conceptTypeLayer", "Technology", "usageCount", 3),
+                    Map.of("name", "Web Application", "conceptType", "ApplicationComponent",
+                            "conceptTypeLayer", "Application", "usageCount", 2),
+                    Map.of("name", "Data Flow", "conceptType", "FlowRelationship",
+                            "conceptTypeLayer", "Relationship", "usageCount", 5));
+            if (conceptTypeFilter != null) {
+                return all.stream()
+                        .filter(m -> conceptTypeFilter.equals(m.get("conceptType")))
+                        .toList();
+            }
+            return all;
         }
 
         @Override
@@ -1345,7 +1439,8 @@ public class ModelQueryHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                               String specializationFilter) {
             throw new RuntimeException("Simulated EMF explosion");
         }
 
@@ -1406,7 +1501,7 @@ public class ModelQueryHandlerTest {
 
         @Override
         public ModelInfoDto getModelInfo() {
-            return new ModelInfoDto("Medium Model", 250, 120, 15,
+            return new ModelInfoDto("Medium Model", 250, 120, 15, 0,
                     Map.of("ApplicationComponent", 100, "BusinessProcess", 80, "Node", 70),
                     Map.of("ServingRelationship", 60, "RealizationRelationship", 30, "FlowRelationship", 30),
                     Map.of("Application", 100, "Business", 80, "Technology", 70));
@@ -1423,7 +1518,7 @@ public class ModelQueryHandlerTest {
 
         @Override
         public ModelInfoDto getModelInfo() {
-            return new ModelInfoDto("Large Model", 1500, 800, 50,
+            return new ModelInfoDto("Large Model", 1500, 800, 50, 0,
                     Map.of("ApplicationComponent", 500, "BusinessProcess", 400, "Node", 300, "DataObject", 300),
                     Map.of("ServingRelationship", 300, "RealizationRelationship", 200, "FlowRelationship", 200, "CompositionRelationship", 100),
                     Map.of("Application", 500, "Business", 400, "Technology", 300, "Physical", 100, "Motivation", 200));
@@ -1444,7 +1539,7 @@ public class ModelQueryHandlerTest {
 
         @Override
         public ModelInfoDto getModelInfo() {
-            return new ModelInfoDto("Sized Model", elementCount, elementCount / 2, 10,
+            return new ModelInfoDto("Sized Model", elementCount, elementCount / 2, 10, 0,
                     Map.of("ApplicationComponent", elementCount),
                     Map.of("ServingRelationship", elementCount / 2),
                     Map.of("Application", elementCount));

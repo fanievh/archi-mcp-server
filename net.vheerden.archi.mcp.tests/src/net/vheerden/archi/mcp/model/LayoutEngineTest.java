@@ -225,7 +225,7 @@ public class LayoutEngineTest {
 		List<AssessmentNode> nodes = new ArrayList<>();
 		for (ViewPositionSpec pos : positions) {
 			nodes.add(new AssessmentNode(pos.viewObjectId(),
-					pos.x(), pos.y(), pos.width(), pos.height(), null, false, false));
+					pos.x(), pos.y(), pos.width(), pos.height(), null, false, false, null, 0.0, null, null));
 		}
 		return nodes;
 	}
@@ -247,7 +247,7 @@ public class LayoutEngineTest {
 		// Cross-validate with LayoutQualityAssessor
 		LayoutQualityAssessor assessor = new LayoutQualityAssessor();
 		List<AssessmentNode> assessmentNodes = toAssessmentNodes(result);
-		LayoutQualityAssessor.OverlapResult overlapResult = assessor.computeOverlaps(assessmentNodes, Set.of());
+		LayoutQualityAssessor.OverlapResult overlapResult = assessor.computeOverlaps(assessmentNodes, Set.of(), false);
 		assertEquals("directed layout should have 0 overlaps after resolution", 0, overlapResult.siblingCount());
 
 		// AC #2: average spacing must be positive (not 0.0 as before overlap resolution)
@@ -271,7 +271,7 @@ public class LayoutEngineTest {
 
 		LayoutQualityAssessor assessor = new LayoutQualityAssessor();
 		LayoutQualityAssessor.OverlapResult overlapResult = assessor.computeOverlaps(
-				toAssessmentNodes(result), Set.of());
+				toAssessmentNodes(result), Set.of(), false);
 		assertEquals("tree layout should have 0 overlaps after resolution", 0, overlapResult.siblingCount());
 	}
 
@@ -294,7 +294,7 @@ public class LayoutEngineTest {
 
 		LayoutQualityAssessor assessor = new LayoutQualityAssessor();
 		LayoutQualityAssessor.OverlapResult overlapResult = assessor.computeOverlaps(
-				toAssessmentNodes(result), Set.of());
+				toAssessmentNodes(result), Set.of(), false);
 		assertEquals("spacious preset should have 0 overlaps after resolution", 0, overlapResult.siblingCount());
 	}
 

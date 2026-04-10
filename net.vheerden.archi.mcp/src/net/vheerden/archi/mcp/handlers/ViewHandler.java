@@ -655,6 +655,7 @@ public class ViewHandler {
                         + "ideal first step for grouped view workflows (discover viewObjectIds for "
                         + "layout-within-group, arrange-groups, optimize-group-order). "
                         + "Set format=graph for deduplicated node/edge structure, format=summary for condensed text overview. "
+                        + "Elements in results include specialization field showing the primary specialization name (null if none). "
                         + "Related: get-element (full element details), "
                         + "get-relationships (connections beyond this view), "
                         + "export-view (visual verification of connection routing).")

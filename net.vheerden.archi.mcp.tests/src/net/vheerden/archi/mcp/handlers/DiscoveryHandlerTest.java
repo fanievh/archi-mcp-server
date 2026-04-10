@@ -89,7 +89,7 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldReturnFoundExisting_whenExactMatchExists() throws Exception {
         accessor.setExactMatchResult(Optional.of(
-                ElementDto.standard("elem-1", "Customer Service", "BusinessProcess", "Business", null, null)));
+                ElementDto.standard("elem-1", "Customer Service", "BusinessProcess", null, "Business", null, null)));
 
         Map<String, Object> result = callAndParse("get-or-create-element",
                 Map.of("type", "BusinessProcess", "name", "Customer Service"));
@@ -102,7 +102,7 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldNotCallCreate_whenExactMatchFound() throws Exception {
         accessor.setExactMatchResult(Optional.of(
-                ElementDto.standard("elem-1", "Customer", "BusinessActor", "Business", null, null)));
+                ElementDto.standard("elem-1", "Customer", "BusinessActor", null, "Business", null, null)));
 
         callAndParse("get-or-create-element",
                 Map.of("type", "BusinessActor", "name", "Customer"));
@@ -113,7 +113,7 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldReturnNextSteps_whenFoundExisting() throws Exception {
         accessor.setExactMatchResult(Optional.of(
-                ElementDto.standard("elem-1", "Customer", "BusinessActor", "Business", null, null)));
+                ElementDto.standard("elem-1", "Customer", "BusinessActor", null, "Business", null, null)));
 
         Map<String, Object> result = callAndParse("get-or-create-element",
                 Map.of("type", "BusinessActor", "name", "Customer"));
@@ -219,8 +219,8 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldReturnFoundExisting_whenSearchHasResults() throws Exception {
         accessor.setSearchResults(List.of(
-                ElementDto.standard("elem-1", "Customer Service", "BusinessProcess", "Business", null, null),
-                ElementDto.standard("elem-2", "Client Service", "BusinessProcess", "Business", null, null)));
+                ElementDto.standard("elem-1", "Customer Service", "BusinessProcess", null, "Business", null, null),
+                ElementDto.standard("elem-2", "Client Service", "BusinessProcess", null, "Business", null, null)));
 
         Map<String, Object> result = callAndParse("search-and-create",
                 Map.of("query", "service", "createType", "BusinessProcess", "createName", "New Service"));
@@ -234,7 +234,7 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldNotCreate_whenSearchHasResults() throws Exception {
         accessor.setSearchResults(List.of(
-                ElementDto.standard("elem-1", "Something", "BusinessProcess", "Business", null, null)));
+                ElementDto.standard("elem-1", "Something", "BusinessProcess", null, "Business", null, null)));
 
         callAndParse("search-and-create",
                 Map.of("query", "something", "createType", "BusinessProcess", "createName", "New Thing"));
@@ -245,7 +245,7 @@ public class DiscoveryHandlerTest {
     @Test
     public void shouldReturnNextSteps_whenSearchHasResults() throws Exception {
         accessor.setSearchResults(List.of(
-                ElementDto.standard("elem-1", "Something", "BusinessProcess", "Business", null, null)));
+                ElementDto.standard("elem-1", "Something", "BusinessProcess", null, "Business", null, null)));
 
         Map<String, Object> result = callAndParse("search-and-create",
                 Map.of("query", "something", "createType", "BusinessProcess", "createName", "New Thing"));
@@ -416,7 +416,7 @@ public class DiscoveryHandlerTest {
         ProposalContext proposalCtx = new ProposalContext("p-disc-1",
                 "Create BusinessActor: New Actor", Instant.now());
         accessor.setCreateElementBehavior((sid, t, n, d, p, f) -> {
-            ElementDto dto = ElementDto.standard("preview-1", n, t, "Business", d, null);
+            ElementDto dto = ElementDto.standard("preview-1", n, t, null, "Business", d, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -444,7 +444,7 @@ public class DiscoveryHandlerTest {
         ProposalContext proposalCtx = new ProposalContext("p-disc-2",
                 "Create BusinessActor: New Actor", Instant.now());
         accessor.setCreateElementBehavior((sid, t, n, d, p, f) -> {
-            ElementDto dto = ElementDto.standard("preview-2", n, t, "Business", d, null);
+            ElementDto dto = ElementDto.standard("preview-2", n, t, null, "Business", d, null);
             return new MutationResult<>(dto, null, proposalCtx);
         });
 
@@ -584,29 +584,30 @@ public class DiscoveryHandlerTest {
         }
 
         @Override
-        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter) {
+        public List<ElementDto> searchElements(String query, String typeFilter, String layerFilter,
+                                               String specializationFilter) {
             return searchResults;
         }
 
         @Override
         public MutationResult<ElementDto> createElement(String sessionId, String type,
                 String name, String documentation, Map<String, String> properties,
-                String folderId) {
+                String folderId, String specialization) {
             createElementCalled = true;
             if (createBehavior != null) {
                 return createBehavior.create(sessionId, type, name, documentation, properties, folderId);
             }
             ElementDto dto = ElementDto.standard(
-                    "elem-created-1", name, type, "Business", documentation, null);
+                    "elem-created-1", name, type, null, "Business", documentation, null);
             return new MutationResult<>(dto, batchMode ? 1 : null);
         }
 
         @Override
         public MutationResult<ElementDto> createElement(String sessionId, String type,
                 String name, String documentation, Map<String, String> properties,
-                String folderId, Map<String, String> source) {
+                String folderId, Map<String, String> source, String specialization) {
             capturedSource = source;
-            return createElement(sessionId, type, name, documentation, properties, folderId);
+            return createElement(sessionId, type, name, documentation, properties, folderId, specialization);
         }
 
         @Override

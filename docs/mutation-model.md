@@ -12,6 +12,7 @@ This document describes how the ArchiMate MCP Server handles model mutations, in
 - [Approval Workflow](#approval-workflow)
 - [Batch Mode](#batch-mode)
 - [Bulk Mutate](#bulk-mutate)
+- [Inline Specialization Parameter](#inline-specialization-parameter)
 - [Error Handling](#error-handling)
 
 ## Mutation Flow Overview
@@ -270,6 +271,20 @@ Operations can reference results from earlier operations using `$N.id`:
 
 150 per `bulk-mutate` call.
 
+### Bulk Profile Deduplication Cache
+
+When a `bulk-mutate` batch creates multiple elements or relationships with the same new specialization, a `ThreadLocal<Map<String, IProfile>>` bulk profile cache prevents duplicate specialization profiles from being created. The problem arises because bulk-mutate runs all prepare methods before dispatching any commands — so `resolveOrCreateProfile` cannot find profiles created by earlier (not yet executed) operations in the same batch.
+
+The cache is scoped to a single `executeBulk` call:
+
+1. **Set** before phase 1 (prepare) begins
+2. **Consulted** by `resolveOrCreateProfile` before the model lookup — on cache hit, the existing profile is reused
+3. **Populated** on both miss-paths (new profile created, or existing model profile found)
+4. **Managed** by specialization mutation prepares: `prepareCreateSpecialization` publishes new profiles, `prepareUpdateSpecialization` re-keys on rename, `prepareDeleteSpecialization` evicts
+5. **Cleared** in `finally` after all commands dispatch
+
+Single-call (non-bulk) paths see a `null` cache reference and behave exactly as before. The cache key is `lowercase(name) + "|" + conceptType` for case-insensitive deduplication.
+
 ### Integration with Other Modes
 
 - **Approval mode:** wraps entire bulk result in a proposal
@@ -277,6 +292,66 @@ Operations can reference results from earlier operations using `$N.id`:
 - **GUI-attached:** executes immediately as a single undo unit
 
 **Source:** `handlers/MutationHandler.java`
+
+## Inline Specialization Parameter
+
+`create-element`, `create-relationship`, `update-element`, and `update-relationship` accept an optional `specialization` parameter that ties the concept to an ArchiMate specialization (an IS-A subtype like "Microservice" or "Cloud Server"). The parameter integrates with the standard mutation pipeline — no separate command stack invocation is required.
+
+### Auto-Create on First Use
+
+On `create-element` and `create-relationship`, if the named specialization does not yet exist for the concept's type, the server creates it and applies it to the new concept in a single GEF `CompoundCommand`:
+
+```text
+CompoundCommand
+  ├── CreateProfileCommand("Microservice", ApplicationComponent)
+  └── CreateElementCommand(ApplicationComponent "Order Service")
+        └── ApplySpecializationCommand("Microservice")
+```
+
+The compound command becomes a single undo unit. Undoing the create removes both the element and the auto-created specialization (if no other concept references it).
+
+### Update Semantics
+
+On `update-element` and `update-relationship`:
+
+| `specialization` value | Behavior |
+|---|---|
+| omitted | Specialization is unchanged |
+| `"Microservice"` | Replace the primary specialization. Auto-creates the specialization if missing |
+| `""` (empty string) | Clear all specializations on the concept |
+
+The clear semantics use `ClearSpecializationCommand`. The reassign path uses `ApplySpecializationCommand`, which detaches the previous primary before attaching the new one.
+
+### Identity and Type Binding
+
+A specialization is identified by `(name, conceptType)` — the same name on a different concept type is a different specialization. The accessor enforces:
+
+- Case-insensitive name matching against existing specializations
+- Concept-type binding to the concrete EClass of the mutation target (e.g. `Node`, not `ArchimateConcept`)
+- Rejection of abstract bases (`ArchimateConcept`, `ArchimateElement`, `ArchimateRelationship`)
+
+### Bulk-Mutate Pre-Registration Pattern
+
+`create-specialization` is supported in `bulk-mutate`, enabling vocabulary pre-registration in a single atomic batch:
+
+```json
+{
+  "operations": [
+    {"tool": "create-specialization", "args": {"name": "Microservice", "conceptType": "ApplicationComponent"}},
+    {"tool": "create-specialization", "args": {"name": "API Gateway", "conceptType": "ApplicationComponent"}},
+    {"tool": "create-element", "args": {"type": "ApplicationComponent", "name": "Order Service", "specialization": "Microservice"}},
+    {"tool": "create-element", "args": {"type": "ApplicationComponent", "name": "Public API Edge", "specialization": "API Gateway"}}
+  ]
+}
+```
+
+`create-specialization` is idempotent — re-running the same `(name, conceptType)` returns the existing specialization rather than failing. This makes pre-registration safe to retry across sessions.
+
+### Multi-Profile Caveat
+
+A concept can technically carry more than one specialization in the underlying EMF model, but the inline `specialization` parameter reads and writes only the **primary** (first) specialization. The `specialization` field on `ElementDto` and `RelationshipDto` exposes the same primary value. For multi-faceted classification, prefer multiple specializations on different relationships, or use properties.
+
+**Source:** `model/CreateProfileCommand.java`, `model/UpdateProfileCommand.java`, `model/DeleteProfileCommand.java`, `model/ApplySpecializationCommand.java`, `model/ClearSpecializationCommand.java`, `handlers/SpecializationHandler.java`
 
 ## Error Handling
 

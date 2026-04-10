@@ -349,12 +349,12 @@ public class TraversalEngineTest {
     private ElementDto elem(String id) {
         return accessor.getElementById(id).orElse(
                 ElementDto.standard(id, "Element " + id, "ApplicationComponent",
-                        "Application", null, List.of()));
+                        null, "Application", null, List.of()));
     }
 
     private ElementDto elemWithId(String id) {
         return ElementDto.standard(id, "Element " + id, "ApplicationComponent",
-                "Application", null, List.of());
+                null, "Application", null, List.of());
     }
 
     // ---- Stub Accessors ----
@@ -370,13 +370,13 @@ public class TraversalEngineTest {
         StubAccessor() {
             super();
             elements.put("A", ElementDto.standard("A", "Component A", "ApplicationComponent",
-                    "Application", "Test A", List.of()));
+                    null, "Application", "Test A", List.of()));
             elements.put("B", ElementDto.standard("B", "Process B", "BusinessProcess",
-                    "Business", "Test B", List.of()));
+                    null, "Business", "Test B", List.of()));
             elements.put("C", ElementDto.standard("C", "Service C", "TechnologyService",
-                    "Technology", "Test C", List.of()));
+                    null, "Technology", "Test C", List.of()));
             elements.put("D", ElementDto.standard("D", "Node D", "Node",
-                    "Technology", "Test D", List.of()));
+                    null, "Technology", "Test D", List.of()));
 
             RelationshipDto relAB = new RelationshipDto("rel-AB", "Serves",
                     "ServingRelationship", "A", "B");
@@ -439,12 +439,12 @@ public class TraversalEngineTest {
         }
         @Override public Optional<ElementDto> getElementById(String id) {
             return Optional.of(ElementDto.standard(id, "Element " + id,
-                    "ApplicationComponent", "Application", null, List.of()));
+                    "ApplicationComponent", null, "Application", null, List.of()));
         }
         @Override public List<ElementDto> getElementsByIds(List<String> ids) {
             return ids.stream().distinct()
                     .map(id -> ElementDto.standard(id, "Element " + id,
-                            "ApplicationComponent", "Application", null, List.of()))
+                            "ApplicationComponent", null, "Application", null, List.of()))
                     .toList();
         }
         @Override public List<RelationshipDto> getRelationshipsForElement(String elementId) {

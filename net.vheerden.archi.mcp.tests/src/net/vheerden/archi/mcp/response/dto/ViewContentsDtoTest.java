@@ -14,7 +14,7 @@ public class ViewContentsDtoTest {
 
     @Test
     public void shouldCreateWithAllFields() {
-        ElementDto element = ElementDto.standard("e-1", "Actor", "BusinessActor", "Business", "doc", null);
+        ElementDto element = ElementDto.standard("e-1", "Actor", "BusinessActor", null, "Business", "doc", null);
         RelationshipDto rel = new RelationshipDto("r-1", "uses", "ServingRelationship", "e-1", "e-2");
         ViewNodeDto node = new ViewNodeDto("vo-1", "e-1", 100, 200, 120, 55);
         ViewConnectionDto conn = new ViewConnectionDto("vc-1", "r-1", "ServingRelationship",

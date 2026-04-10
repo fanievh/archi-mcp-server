@@ -2507,7 +2507,7 @@ public class TraversalHandlerTest {
         @Override
         public ModelInfoDto getModelInfo() {
             if (!isModelLoaded()) throw new NoModelLoadedException();
-            return new ModelInfoDto("Test Model", 4, 2, 0, Map.of(), Map.of(), Map.of());
+            return new ModelInfoDto("Test Model", 4, 2, 0, 0, Map.of(), Map.of(), Map.of());
         }
 
         @Override
@@ -2516,23 +2516,23 @@ public class TraversalHandlerTest {
             if ("elem-1".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "elem-1", "App Component", "ApplicationComponent",
-                        "Application", "A test application component",
+                        null, "Application", "A test application component",
                         List.of(Map.of("key", "version", "value", "1.0"))));
             }
             if ("elem-2".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "elem-2", "Business Process", "BusinessProcess",
-                        "Business", "A test business process", List.of()));
+                        null, "Business", "A test business process", List.of()));
             }
             if ("elem-3".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "elem-3", "Tech Service", "TechnologyService",
-                        "Technology", "A test technology service", List.of()));
+                        null, "Technology", "A test technology service", List.of()));
             }
             if ("elem-4".equals(id)) {
                 return Optional.of(ElementDto.standard(
                         "elem-4", "Isolated Node", "Node",
-                        "Technology", "An isolated node", List.of()));
+                        null, "Technology", "An isolated node", List.of()));
             }
             return Optional.empty();
         }

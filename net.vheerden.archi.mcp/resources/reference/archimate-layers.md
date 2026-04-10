@@ -15,6 +15,8 @@ Strategic elements that model the enterprise's direction and capabilities.
 | ValueStream | A sequence of activities that creates an overall result for a customer, stakeholder, or end user |
 | CourseOfAction | An approach or plan for configuring capabilities and resources to achieve a goal |
 
+**Common Specializations:** Core Capability, Differentiating Capability, Supporting Capability (on `Capability`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
+
 ## Business Layer
 
 Business processes, actors, roles, and services that deliver value.
@@ -35,6 +37,8 @@ Business processes, actors, roles, and services that deliver value.
 | Representation | A perceptible form of the information carried by a business object |
 | Product | A coherent collection of services and/or passive structure elements, accompanied by a contract, offered as a whole to customers |
 
+**Common Specializations:** Customer-Facing Process, Back-Office Function (on `BusinessProcess`); External Partner, Internal Stakeholder (on `BusinessActor`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
+
 ## Application Layer
 
 Software applications, components, and services.
@@ -50,6 +54,8 @@ Software applications, components, and services.
 | ApplicationEvent | An application state change |
 | ApplicationService | An explicitly defined exposed application behaviour |
 | DataObject | Data structured for automated processing |
+
+**Common Specializations:** Microservice, API Gateway, Message Broker, Data Pipeline, Legacy System, SaaS Application (on `ApplicationComponent`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
 
 ## Technology Layer
 
@@ -71,6 +77,8 @@ Infrastructure, platforms, and technology services.
 | TechnologyService | An explicitly defined piece of technology functionality exposed through interfaces |
 | Artifact | A piece of data that is used or produced in a software development process, or by deployment and operation of an IT system |
 
+**Common Specializations:** Cloud Server, Database Server, Load Balancer, Firewall, Container Platform, Kubernetes Cluster (on `Node`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
+
 ## Physical Layer
 
 Physical structures, equipment, and materials.
@@ -81,6 +89,8 @@ Physical structures, equipment, and materials.
 | Facility | A physical structure or environment |
 | DistributionNetwork | A physical network used to transport materials or energy |
 | Material | Tangible physical matter or energy |
+
+**Common Specializations:** Data Centre, Edge Site, Manufacturing Line (on `Facility`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
 
 ## Motivation Layer
 
@@ -99,6 +109,8 @@ Stakeholders, drivers, goals, and requirements that motivate the architecture.
 | Meaning | The knowledge or expertise present in, or the interpretation given to, a concept |
 | Value | The relative worth, utility, or importance of a concept |
 
+**Common Specializations:** Security Requirement, Performance Goal (on `Requirement`); Compliance Constraint (on `Constraint`); Regulatory Driver (on `Driver`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
+
 ## Implementation & Migration Layer
 
 Work packages, deliverables, and plateau states for managing change.
@@ -110,6 +122,8 @@ Work packages, deliverables, and plateau states for managing change.
 | ImplementationEvent | A state change related to implementation or migration |
 | Plateau | A relatively stable state of the architecture that exists during a limited period of time |
 | Gap | A statement of difference between two plateaux |
+
+**Common Specializations:** Migration Work Package, Decommissioning Work Package (on `WorkPackage`); Steady-State Plateau, Transition Plateau (on `Plateau`). See `archimate-specializations.md` for the full catalog and `create-element`'s `specialization` param for inline creation.
 
 ## Composite Layer
 

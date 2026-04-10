@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Result of layout quality assessment containing all metrics,
@@ -16,7 +17,11 @@ import java.util.Map;
  * {@code ratingBreakdown} shows per-metric contributions to the overall rating (Story 11-19).
  * {@code coincidentSegmentCount} tracks overlapping connection route segments (Story 11-23).
  * {@code nonOrthogonalTerminalCount} tracks connections with diagonal terminal segments (B38).
- * {@code contentBounds} is the axis-aligned bounding box of all visual content (Story 11-29).</p>
+ * {@code contentBounds} is the axis-aligned bounding box of all visual content (Story 11-29).
+ * {@code labelTruncationCount}, {@code parentLabelObscuredCount}, {@code imageSiblingOverlapCount}
+ * are informational detections added by B53 — no rating impact.
+ * {@code violatorIds} maps metric names to sets of visual object IDs that violate each metric (B55).
+ * Null when not requested (includeViolatorIds=false). Crossings excluded (emergent property).</p>
  */
 record LayoutAssessmentResult(
         int overlapCount,
@@ -42,4 +47,11 @@ record LayoutAssessmentResult(
         int coincidentSegmentCount,
         int nonOrthogonalTerminalCount,
         ContentBounds contentBounds,
+        int labelTruncationCount,
+        List<String> labelTruncations,
+        int parentLabelObscuredCount,
+        List<String> parentLabelObscuredDescriptions,
+        int imageSiblingOverlapCount,
+        List<String> imageSiblingOverlapDescriptions,
+        Map<String, Set<String>> violatorIds,
         List<String> suggestions) {}

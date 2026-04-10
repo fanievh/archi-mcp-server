@@ -85,7 +85,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void shouldRegisterTwentyTools() {
-        assertEquals(19, registry.getToolSpecifications().size());
+        assertEquals(20, registry.getToolSpecifications().size());
     }
 
     @Test
@@ -2277,6 +2277,7 @@ public class ViewPlacementHandlerTest {
                 vId, 10, 5, 4, 0, 15, 3.0, 8.0, 20, "poor", null,
                 List.of("Element 'a' overlaps with element 'b'"),
                 null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Found 4 overlapping element pairs — use auto-layout-and-route")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2307,6 +2308,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 2, 0, 5, 1, 0.5, 40.0, 65, "good", null,
                 null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2332,6 +2334,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 12, 3.0, 45.0, 70, "good", breakdown,
                 null, null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2372,6 +2375,7 @@ public class ViewPlacementHandlerTest {
                 null, null, null, null, 0, null, 2,
                 List.of("Connection 'c-1' references missing view object(s): source=obj-x target=obj-y"),
                 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Layout quality is good — no immediate improvements needed.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2408,6 +2412,7 @@ public class ViewPlacementHandlerTest {
                 null, null, null, null, 0, null, 3,
                 List.of("Connection 'c-1' references missing view object(s)"),
                 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Layout quality is good.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2427,6 +2432,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "excellent", null,
                 null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("No issues detected.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2444,6 +2450,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 5, 1.25, 60.0, 80, "good", null,
                 null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Some crossings.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2464,6 +2471,7 @@ public class ViewPlacementHandlerTest {
                 vId, 10, 3, 2, 0, 0, 0.0, 25.0, 60, "good", null,
                 List.of("overlap1", "overlap2"),
                 null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Use layout-within-group.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2483,6 +2491,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
                 List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Multiple issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2504,6 +2513,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 15, 8, 6, 0, 20, 2.5, 15.0, 30, "poor", null,
                 List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Major issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2523,6 +2533,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 15, 8, 6, 0, 20, 2.5, 15.0, 30, "poor", null,
                 List.of("many overlaps"), null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Major issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2543,6 +2554,7 @@ public class ViewPlacementHandlerTest {
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "excellent", null,
                 null, null, null, null, 0, null, 2,
                 List.of("orphan1"), 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("No issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2561,6 +2573,7 @@ public class ViewPlacementHandlerTest {
                 vId, 10, 3, 2, 0, 0, 0.0, 25.0, 60, "good", null,
                 List.of("overlap1", "overlap2"),
                 null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Spacing is tight.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2580,6 +2593,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 8, 4, 0, 0, 0, 0.0, 80.0, 90, "good", null,
                 null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("No issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2597,6 +2611,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
                 List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, true, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Multiple issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2617,6 +2632,7 @@ public class ViewPlacementHandlerTest {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 12, 6, 3, 0, 8, 1.33, 30.0, 50, "fair", null,
                 List.of("overlap"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
                 List.of("Issues.")));
 
         Map<String, Object> result = callAndParse("assess-layout",
@@ -2627,6 +2643,52 @@ public class ViewPlacementHandlerTest {
         assertNotNull(nextSteps);
         assertTrue("Last step should always be export-view",
                 nextSteps.get(nextSteps.size() - 1).contains("export-view"));
+    }
+
+    // ---- B55: includeViolatorIds parameter passthrough ----
+
+    @Test
+    public void assessLayout_shouldPassIncludeViolatorIdsToAccessor() throws Exception {
+        accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
+                vId, 8, 4, 2, 0, 0, 0.0, 80.0, 90, "good", null,
+                List.of("overlap1"), null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null,
+                Map.of("overlaps", List.of("elem-1", "elem-2")),
+                List.of("No issues.")));
+
+        Map<String, Object> result = callAndParse("assess-layout",
+                Map.of("viewId", "v-1", "includeViolatorIds", true));
+
+        // Verify parameter was passed through to accessor
+        assertTrue("includeViolatorIds should be passed to accessor",
+                accessor.lastAssessLayoutIncludeViolatorIds);
+
+        // Verify violatorIds appears in response
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("result");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> violatorIds = (Map<String, Object>) data.get("violatorIds");
+        assertNotNull("violatorIds should be present in response", violatorIds);
+        @SuppressWarnings("unchecked")
+        List<String> overlapIds = (List<String>) violatorIds.get("overlaps");
+        assertNotNull("Should have overlaps key", overlapIds);
+        assertTrue("Should contain elem-1", overlapIds.contains("elem-1"));
+        assertTrue("Should contain elem-2", overlapIds.contains("elem-2"));
+    }
+
+    @Test
+    public void assessLayout_shouldOmitViolatorIdsWhenNotRequested() throws Exception {
+        Map<String, Object> result = callAndParse("assess-layout",
+                Map.of("viewId", "v-1"));
+
+        // Default behavior returns null violatorIds
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("result");
+        assertNull("violatorIds should be absent when not requested",
+                data.get("violatorIds"));
+        // Parameter should default to false
+        assertFalse("includeViolatorIds should default to false",
+                accessor.lastAssessLayoutIncludeViolatorIds);
     }
 
     // ---- auto-route-connections tests ----
@@ -3476,7 +3538,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassElementIdsFilter() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             int count = (elemIds != null) ? elemIds.size() : 0;
             return new MutationResult<>(new AutoConnectResultDto(
                     vId, count, 0, List.of("r-1")), null);
@@ -3491,7 +3553,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassRelationshipTypesFilter() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             int count = (relTypes != null) ? relTypes.size() : 0;
             return new MutationResult<>(new AutoConnectResultDto(
                     vId, count, 0, List.of("r-1")), null);
@@ -3507,7 +3569,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnZeroWhenNoConnections() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) ->
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) ->
                 new MutationResult<>(new AutoConnectResultDto(
                         vId, 0, 0, List.of()), null));
 
@@ -3521,7 +3583,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnProposalInApprovalMode() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) ->
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) ->
                 new MutationResult<>(null, null, new ProposalContext("p-42",
                         "Auto-connect view " + vId,
                         Instant.parse("2026-03-04T00:00:00Z"))));
@@ -3538,7 +3600,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldReturnErrorOnInvalidRelationshipType() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             throw new ModelAccessException(
                     "Invalid ArchiMate relationship type: BogusRelationship",
                     ErrorCode.INVALID_PARAMETER);
@@ -3557,7 +3619,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassShowLabelFalseToAccessor() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             assertNotNull("showLabel should be passed", (Object) sl);
             assertFalse("showLabel should be false", sl.booleanValue());
             return new MutationResult<>(new AutoConnectResultDto(
@@ -3573,7 +3635,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassShowLabelTrueToAccessor() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             assertNotNull("showLabel should be passed", (Object) sl);
             assertTrue("showLabel should be true", sl.booleanValue());
             return new MutationResult<>(new AutoConnectResultDto(
@@ -3589,7 +3651,7 @@ public class ViewPlacementHandlerTest {
 
     @Test
     public void autoConnect_shouldPassNullShowLabelWhenOmitted() throws Exception {
-        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl) -> {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
             assertNull("showLabel should be null when omitted", (Object) sl);
             return new MutationResult<>(new AutoConnectResultDto(
                     vId, 2, 0, List.of("r-1", "r-2")), null);
@@ -3597,6 +3659,144 @@ public class ViewPlacementHandlerTest {
 
         Map<String, Object> result = callAndParse("auto-connect-view",
                 Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    // ---- auto-connect-view styling (B52) ----
+
+    @Test
+    public void autoConnect_shouldPassStylingParamsToAccessor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            assertNotNull("styling should be passed", sty);
+            assertEquals("#0066CC", sty.lineColor());
+            assertEquals("#FFFFFF", sty.fontColor());
+            assertEquals(Integer.valueOf(2), sty.lineWidth());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 3, 0, List.of("r-1", "r-2", "r-3")), null);
+        });
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("lineColor", "#0066CC");
+        args.put("fontColor", "#FFFFFF");
+        args.put("lineWidth", 2);
+        Map<String, Object> result = callAndParse("auto-connect-view", args);
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(3, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldPassNullStylingWhenOmitted() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            assertNull("styling should be null when omitted", sty);
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> result = callAndParse("auto-connect-view",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldPassLineColorOnlyToAccessor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            assertNotNull("styling should be passed", sty);
+            assertEquals("#FF8800", sty.lineColor());
+            assertNull("fontColor should be null", sty.fontColor());
+            assertNull("lineWidth should be null", sty.lineWidth());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("lineColor", "#FF8800");
+        Map<String, Object> result = callAndParse("auto-connect-view", args);
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldRejectInvalidLineColor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            throw new ModelAccessException(
+                    "Invalid colour format: 'red'. Expected #RRGGBB hex format.",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        McpSchema.CallToolResult result = callTool("auto-connect-view",
+                Map.of("viewId", "v-1", "lineColor", "red"));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+    }
+
+    @Test
+    public void autoConnect_shouldRejectOutOfRangeLineWidth() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            throw new ModelAccessException(
+                    "lineWidth must be between 1 and 3, got: 5",
+                    ErrorCode.INVALID_PARAMETER);
+        });
+
+        McpSchema.CallToolResult result = callTool("auto-connect-view",
+                Map.of("viewId", "v-1", "lineWidth", 5));
+
+        assertTrue("Should be error", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+    }
+
+    @Test
+    public void autoConnect_shouldCombineStylingWithFilters() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            assertNotNull("elementIds should be passed", elemIds);
+            assertEquals(1, elemIds.size());
+            assertNotNull("relTypes should be passed", relTypes);
+            assertEquals(1, relTypes.size());
+            assertNotNull("showLabel should be passed", (Object) sl);
+            assertFalse("showLabel should be false", sl.booleanValue());
+            assertNotNull("styling should be passed", sty);
+            assertEquals("#0066CC", sty.lineColor());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 1, 0, List.of("r-1")), null);
+        });
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("elementIds", List.of("e-1"));
+        args.put("relationshipTypes", List.of("FlowRelationship"));
+        args.put("showLabel", false);
+        args.put("lineColor", "#0066CC");
+        Map<String, Object> result = callAndParse("auto-connect-view", args);
+
+        Map<String, Object> data = getResult(result);
+        assertEquals(1, ((Number) data.get("connectionsCreated")).intValue());
+    }
+
+    @Test
+    public void autoConnect_shouldPassEmptyStringLineColorToAccessor() throws Exception {
+        accessor.setAutoConnectViewBehavior((sid, vId, elemIds, relTypes, sl, sty) -> {
+            assertNotNull("styling should be passed", sty);
+            assertEquals("lineColor should be empty string", "", sty.lineColor());
+            assertNull("fontColor should be null", sty.fontColor());
+            assertNull("lineWidth should be null", sty.lineWidth());
+            return new MutationResult<>(new AutoConnectResultDto(
+                    vId, 2, 0, List.of("r-1", "r-2")), null);
+        });
+
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("viewId", "v-1");
+        args.put("lineColor", "");
+        Map<String, Object> result = callAndParse("auto-connect-view", args);
 
         Map<String, Object> data = getResult(result);
         assertEquals(2, ((Number) data.get("connectionsCreated")).intValue());
@@ -4415,7 +4615,7 @@ public class ViewPlacementHandlerTest {
     interface AutoConnectViewBehavior {
         MutationResult<AutoConnectResultDto> apply(String sessionId, String viewId,
                 List<String> elementIds, List<String> relationshipTypes,
-                Boolean showLabel);
+                Boolean showLabel, StylingParams styling);
     }
 
     @FunctionalInterface
@@ -4542,6 +4742,9 @@ public class ViewPlacementHandlerTest {
         StylingParams lastAddGroupToViewStyling;
         StylingParams lastAddNoteToViewStyling;
         StylingParams lastUpdateViewConnectionStyling;
+        StylingParams lastAutoConnectViewStyling;
+        // B55: capture last includeViolatorIds parameter
+        boolean lastAssessLayoutIncludeViolatorIds;
 
         StubViewPlacementAccessor() {
             super(true);
@@ -4700,6 +4903,7 @@ public class ViewPlacementHandlerTest {
             this.assessLayoutBehavior = (vId) -> new AssessLayoutResultDto(
                     vId, 5, 3, 0, 0, 2, 0.67, 45.5, 70, "good", null,
                     null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                    0, null, 0, null, 0, null, null,
                     List.of("Layout quality is good — no immediate improvements needed."));
             this.autoLayoutAndRouteBehavior = (sid, vId, m, dir, sp, tr) -> {
                 String d = (dir != null) ? dir.toUpperCase() : "DOWN";
@@ -4711,7 +4915,7 @@ public class ViewPlacementHandlerTest {
                 String s = (strategy != null) ? strategy : "orthogonal";
                 return new MutationResult<>(new AutoRouteResultDto(vId, 5, s, false), null);
             };
-            this.autoConnectViewBehavior = (sid, vId, elemIds, relTypes, sl) ->
+            this.autoConnectViewBehavior = (sid, vId, elemIds, relTypes, sl, sty) ->
                     new MutationResult<>(new AutoConnectResultDto(
                             vId, 3, 1, List.of("r-1", "r-2", "r-3")), null);
             this.layoutWithinGroupBehavior = (sid, vId, gvoId, arr, sp, pad, ew, eh, ar, aw, cols, rec) ->
@@ -4840,6 +5044,12 @@ public class ViewPlacementHandlerTest {
         }
 
         @Override
+        public AssessLayoutResultDto assessLayout(String viewId, boolean includeViolatorIds) {
+            this.lastAssessLayoutIncludeViolatorIds = includeViolatorIds;
+            return assessLayoutBehavior.apply(viewId);
+        }
+
+        @Override
         public DetectHubElementsResultDto detectHubElements(String viewId) {
             return detectHubElementsBehavior.apply(viewId);
         }
@@ -4863,9 +5073,10 @@ public class ViewPlacementHandlerTest {
         public MutationResult<AutoConnectResultDto> autoConnectView(
                 String sessionId, String viewId,
                 List<String> elementIds, List<String> relationshipTypes,
-                Boolean showLabel) {
+                Boolean showLabel, StylingParams styling) {
+            lastAutoConnectViewStyling = styling;
             return autoConnectViewBehavior.apply(sessionId, viewId, elementIds,
-                    relationshipTypes, showLabel);
+                    relationshipTypes, showLabel, styling);
         }
 
         @Override

@@ -188,4 +188,97 @@ public class ElementSizerTest {
         int lines = ElementSizer.simulateWordWrap("", new int[0], 4, 100);
         assertEquals(1, lines);
     }
+
+    // ---- computeLabelHeightFromMetrics (B50) ----
+
+    @Test
+    public void computeLabelHeight_singleLine_returnsApprox25() {
+        // "Server" at wide element (200px) — fits single line
+        String label = "Application Server";
+        // Words: Application=70, Server=42 → single-line width = 70+4+42 = 116
+        ElementSizer.FontMetrics metrics = metricsFor(label, 70, 42);
+        // Element width 200, content width = 200 - 30 (HORIZONTAL_PADDING) = 170 — fits in one line
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, 200);
+        // Expected: 1 * 14 + 6 + 5 = 25
+        assertEquals(25, height);
+    }
+
+    @Test
+    public void computeLabelHeight_multiLine_exceedsDefault() {
+        // "Payment Processing Engine" at 142px width — wraps to 2+ lines
+        String label = "Payment Processing Engine";
+        // Words: Payment=49, Processing=70, Engine=42
+        ElementSizer.FontMetrics metrics = metricsFor(label, 49, 70, 42);
+        // Element width 142, content width = 142 - 30 = 112
+        // Line 1: "Payment" (49), "Processing" fits? 49+4+70=123 > 112 → wrap
+        // Line 2: "Processing" (70), "Engine" fits? 70+4+42=116 > 112 → wrap
+        // Line 3: "Engine" (42)
+        // → 3 lines
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, 142);
+        // Expected: 3 * 14 + 6 + 5 = 53
+        assertTrue("Multi-line label height should exceed 25px: " + height, height > 25);
+        assertEquals(53, height);
+    }
+
+    @Test
+    public void computeLabelHeight_nullLabel_returnsDefault25() {
+        int height = ElementSizer.computeLabelHeightFromMetrics(null, null, 200);
+        assertEquals(ElementSizer.DEFAULT_LABEL_HEIGHT, height);
+    }
+
+    @Test
+    public void computeLabelHeight_emptyLabel_returnsDefault25() {
+        int height = ElementSizer.computeLabelHeightFromMetrics("", null, 200);
+        assertEquals(ElementSizer.DEFAULT_LABEL_HEIGHT, height);
+    }
+
+    @Test
+    public void computeLabelHeight_veryLongName_threeOrMoreLines() {
+        // "Enterprise Application Integration Platform" at narrow width
+        String label = "Enterprise Application Integration Platform";
+        // Words: Enterprise=63, Application=70, Integration=70, Platform=49
+        ElementSizer.FontMetrics metrics = metricsFor(label, 63, 70, 70, 49);
+        // Element width 120, content width = 120 - 30 = 90
+        // Line 1: "Enterprise" (63), "Application" 63+4+70=137>90 → wrap
+        // Line 2: "Application" (70), "Integration" 70+4+70=144>90 → wrap
+        // Line 3: "Integration" (70), "Platform" 70+4+49=123>90 → wrap
+        // Line 4: "Platform" (49)
+        // → 4 lines
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, 120);
+        // Expected: 4 * 14 + 6 + 5 = 67
+        assertEquals(67, height);
+        assertTrue("Should be proportionally taller than 2-line", height > 53);
+    }
+
+    @Test
+    public void computeLabelHeight_wideElement_singleLine() {
+        // Same long name but at very wide element — fits single line
+        String label = "Payment Processing Engine";
+        ElementSizer.FontMetrics metrics = metricsFor(label, 49, 70, 42);
+        // Element width 300, content width = 300 - 30 = 270
+        // Single line: 49+4+70+4+42 = 169 < 270 → 1 line
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, 300);
+        assertEquals(25, height);
+    }
+
+    @Test
+    public void computeLabelHeight_zeroOrNegativeContentWidth_returnsDefault() {
+        String label = "Test Label Here!";
+        ElementSizer.FontMetrics metrics = metricsFor(label, 28, 35, 28, 7);
+        // Element width = HORIZONTAL_PADDING exactly → content width = 0
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, ElementSizer.HORIZONTAL_PADDING);
+        assertEquals(ElementSizer.DEFAULT_LABEL_HEIGHT, height);
+    }
+
+    @Test
+    public void computeLabelHeight_shortName_returnsDefault() {
+        // Names <= SHORT_NAME_THRESHOLD (15 chars) should fast-path to DEFAULT_LABEL_HEIGHT
+        // "DB" is 2 chars — well under threshold
+        // computeLabelHeightFromMetrics still needs to handle short names for direct calls
+        String label = "DB Server";  // 9 chars, under threshold
+        ElementSizer.FontMetrics metrics = metricsFor(label, 14, 42);
+        int height = ElementSizer.computeLabelHeightFromMetrics(label, metrics, 200);
+        // Single line: 1 * 14 + 6 + 5 = 25
+        assertEquals(25, height);
+    }
 }

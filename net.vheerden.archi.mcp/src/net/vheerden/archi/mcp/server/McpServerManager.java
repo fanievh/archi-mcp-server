@@ -23,6 +23,7 @@ import net.vheerden.archi.mcp.handlers.RenderHandler;
 import net.vheerden.archi.mcp.handlers.ResourceHandler;
 import net.vheerden.archi.mcp.handlers.SearchHandler;
 import net.vheerden.archi.mcp.handlers.SessionHandler;
+import net.vheerden.archi.mcp.handlers.SpecializationHandler;
 import net.vheerden.archi.mcp.handlers.TraversalHandler;
 import net.vheerden.archi.mcp.handlers.ViewHandler;
 import net.vheerden.archi.mcp.handlers.ViewPlacementHandler;
@@ -444,6 +445,10 @@ public class McpServerManager implements ModelChangeListener {
         ElementCreationHandler elementCreationHandler = new ElementCreationHandler(
                 modelAccessor, formatter, commandRegistry, sm);
         elementCreationHandler.registerTools();
+
+        SpecializationHandler specializationHandler = new SpecializationHandler(
+                modelAccessor, formatter, commandRegistry, sm);
+        specializationHandler.registerTools();
 
         ElementUpdateHandler elementUpdateHandler = new ElementUpdateHandler(
                 modelAccessor, formatter, commandRegistry, sm);

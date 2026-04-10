@@ -1810,7 +1810,7 @@ public class ViewHandlerTest {
             if (!isModelLoaded()) {
                 throw new NoModelLoadedException();
             }
-            return new ModelInfoDto("Test Model", 10, 5, views.size(), Map.of(), Map.of(), Map.of());
+            return new ModelInfoDto("Test Model", 10, 5, views.size(), 0, Map.of(), Map.of(), Map.of());
         }
 
         @Override
@@ -1821,9 +1821,9 @@ public class ViewHandlerTest {
             if ("view-1".equals(viewId)) {
                 List<ElementDto> elements = List.of(
                         ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
-                                "Application", "Main web app", List.of()),
+                                null, "Application", "Main web app", List.of()),
                         ElementDto.standard("elem-2", "API Gateway", "ApplicationComponent",
-                                "Application", "REST API gateway", List.of()));
+                                null, "Application", "REST API gateway", List.of()));
                 List<RelationshipDto> relationships = List.of(
                         new RelationshipDto("rel-1", "Serves", "ServingRelationship", "elem-1", "elem-2"));
                 List<ViewNodeDto> visualMetadata = List.of(

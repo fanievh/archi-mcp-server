@@ -28,6 +28,21 @@ public class RelationshipDtoTest {
     }
 
     @Test
+    public void shouldIncludeSpecializationWhenPresent() {
+        RelationshipDto dto = new RelationshipDto(
+                "rel-1", "Data Flow", "FlowRelationship", "Material Flow",
+                "src-1", "tgt-1", false, null, null, null, null);
+
+        assertEquals("Material Flow", dto.specialization());
+    }
+
+    @Test
+    public void shouldHaveNullSpecializationInConvenienceConstructor() {
+        RelationshipDto dto = new RelationshipDto("rel-1", "Uses", "ServingRelationship", "a", "b");
+        assertNull(dto.specialization());
+    }
+
+    @Test
     public void shouldSupportEquality() {
         RelationshipDto dto1 = new RelationshipDto("r-1", "R", "Flow", "a", "b");
         RelationshipDto dto2 = new RelationshipDto("r-1", "R", "Flow", "a", "b");

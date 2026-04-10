@@ -30,7 +30,7 @@ public class ResponseFormatterTest {
     @SuppressWarnings("unchecked")
     public void shouldBuildSuccessEnvelope_withAllFields() {
         ElementDto element = ElementDto.standard("id-1", "My Element",
-                "BusinessActor", "Business", "A description",
+                "BusinessActor", null, "Business", "A description",
                 List.of(Map.of("key", "owner", "value", "team-a")));
 
         Map<String, Object> envelope = formatter.formatSuccess(
