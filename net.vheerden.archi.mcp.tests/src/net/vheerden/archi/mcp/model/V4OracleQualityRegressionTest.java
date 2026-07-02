@@ -599,7 +599,7 @@ public class V4OracleQualityRegressionTest {
                     0.0,   // labelTextWidth — informational, not used by these three metrics
                     null,  // imagePath
                     null   // imagePosition
-            ));
+            , 0.0, 0.0, 0.0));
         }
 
         // 3. Build AssessmentConnection list from routed bendpoints.

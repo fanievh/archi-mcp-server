@@ -535,6 +535,91 @@ public class RoutingPipelineTest {
         assertEquals("L-shape should not be collapsed", 3, path.size());
     }
 
+    // --- Terminals-only interior collinear collapse ---
+    // The terminals-only compose (terminalsOnlyRectifyAndClearEgress) prepends/appends an L-bend without
+    // any collinear sweep, so an inserted L-bend collinear with the existing trunk leaves an exactly-
+    // collinear INTERIOR bendpoint that the full router would have removed. These reproduce the survivor
+    // from view "B.1 · Tool Request → Response" (connection Junction→Format read result) and are the
+    // red-on-revert anchor for the terminals-only fix.
+
+    /**
+     * B.1 survivor reproduction: a source (a small junction, centre (806,191)) whose stored path already
+     * runs {@code (823,194) → (823,391)} vertically. terminalsOnlyRectify prepends the horizontal-egress
+     * L-bend (823,191), producing the exactly-collinear interior middle (823,194) on x=823. The compose
+     * must now collapse that interior point, leaving a clean L {@code (823,191) → (823,391)}.
+     */
+    @Test
+    public void terminalsOnlyRectifyAndClearEgress_collapsesInteriorCollinearMiddle_afterLBendPrepend() {
+        RoutingRect source = new RoutingRect(799, 184, 14, 14, "junction"); // centre (806,191)
+        RoutingRect target = new RoutingRect(1218, 363, 122, 55, "fmt");    // centre (1279,390)
+        List<AbsoluteBendpointDto> existing = List.of(
+                new AbsoluteBendpointDto(823, 194),
+                new AbsoluteBendpointDto(823, 391));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyRectifyAndClearEgress(source, target, existing);
+
+        assertNotNull("prepended L-bend + collapse changes the path", result);
+        // The interior (823,194) is collinear with (823,191) and (823,391) and must be gone.
+        for (AbsoluteBendpointDto bp : result) {
+            assertFalse("interior collinear middle (823,194) must be collapsed",
+                    bp.x() == 823 && bp.y() == 194);
+        }
+        // Every retained point stays on the x=823 trunk (a clean vertical run, same polyline).
+        for (AbsoluteBendpointDto bp : result) {
+            assertEquals("retained bendpoints stay on the x=823 trunk", 823, bp.x());
+        }
+        // The trunk endpoints survive: the prepended egress (823,191) and the trunk end (823,391).
+        assertEquals(new AbsoluteBendpointDto(823, 191), result.get(0));
+        assertEquals(new AbsoluteBendpointDto(823, 391), result.get(result.size() - 1));
+    }
+
+    /**
+     * The PRIMARY production path: the survivor is ALREADY present in {@code existingAbs} as a 3-point
+     * list with orthogonal terminals, so {@code terminalsOnlyRectify} returns null and egress is a no-op —
+     * yet the collapse must still fire (value-based no-op detection) and emit a non-null collapsed path.
+     * This is the real view-B.1 shape (junction centre (806,191) → (1279,390), stored
+     * (823,191),(823,194),(823,391)); the earlier test forces the same middle via an L-bend prepend, this
+     * one exercises the no-op branch the fix specifically added.
+     */
+    @Test
+    public void terminalsOnlyRectifyAndClearEgress_collapsesPreExistingInteriorSurvivor_whenRectifyIsNoOp() {
+        RoutingRect source = new RoutingRect(799, 184, 14, 14, "junction"); // centre (806,191)
+        RoutingRect target = new RoutingRect(1218, 363, 122, 55, "fmt");    // centre (1279,390)
+        List<AbsoluteBendpointDto> existing = List.of(
+                new AbsoluteBendpointDto(823, 191),
+                new AbsoluteBendpointDto(823, 194),
+                new AbsoluteBendpointDto(823, 391));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyRectifyAndClearEgress(source, target, existing);
+
+        assertNotNull("a pre-existing collinear survivor must be collapsed, not treated as a no-op", result);
+        assertEquals("only the interior collinear middle is removed", 2, result.size());
+        assertEquals(new AbsoluteBendpointDto(823, 191), result.get(0));
+        assertEquals(new AbsoluteBendpointDto(823, 391), result.get(1));
+        // The caller's stored list must not be mutated.
+        assertEquals("existingAbs must be left untouched", 3, existing.size());
+    }
+
+    /**
+     * Documents the interior-only limitation that scopes this fix to B.1-class survivors: a fully straight
+     * route stores only its two edge-attachment points, and a 2-point list has no removable middle — so
+     * the collinear sweep is a no-op there. (View 2.4's survivors are terminal egress stubs — either this
+     * 2-point straight-run shape or first/last stubs on longer paths — that the terminal-anchoring
+     * invariant intentionally preserves; neither is an interior middle, so this sweep never touches them.)
+     */
+    @Test
+    public void removeCollinearPoints_leavesStraightRouteAttachmentPoints_twoPointList() {
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(327, 131),
+                new AbsoluteBendpointDto(370, 131)));
+
+        RoutingPipeline.removeCollinearPoints(path);
+
+        assertEquals("interior-only sweep cannot touch a 2-point list", 2, path.size());
+    }
+
     @Test
     public void shouldRemoveDuplicatePoints() {
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
@@ -3672,6 +3757,254 @@ public class RoutingPipelineTest {
 
         assertNull("Connection with axis-aligned terminals should produce no change",
                 result);
+    }
+
+    // =============================================
+    // Terminals-only off-face egress clearance
+    // =============================================
+
+    // Source element used across the egress tests: x[400,614] y[54,109], center (507,81).
+    private static RoutingRect egressSource() {
+        return new RoutingRect(400, 54, 214, 55, "src");
+    }
+
+    @Test
+    public void egressClearance_sourceBottomHug_isLiftedToHealthyGap() {
+        RoutingRect src = egressSource();            // bottom face y=109, centerX 507
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+        // exit (507,110) is 1px below the bottom face; trunk runs horizontal at y=110 (hug).
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 110),
+                new AbsoluteBendpointDto(472, 110),
+                new AbsoluteBendpointDto(472, 400));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        // Pushed out to bottom(109) + HEALTHY_PARALLEL_GAP_PX(15) = 124 on both the exit and trunk end.
+        assertEquals("Exit lifted to healthy gap", 124, result.get(0).y());
+        assertEquals("Exit keeps centerX", 507, result.get(0).x());
+        assertEquals("Trunk end lifted to healthy gap", 124, result.get(1).y());
+        assertEquals("Trunk end keeps its X", 472, result.get(1).x());
+        assertEquals("Tail bendpoint untouched", 400, result.get(2).y());
+    }
+
+    @Test
+    public void egressClearance_sourceTopHug_isLiftedOutward() {
+        RoutingRect src = egressSource();            // top face y=54
+        RoutingRect tgt = new RoutingRect(1000, -800, 100, 60, "tgt");
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 52),   // 2px above the top face
+                new AbsoluteBendpointDto(472, 52),
+                new AbsoluteBendpointDto(472, -400));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        // top(54) - 15 = 39.
+        assertEquals(39, result.get(0).y());
+        assertEquals(39, result.get(1).y());
+    }
+
+    @Test
+    public void egressClearance_sourceLeftHug_isLiftedOutward() {
+        RoutingRect src = egressSource();            // left face x=400, centerY 81
+        RoutingRect tgt = new RoutingRect(-800, 800, 100, 60, "tgt");
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(399, 81),   // 1px left of the left face
+                new AbsoluteBendpointDto(399, 300),  // vertical trunk hugging the left face
+                new AbsoluteBendpointDto(700, 300));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        // left(400) - 15 = 385 on both the exit and the trunk end (X axis).
+        assertEquals(385, result.get(0).x());
+        assertEquals("Exit keeps centerY", 81, result.get(0).y());
+        assertEquals(385, result.get(1).x());
+        assertEquals(300, result.get(1).y());
+    }
+
+    @Test
+    public void egressClearance_sourceRightHug_isLiftedOutward() {
+        RoutingRect src = egressSource();            // right face x=614
+        RoutingRect tgt = new RoutingRect(2000, 800, 100, 60, "tgt");
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(616, 81),   // 2px right of the right face
+                new AbsoluteBendpointDto(616, 300),
+                new AbsoluteBendpointDto(900, 300));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        // right(614) + 15 = 629.
+        assertEquals(629, result.get(0).x());
+        assertEquals(629, result.get(1).x());
+    }
+
+    @Test
+    public void egressClearance_targetBottomHug_isLifted() {
+        // Source side is a pre-existing diagonal interior (not a clean trunk) so only the target fires.
+        RoutingRect src = new RoutingRect(0, 150, 100, 55, "src");
+        RoutingRect tgt = new RoutingRect(400, 400, 214, 55, "tgt"); // bottom y=455, centerX 507
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(100, 200),
+                new AbsoluteBendpointDto(472, 300),
+                new AbsoluteBendpointDto(472, 456),   // trunk end (1px below target bottom)
+                new AbsoluteBendpointDto(507, 456));  // target exit at centerX
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        // bottom(455) + 15 = 470 on the target exit and its trunk end; source-side diagonal untouched.
+        assertEquals(470, result.get(3).y());
+        assertEquals(507, result.get(3).x());
+        assertEquals(470, result.get(2).y());
+        assertEquals(472, result.get(2).x());
+        assertEquals("Source-side diagonal untouched", 200, result.get(0).y());
+    }
+
+    @Test
+    public void egressClearance_alreadyClears_isByteIdentical() {
+        RoutingRect src = egressSource();            // bottom y=109
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+        // exit 21px below the face — already clears OFF_FACE_MIN_STUB_PX.
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 130),
+                new AbsoluteBendpointDto(472, 130),
+                new AbsoluteBendpointDto(472, 400));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        assertSame("A clearing terminal must be returned unchanged (reference-equal)",
+                rectified, result);
+    }
+
+    @Test
+    public void egressClearance_threshold_firesJustUnder_notAtExactly8() {
+        RoutingRect src = egressSource();            // bottom y=109
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+
+        // stub == 8 (exit at y=117): the assessor reads this as clean → no lift.
+        List<AbsoluteBendpointDto> atThreshold = List.of(
+                new AbsoluteBendpointDto(507, 117),
+                new AbsoluteBendpointDto(472, 117),
+                new AbsoluteBendpointDto(472, 400));
+        assertSame("stub == OFF_FACE_MIN_STUB_PX must not fire",
+                atThreshold,
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, atThreshold));
+
+        // stub == 7 (exit at y=116): below the threshold → lifted to 124.
+        List<AbsoluteBendpointDto> justUnder = List.of(
+                new AbsoluteBendpointDto(507, 116),
+                new AbsoluteBendpointDto(472, 116),
+                new AbsoluteBendpointDto(472, 400));
+        List<AbsoluteBendpointDto> lifted =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, justUnder);
+        assertEquals("stub just under the threshold must fire", 124, lifted.get(0).y());
+    }
+
+    @Test
+    public void egressClearance_isIdempotent() {
+        RoutingRect src = egressSource();
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 110),
+                new AbsoluteBendpointDto(472, 110),
+                new AbsoluteBendpointDto(472, 400));
+
+        List<AbsoluteBendpointDto> once =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+        List<AbsoluteBendpointDto> twice =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, once);
+
+        assertSame("A second pass over a cleared path is a no-op (reference-equal)", once, twice);
+    }
+
+    @Test
+    public void egressClearance_declinesLift_whenItWouldCreateDiagonal() {
+        RoutingRect src = egressSource();
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+        // Three collinear points on the hug line: moving the trunk end would make the
+        // trunkEnd → neighbour segment diagonal, so the lift must be declined.
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 110),
+                new AbsoluteBendpointDto(472, 110),
+                new AbsoluteBendpointDto(400, 110));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        assertSame("A lift that would create a diagonal must be declined", rectified, result);
+    }
+
+    @Test
+    public void egressClearance_noHug_isByteIdentical() {
+        RoutingRect src = egressSource();
+        RoutingRect tgt = new RoutingRect(1000, 800, 100, 60, "tgt");
+        // Clean L-exit: vertical egress then a horizontal trunk 91px below the bottom face —
+        // stub well above the threshold, so no hug to lift.
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(507, 200),
+                new AbsoluteBendpointDto(900, 200));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        assertSame("A non-hugging path must be returned unchanged", rectified, result);
+    }
+
+    @Test
+    public void egressClearance_twoPointPath_declinesLift_whenItWouldDiagonalToOppositeCentre() {
+        // Two-bendpoint path: the source exit hugs the bottom face, and the trunk end is ALSO the
+        // target's terminal bendpoint (it connects straight to the target centre — there is no
+        // interior bendpoint beyond it). Lifting the trunk would bend that trunk-end → target-centre
+        // run into a diagonal (a non-orthogonal terminal), so the lift must be declined.
+        RoutingRect src = egressSource();                            // bottom y=109, centerX 507
+        RoutingRect tgt = new RoutingRect(350, 85, 100, 50, "tgt");  // centerX 400, centerY 110
+        List<AbsoluteBendpointDto> twoPoint = List.of(
+                new AbsoluteBendpointDto(507, 110),   // source exit, hugs the bottom face
+                new AbsoluteBendpointDto(450, 110));  // trunk end; x=450 ≠ target centerX 400
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, twoPoint);
+
+        // Pushed trunk end (450,124) vs target centre (400,110): 450≠400 AND 124≠110 → would be a
+        // diagonal terminal, so the lift is declined and the path returned unchanged.
+        assertSame("A two-point lift that would diagonal to the opposite centre must be declined",
+                twoPoint, result);
+    }
+
+    @Test
+    public void egressClearance_rectifyAndClear_returnsNull_whenNothingToDo() {
+        // Already-orthogonal, non-hugging: rectify returns null AND clearance is a no-op → null.
+        RoutingRect src = new RoutingRect(0, 170, 100, 60, "src");   // center (50,200)
+        RoutingRect tgt = new RoutingRect(400, 170, 100, 60, "tgt"); // center (450,200)
+        assertNull("Genuine no-op must return null so the dispatcher counts it already-orthogonal",
+                RoutingPipeline.terminalsOnlyRectifyAndClearEgress(src, tgt, List.of()));
+    }
+
+    @Test
+    public void egressClearance_rectifyAndClear_liftsHug_whenTerminalAlreadyOrthogonal() {
+        // The terminal segment center→firstBP is already orthogonal (so terminalsOnlyRectify is a
+        // no-op), but the routed bendpoint sits 1px off the bottom face with a horizontal trunk —
+        // the hug must still be lifted via the composed entry point.
+        RoutingRect src = egressSource();                              // bottom y=109, centerX 507
+        // Target center (472,830) aligns with the last bendpoint (472,400) so the target terminal is
+        // already orthogonal too — terminalsOnlyRectify is a genuine no-op for this path.
+        RoutingRect tgt = new RoutingRect(422, 800, 100, 60, "tgt");
+        List<AbsoluteBendpointDto> existing = List.of(
+                new AbsoluteBendpointDto(507, 110),   // vertical egress from centerX → already orthogonal
+                new AbsoluteBendpointDto(472, 110),
+                new AbsoluteBendpointDto(472, 400));
+
+        List<AbsoluteBendpointDto> result =
+                RoutingPipeline.terminalsOnlyRectifyAndClearEgress(src, tgt, existing);
+
+        assertNotNull("A hug on an already-orthogonal terminal must still be fixed", result);
+        assertEquals(124, result.get(0).y());
+        assertEquals(124, result.get(1).y());
     }
 
     // =============================================

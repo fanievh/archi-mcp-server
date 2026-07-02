@@ -16,6 +16,7 @@ This document describes how the ArchiMate MCP Server handles model mutations, in
 - [Specialization Icons](#specialization-icons)
 - [Relationship Semantic Attributes](#relationship-semantic-attributes)
 - [Model Metadata Mutation](#model-metadata-mutation)
+- [Container Fill Recession (auto-backdrop)](#container-fill-recession-auto-backdrop)
 - [Error Handling](#error-handling)
 
 ## Mutation Flow Overview
@@ -87,6 +88,17 @@ The type parameter `<T>` constrains to the appropriate DTO type:
 - `PreparedMutation<MutationResultDto>` for updates and deletions
 
 **Source:** `model/PreparedMutation.java`
+
+### Folder-Type Validation (fail-fast)
+
+ArchiMate organises concepts into typed top-level folders by layer (Business, Application, Technology, Motivation, …). Placing a concept into a folder whose layer is illegal for its eClass produces a model that **host Archi refuses to save** ("Object is in wrong folder type"). To surface that at mutation time instead of at save time, the prepare phase calls `validateFolderLayerMatch`, which **delegates to Archi's own `getDefaultFolderForObject`** (widened to `IArchimateConcept`, so it covers relationships too) rather than re-encoding the platform's type→folder map. An illegal placement is rejected with `FOLDER_LAYER_MISMATCH`.
+
+Two paths enforce it:
+
+- **`create-element`** — validates the optional `folderId` before creating. (It was previously guarded by a hand-rolled `getExpectedFolderType` switch that returned `null` for Junction, Grouping, and Location — so those silently skipped validation. The drift-prone switch is gone.)
+- **`move-to-folder`** — now validated for the first time, reusing the identical check and payload, so create and move are symmetric.
+
+> Never re-encode the platform's type→folder map in MCP code; delegate to `getDefaultFolderForObject` so the rule cannot drift from Archi's.
 
 ## MutationDispatcher
 
@@ -187,6 +199,24 @@ act only on agent-authored top-of-stack entries.
 - **Archi's native Edit ▸ Undo/Redo (Ctrl+Z / Ctrl+Y) is unchanged** — it calls `CommandStack`
   directly and is **not** scoped, so the human still owns the whole timeline and can undo anything,
   including the agent's work.
+
+### Compound-undo ordering (successor anchors)
+
+A compound that deletes several sibling diagram objects or model elements at once — `bulk-mutate`
+with multiple deletes, or a forced folder delete — must restore not only **membership** on undo but
+also the children's **paint order (z-order)** and the model-tree **folder order**. The hazard: a
+`CompoundCommand` undoes its members in **reverse**, so if each delete captured an **absolute**
+insertion index and re-inserted there, a later delete would restore into a list whose earlier members
+were not yet back, landing at the wrong slot and perturbing order.
+
+The delete commands (`DeleteElementCommand`, `RemoveFromViewCommand`, `RemoveViewObjectCommand`)
+therefore capture each removed item's **surviving-successor sibling** at construction time (prepare
+time, while the lists are still intact) and, on undo, re-insert the item **directly before that
+anchor** — falling back to the clamped absolute index only when the item was the tail or the anchor is
+transiently absent. Single deletes and the common ascending-order multi-delete are exact and remain
+byte-identical to the old behaviour; membership and connection integrity are always preserved. (A
+documented residual remains only for 3+ co-deleted siblings supplied in non-monotonic order, where
+rare paint-order drift can survive.)
 
 ### Experimental Workflow
 
@@ -311,7 +341,26 @@ The `bulk-mutate` tool executes multiple mutations in a single request.
 
 ### Supported Operations
 
-27 tools are supported in bulk: create, update, view placement (including `add-view-reference-to-view` and `add-image-to-view`), `update-model`, folder, deletion, and specialization tools. Query tools, undo/redo, approval tools, and session tools are not supported. The full list is maintained as `BulkOperation.SUPPORTED_TOOLS_ORDERED` — both the tool description and the operations-array parameter description derive from this single source of truth.
+28 operations are supported in bulk: create, update, view placement (including `add-view-reference-to-view` and `add-image-to-view`), the view-scoped `set-view-label-expression` (see [View-Scoped Label Expressions](#view-scoped-label-expressions)), `update-model`, folder, deletion, and specialization tools. Query tools, undo/redo, approval tools, and session tools are not supported. The full list is maintained as `BulkOperation.SUPPORTED_TOOLS_ORDERED` — both the tool description and the operations-array parameter description derive from this single source of truth.
+
+> Note: these are `bulk-mutate` *operations*, not top-level MCP tools. `set-view-label-expression` runs only inside a bulk-mutate batch, so the server's top-level tool count is unchanged.
+
+### View-Scoped Label Expressions
+
+`set-view-label-expression` stamps one `labelExpression` template onto every eligible diagram object on a single view in one atomic command — collapsing what used to be one `update-view-object` call per object into one operation per view. It is the common case when an agent retro-fits an evidence-mark or status glyph onto an existing diagram (e.g. `${name} ${property:evidenceMark}`).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `viewId` | Yes | The diagram whose objects are stamped |
+| `labelExpression` | Yes | The template to apply; an empty or blank value **clears** the override on every matched object |
+| `objectTypes` | No | Widens the scope beyond the default. Default = ArchiMate **element** objects only; add `note` / `group` to include those |
+
+Semantics:
+
+- **One GEF command writes all N objects**, so the whole sweep is a single undo unit. The command reuses the same `labelExpression` `IFeatures` put/remove + empty-to-null handling as `update-view-object`, so a cleared expression removes the feature rather than storing a blank.
+- **Idempotent** — re-applying the same template is a no-op on already-matching objects.
+- **Non-blank-name guard** — when *setting* a template, an object whose name is blank is skipped (so a placed object never renders a half-empty glyph); when *clearing*, the guard is bypassed so the override is removed everywhere.
+- The per-operation result (`SetViewLabelExpressionResultDto`) reports `appliedCount` and `skippedCount`; `BulkOperationResult` carries these through on the per-op wire response.
 
 ### Back-Reference Syntax
 
@@ -494,6 +543,47 @@ At least one of the three must be provided; omitted parameters stay unchanged.
 
 **Source:** `model/UpdateModelCommand.java`, `response/dto/ModelInfoDto.java`, `handlers/ModelQueryHandler.java`
 
+## Container Fill Recession (auto-backdrop)
+
+When `add-to-view` or `add-group-to-view` places a child *inside* a container view-object, the placement also recedes the container's fill to a subtle light backdrop (`#F4F4F4`) so the nested content reads as foreground-on-depth instead of a flat single-colour block — the standard "the container is the canvas, the children are the figures" convention applied automatically. This is the mutation-side counterpart to the assessor's [container-fill-equals-child](layout-engine.md#container-fill-equals-child-flat-blob) backstop detection.
+
+The recession is performed by `RecedeContainerFillCommand` and is **provenance-gated** so it is safe and idempotent:
+
+- Only a container whose fill is **unauthored** (null fill — never explicitly set by a user or agent) is receded. An explicitly coloured container is **sacrosanct** and left untouched.
+- An already-receded parent is left alone, so re-running placement is a no-op on the fill.
+- The **root view** is excluded structurally (it is the canvas, not a figure).
+- The recede rides the placement as part of one atomic `NonNotifyingCompoundCommand`, so it is a single undo unit with the add and does not emit its own notification.
+
+| Parameter | Required | Semantics |
+|-----------|----------|-----------|
+| `recede` | Optional (tri-state `Boolean`) | `null` / omitted = default (auto-recede an unauthored-fill parent on nesting); `false` = opt out for this call. There is no `true`-only mode — `true` is the default behaviour |
+
+The opt-out is carried through the styling pipeline even when no other styling field is set, so `recede: false` is honoured on an otherwise-bare placement. The flag is plumbed through both the single-add prepare path and the bulk add-to-view fork (and both styling extractors), so it behaves identically under `bulk-mutate`.
+
+**Source:** `model/RecedeContainerFillCommand.java`, `model/StylingParams.java`, `handlers/ViewPlacementHandler.java`
+
+## View Object Anchoring
+
+`update-view-object` can record an **anchor** on a view object (note or child) so its position is resolved from a *target container's current bounds at commit time* instead of a frozen absolute snapshot. This lets an object follow a target that grows or moves — the flagship case is a note that stays below a group as the group grows, where a captured absolute position would silently drift out of alignment the moment the group changes size.
+
+The anchor is `{anchorTarget, anchorEdge, dx, dy}`:
+
+| Field | Semantics |
+|-------|-----------|
+| `anchorTarget` | The view-object id of the container to anchor to. An empty string **clears** the anchor. Self-anchoring and cross-coordinate-space anchoring (a target under a different parent) are rejected on set |
+| `anchorEdge` | `below` (default — tracks the target's growing bottom), `above`, `right`, or `left` (each tracks the corresponding edge) |
+| `dx` / `dy` | Integer offsets from the resolved edge |
+
+Mechanics:
+
+- The anchor is persisted as four `IFeatures` keys on the child, captured at construction and undone as a rail on `UpdateViewObjectCommand` (mirroring how `labelExpression` is carried).
+- Resolution and the **commit-time cascade** live in a dedicated `model/AnchorResolver` collaborator (kept out of `ArchiModelAccessorImpl`). When a mutation changes a target's bounds, every object anchored to that target is repositioned **within the same undo unit**.
+- Target and object must share a coordinate space (same parent); a self-anchor or cross-space anchor is skipped in the cascade as well as rejected on set.
+- `add-note-to-view`'s content-relative placement delegates to the same edge resolver, so anchored and content-relative placement round identically.
+- `ViewObjectDto` reports the resolved anchor on the `update-view-object` result for read-back.
+
+**Source:** `model/AnchorResolver.java`, `model/UpdateViewObjectCommand.java`, `handlers/ViewPlacementHandler.java`
+
 ## Error Handling
 
 ### Error Response Structure
@@ -529,6 +619,14 @@ At least one of the three must be provided; omitted parameters stay unchanged.
 ### Validation Sync Principle
 
 Relationship validation delegates to Archi's own `ArchimateModelUtils.isValidRelationship()`. The MCP server is never stricter nor more forgiving than Archi itself. If Archi allows it, the server allows it. If Archi rejects it, the server rejects it.
+
+### Verbatim-Store Validation (HTML/XML entity rejection)
+
+The plugin is a **faithful verbatim store**: what a caller supplies in a name or label is what Archi stores. The one place this bites is a literal HTML/XML entity token pasted from JSON-escaping muscle memory — `&amp;amp;`, `&amp;lt;`, `&amp;#160;` — where the model would otherwise store the multi-character literal exactly where a human expects a single `&`. Auto-unescaping is lossy and ambiguous (a genuinely-intended `&amp;amp;amp;` would be corrupted), so a new `InputValidation.reject` pass **rejects** such a value with a corrective hint instead of silently storing or unescaping it.
+
+- **Grammar:** `&(amp|lt|gt|quot|apos|#[0-9]+|#[xX][0-9a-fA-F]+);` — the required trailing `;` is what lets a bare `&` through. Bare ampersands and non-entity text (`R&D`, `A & B`, `<tag>`, `${name} & ${property:x}`) are accepted and stored byte-for-byte.
+- **Coverage:** element / relationship / folder / view / specialization / clone names, group and note labels, view-object text, the `update-view-object` and `set-view-label-expression` `labelExpression`, and `update-model` / `update-specialization` — across the `create-*` / `update-*` / `add-*` ops and their `bulk-mutate` equivalents.
+- The validator is a pass-through wrapper (`InputValidation`), so the accessor delegates via in-place argument wraps only — no signature change.
 
 ---
 

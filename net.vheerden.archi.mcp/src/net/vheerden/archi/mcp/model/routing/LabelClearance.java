@@ -15,8 +15,11 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  */
 class LabelClearance {
 
-    // Keep in sync with LayoutQualityAssessor.LABEL_CHAR_WIDTH etc.
-    // (duplicated due to architecture boundary: model.routing vs model)
+    // Keep these base constants in sync with LayoutQualityAssessor.LABEL_CHAR_WIDTH etc.
+    // (duplicated due to architecture boundary: model.routing vs model).
+    // NOTE: LayoutQualityAssessor's detector additionally applies LABEL_RENDER_WIDTH_FACTOR (1.35) that
+    // this reserver deliberately omits — the routing reservation uses the raw estimate. Do not copy that
+    // factor here (the under-reservation is intentional; see LABEL_RENDER_WIDTH_FACTOR Javadoc).
     static final double CHAR_WIDTH = 8.0;
     static final double CHAR_HEIGHT = 14.0;
     static final double PADDING_X = 10.0;

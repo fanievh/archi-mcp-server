@@ -156,6 +156,37 @@ public class FolderMutationHandlerMoveTest {
     }
 
     @Test
+    public void shouldReturnFolderLayerMismatchError_whenMoveViolatesLayer() throws Exception {
+        // Stub: asserts the handler serialises the error envelope correctly. The real
+        // validateFolderLayerMatch logic is covered in ArchiModelAccessorImplTest.
+        accessor.setMoveToFolderBehavior((sessionId, objectId, targetFolderId) -> {
+            throw new ModelAccessException(
+                    "Junction elements belong to the Other layer but the target folder "
+                            + "'Behaviour Flows' is under the Application layer",
+                    ErrorCode.FOLDER_LAYER_MISMATCH,
+                    "Expected root folder type: OTHER, actual root folder type: APPLICATION",
+                    "Either omit folderId to use the default Other folder, or provide a "
+                            + "folder under the Other root folder.",
+                    "ArchiMate 3.2 specification, element classification");
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("objectId", "junction-1");
+        args.put("targetFolderId", "behaviour-flows");
+
+        McpSchema.CallToolResult result = callTool(args);
+        assertTrue("Should be an error", result.isError());
+
+        Map<String, Object> parsed = parseResult(result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parsed.get("error");
+        assertEquals("FOLDER_LAYER_MISMATCH", error.get("code"));
+        assertNotNull("Should have details", error.get("details"));
+        assertNotNull("Should have suggestedCorrection", error.get("suggestedCorrection"));
+        assertNotNull("Should have archiMateReference", error.get("archiMateReference"));
+    }
+
+    @Test
     public void shouldReturnNotFound_whenObjectMissing() throws Exception {
         accessor.setMoveToFolderBehavior((sessionId, objectId, targetFolderId) -> {
             throw new ModelAccessException(

@@ -7,6 +7,7 @@ import org.eclipse.gef.commands.Command;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IIdentifier;
 
 /**
@@ -39,6 +40,11 @@ public class RemoveFromViewCommand extends Command {
     private final IDiagramModelArchimateObject diagramObject;
     private final IDiagramModelContainer parent;
     private final int originalIndex;
+    // The sibling that immediately followed diagramObject in the parent's child
+    // list at construction time (null if it was last). undo() prefers to restore
+    // the object directly BEFORE this surviving anchor rather than at a stale
+    // absolute index — see undo() for why this matters under compound undo.
+    private final IDiagramModelObject successorAnchor;
     private final List<IDiagramModelArchimateConnection> attachedConnections;
 
     /**
@@ -67,6 +73,10 @@ public class RemoveFromViewCommand extends Command {
         this.diagramObject = diagramObject;
         this.parent = parent;
         this.originalIndex = parent.getChildren().indexOf(diagramObject);
+        this.successorAnchor = (originalIndex >= 0
+                && originalIndex + 1 < parent.getChildren().size())
+                        ? parent.getChildren().get(originalIndex + 1)
+                        : null;
         this.attachedConnections = List.copyOf(attachedConnections);
         setLabel("Remove " + diagramObject.getArchimateElement().eClass().getName() + " from view");
     }
@@ -101,8 +111,23 @@ public class RemoveFromViewCommand extends Command {
 
     @Override
     public void undo() {
-        // Re-add element to its parent at original position (preserves z-order)
-        if (originalIndex >= 0 && originalIndex <= parent.getChildren().size()) {
+        // Re-add element to its parent, preserving paint order (z-order).
+        //
+        // A raw absolute index is unsafe when several sibling removals from the
+        // same parent are grouped in one compound: the compound undoes its
+        // sub-commands in reverse, so a later-listed removal restores its child
+        // into a list whose earlier-listed siblings are not yet back — the
+        // absolute index then lands in the wrong slot. Restoring directly BEFORE
+        // the surviving successor sibling (captured at construction) is robust to
+        // that, because nearer-tail siblings are restored first and act as stable
+        // anchors. Fall back to the clamped absolute index when the object was
+        // last in its parent or the anchor is (transiently) absent — which also
+        // makes the single-removal case byte-identical to the original behavior.
+        int anchorIndex = (successorAnchor != null)
+                ? parent.getChildren().indexOf(successorAnchor) : -1;
+        if (anchorIndex >= 0) {
+            parent.getChildren().add(anchorIndex, diagramObject);
+        } else if (originalIndex >= 0 && originalIndex <= parent.getChildren().size()) {
             parent.getChildren().add(originalIndex, diagramObject);
         } else {
             parent.getChildren().add(diagramObject);

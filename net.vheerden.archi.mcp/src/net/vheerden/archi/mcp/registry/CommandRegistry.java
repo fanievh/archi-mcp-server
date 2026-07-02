@@ -52,17 +52,51 @@ public class CommandRegistry {
      *
      * @param toolSpec the tool specification to register
      * @throws NullPointerException if toolSpec is null
+     * @throws IllegalStateException if a tool with the same name is already registered
      */
     public void registerTool(McpServerFeatures.SyncToolSpecification toolSpec) {
         Objects.requireNonNull(toolSpec, "toolSpec must not be null");
+
+        String toolName = toolSpec.tool() != null ? toolSpec.tool().name() : null;
+        rejectDuplicateName(toolName);
+
         McpServerFeatures.SyncToolSpecification wrapped = wrapWithTiming(toolSpec);
         toolSpecs.add(wrapped);
 
-        String toolName = toolSpec.tool() != null ? toolSpec.tool().name() : "unknown";
-        logger.info("Registered MCP tool: {}", toolName);
+        logger.info("Registered MCP tool: {}", toolName != null ? toolName : "unknown");
 
         // If servers are already built, add at runtime
         addToolToRunningServers(wrapped);
+    }
+
+    /**
+     * Enforces tool-name uniqueness at the source, before the spec is added.
+     *
+     * <p>Every MCP tool is registered exactly once, at startup, through this registry
+     * (see {@code HandlerRegistrar.registerAll}); {@link #clearTools()} handles the
+     * restart case. A second registration of an already-known name is therefore always
+     * a wiring bug — two handlers, or one handler twice, claiming the same name — and is
+     * rejected here so it fails fast at the offending call rather than being caught only
+     * after the fact when the assembled tool set is inspected.</p>
+     *
+     * <p>Uniqueness is keyed on the tool name; a spec with no resolvable name is left to
+     * the existing null-tolerant handling and not deduplicated.</p>
+     *
+     * @param toolName the name of the tool being registered
+     * @throws IllegalStateException if a tool with this name is already registered
+     */
+    private void rejectDuplicateName(String toolName) {
+        if (toolName == null) {
+            // A spec with no resolvable name is not deduplicated — uniqueness is
+            // keyed on the name, and a null name carries no identity to compare.
+            return;
+        }
+        for (McpServerFeatures.SyncToolSpecification existing : toolSpecs) {
+            if (existing.tool() != null && toolName.equals(existing.tool().name())) {
+                throw new IllegalStateException(
+                        "Duplicate MCP tool name: '" + toolName + "' is already registered");
+            }
+        }
     }
 
     /**

@@ -10,6 +10,13 @@ import java.util.List;
 
 import org.junit.Test;
 
+import com.archimatetool.model.IArchimateElement;
+import com.archimatetool.model.IArchimateFactory;
+import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelNote;
+import com.archimatetool.model.IProfile;
+
 /**
  * Tests for {@link ImageHelper}.
  *
@@ -344,5 +351,76 @@ public class ImageHelperTest {
         // Sanity-pin the constant — must stay 16+8=24, by parity with
         // GROUP_LABEL_HEIGHT=24 at ArchiModelAccessorImpl:8955.
         assertEquals(24, ImageHelper.ICON_BAND_HEIGHT);
+    }
+
+    // ---- Profile (specialization) image path resolution ----
+    // A specialization image lives on the element's profile, not on the diagram
+    // object; readImagePath returns null for it. readProfileImagePath resolves it
+    // when the object's image source is the profile, so the overlap detector can
+    // see specialization icons.
+
+    private static IDiagramModelArchimateObject archimateObjectWithProfileImage(
+            String imagePath, int imageSource) {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IDiagramModelArchimateObject dmo = f.createDiagramModelArchimateObject();
+        IArchimateElement element = f.createBusinessActor();
+        dmo.setArchimateElement(element);
+        dmo.setImageSource(imageSource);
+        if (imagePath != null) {
+            IProfile profile = f.createProfile();
+            profile.setImagePath(imagePath);
+            element.getProfiles().add(profile);
+        }
+        return dmo;
+    }
+
+    @Test
+    public void readProfileImagePath_shouldResolvePath_whenProfileSourceAndIconBearingProfile() {
+        IDiagramModelArchimateObject dmo = archimateObjectWithProfileImage(
+                "images/specialization-icon.png",
+                IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE);
+        assertEquals("images/specialization-icon.png", ImageHelper.readProfileImagePath(dmo));
+    }
+
+    @Test
+    public void readProfileImagePath_shouldReturnNull_whenImageSourceIsCustom() {
+        // Custom image source → the profile icon is not displayed → not resolved here
+        // (the custom image is read via readImagePath instead).
+        IDiagramModelArchimateObject dmo = archimateObjectWithProfileImage(
+                "images/specialization-icon.png",
+                IDiagramModelArchimateObject.IMAGE_SOURCE_CUSTOM);
+        assertNull(ImageHelper.readProfileImagePath(dmo));
+    }
+
+    @Test
+    public void readProfileImagePath_shouldReturnNull_whenNoProfileHasImage() {
+        IDiagramModelArchimateObject dmo = archimateObjectWithProfileImage(
+                null, IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE);
+        assertNull(ImageHelper.readProfileImagePath(dmo));
+    }
+
+    @Test
+    public void readProfileImagePath_shouldReturnNull_whenNotArchimateObject() {
+        IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
+        assertNull(ImageHelper.readProfileImagePath(note));
+    }
+
+    // ---- Natural image dimension read (archive) ----
+    // Headless has no archive manager, so the read returns null and callers fall
+    // back to the fixed icon size. These pin the null-safety contract.
+
+    @Test
+    public void readNaturalImageDimensions_shouldReturnNull_whenModelOrPathNull() {
+        IArchimateModel model = IArchimateFactory.eINSTANCE.createArchimateModel();
+        assertNull(ImageHelper.readNaturalImageDimensions(null, "img/x.png"));
+        assertNull(ImageHelper.readNaturalImageDimensions(model, null));
+    }
+
+    @Test
+    public void readNaturalImageDimensions_shouldReturnNull_whenNoArchiveManager() {
+        // A bare EMF model has no archive manager adapter → null, never throws.
+        IArchimateModel model = IArchimateFactory.eINSTANCE.createArchimateModel();
+        model.setDefaults();
+        assertNull(ImageHelper.readNaturalImageDimensions(model, "img/missing.png"));
     }
 }

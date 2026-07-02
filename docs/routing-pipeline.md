@@ -537,6 +537,34 @@ V4 oracle measurement: legacy `coincidentSegmentCount` 12 → 2 with `hubPortQua
 
 **Source:** `model/routing/RoutingPipeline.java`
 
+### Stage 4.7r: Terminal Egress Clearance
+
+`TerminalEgressClearancePass` clears an **off-face terminal hug** — a connection that leaves an element face then runs a pixel or two *parallel* to that same face before turning, so the trunk reads as if it is stuck to the box it just departed. The pass detects a terminal-incident segment hugging the departed face and pushes its first trunk clear.
+
+**Dual-axis healthy-floor model.** The accept/reject test (`netImproves`) replaced an earlier over-strict, wrong-axis guard ("never reduce the vertical parallel-gap p10, `V_p10`"), which was both the wrong axis for a *horizontal* hug and too strict (it rolled back the only stub that would clear the hug). The current model enforces a per-axis **healthy floor** (`regressesBelowHealthyFloor`): a lift is accepted as long as it does not push *either* the vertical (`vP10`) or horizontal (`hP10`) parallel-gap p10 below the healthy minimum `HEALTHY_PARALLEL_GAP_PX` (15 px). So a healthy-to-healthy tightening (e.g. 238 → 151) is now allowed, while a push into the danger zone stays blocked. `vP10` / `hP10` are computed from a private `EgressMetrics` record (the horizontal mirror is `HubPerimeterRoutingStage.computeHAxisParallelGapP10`). Because a fixed hug no longer drops M4, the pass is idempotent and cannot ratchet a field down across repeated routes.
+
+**Short-run own-face micro-hugs.** A foreign-edge overlap test requires ≥ 10 px of shared run to register, so a *short* (< 10 px) micro-hug of an element's *own* face was invisible to it. An own-face short-circuit in `tryEgress` treats a terminal pinned on its own face line as a hug at any positive run length (the foreign-edge collectors are unchanged, so the wider corpus stays byte-identical). Because the M4 keep-signal is also 10 px-gated and would roll a sub-10 px fix back, the pass adds an in-pass `computeOffFaceStubCount` (mirroring the assessor's `OFF_FACE_MIN_STUB_PX` = 8 px oracle) to `EgressMetrics`, and `netImproves` keeps a lift on an M4 drop **or** a stub-count drop with M4 non-regress.
+
+This pass drives the assessor's `offFaceParallelTerminalCount` signal (see [layout-engine.md](layout-engine.md)) to zero on the full-route path.
+
+**Source:** `model/routing/TerminalEgressClearancePass.java`, `model/routing/HubPerimeterRoutingStage.java`
+
+### Terminals-Only Egress Clearance
+
+`auto-route-connections` `mode: "terminals-only"` rectifies only the first/last bendpoint of each connection, so it never enters `routeAllConnections` and cannot reuse `TerminalEgressClearancePass` — that pass requires the hug to be the *terminal-incident* segment, whereas terminals-only renders `elementCenter → L-bend → trunk`, so the hug is the **trunk after the L-bend**. The same healthy floor is therefore mirrored as pure geometry in `RoutingPipeline` (`terminalsOnlyEnforceEgressClearance` + `terminalsOnlyRectifyAndClearEgress` + `tryLiftTerminalHug`), reusing `HEALTHY_PARALLEL_GAP_PX` (15 px) and `OFF_FACE_MIN_STUB_PX` (8 px). Detection fires at the assessor's 8 px oracle threshold, so an already-clearing terminal is byte-identical; the push targets 15 px. A per-side **orthogonality backstop** validates the egress segment and the segment beyond the moved trunk (falling back to the opposite element centre on a two-bendpoint path) and declines any lift that would introduce a diagonal. The composition runs egress clearance even when rectification is a no-op, so an already-orthogonal-but-hugging terminal is still fixed. The lifted path still flows through the existing interior / zigzag / obstacle / crossing vetoes.
+
+**Interior collinear collapse.** The terminals-only rectifier prepends/appends terminal L-bends without any collinear sweep, so an inserted L-bend that lands collinear with the existing trunk leaves an exactly-collinear *interior* bendpoint that a full re-route would have removed — it renders as a redundant point on a straight run and shows up in `connectionRedundantBendpointCount`. `terminalsOnlyRectifyAndClearEgress` now runs a plain interior `removeCollinearPoints` sweep with value-based no-op detection, so a pre-existing interior survivor is collapsed even when rectification and egress clearance are both no-ops. The sweep is **interior-only**: the terminal egress anchors (first/last bendpoints) are never removed, preserving the terminal-anchoring / hub-port-distribution invariant. `routeAllConnections` and the assessor are unchanged, so the golden routing corpus stays byte-identical.
+
+**Source:** `model/routing/RoutingPipeline.java` (`terminalsOnlyEnforceEgressClearance`, `terminalsOnlyRectifyAndClearEgress`, `tryLiftTerminalHug`)
+
+### Stage 4.7s: Coincident Face Port Dissolution
+
+Downstream terminal stages can pull a connection's source-exit and another connection's target-entry on the *same low-degree element face* onto that face's centre, collapsing two terminals onto one perimeter port (the `coincidentFacePortCount` defect the assessor reports, where two edges appear to leave one point). A gated **final pass in `routeAllConnections`** — running after all terminal stages — separates them: it groups terminals per element face, clusters them by along-face slot, and for each colliding cluster moves whichever member *can* move (swapping the anchor when the one tried is an immovable face-hug), avoiding every other terminal already on that face.
+
+Every move is gated so the pass is a **byte-identical no-op except on an actual collision**: element degree below the hub threshold (a dense hub keeps its own distribution), the terminal on the perimeter, a provable collision within the assessor's `HUB_PORT_SLOT_TOLERANCE_PX`, a free on-line slot at least the 12 px distinguishability floor from every occupied slot (else the collision is accepted rather than forced), the relocated stub staying perpendicular, zero new edge crossing, and no obstacle crossing; a loop-until-stable collinear cleanup leaves no redundant bendpoint behind. Because nothing moves unless all gates pass, the full corpus stays byte-identical with no oracle re-baseline. It is the router half of the S1 `coincidentFacePortCount` oracle above.
+
+**Source:** `model/routing/RoutingPipeline.java` (coincident same-face port spread pass)
+
 ## Label Position Optimization
 
 After routing completes, the `LabelPositionOptimizer` selects the best label position for each connection.
@@ -552,6 +580,21 @@ After routing completes, the `LabelPositionOptimizer` selects the best label pos
 5. Lock the label rectangle (affects future scoring)
 
 **Source:** `model/routing/LabelPositionOptimizer.java`
+
+## Connection Label Offset (Archi 5.10)
+
+The greedy position optimizer above picks the best of three *along-path* slots (source / middle / target), but it scores against everything **except** the connection's own endpoints. On a tight, position-preserving layout that leaves a residual defect the optimizer cannot see: a Middle label rendered *on* its own source or target box. Archi 5.10 adds a per-connection **Label Offset** — a Centre-plus-eight-compass anchor (`IDiagramModelConnection.relativePosition`, feature `textRelativePosition`) that nudges a Middle label off the connection midpoint — and the pipeline uses it as the perpendicular channel to lift that label clear.
+
+When the chosen Middle position still leaves the label flagged by the own-endpoint overlap rule (the `≥ 0.30` fraction from [Label Overlaps](layout-engine.md#label-overlaps)) or a residual third-party inset overlap, the optimizer scores the eight compass offsets and applies the first that lifts the label clear. The candidate order is derived from the **hosting segment's** orientation (not the source→target vector), so a Z-routed connection gets the correct perpendicular tried first.
+
+Key properties:
+
+- **Metric-neutral.** The assessor reads `textPosition`, not `relativePosition`, so an offset moves the rendered label without changing the geometry the quality metrics score. Offsets are therefore merged through `LabelOffsetSupport` even when `labelOverlapCount` does not improve.
+- **Where it fires.** On `auto-route-connections` the offset is the *only* channel that can clear own-endpoint bleed, because a hand-tuned view keeps its positions (`emitLabelOffsets = true` on the primary and auto-nudge re-route paths). On `auto-layout-and-route` it is a last-resort fallback in `executeLabelFallback`, after ELK has re-spread elements — the delegating routing paths pass `emitLabelOffsets = false` to avoid double-applying.
+- **Runtime-guarded.** All EMF writes go through a reflective `RelativePositionFeature` / `SetTextRelativePositionCommand`; there is no compile-time reference to the 5.10 accessors, so on Archi 5.7 the step is a silent no-op and the PDE target floor is unchanged.
+- **Read-back.** `get-view-contents` surfaces the applied anchor as `ViewConnectionDto.relativePosition`. Note that Archi's PNG/SVG export renderer does **not** draw the offset — only the live editor and the Properties panel do — so verification is via `get-view-contents` or the editor, not `export-view`.
+
+**Source:** `model/routing/LabelPositionOptimizer.java` (offset scoring), `model/routing/LabelOffsetSupport.java` (write-back), `model/commands/SetTextRelativePositionCommand.java` (reflective EMF write)
 
 ## Endpoint Pass-Through Correction
 
@@ -695,8 +738,11 @@ The response carries a `structuredWarnings: List<StructuredWarningDto>` field in
 | Code | Trigger | `remediationTool` | `remediationViolatorIds` |
 |------|---------|-------------------|--------------------------|
 | `AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP` | `autoNudge: true` but `OverlapResolver.hasOverlappingElements()` returned true | `layout-within-group` | The offending sibling-pair element IDs (call the remediation tool on their shared parent) |
+| `EGRESS_LIFT_LAYOUT_BOUND` | The router generated one or more off-face terminal egress lifts but rolled them back, because applying them would narrow a parallel-connection gap below `HEALTHY_PARALLEL_GAP_PX` (15 px) — the residual off-face hug is layout-bound, not a routing bug | (layout — spread the elements) | — |
 
 The autoNudge skip is a **hard gate** that the pipeline cannot resolve on its own — re-running `auto-route-connections` without first separating the siblings will reproduce the same skip. LLM agents should call the named `remediationTool` on the parent of `remediationViolatorIds` before re-routing.
+
+`EGRESS_LIFT_LAYOUT_BOUND` surfaces an honest decline rather than a silent one. The count of rolled-back lifts is threaded `RoutingResult.egressRolledBack` → `OrthogonalRoutingResult` and emitted through an unmeasured `AutoRouteWarnings` helper into both the `structuredWarnings` and free-text `warnings` surfaces, accompanied by a matching layout-bound `nextSteps` entry (spread the elements sharing the departed face). The routing decision, the routed geometry, and the assessed rating are all unchanged — this is signal only.
 
 ### Response
 
@@ -756,6 +802,7 @@ record RoutingResult(
 - `failed` — connections still crossing obstacles, with constraint details
 - `violatedRoutes` — actual bendpoints for failed connections (for force-mode application)
 - `recommendations` — move suggestions for blocking elements
+- `egressRolledBack` — count of off-face terminal egress lifts the router generated then rolled back (applying them would breach the healthy parallel-gap floor). Consumed by `AutoRouteWarnings.emitEgressLiftLayoutBound` to raise the `EGRESS_LIFT_LAYOUT_BOUND` structured warning; `0` when no lift was declined
 
 ### FailedConnection
 
@@ -812,6 +859,8 @@ Returned in the `AutoRouteResultDto.nudgedElements` list when `autoNudge` is ena
 | `DEFAULT_SNAP_THRESHOLD` | 20px | Snap-to-straight threshold for near-aligned segments |
 | `MIN_CLEARANCE` | 8px | Minimum bendpoint clearance from obstacles |
 | `CROSSING_INFLATION_THRESHOLD` | 1.5 | Crossing count inflation detection multiplier |
+| `HEALTHY_PARALLEL_GAP_PX` | 15px | Per-axis parallel-gap p10 healthy floor for terminal egress clearance (Stage 4.7r and terminals-only). A lift is declined if it pushes either axis below this. |
+| `OFF_FACE_MIN_STUB_PX` | 8px | Off-face hug detection threshold (mirrors the assessor oracle). Detection fires at this gap; the egress push targets `HEALTHY_PARALLEL_GAP_PX`. |
 
 ### Edge Attachment (EdgeAttachmentCalculator)
 

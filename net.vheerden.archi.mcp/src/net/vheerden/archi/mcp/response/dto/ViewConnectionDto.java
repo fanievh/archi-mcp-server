@@ -31,6 +31,16 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * Other view-object-only fields ({@code gradient}, {@code borderType},
  * {@code deriveLineColor}, {@code outlineOpacity}, {@code lineStyle}) remain absent
  * from connections — those are typed setters on {@code IDiagramModelObject} only.</p>
+ *
+ * <p>Added {@code relativePosition} so {@code get-view-contents} surfaces a connection's
+ * label-offset anchor (the "Label Offset" available on newer Archi: a compass bitmask offsetting a
+ * {@code Middle} label off its own line/endpoint). The value is the platform's own anchor bitmask
+ * ({@code NORTH=1}, {@code SOUTH=4}, {@code WEST=8}, {@code EAST=16}, {@code NE=17}, {@code NW=9},
+ * {@code SE=20}, {@code SW=12}). It is {@code null} — and so omitted from JSON via NON_NULL — when the
+ * running platform lacks the feature (older Archi) or when the anchor is the un-offset default
+ * ({@code CENTER=2}), keeping the wire byte-identical to before on both older platforms and un-offset
+ * labels. This is the read-back channel for a label offset that is otherwise invisible to
+ * MCP-side verification (neither {@code assess-layout} nor {@code export-view} reflect it).</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ViewConnectionDto(
@@ -51,8 +61,42 @@ public record ViewConnectionDto(
     String fontName,
     Integer fontSize,
     String fontStyle,
-    String labelExpression
+    String labelExpression,
+    Integer relativePosition
 ) {
+
+    /**
+     * Constructor matching the prior 18-field shape (with labelExpression but no
+     * relativePosition). Delegates to the canonical 19-field constructor with one trailing null
+     * for relativePosition. Preserves every existing 18-arg call site (collect/read-back,
+     * prepare-update-connection, bulk-mutate, and the shorter convenience constructors that
+     * delegate through this arity) byte-identically.
+     */
+    public ViewConnectionDto(
+            String viewConnectionId,
+            String relationshipId,
+            String relationshipType,
+            String sourceViewObjectId,
+            String targetViewObjectId,
+            List<BendpointDto> bendpoints,
+            List<AbsoluteBendpointDto> absoluteBendpoints,
+            AnchorPointDto sourceAnchor,
+            AnchorPointDto targetAnchor,
+            Integer textPosition,
+            String lineColor,
+            Integer lineWidth,
+            String fontColor,
+            Boolean nameVisible,
+            String fontName,
+            Integer fontSize,
+            String fontStyle,
+            String labelExpression) {
+        this(viewConnectionId, relationshipId, relationshipType,
+                sourceViewObjectId, targetViewObjectId, bendpoints,
+                absoluteBendpoints, sourceAnchor, targetAnchor, textPosition,
+                lineColor, lineWidth, fontColor, nameVisible,
+                fontName, fontSize, fontStyle, labelExpression, null);
+    }
 
     /**
      * Constructor matching the prior 14-field shape (no typography).

@@ -234,6 +234,60 @@ public class ApprovalCardModelTest {
         assertTrue(c.rawDetailsJson().contains("Foo"));
     }
 
+    // ---- copy-json payload (per-card Copy JSON action) ----
+
+    @Test
+    public void shouldProduceValidJson_forCopyPayload() throws Exception {
+        ApprovalCardModel c = card("p-1", "create-element", "Create Foo",
+                Map.of("name", "Foo", "type", "Node"), "2026-01-01T00:00:00Z");
+        // Parses cleanly => valid JSON.
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(c.copyJson());
+        assertEquals("p-1", node.get("proposalId").asText());
+        assertEquals("create-element", node.get("tool").asText());
+        assertEquals("pending", node.get("status").asText());
+        assertTrue("payload carries the structured changes",
+                node.has("proposedChanges"));
+        assertTrue("proposedChanges is a nested JSON object, not a stringified map",
+                node.get("proposedChanges").isObject());
+        assertEquals("Foo", node.get("proposedChanges").get("name").asText());
+    }
+
+    @Test
+    public void shouldIncludeIntentAndEffectDescription_whenProposalCarriesThem() throws Exception {
+        ApprovalCardModel c = cardFull("p-2", "create-relationship", "Create rel",
+                Map.of("type", "Association"), "2026-01-01T00:00:00Z",
+                "A is associated with B", "linking the two actors");
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(c.copyJson());
+        assertEquals("A is associated with B", node.get("effectDescription").asText());
+        assertEquals("linking the two actors", node.get("intent").asText());
+    }
+
+    @Test
+    public void shouldOmitNullFields_fromCopyPayload() throws Exception {
+        // The 8-arg fixture leaves effectDescription, intent and currentState null.
+        ApprovalCardModel c = card("p-3", "create-element", "Create Bar",
+                Map.of("name", "Bar"), "2026-01-01T00:00:00Z");
+        com.fasterxml.jackson.databind.JsonNode node =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(c.copyJson());
+        assertFalse("null intent is omitted", node.has("intent"));
+        assertFalse("null effectDescription is omitted", node.has("effectDescription"));
+        assertFalse("null currentState is omitted", node.has("currentState"));
+    }
+
+    @Test
+    public void shouldNotLeakSessionId_inCopyPayload() {
+        // sessionId is a routing key on PendingProposalView, not part of the ProposalDto payload.
+        ProposalDto dto = new ProposalDto("p-4", "create-element", "pending", "Create Baz",
+                null, Map.of("name", "Baz"), "Valid", "2026-01-01T00:00:00Z");
+        ApprovalCardModel c = ApprovalCardModel.fromProposal(
+                new PendingProposalView("secret-session-123", dto));
+        assertFalse("copy payload must not contain the session routing key",
+                c.copyJson().contains("secret-session-123"));
+        assertFalse(c.copyJson().contains("sessionId"));
+    }
+
     // ---- empty / gate-off / cards selection ----
 
     @Test

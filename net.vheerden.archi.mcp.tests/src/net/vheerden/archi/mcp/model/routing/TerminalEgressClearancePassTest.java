@@ -10,6 +10,7 @@ import java.util.List;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.RoutingRect;
+import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass.EgressMetrics;
 import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass.EgressProposal;
 import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass.Result;
 import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass.Snapshot;
@@ -143,8 +144,8 @@ public class TerminalEgressClearancePassTest {
     /**
      * A neighbouring connection has a horizontal parallel run at y=170 — 2px below the naive
      * 8px push target (y=168). With the element-edge-only v1 search the egress would land at
-     * y=168, 2px from that neighbour. Fix-2a requires {@code max(8, prePassVp10)=8}px to the
-     * neighbour, so the push is moved out to y=178 (exactly 8px from the neighbour). Control:
+     * y=168, 2px from that neighbour. Option B requires {@code HEALTHY_PARALLEL_GAP_PX=15}px to
+     * the neighbour, so the push is moved out to y=185 (exactly 15px from the neighbour). Control:
      * without the neighbour the push lands at y=168.
      */
     @Test
@@ -165,40 +166,36 @@ public class TerminalEgressClearancePassTest {
 
         assertEquals("only the size-3 hug yields a proposal", 1, proposals.size());
         EgressProposal pr = proposals.get(0);
-        assertEquals("egress pushed PAST the neighbour to y=178 (8px gap)", 178,
+        assertEquals("egress pushed PAST the neighbour to y=185 (15px healthy gap)", 185,
                 pr.newPath().get(2).y());
-        assertEquals("inserted A' rides the same out-pushed coordinate", 178,
+        assertEquals("inserted A' rides the same out-pushed coordinate", 185,
                 pr.newPath().get(1).y());
-        assertTrue("the cleared run keeps >=8px from the neighbour run at y=170",
-                Math.abs(pr.newPath().get(2).y() - 170) >= 8);
+        assertTrue("the cleared run keeps >= HEALTHY gap from the neighbour run at y=170",
+                Math.abs(pr.newPath().get(2).y() - 170) >= TerminalEgressClearancePass.HEALTHY_PARALLEL_GAP_PX);
     }
 
     /**
-     * Fix-2a no-op: an inflated pre-pass V_p10 (two vertical runs 30px apart) makes
-     * {@code requiredConnGap=30}, and a neighbouring horizontal run sits mid-range at y=196 —
-     * so EVERY candidate in the [168,224] search window is within 30px of the neighbour. The
-     * push is rejected wholesale (no proposal). Control: drop the close neighbour and the same
-     * view yields a proposal, proving the no-op is the connection-gap check, not absence of a
-     * hug.
+     * Option B (replaces the old "inflated V_p10 → wholesale no-op" pin): the connection-gap floor
+     * is the FLAT {@code HEALTHY_PARALLEL_GAP_PX=15}, no longer {@code ceil(V_p10)}. Two vertical
+     * runs 30px apart (which previously inflated {@code requiredConnGap} to 30 and rejected every
+     * candidate) no longer block: a neighbouring horizontal run at y=196 blocks only candidates
+     * within 15px of it ([181,211]), so the push routes to the first free coordinate (y=168, the
+     * 8px egress target, 28px clear of the neighbour) and the hug IS fixed — the exact
+     * over-declining Option B was written to remove. The cleared run still keeps the healthy gap.
      */
     @Test
-    public void egressClearance_connectionGapAware_neighbourBlocksWholeRange_noOp() {
+    public void egressClearance_connectionGapAware_healthyFloorNotInflatedByVp10() {
         List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
         List<AbsoluteBendpointDto> vPairPartner = path(bp(390, 161), bp(390, 300)); // V_p10 = 30
-        List<AbsoluteBendpointDto> closeNeighbour = path(bp(150, 196), bp(370, 196)); // mid-range H
+        List<AbsoluteBendpointDto> midNeighbour = path(bp(150, 196), bp(370, 196));  // 28px from y=168
 
-        // Control: V-pair present (requiredConnGap=30) but no close horizontal neighbour.
-        List<EgressProposal> control = pass.evaluate(
-                conns(conn("c1", S, T), conn("c2", S, T)),
-                paths(hug, vPairPartner), List.of(S, T));
-        assertEquals("with room, the hug still yields a proposal", 1, control.size());
-
-        // Re-arm the hug (control left it unmutated, but be explicit) and add the blocker neighbour.
-        List<AbsoluteBendpointDto> hug2 = path(bp(140, 161), bp(360, 161), bp(360, 300));
         List<EgressProposal> proposals = pass.evaluate(
                 conns(conn("c1", S, T), conn("c2", S, T), conn("c3", S, T)),
-                paths(hug2, vPairPartner, closeNeighbour), List.of(S, T));
-        assertTrue("connection-gap check rejects every candidate -> no-op", proposals.isEmpty());
+                paths(hug, vPairPartner, midNeighbour), List.of(S, T));
+        assertEquals("inflated V_p10 no longer blocks: the hug is fixed", 1, proposals.size());
+        int pushedY = proposals.get(0).newPath().get(2).y();
+        assertTrue("cleared run keeps >= HEALTHY gap from the neighbour at y=196",
+                Math.abs(pushedY - 196) >= TerminalEgressClearancePass.HEALTHY_PARALLEL_GAP_PX);
     }
 
     // ===================================================================
@@ -305,27 +302,37 @@ public class TerminalEgressClearancePassTest {
     // ===================================================================
 
     /**
-     * A connection hugs at its source face (terminal-incident) AND has a second hug on an
-     * interior horizontal segment (against element F's top edge). The source-side egress fixes
-     * only the first hug, so the connection stays M4-flagged (M4 does not drop at the view
-     * level). {@link TerminalEgressClearancePass#run} rolls the apply back byte-identical
-     * (Fix-1: keep only when M4 strictly drops).
+     * Sub-M4 keep-signal (router-egress-shortrun-microhug story). A connection hugs at its source
+     * face (a genuine off-face stub) AND has a SECOND, independent hug on an interior horizontal
+     * segment (against element F's top edge). The source-side egress clears ONLY the source stub,
+     * so the per-connection M4 stays flagged by the interior graze — <b>M4 does NOT drop</b>. Under
+     * the pre-story strict-M4-drop rule this rolled back byte-identical. The sub-M4 keep-signal now
+     * COMMITS it: the off-face parallel-terminal stub count strictly drops (1&rarr;0), a monotonic
+     * improvement (one fewer off-face hug, no new M4, floors/HPQ held). The interior F-graze tail is
+     * untouched (the fix is a real partial improvement, not a no-op). Companion to the whole-view
+     * {@code EgressClearanceView12RegressionTest}; rollback is still anchored by
+     * {@link #egressClearance_run_rollsBackWhenPushNarrowsVp10BelowHealthyFloor}.
      */
     @Test
-    public void egressClearance_run_rollsBackWhenM4DoesNotDrop() {
+    public void egressClearance_run_commitsOnStubDropEvenWhenM4StaysFlat() {
         RoutingRect f = new RoutingRect(360, 300, 110, 60, "F"); // top edge y=300, x=[360,470]
         List<AbsoluteBendpointDto> p = path(
                 bp(140, 161), bp(360, 161), bp(360, 300), bp(500, 300), bp(500, 400));
-        List<AbsoluteBendpointDto> original = new ArrayList<>(p);
         List<List<AbsoluteBendpointDto>> paths = paths(p);
 
         Result result = pass.run(conns(conn("c1", S, f)), paths, List.of(S, f));
 
         assertFalse("not a pre-gate skip", result.skippedByPreGate());
         assertEquals("a proposal was evaluated", 1, result.proposalsEvaluated());
-        assertEquals("nothing committed (M4 did not drop)", 0, result.applied());
-        assertEquals("the proposal was rolled back", 1, result.rolled());
-        assertEquals("path restored byte-identical after rollback", original, paths.get(0));
+        assertEquals("committed: the source off-face stub was cleared (stub count 1 -> 0)", 1, result.applied());
+        assertEquals("nothing rolled back", 0, result.rolled());
+        // Terminal byte-identical (perimeter-immutable); source stub lifted to y=168 (8px off S's
+        // bottom edge y=160), the inserted A' making a clean perpendicular L. The interior F-graze
+        // tail is UNTOUCHED — M4 stayed flat, so this commit is driven solely by the stub-count drop.
+        assertEquals("terminal byte-identical", bp(140, 161), paths.get(0).get(0));
+        assertEquals("source stub lifted off the face (perpendicular A')", bp(140, 168), paths.get(0).get(1));
+        assertEquals("interior F-graze preserved", bp(360, 300), paths.get(0).get(3));
+        assertEquals("interior F-graze preserved", bp(500, 300), paths.get(0).get(4));
     }
 
     /**
@@ -345,6 +352,124 @@ public class TerminalEgressClearancePassTest {
         assertEquals("nothing rolled back", 0, result.rolled());
         assertEquals("terminal anchor unchanged (B71)", bp(140, 161), paths.get(0).get(0));
         assertEquals("parallel run pushed to 8px clearance", 168, paths.get(0).get(2).y());
+    }
+
+    /**
+     * Option B netImproves FLOOR (red-on-revert anchor for {@code regressesBelowHealthyFloor}).
+     * The SAME hug as {@link #egressClearance_run_appliesWhenM4Drops} (which proves it applies in
+     * isolation, so M4 strictly drops and HPQ holds), but a vertical neighbour at x=150 sits 10px
+     * from the inserted egress stub at x=140. The push therefore drops the view's V-axis
+     * parallel-gap p10 to 10 (&lt; {@link TerminalEgressClearancePass#HEALTHY_PARALLEL_GAP_PX}=15),
+     * so {@link TerminalEgressClearancePass#netImproves} rolls it back byte-identical — the exact
+     * final-state safety the floor provides. (The proposal is still EMITTED: the proposal-time
+     * {@code requiredConnGap} gates only CO-AXIAL — here horizontal — neighbours, so the vertical
+     * crowding is caught only at the whole-view netImproves stage.) The neighbour uses distinct
+     * rects (N1/N2) so it does not perturb S/T hub-port quality.
+     */
+    @Test
+    public void egressClearance_run_rollsBackWhenPushNarrowsVp10BelowHealthyFloor() {
+        RoutingRect n1 = new RoutingRect(0, 500, 20, 20, "N1");
+        RoutingRect n2 = new RoutingRect(0, 600, 20, 20, "N2");
+        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> original = new ArrayList<>(hug);
+        List<AbsoluteBendpointDto> vNeighbour = path(bp(150, 155), bp(150, 175)); // x=150, overlaps the stub's y[161,168]
+        List<List<AbsoluteBendpointDto>> paths = paths(hug, vNeighbour);
+
+        Result result = pass.run(conns(conn("c1", S, T), conn("c2", n1, n2)), paths, List.of(S, T));
+
+        assertFalse("not a pre-gate skip (pre-pass V_p10 = 210 >= 8)", result.skippedByPreGate());
+        assertEquals("a proposal was evaluated", 1, result.proposalsEvaluated());
+        assertEquals("rolled back: the egress stub would narrow V_p10 to 10 (< 15)", 0, result.applied());
+        assertEquals("exactly one proposal rolled back", 1, result.rolled());
+        assertEquals("hug byte-identical after rollback", original, paths.get(0));
+    }
+
+    // ===================================================================
+    // Short-run story — sub-10px own-face micro-hug detection + keep
+    // ===================================================================
+
+    /**
+     * AC-1/AC-2 unit anchor: a SHORT (7px) parallel run on the source's OWN BOTTOM face. The run is
+     * below the 10px overlap floor, so {@code collectOverlappingEdges} surfaces no edge and M4 never
+     * counts it — pre-story this produced NO proposal at all. The own-face detection short-circuit
+     * now detects it (terminal on the face line), and the sub-M4 stub-count drop (1&rarr;0) keeps the
+     * lift: the stub is pushed to 8px clearance (y=168), terminal byte-identical.
+     */
+    @Test
+    public void egressClearance_shortRun_ownFaceMicroHug_isDetectedAndCleared() {
+        // term on S's BOTTOM face line (y=161), a 7px horizontal parallel run, then down.
+        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(147, 161), bp(147, 250));
+        List<List<AbsoluteBendpointDto>> paths = paths(p);
+
+        Result result = pass.run(conns(conn("c1", S, T)), paths, List.of(S, T));
+
+        assertFalse("not a pre-gate skip", result.skippedByPreGate());
+        assertEquals("the short own-face micro-hug is detected", 1, result.proposalsEvaluated());
+        assertEquals("committed via the sub-M4 stub-count drop", 1, result.applied());
+        assertEquals("nothing rolled back", 0, result.rolled());
+        assertEquals("terminal byte-identical (perimeter-immutable)", bp(140, 161), paths.get(0).get(0));
+        assertEquals("stub lifted to 8px clearance (perpendicular A')", bp(140, 168), paths.get(0).get(1));
+    }
+
+    /**
+     * AC-7 guard: a short (7px) co-axial parallel run that is NOT terminal-incident (it is an
+     * interior segment between two clean perpendicular terminals) is never a candidate — the
+     * own-face relaxation is strictly terminal-on-own-face, so no proposal is emitted and nothing is
+     * pushed. Proves the short-run detection did not loosen into arbitrary short parallel runs.
+     */
+    @Test
+    public void egressClearance_shortRun_interiorParallelNotTerminalIncident_noProposal() {
+        // c1: clean perpendicular exit off S's BOTTOM face (vertical first segment), then a
+        // horizontal interior run at y=250. c2: clean perpendicular exit off T's TOP face, with a
+        // horizontal interior run at y=257 (7px co-axial overlap with c1's run) — neither terminal
+        // is a parallel-on-own-face hug.
+        List<AbsoluteBendpointDto> p1 = path(bp(140, 161), bp(140, 250), bp(300, 250), bp(300, 280));
+        List<AbsoluteBendpointDto> p2 = path(bp(360, 299), bp(360, 257), bp(220, 257), bp(220, 200));
+        List<List<AbsoluteBendpointDto>> paths = paths(p1, p2);
+        List<AbsoluteBendpointDto> o1 = new ArrayList<>(p1);
+        List<AbsoluteBendpointDto> o2 = new ArrayList<>(p2);
+
+        Result result = pass.run(conns(conn("c1", S, T), conn("c2", T, S)), paths, List.of(S, T));
+
+        assertEquals("no terminal hug → no proposal", 0, result.proposalsEvaluated());
+        assertEquals("nothing committed", 0, result.applied());
+        assertEquals("c1 byte-identical", o1, paths.get(0));
+        assertEquals("c2 byte-identical", o2, paths.get(1));
+    }
+
+    /**
+     * Direct truth-table pin for {@link TerminalEgressClearancePass#netImproves} — the keep gate.
+     * Anchors that the predicate is the intended (m4Drops OR (stubDrops AND M4-non-regress)) AND
+     * floors AND hpq, in particular the {@code post.m4Count() <= pre.m4Count()} conjunct on the
+     * stub path (a stub-clearing push that ALSO introduces a new M4 hug must be rolled back). That
+     * conjunct is otherwise unanchored — the geometric transform cannot normally introduce same-span
+     * M4, so only this synthetic test red-on-reverts it. {@code vP10/hP10 = null} → the floor guard
+     * is vacuous (no prior field to protect), isolating the M4/stub/HPQ logic.
+     */
+    @Test
+    public void netImproves_keepGate_truthTable() {
+        // (m4, stub, vP10, hP10, hpq)
+        EgressMetrics base = new EgressMetrics(2, 1, null, null, 1.0);
+
+        // m4 strictly drops (the original trigger) → keep.
+        assertTrue("m4 drop keeps", TerminalEgressClearancePass.netImproves(
+                base, new EgressMetrics(1, 1, null, null, 1.0)));
+        // M4 flat, stub strictly drops → keep (the sub-M4 signal).
+        assertTrue("stub drop with M4 flat keeps", TerminalEgressClearancePass.netImproves(
+                base, new EgressMetrics(2, 0, null, null, 1.0)));
+        // Stub drops BUT M4 increases → roll back (the M4-non-regress conjunct).
+        assertFalse("stub drop is void when M4 regresses", TerminalEgressClearancePass.netImproves(
+                base, new EgressMetrics(3, 0, null, null, 1.0)));
+        // Neither M4 nor stub improves → roll back.
+        assertFalse("no improvement rolls back", TerminalEgressClearancePass.netImproves(
+                base, new EgressMetrics(2, 1, null, null, 1.0)));
+        // m4 drops but HPQ regresses → roll back.
+        assertFalse("HPQ regression rolls back", TerminalEgressClearancePass.netImproves(
+                base, new EgressMetrics(1, 1, null, null, 0.9)));
+        // Stub drops but a parallel-gap axis falls below the healthy floor → roll back.
+        assertFalse("floor regression rolls back", TerminalEgressClearancePass.netImproves(
+                new EgressMetrics(2, 1, 20.0, null, 1.0),
+                new EgressMetrics(2, 0, 10.0, null, 1.0)));
     }
 
     // ===================================================================

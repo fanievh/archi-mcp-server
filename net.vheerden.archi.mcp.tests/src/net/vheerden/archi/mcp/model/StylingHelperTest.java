@@ -3,6 +3,7 @@ package net.vheerden.archi.mcp.model;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 
 import org.junit.Test;
 
@@ -10,7 +11,10 @@ import com.archimatetool.model.FolderType;
 import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IArchimateRelationship;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.ITextAlignment;
@@ -310,8 +314,109 @@ public class StylingHelperTest {
     }
 
     // ------------------------------------------------------------------
+    // resolveConnectionLabelText — label-width reservation resolver
+    // ------------------------------------------------------------------
+
+    @Test
+    public void resolveConnectionLabelText_returnsRelationshipName_whenVisible() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        conn.setNameVisible(true);
+        assertEquals("serves", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_returnsEmpty_whenSuppressed() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        conn.setNameVisible(false);
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_honoursLabelExpression_overRelationshipName() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        conn.setNameVisible(true);
+        conn.getFeatures().putString("labelExpression", "${name} (flow)");
+        assertEquals("${name} (flow)", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_returnsEmpty_whenRelationshipNameNull() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection(null);
+        conn.setNameVisible(true);
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_returnsConnectionName_forPlainConnection() {
+        IDiagramModelConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
+        conn.setName("manual-label");
+        conn.setNameVisible(true);
+        assertEquals("manual-label", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_returnsEmpty_whenPlainConnectionSuppressed() {
+        IDiagramModelConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
+        conn.setName("manual-label");
+        conn.setNameVisible(false);
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+    }
+
+    // ------------------------------------------------------------------
+    // readConnectionRelativePosition — Label Offset anchor read-back
+    // ------------------------------------------------------------------
+
+    /**
+     * Default / un-offset → null, on EVERY platform: on older Archi the feature is absent
+     * (unsupported → null); on newer Archi a fresh connection's anchor is the default CENTER
+     * (omitted at default). Either way the reader returns null so the field is omitted.
+     */
+    @Test
+    public void readConnectionRelativePosition_returnsNull_whenUnsetOrUnsupported() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        assertNull(StylingHelper.readConnectionRelativePosition(conn));
+    }
+
+    /**
+     * When the platform exposes the Label Offset feature, a non-default anchor reads back as its
+     * exact bitmask. Assumption-skipped on an older target (mirrors the runtime no-op).
+     */
+    @Test
+    public void readConnectionRelativePosition_returnsBitmask_whenOffsetSet() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        assumeTrue("Label-offset feature is only present on newer platforms",
+                RelativePositionFeature.isSupported(conn));
+
+        final int south = 4;
+        RelativePositionFeature.set(conn, south);
+        assertEquals(Integer.valueOf(south), StylingHelper.readConnectionRelativePosition(conn));
+    }
+
+    /** An explicit CENTER anchor is treated as the un-offset default → null (feature-gated). */
+    @Test
+    public void readConnectionRelativePosition_returnsNull_atExplicitCenter() {
+        IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
+        assumeTrue("Label-offset feature is only present on newer platforms",
+                RelativePositionFeature.isSupported(conn));
+
+        RelativePositionFeature.set(conn, RelativePositionFeature.CENTER);
+        assertNull(StylingHelper.readConnectionRelativePosition(conn));
+    }
+
+    // ------------------------------------------------------------------
     // Test helpers
     // ------------------------------------------------------------------
+
+    private IDiagramModelArchimateConnection freshArchimateConnection(String relName) {
+        IArchimateRelationship rel = IArchimateFactory.eINSTANCE.createServingRelationship();
+        if (relName != null) {
+            rel.setName(relName);
+        }
+        IDiagramModelArchimateConnection conn =
+                IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        conn.setArchimateRelationship(rel);
+        return conn;
+    }
 
     private IDiagramModelGroup freshGroup() {
         IArchimateModel model = IArchimateFactory.eINSTANCE.createArchimateModel();

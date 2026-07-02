@@ -209,6 +209,57 @@ public class ElkLayoutEngineTest {
 				wideBounds[0] > tightBounds[0]);
 	}
 
+	// --- Edge-label width reservation ---
+
+	@Test
+	public void shouldProduceWiderLayout_whenEdgesHaveLabels() {
+		// RIGHT-flowing chain: a label's reserved width lands in the
+		// between-layer (horizontal) gap, so labelled edges spread the layout
+		// wider than the same graph with bare (label-free) edges.
+		List<LayoutNode> nodes = new ArrayList<>();
+		for (int i = 0; i < 4; i++) {
+			nodes.add(new LayoutNode("node-" + i, 50, 50, 120, 55, null));
+		}
+		List<LayoutEdge> bareEdges = new ArrayList<>();
+		List<LayoutEdge> labelledEdges = new ArrayList<>();
+		for (int i = 0; i < 3; i++) {
+			bareEdges.add(new LayoutEdge("node-" + i, "node-" + (i + 1), "e" + i));
+			labelledEdges.add(new LayoutEdge("node-" + i, "node-" + (i + 1), "e" + i, 160));
+		}
+
+		ElkLayoutResult bare = engine.computeLayout(nodes, bareEdges, "RIGHT", 50);
+		ElkLayoutResult labelled = engine.computeLayout(nodes, labelledEdges, "RIGHT", 50);
+
+		int bareWidth = computeBoundingBox(bare.positions())[0];
+		int labelledWidth = computeBoundingBox(labelled.positions())[0];
+
+		assertTrue("Labelled edges should widen the layout: bare=" + bareWidth
+				+ " labelled=" + labelledWidth, labelledWidth > bareWidth);
+	}
+
+	@Test
+	public void shouldNotWidenLayout_whenLabelWidthZero() {
+		// A zero-width label (suppressed/empty) must reserve nothing: a 4-arg
+		// edge with labelWidth 0 must produce the same spread as a bare 3-arg edge.
+		List<LayoutNode> nodes = new ArrayList<>();
+		for (int i = 0; i < 4; i++) {
+			nodes.add(new LayoutNode("node-" + i, 50, 50, 120, 55, null));
+		}
+		List<LayoutEdge> bareEdges = new ArrayList<>();
+		List<LayoutEdge> zeroLabelEdges = new ArrayList<>();
+		for (int i = 0; i < 3; i++) {
+			bareEdges.add(new LayoutEdge("node-" + i, "node-" + (i + 1), "e" + i));
+			zeroLabelEdges.add(new LayoutEdge("node-" + i, "node-" + (i + 1), "e" + i, 0));
+		}
+
+		ElkLayoutResult bare = engine.computeLayout(nodes, bareEdges, "RIGHT", 50);
+		ElkLayoutResult zero = engine.computeLayout(nodes, zeroLabelEdges, "RIGHT", 50);
+
+		assertEquals("Zero-width label must reserve no extra space",
+				computeBoundingBox(bare.positions())[0],
+				computeBoundingBox(zero.positions())[0]);
+	}
+
 	// --- Task 6.6: Test edge cases ---
 
 	@Test

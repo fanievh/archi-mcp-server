@@ -79,6 +79,37 @@ public class CommandRegistryTest {
     }
 
     @Test
+    public void shouldRejectDuplicateToolName_whenSameNameRegisteredTwice() {
+        registry.registerTool(createToolSpec("dup-tool", "First registration"));
+
+        try {
+            registry.registerTool(createToolSpec("dup-tool", "Second registration"));
+            fail("Expected the registry to reject a duplicate tool name");
+        } catch (IllegalStateException e) {
+            // expected — the no-duplicate-name invariant is enforced at the source
+            assertTrue("Rejection message should name the offending tool",
+                    e.getMessage() != null && e.getMessage().contains("dup-tool"));
+        }
+
+        // The rejected registration must leave registry state untouched.
+        assertEquals("Duplicate must not be added", 1, registry.getToolCount());
+        assertEquals("First registration must survive", "dup-tool",
+                registry.getToolSpecifications().get(0).tool().name());
+    }
+
+    @Test
+    public void shouldAllowSameNameAfterClearTools() {
+        registry.registerTool(createToolSpec("recycled-name", "Before clear"));
+        registry.clearTools();
+
+        // After clearTools the name is no longer registered, so it is legal again.
+        registry.registerTool(createToolSpec("recycled-name", "After clear"));
+
+        assertEquals(1, registry.getToolCount());
+        assertEquals("recycled-name", registry.getToolSpecifications().get(0).tool().name());
+    }
+
+    @Test
     public void shouldClearMcpServersWithoutError() {
         // Should not throw even if no servers are set
         registry.clearMcpServers();

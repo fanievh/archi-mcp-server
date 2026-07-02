@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
+import net.vheerden.archi.mcp.model.AnchorResolver;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
 import net.vheerden.archi.mcp.model.ElementSizer;
 import net.vheerden.archi.mcp.model.ModelAccessException;
@@ -33,6 +34,7 @@ import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+import net.vheerden.archi.mcp.response.dto.ViewDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.AdjustViewSpacingResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyElementSpacingRecommendationsResultDto;
@@ -49,6 +51,7 @@ import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
@@ -194,6 +197,15 @@ public class ViewPlacementHandler {
                 + "Recommended for flat views and individual element placement "
                 + "to prevent label truncation (default: false).");
 
+        Map<String, Object> recedeProp = new LinkedHashMap<>();
+        recedeProp.put("type", "boolean");
+        recedeProp.put("description",
+                "Optional. When this placement nests the element inside a parent group or element "
+                + "(via parentViewObjectId) whose fill colour is unauthored (never set by a caller), "
+                + "the parent's fill automatically recedes to a subtle backdrop so the nested view does "
+                + "not read as a flat single-colour blob. A parent with an authored fill is never "
+                + "touched. Set recede=false to suppress this for the call (default: true).");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("elementId", elementIdProp);
@@ -204,6 +216,7 @@ public class ViewPlacementHandler {
         properties.put("autoSize", autoSizeProp);
         properties.put("autoConnect", autoConnectProp);
         properties.put("parentViewObjectId", parentVoProp);
+        properties.put("recede", recedeProp);
         addStylingProperties(properties);
         addImageProperties(properties);
 
@@ -372,6 +385,15 @@ public class ViewPlacementHandler {
                 + "from the top of the parent. "
                 + "Omit to place at the top level of the view.");
 
+        Map<String, Object> recedeProp = new LinkedHashMap<>();
+        recedeProp.put("type", "boolean");
+        recedeProp.put("description",
+                "Optional. When this group is nested inside a parent group or element (via "
+                + "parentViewObjectId) whose fill colour is unauthored (never set by a caller), the "
+                + "parent's fill automatically recedes to a subtle backdrop so the nested view does not "
+                + "read as a flat single-colour blob. A parent with an authored fill is never touched. "
+                + "Set recede=false to suppress this for the call (default: true).");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("label", labelProp);
@@ -380,6 +402,7 @@ public class ViewPlacementHandler {
         properties.put("width", widthProp);
         properties.put("height", heightProp);
         properties.put("parentViewObjectId", parentVoProp);
+        properties.put("recede", recedeProp);
         addStylingProperties(properties);
         addImageProperties(properties);
 
@@ -1308,8 +1331,37 @@ public class ViewPlacementHandler {
                 + "object. Archi evaluates the expression at render time. "
                 + "Set to a non-empty string to apply; set to empty string (\"\") to clear and "
                 + "fall back to the element's static name; omit to leave unchanged. "
-                + "No server-side validation — Archi owns the grammar; unknown tokens render as "
-                + "the literal '${...}'. See the archimate-view-patterns reference for details.");
+                + "Archi owns the grammar (unknown tokens render as the literal '${...}'); the only "
+                + "server-side check rejects a literal HTML/XML entity (e.g. \"&amp;\", \"&lt;\", "
+                + "\"&#160;\") in the template — use the actual character instead. "
+                + "See the archimate-view-patterns reference for details.");
+
+        Map<String, Object> anchorTargetProp = new LinkedHashMap<>();
+        anchorTargetProp.put("type", "string");
+        anchorTargetProp.put("description",
+                "Anchor this object's position to another view object (its viewObjectId) so it "
+                + "follows that target when the target moves or grows, instead of keeping a frozen "
+                + "absolute position. The anchored position is resolved from the target's current "
+                + "bounds plus anchorEdge/dx/dy. Set to a non-empty target id to anchor; set to "
+                + "empty string (\"\") to clear the anchor; omit to leave unchanged. The target and "
+                + "this object must share a coordinate space (both top-level, or both in the same group).");
+
+        Map<String, Object> anchorEdgeProp = new LinkedHashMap<>();
+        anchorEdgeProp.put("type", "string");
+        anchorEdgeProp.put("description",
+                "Which edge of the anchor target to track: 'below' (default) keeps this object below "
+                + "the target and follows its growing bottom; 'above', 'right', 'left' track the "
+                + "corresponding edge. Only meaningful with anchorTarget.");
+
+        Map<String, Object> dxProp = new LinkedHashMap<>();
+        dxProp.put("type", "integer");
+        dxProp.put("description",
+                "Offset (px) along/against the anchor edge on the x axis; defaults to 0. Only meaningful with anchorTarget.");
+
+        Map<String, Object> dyProp = new LinkedHashMap<>();
+        dyProp.put("type", "integer");
+        dyProp.put("description",
+                "Gap (px) from the anchor edge on the y axis; defaults to 0. Only meaningful with anchorTarget.");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewObjectId", viewObjectIdProp);
@@ -1319,6 +1371,10 @@ public class ViewPlacementHandler {
         properties.put("height", heightProp);
         properties.put("text", textProp);
         properties.put("labelExpression", labelExpressionProp);
+        properties.put("anchorTarget", anchorTargetProp);
+        properties.put("anchorEdge", anchorEdgeProp);
+        properties.put("anchorDx", dxProp);
+        properties.put("anchorDy", dyProp);
         addStylingProperties(properties);
         addImageProperties(properties);
 
@@ -1356,6 +1412,11 @@ public class ViewPlacementHandler {
                         + "lineColor is used verbatim instead of derived from fill). Optional "
                         + "outlineOpacity (0-255). Optional lineStyle ('solid'/'dashed'/'dotted'/'none' "
                         + "— view-object outline border style). "
+                        + "Optional anchoring: anchorTarget (string — viewObjectId to anchor to; empty "
+                        + "string clears), anchorEdge ('below' default / 'above' / 'right' / 'left'), "
+                        + "anchorDx / anchorDy (integer offsets) — makes this object follow the target when it "
+                        + "moves or grows (e.g. a note that stays below a group as the group grows), "
+                        + "instead of a frozen absolute position. Anchor resolves at commit time. "
                         + "Respects approval mode (human-gated in Archi). All changes (including labelExpression, "
                         + "figureType, textAlignment, verticalTextAlignment, typography, gradient, borderType, "
                         + "deriveLineColor, outlineOpacity, lineStyle) execute as a single undo unit. "
@@ -1390,10 +1451,24 @@ public class ViewPlacementHandler {
             // allow-empty variant — empty string "" clears the label
             // expression; absent key leaves it unchanged.
             String labelExpression = HandlerUtils.optionalStringParamAllowEmpty(args, "labelExpression");
+            // Anchor params — empty string anchorTarget clears; absent leaves unchanged.
+            String anchorTarget = HandlerUtils.optionalStringParamAllowEmpty(args, "anchorTarget");
+            String anchorEdge = HandlerUtils.optionalStringParam(args, "anchorEdge");
+            Integer anchorDx = HandlerUtils.optionalIntegerParam(args, "anchorDx");
+            Integer anchorDy = HandlerUtils.optionalIntegerParam(args, "anchorDy");
+            boolean anchoring = anchorTarget != null && !anchorTarget.isEmpty();
+            if (anchoring && !AnchorResolver.isValidEdge(anchorEdge)) {
+                throw new ModelAccessException(
+                        "Invalid anchorEdge value: '" + anchorEdge + "'",
+                        ErrorCode.INVALID_PARAMETER,
+                        null,
+                        "anchorEdge must be one of: below, above, right, left (omit for the default 'below').",
+                        null);
+            }
 
             MutationResult<ViewObjectDto> result = accessor.updateViewObject(
                     sessionId, viewObjectId, x, y, width, height, text, styling, imageParams,
-                    labelExpression);
+                    labelExpression, anchorTarget, anchorEdge, anchorDx, anchorDy);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildUpdateViewObjectNextSteps(result), accessor, formatter);
@@ -2108,12 +2183,28 @@ public class ViewPlacementHandler {
                 + "(emergent property, not per-connection fixable). Empty metrics omitted. "
                 + "Default: false.");
 
+        Map<String, Object> scopeProp = new LinkedHashMap<>();
+        scopeProp.put("type", "string");
+        scopeProp.put("enum", List.of("single", "all-views"));
+        scopeProp.put("default", "single");
+        scopeProp.put("description",
+                "Assessment scope. 'single' (default) assesses the one view named by "
+                + "viewId and returns the full assessment. 'all-views' assesses every "
+                + "diagram in the model and returns a compact per-view map (keyed by view "
+                + "id) of {name, overallRating, overallExcludingAcceptedCosmetics, "
+                + "elementCount, connectionCount, overlapCount, nonOrthogonalTerminalCount, "
+                + "connectionPassThroughCount} — one cheap overview call instead of one full "
+                + "payload per view. viewId is ignored when scope is 'all-views'.");
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("includeViolatorIds", includeViolatorIdsProp);
+        properties.put("scope", scopeProp);
 
+        // viewId is required only for single-view scope; the handler enforces it there so
+        // an all-views call need not supply a viewId. Hence no unconditionally-required field.
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
-                "object", properties, List.of("viewId"), null, null, null);
+                "object", properties, List.of(), null, null, null);
 
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("assess-layout")
@@ -2139,12 +2230,25 @@ public class ViewPlacementHandler {
                         + "`containmentOverlaps` (expected overlaps from ancestor-descendant "
                         + "containment, e.g., elements inside groups). Only sibling overlaps "
                         + "affect the quality rating and trigger suggestions.\n\n"
-                        + "The overall rating uses a severity-tiered model: "
-                        + "Tier 1 (critical: overlaps, passThroughs, coincidentSegments) can produce 'poor'; "
-                        + "Tier 2 (moderate: edgeCrossings) caps at 'fair'; "
-                        + "Tier 3 (cosmetic: spacing, alignment, labelOverlaps, nonOrthogonalTerminals) caps at 'good'. "
-                        + "The `ratingBreakdown` map shows per-metric ratings including "
-                        + "`coincidentSegments` and `nonOrthogonalTerminals`.\n\n"
+                        + "The overall rating uses the two-dimensional M6 severity-tiered model "
+                        + "(worse of a layout tier and a routing tier). Routing: Tier-1R (critical: "
+                        + "passThroughs, interiorTerminations, zigzags, coincidentSegments) can produce "
+                        + "'poor'; Tier-2R (cap 'fair': nonOrthogonalTerminals, nonOrthogonalInteriorSegments, "
+                        + "connectionEdgeCoincidence, hubPortQuality, labelOverlaps, labelTruncations); "
+                        + "Tier-3R (cap 'good': edgeCrossings, connectionThroughNote). Layout: Tier-1L "
+                        + "(critical: overlaps, boundaryViolations, parentLabelObscured) can produce 'poor'; "
+                        + "Tier-2L (cap 'fair': spacing, offCanvas, hubNeighbourCrowding); Tier-3L (cap "
+                        + "'good': alignment). The `ratingBreakdown` map shows per-metric ratings.\n\n"
+                        + "DE-NOISED HEADLINE: `ratingBreakdown` also carries "
+                        + "`overallExcludingAcceptedCosmetics` — the same overall rating recomputed with "
+                        + "the `nonOrthogonalTerminals` contribution removed. Diagonal terminal segments "
+                        + "are the straight-line signature of ELK auto-layout and routinely push an "
+                        + "otherwise-clean view to 'fair'. Compare the two: when `overallRating` is 'fair' "
+                        + "but `overallExcludingAcceptedCosmetics` is 'good'/'excellent', the 'fair' is "
+                        + "terminal cosmetics only (run auto-route-connections mode='terminals-only' to "
+                        + "clear it, or accept it); when the two are EQUAL, the rating reflects a real "
+                        + "routing/layout defect to fix. It is a floor, never a lift — it can only equal "
+                        + "or improve `overallRating`, never worsen it.\n\n"
                         + "Edge crossing rating is lenient for grouped views: when groups with "
                         + "inter-group connections are present and crossings are the main issue "
                         + "(zero overlaps, good alignment, pass-throughs <= 3), crossings get a "
@@ -2159,14 +2263,31 @@ public class ViewPlacementHandler {
                         + "`zigzagCount` (M3) flags route shapes that backtrack or zigzag along an axis. "
                         + "`connectionEdgeCoincidenceCount` (M4) flags connection-vs-element-edge "
                         + "coincidence (separate from the legacy connection-vs-connection "
-                        + "`coincidentSegmentCount`). "
+                        + "`coincidentSegmentCount`); it counts CONNECTIONS that hug at least one "
+                        + "element edge (stops at the first graze) and is the rating-bearing tally. "
+                        + "`edgeCoincidenceGrazedElementCount` is the informational companion that "
+                        + "enumerates EVERY distinct (connection, element) graze — a single trunk "
+                        + "hugging three element edges contributes 3 here but 1 to "
+                        + "`connectionEdgeCoincidenceCount`; the grazed element IDs are listed under "
+                        + "the `edgeCoincidenceGrazedElements` violator key. Note the count sums "
+                        + "distinct grazed elements PER CONNECTION (one element grazed by two "
+                        + "different connections counts twice), whereas the "
+                        + "`edgeCoincidenceGrazedElements` ID set is deduplicated view-wide — so the "
+                        + "set can be smaller than the count; do not use the set size as the count. "
                         + "`hubPortQualityScore` (M5) is a 0–1 score measuring port distribution "
                         + "evenness across hub-element faces (1.0 = perfectly distributed, "
                         + "0.18 = catastrophic 1-slot-for-7-connections). When this score is below "
                         + "0.5, run detect-hub-elements and resize the violating hubs via "
                         + "update-view-object. "
-                        + "`corridorUtilisationScore` (R8) is a 0–1 score measuring how well wide "
-                        + "corridors are used. "
+                        + "`corridorUtilisationScore` (R8) is a 0–1 score measuring multi-occupant "
+                        + "corridor occupancy/spread — how widely two or more parallel routes sharing "
+                        + "a wall-pair fan out across the available corridor width. It does NOT "
+                        + "measure whether a single route sits centred in its corridor versus hugs an "
+                        + "edge: a single-occupant corridor is skipped (a view with no multi-occupant "
+                        + "corridor scores 1.0 vacuously) and multi-occupant wall-hugging clamps to "
+                        + "1.0 (edge-hugging surfaces via the edge-coincidence metric, not here). A "
+                        + "perfect 1.0 therefore does NOT certify route centring — see the "
+                        + "`corridorCentering` coverage dimension (not-checked) and render-verify. "
                         + "M1 (`nonOrthogonalTerminalCount`) uses a visible-segment-length guard "
                         + "so clipped diagonals invisible to the human eye no longer over-report. "
                         + "M6 reports a two-dimensional `(layoutTier, routingTier)` rating that "
@@ -2201,11 +2322,131 @@ public class ViewPlacementHandler {
                         + "elements (groups) whose label text area is overlapped by the topmost child. "
                         + "Since M6 a nonzero count drops layoutTier to 'poor' and vetoes the overall rating (Tier-1L), "
                         + "so fix it before a view can rate 'good'. "
-                        + "Move children down or increase parent top padding.\n\n"
+                        + "Move children down or increase parent top padding. "
+                        + "`hubNeighbourClearanceMin` — the smallest clearance (px) between a hub "
+                        + "element's edge and the row of spoke neighbours packed against it (measured "
+                        + "only on a hub face carrying >= 3 overlapping spoke neighbours; -1.0 = no "
+                        + "measurable hub). A value at/above 0 and below the 60 px crowding floor caps "
+                        + "layoutTier at 'fair' so a hub enlarged until it crowds its neighbours cannot "
+                        + "rate 'good'; the -1.0 sentinel and clearances at/above the floor have no "
+                        + "rating impact. This is orthogonal to hubPortQualityScore (which scores port "
+                        + "DISTRIBUTION, not the room the enlarged box leaves for neighbours), so a hub "
+                        + "can max hubPortQuality yet still crowd. On a near-saturated container-nested-"
+                        + "hub view, nextSteps emits a single diagnostic resize-vs-reposition step gated "
+                        + "on this clearance instead of generic spacing inflation. "
+                        + "`connectionThroughNoteCount` / `connectionThroughNoteDescriptions` — "
+                        + "connections whose route passes straight through a Note's box or an "
+                        + "element's rendered image rectangle (the \"line runs through the caption/"
+                        + "legend\" defect). Any nonzero count contributes to `routingRating` "
+                        + "(cap-good, Tier-3R): a line through a note/image is always jarring to the "
+                        + "reader, so a single crossing nudges the routing tier to 'good' (binary "
+                        + "presence — one crossing and several both rate 'good', never worse). "
+                        + "Counted per connection×visual. Notes are excluded from the element "
+                        + "pass-through scoring set, and for image-bearing elements this tests the "
+                        + "rendered image RECTANGLE (which can overhang the box), so it catches "
+                        + "clutter the box-based `connectionPassThroughs` (Tier-1R) misses; where a "
+                        + "route could trip both, the routing tier takes the max so the Tier-1R "
+                        + "pass-through dominates (no double penalty). A visual on a connection's own "
+                        + "endpoint/container is not flagged. Reroute the connection or move the "
+                        + "note/image clear.\n\n"
                         + "INFORMATIONAL DETECTIONS (no rating impact): "
                         + "`imageSiblingOverlapCount` / `imageSiblingOverlapDescriptions` — elements "
-                        + "with images whose image area is overlapped by a sibling element. "
-                        + "Increase element spacing or reposition the image.\n\n"
+                        + "whose image area (custom image or specialization icon, sized from its true "
+                        + "rendered dimensions) is overlapped by a sibling element. "
+                        + "Increase element spacing, reposition the image, or shrink the icon. "
+                        + "`noteClipCount` / `noteClipDescriptions` — notes whose text content needs "
+                        + "more height than their box provides (clipped). Omit the note `height` so "
+                        + "the server auto-fits it, or increase the height / reduce the font size. "
+                        + "`connectionRedundantBendpointCount` / `connectionRedundantBendpointDescriptions` "
+                        + "— bendpoints that are collinear along a HORIZONTAL or VERTICAL segment and "
+                        + "lie between their neighbours, so removing the point would not change the "
+                        + "orthogonal route (the \"many unnecessary bendpoints / wobbles\" defect). "
+                        + "Near-collinear DIAGONAL micro-jogs and sub-pixel artifacts are NOT reported "
+                        + "— removing them would diagonalise an orthogonal segment, so they are not "
+                        + "redundant. Terminal egress-stub bendpoints (a first/last bendpoint sitting "
+                        + "on its element's perimeter face) are also NOT reported: the router pins "
+                        + "them for terminal anchoring / port distribution, so they are intentional "
+                        + "and re-running auto-route will not remove them. Counted per redundant "
+                        + "bendpoint and distinct from the reversal-based `zigzagCount`. The reported "
+                        + "(interior) points are genuinely removable — straighten the route or re-run "
+                        + "auto-route-connections. "
+                        + "`nonOrthogonalInteriorSegmentCount` / `nonOrthogonalInteriorSegmentDescriptions` "
+                        + "— connections with at least one off-cardinal (more than ~5° from horizontal/"
+                        + "vertical) segment in the INTERIOR of the route, i.e. between the two terminal "
+                        + "segments. This generalises `nonOrthogonalTerminalCount` (which checks only the "
+                        + "source/target segments) to mid-route bends. It contributes to `routingRating` "
+                        + "(cap-fair, tier 2), ratio-bucketed identically to `nonOrthogonalTerminalCount` "
+                        + "(a low interior-diagonal-per-connection ratio rates good, a high one fair); the "
+                        + "two are SEPARATE breakdown entries but the routing tier combines them by max, so "
+                        + "a connection diagonal at both a terminal and an interior segment is capped once. "
+                        + "Counted per connection. Re-run auto-route-connections for clean orthogonal paths. "
+                        + "`offFaceParallelTerminalCount` / `offFaceParallelTerminalDescriptions` "
+                        + "— connections whose terminal route departs an element face then immediately runs "
+                        + "PARALLEL to and hugs that same face (the first exterior segment travels along the "
+                        + "departed face with a perpendicular clearance below ~8px). This catches the visible "
+                        + "\"hugging exit\" that `nonOrthogonalTerminalCount` misses: when a route exits a "
+                        + "fraction of a pixel off the perimeter and turns to run just beside the face, the "
+                        + "exit stub is a sub-perceptible diagonal that the terminal-angle check suppresses. "
+                        + "Measured against the face the route departs, not the raw segment angle. Counted per "
+                        + "connection (a route hugging at either terminal counts once), informational (no "
+                        + "rating impact — distinct from the rating-bearing `nonOrthogonalTerminalCount`). "
+                        + "Push the first segment perpendicular off the face before turning. "
+                        + "`coincidentFacePortCount` / `coincidentFacePortDescriptions` "
+                        + "— element faces on which TWO OR MORE connection terminals collide onto the "
+                        + "same perimeter port (within ~1px along the face axis), so two edges appear to "
+                        + "leave one point. This closes a blind spot in `hubPortQualityScore` (M5): its "
+                        + "per-face guard only scores a face carrying four or more connections, so a face "
+                        + "with two or three coincident terminals reads a vacuous 1.0 despite the "
+                        + "collision. Counted per face (the `coincidentFacePorts` violator key carries the "
+                        + "colliding connection IDs), informational (no rating impact — M5 is untouched). "
+                        + "Spread the terminals across the face with auto-route-connections, which "
+                        + "dissolves a coincident same-face pair on a low-degree element. "
+                        + "`containerFillEqualsChildCount` / `containerFillEqualsChildDescriptions` "
+                        + "— containers whose AUTHORED fill colour equals a nested child's fill, so the "
+                        + "parent and its children merge into one flat single-colour block (the "
+                        + "\"flat-blob\" defect). Counted per container, informational (no rating impact). "
+                        + "Note: when you place a child inside a container whose fill is unauthored, "
+                        + "add-to-view / add-group-to-view already auto-recede the parent to a backdrop "
+                        + "(opt out with recede:false), so this only flags blobs from an explicit "
+                        + "same-colour fill — give the container a distinct (lighter) fill. "
+                        + "`connectionGrazesVisualCount` / `connectionGrazesVisualDescriptions` "
+                        + "— connections whose route touches/clips a Note's or image's BORDER (the "
+                        + "outer band the through-visual interior test discards), including visuals "
+                        + "too small to inset that a route crosses. Counted per connection×visual and "
+                        + "DISJOINT from `connectionThroughNoteCount` (interior penetration): a single "
+                        + "crossing is classified as exactly one of through or graze. Informational "
+                        + "(no rating impact). Reroute the connection or move the note/image clear. "
+                        + "`labelOnNoteCount` / `labelOnNoteDescriptions` — connection LABELS rendered "
+                        + "on a Note's rectangle (the caption/legend collision the route detectors "
+                        + "cannot see, since a label is positioned independently of the line). Counted "
+                        + "per label×note. Informational (no rating impact) and independent of "
+                        + "`connectionThroughNoteCount` / `connectionGrazesVisualCount`. Reposition the "
+                        + "label (apply a Label Offset / auto-route-connections) or move the note clear. "
+                        + "`labelOnGroupCount` / `labelOnGroupDescriptions` — connection LABELS rendered "
+                        + "on a visual Group's TITLE BAND (the title collision the label-overlap detector "
+                        + "cannot see, since it skips groups wholesale as transparent containers). Only "
+                        + "the group's top title strip is tested, so a label sitting inside the group "
+                        + "body is normal and NOT flagged. Counted per label×group. Informational (no "
+                        + "rating impact). Reposition the label or reroute the connection clear of the "
+                        + "group title.\n\n"
+                        + "CONNECTION-LABEL OVERLAP: `labelOverlapCount` is render-calibrated "
+                        + "(the estimated glyph box is widened to match how Archi actually renders, "
+                        + "so short, tight segments are no longer under-flagged) and now also flags "
+                        + "a label rendered on its OWN source/target box when more than ~30% of its "
+                        + "area falls on that endpoint — own-endpoint bleed the earlier "
+                        + "source/target exclusion masked. Light grazing of the attached box is "
+                        + "tolerated. Three companion rules cover what the area fraction misses: a "
+                        + "box-coverage rule flags a label blanketing a TINY endpoint box (e.g. a "
+                        + "junction) when the overlap covers ~60%+ of that box; a short-segment "
+                        + "rule lowers the bar to ~15% when the label is wider than the first/last "
+                        + "segment it anchors to (a long source/target label on a short terminal "
+                        + "segment); and a junction rule drops the bar to ~5% when the endpoint is "
+                        + "a Junction (a solid dark shape with no readable interior), catching an "
+                        + "oversized junction grazed by a label. The check is offset-aware: a Middle label already lifted clear "
+                        + "by an applied Label Offset is not re-reported. On Archi 5.10, clear an "
+                        + "own-endpoint bleed with auto-route-connections, which applies the "
+                        + "connection Label Offset. Labels suppressed with `showLabel: false` "
+                        + "reserve and flag nothing.\n\n"
                         + "VIOLATOR IDS (opt-in via includeViolatorIds=true): "
                         + "Returns a `violatorIds` map keyed by metric name, each value a list "
                         + "of visual object IDs. Use these IDs with update-view-object or "
@@ -2215,11 +2456,56 @@ public class ViewPlacementHandler {
                         + "IDs), nonOrthogonalTerminals (connection IDs), boundaryViolations "
                         + "(child element IDs), interiorTerminations (connection IDs), "
                         + "zigzags (connection IDs), edgeCoincidence (connection IDs), "
+                        + "edgeCoincidenceGrazedElements (the element IDs every edge-coincident "
+                        + "route hugs — the full breadth of each graze), "
+                        + "redundantBendpoints (connection IDs), "
+                        + "nonOrthogonalInteriorSegments (connection IDs), "
+                        + "containerFillRecession (container element/group IDs), "
+                        + "labelOnNote (note IDs carrying a connection label), "
+                        + "labelOnGroup (group IDs whose title band carries a connection label), "
+                        + "coincidentFacePorts (connection IDs colliding onto a shared face port), "
                         + "hubPortLowQuality (element IDs), parallelConnectionGapV "
                         + "(connection IDs with V-axis gap < 25 px), parallelConnectionGapH "
                         + "(connection IDs with H-axis gap < 25 px). Crossings excluded — "
                         + "use auto-route-connections for crossing reduction. Empty metrics "
-                        + "omitted from map.")
+                        + "omitted from map.\n\n"
+                        + "COVERAGE DECLARATION: the `coverage` map declares, per defect "
+                        + "dimension, whether this run actually evaluated it. Each value is one "
+                        + "of `checked` (the detector ran and fully covers this dimension's "
+                        + "failure modes — regardless of whether it found anything, so `checked` "
+                        + "with a zero/absent metric means genuinely clean), `partial` (a "
+                        + "detector ran but covers only SOME of this dimension's failure modes — "
+                        + "a zero/absent metric means only the covered modes are clean, so the "
+                        + "uncovered modes must be render-verified before certifying clean), "
+                        + "`not-checked` (this defect class was NOT evaluated — there "
+                        + "is no detector for it yet, so absence of a finding is NOT evidence "
+                        + "of absence; treat it as unknown, never as clean), or "
+                        + "`not-applicable` (the view structurally cannot exhibit it). The map "
+                        + "is keyed by dimension id and always present on a normal assessment "
+                        + "(an empty map only appears on degenerate empty/single-element "
+                        + "views). It is informational only and never affects any rating. A "
+                        + "done-gate must read BOTH `coverage` and `ratingBreakdown`: a "
+                        + "dimension is only 'clean' when coverage==checked AND breakdown==pass. "
+                        + "A `partial` dimension is NOT certifiable as clean from the metric "
+                        + "alone — render-verify its uncovered modes. Most defect-class dimensions "
+                        + "report `checked`; two exceptions: `labelOverlaps` downgrades to `partial` "
+                        + "on a run carrying a connection label wider than its hosting segment "
+                        + "(checked otherwise) — such a label can crowd a neighbour while clearing it "
+                        + "geometrically, so an overlap count of zero cannot certify that crowding "
+                        + "mode clean; and `corridorCentering` is always `not-checked` — no detector "
+                        + "measures whether a single route sits centred in its corridor versus hugs "
+                        + "an edge (the `corridorUtilisationScore` metric only measures multi-occupant "
+                        + "spread), so render-verify centring regardless of that score. The other "
+                        + "levels remain defined for dimensions added later.\n\n"
+                        + "SCOPE: the `scope` parameter selects single-view (default) or whole-model "
+                        + "assessment. With scope='all-views', viewId is ignored and the result is a "
+                        + "compact map keyed by view id — each value {name, overallRating, "
+                        + "overallExcludingAcceptedCosmetics, elementCount, connectionCount, "
+                        + "overlapCount, nonOrthogonalTerminalCount, connectionPassThroughCount} — for a "
+                        + "one-call overview of every diagram (e.g. a final close-out sweep). It omits "
+                        + "violatorIds, descriptions, and the per-metric breakdown; drill into any view "
+                        + "that rates 'fair'/'poor' with a single-scope call for the full assessment. An "
+                        + "empty model returns an empty map.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -2236,6 +2522,15 @@ public class ViewPlacementHandler {
             HandlerUtils.requireModelLoaded(accessor);
 
             Map<String, Object> args = request.arguments();
+            String scope = HandlerUtils.optionalStringParam(args, "scope");
+            if (scope == null) {
+                scope = "single";
+            }
+
+            if ("all-views".equals(scope)) {
+                return handleAssessAllViews();
+            }
+
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             boolean includeViolatorIds = Boolean.TRUE.equals(args.get("includeViolatorIds"));
 
@@ -2258,6 +2553,56 @@ public class ViewPlacementHandler {
     }
 
     /**
+     * Whole-model assess: a compact per-view summary keyed by view id, for a one-call
+     * overview of every diagram (e.g. a final close-out sweep) instead of one full payload
+     * per view. Each value carries the headline rating, the de-noised headline
+     * ({@code overallExcludingAcceptedCosmetics}), and the key counts a consumer triages on;
+     * violatorIds, descriptions, and the per-metric breakdown are intentionally omitted — drill
+     * into any flagged view with a single-scope call for the full assessment. An empty model
+     * (no diagrams) returns an empty map. Reuses the existing per-view assessor entry point.
+     */
+    private McpSchema.CallToolResult handleAssessAllViews() {
+        Map<String, Object> perView = new LinkedHashMap<>();
+        for (ViewDto view : accessor.getViews(null)) {
+            AssessLayoutResultDto dto = accessor.assessLayout(view.id(), false);
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("name", view.name());
+            summary.put("overallRating", dto.overallRating());
+            // Fall back to overallRating when the de-noised key is absent (degenerate views
+            // produce an empty/absent ratingBreakdown). The values are equal when de-noising
+            // has no effect, so this keeps the compact entry's key set complete and non-null
+            // (the response mapper omits null fields), never silently dropping the key.
+            summary.put("overallExcludingAcceptedCosmetics",
+                    dto.ratingBreakdown() != null
+                            ? dto.ratingBreakdown().getOrDefault(
+                                    "overallExcludingAcceptedCosmetics", dto.overallRating())
+                            : dto.overallRating());
+            summary.put("elementCount", dto.elementCount());
+            summary.put("connectionCount", dto.connectionCount());
+            summary.put("overlapCount", dto.overlapCount());
+            summary.put("nonOrthogonalTerminalCount", dto.nonOrthogonalTerminalCount());
+            summary.put("connectionPassThroughCount",
+                    dto.connectionPassThroughs() != null ? dto.connectionPassThroughs().size() : 0);
+            perView.put(view.id(), summary);
+        }
+
+        List<String> nextSteps = perView.isEmpty()
+                ? List.of("No diagram views in the model.")
+                : List.of(
+                        "Drill into any view whose overallRating is 'fair'/'poor' with a "
+                                + "single-scope assess-layout call (scope omitted, viewId set) for "
+                                + "the full per-metric breakdown and violator ids.",
+                        "A view whose overallRating is 'fair' but "
+                                + "overallExcludingAcceptedCosmetics is 'good'/'excellent' is "
+                                + "terminal-cosmetic-only — run auto-route-connections "
+                                + "mode='terminals-only' to clear it, or accept it.");
+        String modelVersion = accessor.getModelVersion();
+        Map<String, Object> envelope = formatter.formatSuccess(
+                perView, nextSteps, modelVersion, perView.size(), perView.size(), false);
+        return HandlerUtils.buildResult(formatter.toJsonString(envelope), false);
+    }
+
+    /**
      * Builds context-aware nextSteps graduated by quality rating and view structure.
      * Recommends the lightest effective intervention first: auto-route-connections, then
      * auto-layout-and-route (ELK). Never recommends compute-layout.
@@ -2270,6 +2615,20 @@ public class ViewPlacementHandler {
     // Mirrors LayoutQualityAssessor.HUB_PORT_QUALITY_PASS_THRESHOLD (0.95) — anything below
     // is a routing-attributable hub-distribution defect for next-steps purposes.
     private static final double HUB_PORT_QUALITY_NEXTSTEPS_THRESHOLD = 0.95;
+    // Near-saturated corridor utilisation — corridors are full, so the spacing/edge-coincidence
+    // pressure is best relieved by a hub-resize (where there is slack) OR an ELK reposition
+    // (where a resize would crowd neighbours), not by the generic spacing-inflation step. Paired
+    // with edge-coincidence pressure and hub-port quality NOT already flagged, this is the
+    // container-nested-hub signal. The emitter cannot see per-element geometry or confirm a hub,
+    // so the step it emits is diagnostic (run detect-hub-elements and choose), not prescriptive.
+    private static final double NESTED_HUB_CORRIDOR_SATURATION_THRESHOLD = 0.9;
+
+    // Mirrors LayoutQualityAssessor.CROWDING_FLOOR_PX (cross-package; kept in sync by the shared
+    // live-calibration). When the assessor measures a hub's edge-to-spoke-row clearance, a value at
+    // or above this floor means a resize has room (sparse → grow the hub), and below it a resize
+    // would crowd (dense → reposition). A negative value is the "no hub measured" sentinel, which
+    // keeps the diagnostic hub-existence-safe (present both levers) rather than branching.
+    private static final double NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX = 60.0;
 
     // Package-private for direct unit testing (Assessor.Redesign code-review H1, 2026-04-27).
     List<String> buildAssessLayoutNextSteps(AssessLayoutResultDto dto) {
@@ -2332,11 +2691,79 @@ public class ViewPlacementHandler {
                     hpq, violatorClause));
         }
 
+        // #1b: Saturated container-nested-hub layout — supersedes the generic spacing step (#2)
+        // below. When corridors are near-saturated AND there is edge-coincidence/coincident-segment
+        // pressure AND hub-port quality was NOT already flagged by #1 (hpq>=0.5), a hub-resize OR a
+        // reposition (ELK) is the right lever — but which one depends on per-element density the
+        // emitter cannot see, and it cannot even confirm a hub exists (no hub count; hubPortQualityFaces
+        // is null without includeViolatorIds; hpq defaults to neutral). So the step is DIAGNOSTIC:
+        // it points at detect-hub-elements and presents both levers + the render-authoritative caveat,
+        // conditioned on a hub actually being present (correct even on a hubless saturated view).
+        boolean saturatedNestedHub =
+                dto.corridorUtilisationScore() >= NESTED_HUB_CORRIDOR_SATURATION_THRESHOLD
+                && (dto.connectionEdgeCoincidenceCount() > 4 || dto.coincidentSegmentCount() > 2)
+                && hpq >= 0.5;
+        if (saturatedNestedHub) {
+            String header = "Saturated layout (corridorUtilisation "
+                    + String.format("%.2f", dto.corridorUtilisationScore())
+                    + ", connectionEdgeCoincidence=" + dto.connectionEdgeCoincidenceCount()
+                    + ", coincidentSegments=" + dto.coincidentSegmentCount()
+                    + "): corridors are full. ";
+            double clearance = dto.hubNeighbourClearanceMin();
+            if (clearance >= NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX) {
+                // SPARSE — the hub edge keeps a readable corridor, so a resize has room. Emit the
+                // resize lever only (the present-both MVP is replaced once geometry can decide).
+                steps.add(header + "Hub-to-neighbour clearance is "
+                        + String.format("%.0f", clearance) + "px (>= "
+                        + String.format("%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
+                        + "px), so there is room to grow. Run detect-hub-elements. If a hub is present, "
+                        + "enlarge it in BOTH dimensions with update-view-object "
+                        + "(formula: dimension = 55 + 15 × (count − 6)), then auto-route-connections. "
+                        + "Re-routing alone is inert here, and a high hubPortQualityScore does NOT mean "
+                        + "enlarging the hub will not help (port distribution is orthogonal to corridor "
+                        + "headroom). Acceptance is render-authoritative: confirm with export-view and "
+                        + "look — do not accept on the rating.");
+            } else if (clearance >= 0.0) {
+                // DENSE — the hub edge is within the crowding floor of a spoke row, so a resize would
+                // crowd. Emit the reposition (ELK) lever only.
+                steps.add(header + "Hub-to-neighbour clearance is only "
+                        + String.format("%.0f", clearance) + "px (< "
+                        + String.format("%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
+                        + "px), so enlarging the hub would crowd its neighbours. Run detect-hub-elements. "
+                        + "If a hub is present, revert it to its normal size first (an oversized hub "
+                        + "before ELK causes interior terminations), run auto-layout-and-route (ELK) to "
+                        + "re-place elements, then a FULL auto-route-connections (NOT terminals-only — "
+                        + "terminals-only vetoes terminations that land inside the re-placed elements). "
+                        + "Acceptance is render-authoritative: confirm with export-view and look — do not "
+                        + "accept on the rating.");
+            } else {
+                // No hub-neighbour clearance was measured (sentinel) — stay hub-existence-safe and
+                // present both levers, deferring the sparse/dense choice to detect-hub-elements +
+                // render inspection (the diagnostic MVP for the un-measurable case).
+                steps.add(header + "If this view nests components inside a container with a "
+                        + "central hub, generic spacing inflation is the wrong lever — diagnose first. Run "
+                        + "detect-hub-elements. If a hub is present, choose by density: "
+                        + "(1) SPARSE view with spare room around the hub — enlarge that hub in BOTH "
+                        + "dimensions with update-view-object, then auto-route-connections. Re-routing alone "
+                        + "is inert here, and a high hubPortQualityScore does NOT mean enlarging the hub will "
+                        + "not help (port distribution is orthogonal to corridor headroom). "
+                        + "(2) DENSE view where enlarging would crowd neighbours — revert the hub to its "
+                        + "normal size first (an oversized hub before ELK causes interior terminations), run "
+                        + "auto-layout-and-route (ELK) to re-place elements, then a FULL auto-route-connections "
+                        + "(NOT terminals-only — terminals-only vetoes terminations that land inside the "
+                        + "re-placed elements). Acceptance is render-authoritative: confirm with export-view and "
+                        + "look — the rating number alone can score a crowded layout 'good', so do not accept on "
+                        + "the rating.");
+            }
+        }
+
         // #2: Spacing tightness — name the right inflation tool for the view's shape.
         // adjust-view-spacing requires a grouped view (per ArchiModelAccessorImpl.adjustViewSpacing
         // runtime guard); flat views need layout-flat-view with increased spacing instead.
-        if (dto.coincidentSegmentCount() > 2
-                || dto.connectionEdgeCoincidenceCount() > 4) {
+        // Suppressed when #1b fired so the agent is not handed two conflicting spacing remedies.
+        if (!saturatedNestedHub
+                && (dto.coincidentSegmentCount() > 2
+                || dto.connectionEdgeCoincidenceCount() > 4)) {
             String spacingTool = hasGroups
                     ? "adjust-view-spacing with interElementDelta and/or interGroupDelta "
                             + "(inflate + re-route in a single undo step)"
@@ -2544,13 +2971,15 @@ public class ViewPlacementHandler {
         modeProp.put("type", "string");
         modeProp.put("description",
                 "Routing scope. 'full' (default) re-routes whole connections "
-                + "via visibility-graph A*. 'terminals-only' leaves all intermediate "
-                + "bendpoints unchanged and only modifies the first and/or last "
-                + "bendpoint to make terminal segments orthogonal. Use terminals-only "
-                + "to fix diagonal terminal entries/exits on ELK-laid-out views without "
-                + "the crossing inflation that a full re-route causes (assess-layout "
-                + "reports zero-bendpoint connections as the signature). terminals-only "
-                + "is mutually exclusive with strategy='clear' and autoNudge=true.");
+                + "via visibility-graph A*. 'terminals-only' leaves intermediate "
+                + "bendpoints unchanged and only adjusts the terminal segments: it "
+                + "makes them orthogonal and, when a terminal departs a face and then "
+                + "runs parallel hugging that face within a few pixels, pushes that first "
+                + "trunk clear of the face. Use terminals-only "
+                + "to fix diagonal terminal entries/exits and off-face hugs on ELK-laid-out "
+                + "views without the crossing inflation that a full re-route causes "
+                + "(assess-layout reports zero-bendpoint connections as the signature). "
+                + "terminals-only is mutually exclusive with strategy='clear' and autoNudge=true.");
 
         Map<String, Object> enableChannelNudgingProp = new LinkedHashMap<>();
         enableChannelNudgingProp.put("type", "boolean");
@@ -2602,6 +3031,22 @@ public class ViewPlacementHandler {
                         + "A warning is emitted if routed crossings exceed 1.5x the "
                         + "straight-line estimate — indicates layout is too dense for "
                         + "clean orthogonal routing (increase element spacing and re-route). "
+                        + "COINCIDENT PORT DISSOLUTION: a gated final pass separates two "
+                        + "connection terminals that a downstream stage collapsed onto the "
+                        + "SAME perimeter port of a low-degree element face (the "
+                        + "coincidentFacePortCount defect assess-layout reports) — it moves "
+                        + "whichever terminal can move to a free along-face slot, and is a "
+                        + "byte-identical no-op unless there is an actual collision with a "
+                        + "clear slot, so it never disturbs a dense hub's own distribution "
+                        + "or adds a crossing. "
+                        + "LABEL OFFSET (Archi 5.10): when a Middle-positioned connection "
+                        + "label still renders on its own source/target box after position "
+                        + "selection, the router applies the connection \"Label Offset\" "
+                        + "(relativePosition) to lift it clear — on a position-preserving "
+                        + "route this is the only channel that can clear own-endpoint label "
+                        + "bleed. Read the applied anchor back via get-view-contents "
+                        + "(relativePosition); export-view does not render it. Runtime-guarded: "
+                        + "a silent no-op on Archi 5.7, which lacks the feature. "
                         + "Connections are updated atomically as a single undo unit. "
                         + "Supports batch and approval modes. SPECULATIVE EXECUTION: "
                         + "To preview routing quality, apply routing → assess-layout → "
@@ -2627,7 +3072,11 @@ public class ViewPlacementHandler {
                         + "first. Pass force=true to bypass all four vetoes and force-apply "
                         + "every L-bend (matches force semantics on the orthogonal strategy). "
                         + "terminals-only is mutually exclusive with strategy='clear' and "
-                        + "autoNudge=true. "
+                        + "autoNudge=true. It also sweeps redundant INTERIOR collinear "
+                        + "bendpoints (an inserted terminal L-bend that lands collinear with "
+                        + "the existing trunk) so a terminals-only re-route drives "
+                        + "connectionRedundantBendpointCount toward zero without touching the "
+                        + "pinned terminal egress anchors. "
                         + "Related: auto-layout-and-route (position elements first), assess-layout "
                         + "(evaluate quality after routing), adjust-view-spacing (inflate "
                         + "spacing and re-route in one call), apply-element-spacing-recommendations "
@@ -2648,7 +3097,14 @@ public class ViewPlacementHandler {
                         + "skipped and a structuredWarnings entry is emitted with "
                         + "code=AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP, "
                         + "remediationTool=\"layout-within-group\" and remediationViolatorIds "
-                        + "naming the offending sibling pair. RECOMMENDED ITERATION: when "
+                        + "naming the offending sibling pair. A second code, "
+                        + "EGRESS_LIFT_LAYOUT_BOUND, is emitted when the router generated one or "
+                        + "more off-face terminal egress lifts but rolled them back because "
+                        + "applying them would narrow a parallel-connection gap below the 15px "
+                        + "healthy floor — i.e. the residual off-face hug is layout-bound, not a "
+                        + "routing bug, so it names spreading the elements (a matching layout-bound "
+                        + "nextSteps entry accompanies it) rather than declining silently. "
+                        + "RECOMMENDED ITERATION: when "
                         + "structuredWarnings[].code == AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP, "
                         + "invoke layout-within-group on the parent of remediationViolatorIds "
                         + "BEFORE re-running auto-route-connections — the autoNudge skip is a "
@@ -2759,6 +3215,25 @@ public class ViewPlacementHandler {
         return result;
     }
 
+    /**
+     * nextSteps guidance for a layout-bound off-face egress-lift decline. The router deliberately
+     * kept the hug(s) because clearing them would narrow a parallel-connection gap below its healthy
+     * floor — a routing re-run cannot help; the corridor must be widened.
+     */
+    private static final String EGRESS_LIFT_LAYOUT_BOUND_STEP =
+            "One or more off-face terminal hugs were left in place because clearing them would narrow "
+                    + "a parallel-connection gap below the 15px healthy floor — this is layout-bound. "
+                    + "Increase element spacing in the affected corridor (e.g. run "
+                    + "apply-spacing-recommendations), then re-route; re-routing alone will not clear "
+                    + "them. See the structuredWarnings entry (EGRESS_LIFT_LAYOUT_BOUND) for details.";
+
+    /** True when the auto-route result carries the layout-bound egress-lift structured warning. */
+    private boolean hasEgressLiftLayoutBoundWarning(AutoRouteResultDto entity) {
+        return entity != null && entity.structuredWarnings() != null
+                && entity.structuredWarnings().stream().anyMatch(
+                        w -> StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND.equals(w.code()));
+    }
+
     private List<String> buildAutoRouteNextSteps(
             MutationResult<AutoRouteResultDto> result) {
         if (result.isBatched()) {
@@ -2771,6 +3246,9 @@ public class ViewPlacementHandler {
                     && !result.entity().warnings().isEmpty()) {
                 batchSteps.add("Some connection IDs were not found — check the warnings "
                         + "array for details.");
+            }
+            if (hasEgressLiftLayoutBoundWarning(result.entity())) {
+                batchSteps.add(EGRESS_LIFT_LAYOUT_BOUND_STEP);
             }
             batchSteps.add("Mutation queued as operation #"
                     + result.batchSequenceNumber() + " in current batch");
@@ -2788,6 +3266,9 @@ public class ViewPlacementHandler {
                 && !result.entity().warnings().isEmpty()) {
             steps.add("Some connection IDs were not found — check the warnings "
                     + "array for details.");
+        }
+        if (hasEgressLiftLayoutBoundWarning(result.entity())) {
+            steps.add(EGRESS_LIFT_LAYOUT_BOUND_STEP);
         }
         if (result.entity() != null && !result.entity().violations().isEmpty()) {
             steps.add("Routes applied with " + result.entity().violations().size()
@@ -4033,19 +4514,23 @@ public class ViewPlacementHandler {
         // deriveLineColor is a Boolean; null = unchanged, true/false = set.
         Boolean deriveLineColor = (args.get("deriveLineColor") instanceof Boolean b) ? b : null;
         Integer outlineOpacity = HandlerUtils.optionalIntegerParam(args, "outlineOpacity");
+        // recede is a tri-state Boolean (add-to-view / add-group-to-view only): null = default
+        // (auto-recede a null-fill parent), false = opt out. Must be carried even when no other
+        // styling is set, so it is part of the "is there anything to carry?" guard below.
+        Boolean recede = (args.get("recede") instanceof Boolean b) ? b : null;
 
         if (fillColor == null && lineColor == null && fontColor == null
                 && opacity == null && lineWidth == null
                 && figureType == null && textAlignment == null && verticalTextAlignment == null
                 && fontName == null && fontSize == null && fontStyle == null
                 && lineStyle == null && gradient == null && borderType == null
-                && deriveLineColor == null && outlineOpacity == null) {
+                && deriveLineColor == null && outlineOpacity == null && recede == null) {
             return null;
         }
         return new StylingParams(fillColor, lineColor, fontColor, opacity, lineWidth,
                 figureType, textAlignment, verticalTextAlignment,
                 fontName, fontSize, fontStyle, lineStyle, gradient, borderType,
-                deriveLineColor, outlineOpacity);
+                deriveLineColor, outlineOpacity, recede);
     }
 
     // ---- Image helper methods ----

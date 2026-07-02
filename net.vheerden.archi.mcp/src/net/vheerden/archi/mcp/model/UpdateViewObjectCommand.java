@@ -129,6 +129,22 @@ public class UpdateViewObjectCommand extends Command {
     /** Feature-list key for the Archi-side label-expression renderer (matches Archi's own constant). */
     static final String LABEL_EXPRESSION_FEATURE = "labelExpression";
 
+    // Anchor rail — view-anchored positioning. Four generic IFeatures entries on the
+    // child object recording that its position is relative to a target container
+    // (anchorTarget id + anchorEdge + anchorDx/anchorDy) rather than a frozen absolute
+    // snapshot. Same single-undo-unit + capture-at-construction discipline as the
+    // label-expression rail. hasAnchorChange = true when the caller passed a non-null
+    // anchorTarget (empty string clears all four entries).
+    private final String oldAnchorTarget;
+    private final String newAnchorTarget;
+    private final String oldAnchorEdge;
+    private final String newAnchorEdge;
+    private final String oldAnchorDx;
+    private final String newAnchorDx;
+    private final String oldAnchorDy;
+    private final String newAnchorDy;
+    private final boolean hasAnchorChange;
+
     // Styling extensions — all ride the same hasStylingChange boundary.
     // Captured-old / captured-new pairs. The font composite string is captured as ONE
     // value; the merge happens through StylingHelper.assembleFontString.
@@ -245,6 +261,27 @@ public class UpdateViewObjectCommand extends Command {
                                     int newX, int newY, int newWidth, int newHeight,
                                     String newText, StylingParams styling,
                                     ImageParams imageParams, String newLabelExpression) {
+        this(diagramObject, newX, newY, newWidth, newHeight, newText, styling,
+                imageParams, newLabelExpression, null, null, null, null);
+    }
+
+    /**
+     * Creates a command to update a diagram object's bounds, text, styling, image,
+     * label expression, and view-anchor.
+     *
+     * <p>{@code anchorTarget} semantics: {@code null} leaves the anchor unchanged;
+     * empty string clears the anchor (removes all four anchor feature entries); any
+     * other string records an anchor to that target view-object id. {@code anchorEdge}
+     * defaults to {@code "below"} when null/empty; {@code anchorDx}/{@code anchorDy}
+     * default to {@code 0}. The caller is responsible for having resolved the concrete
+     * {@code newX}/{@code newY} from the target's current bounds.</p>
+     */
+    public UpdateViewObjectCommand(IDiagramModelObject diagramObject,
+                                    int newX, int newY, int newWidth, int newHeight,
+                                    String newText, StylingParams styling,
+                                    ImageParams imageParams, String newLabelExpression,
+                                    String anchorTarget, String anchorEdge,
+                                    Integer anchorDx, Integer anchorDy) {
         this.diagramObject = diagramObject;
         this.oldX = diagramObject.getBounds().getX();
         this.oldY = diagramObject.getBounds().getY();
@@ -431,6 +468,38 @@ public class UpdateViewObjectCommand extends Command {
             this.newLabelExpression = null;
         }
 
+        // Anchor rail. Generic IFeatures storage (four keys), mirroring the label-expression
+        // rail. Non-null anchorTarget = change requested; empty string clears all four.
+        this.hasAnchorChange = (anchorTarget != null);
+        if (hasAnchorChange) {
+            this.oldAnchorTarget = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_TARGET_FEATURE, null);
+            this.oldAnchorEdge = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_EDGE_FEATURE, null);
+            this.oldAnchorDx = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DX_FEATURE, null);
+            this.oldAnchorDy = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DY_FEATURE, null);
+            if (anchorTarget.isEmpty()) {
+                // Clear — remove all four entries.
+                this.newAnchorTarget = null;
+                this.newAnchorEdge = null;
+                this.newAnchorDx = null;
+                this.newAnchorDy = null;
+            } else {
+                this.newAnchorTarget = anchorTarget;
+                this.newAnchorEdge = (anchorEdge != null && !anchorEdge.isEmpty())
+                        ? anchorEdge : AnchorResolver.DEFAULT_EDGE;
+                this.newAnchorDx = String.valueOf(anchorDx != null ? anchorDx : 0);
+                this.newAnchorDy = String.valueOf(anchorDy != null ? anchorDy : 0);
+            }
+        } else {
+            this.oldAnchorTarget = null;
+            this.newAnchorTarget = null;
+            this.oldAnchorEdge = null;
+            this.newAnchorEdge = null;
+            this.oldAnchorDx = null;
+            this.newAnchorDx = null;
+            this.oldAnchorDy = null;
+            this.newAnchorDy = null;
+        }
+
         setLabel("Update view object");
     }
 
@@ -450,6 +519,9 @@ public class UpdateViewObjectCommand extends Command {
         if (hasLabelExpressionChange) {
             applyLabelExpression(newLabelExpression);
         }
+        if (hasAnchorChange) {
+            applyAnchor(newAnchorTarget, newAnchorEdge, newAnchorDx, newAnchorDy);
+        }
     }
 
     @Override
@@ -467,6 +539,9 @@ public class UpdateViewObjectCommand extends Command {
         }
         if (hasLabelExpressionChange) {
             applyLabelExpression(oldLabelExpression);
+        }
+        if (hasAnchorChange) {
+            applyAnchor(oldAnchorTarget, oldAnchorEdge, oldAnchorDx, oldAnchorDy);
         }
     }
 
@@ -580,7 +655,8 @@ public class UpdateViewObjectCommand extends Command {
     /**
      * Writes or clears the "labelExpression" feature entry on the diagram object.
      * Null clears (Archi falls back to the element's static name); non-null sets verbatim
-     * (no token validation — Archi owns the grammar).
+     * (no token validation — Archi owns the grammar; a literal HTML/XML entity is rejected
+     * upstream in the accessor before this command is built).
      */
     private void applyLabelExpression(String value) {
         if (value == null) {
@@ -591,9 +667,31 @@ public class UpdateViewObjectCommand extends Command {
     }
 
     /**
-     * Converts empty string to null (Archi EMF stores null for "use default").
+     * Writes or clears the four anchor feature entries. A null component removes that entry
+     * (Archi falls back to the object's absolute bounds); a non-null component sets it verbatim.
      */
-    private static String emptyToNull(String value) {
+    private void applyAnchor(String target, String edge, String dx, String dy) {
+        applyAnchorFeature(AnchorResolver.ANCHOR_TARGET_FEATURE, target);
+        applyAnchorFeature(AnchorResolver.ANCHOR_EDGE_FEATURE, edge);
+        applyAnchorFeature(AnchorResolver.ANCHOR_DX_FEATURE, dx);
+        applyAnchorFeature(AnchorResolver.ANCHOR_DY_FEATURE, dy);
+    }
+
+    private void applyAnchorFeature(String key, String value) {
+        if (value == null) {
+            diagramObject.getFeatures().remove(key);
+        } else {
+            diagramObject.getFeatures().putString(key, value);
+        }
+    }
+
+    /**
+     * Converts empty string to null (Archi EMF stores null for "use default").
+     *
+     * <p>Package-visible so the view-scoped label-expression command shares the exact
+     * same empty-clears semantic instead of duplicating it.</p>
+     */
+    static String emptyToNull(String value) {
         return (value != null && value.isEmpty()) ? null : value;
     }
 
@@ -716,6 +814,24 @@ public class UpdateViewObjectCommand extends Command {
 
     /** Package-visible for testing. */
     String getNewLabelExpression() { return newLabelExpression; }
+
+    /** Package-visible for testing. */
+    boolean hasAnchorChange() { return hasAnchorChange; }
+
+    /** Package-visible for testing. */
+    String getOldAnchorTarget() { return oldAnchorTarget; }
+
+    /** Package-visible for testing. */
+    String getNewAnchorTarget() { return newAnchorTarget; }
+
+    /** Package-visible for testing. */
+    String getNewAnchorEdge() { return newAnchorEdge; }
+
+    /** Package-visible for testing. */
+    String getNewAnchorDx() { return newAnchorDx; }
+
+    /** Package-visible for testing. */
+    String getNewAnchorDy() { return newAnchorDy; }
 
     /** Package-visible for testing. */
     String getOldFont() { return oldFont; }

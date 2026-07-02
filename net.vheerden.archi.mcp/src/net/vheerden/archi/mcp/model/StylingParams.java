@@ -45,6 +45,13 @@ package net.vheerden.archi.mcp.model;
  *                              {@code IDiagramModelObject.setDeriveElementLineColor(boolean)}
  * @param outlineOpacity        line/outline opacity 0-255 (255 = fully opaque, Archi default), null = unchanged.
  *                              Maps to {@code IDiagramModelObject.setLineAlpha(int)}
+ * @param recede                container-fill recession opt-out (add-to-view / add-group-to-view only):
+ *                              null or true = auto-recede an unauthored (null-fill) parent the moment it
+ *                              gains a nested child so the container reads as a backdrop rather than a flat
+ *                              blob; false = suppress that auto-recede for this call. Has no effect on the
+ *                              newly-created object's own styling (it governs the parent), and is ignored by
+ *                              {@link StylingHelper#applyStylingToNewObject} and by add paths other than
+ *                              add-to-view / add-group-to-view.
  */
 public record StylingParams(
     String fillColor,
@@ -62,7 +69,8 @@ public record StylingParams(
     String gradient,
     String borderType,
     Boolean deriveLineColor,
-    Integer outlineOpacity
+    Integer outlineOpacity,
+    Boolean recede
 ) {
 
     /** An empty StylingParams indicating no styling changes. */
@@ -98,7 +106,30 @@ public record StylingParams(
     }
 
     /**
+     * Back-compatibility constructor matching the pre-{@code recede} 16-field record shape.
+     * Delegates to the 17-field canonical constructor with {@code recede = null} (= default
+     * auto-recede). Preserves every existing 16-arg {@code new StylingParams(...)} call site
+     * byte-identically (including the chained {@code this(...)} delegations from the 5-/8-field
+     * convenience constructors and the {@link #NONE} constant), so only callers that genuinely
+     * carry a {@code recede} opt-out use the canonical 17-field form.
+     */
+    public StylingParams(String fillColor, String lineColor, String fontColor,
+                         Integer opacity, Integer lineWidth, String figureType,
+                         String textAlignment, String verticalTextAlignment,
+                         String fontName, Integer fontSize, String fontStyle,
+                         String lineStyle, String gradient, String borderType,
+                         Boolean deriveLineColor, Integer outlineOpacity) {
+        this(fillColor, lineColor, fontColor, opacity, lineWidth, figureType,
+             textAlignment, verticalTextAlignment, fontName, fontSize, fontStyle,
+             lineStyle, gradient, borderType, deriveLineColor, outlineOpacity, null);
+    }
+
+    /**
      * Returns true if at least one styling parameter is specified (non-null).
+     *
+     * <p>Deliberately excludes {@code recede}: it is not styling applied to the object itself
+     * (it governs the parent container's fill), so it must not trip the
+     * {@link StylingHelper#applyStylingToNewObject} early-return guard.</p>
      */
     public boolean hasAnyValue() {
         return fillColor != null || lineColor != null || fontColor != null

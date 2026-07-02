@@ -370,7 +370,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<ViewObjectDto> updateViewObject(String sessionId, String viewObjectId,
             Integer x, Integer y, Integer width, Integer height, String text,
-            StylingParams styling, ImageParams imageParams, String labelExpression) {
+            StylingParams styling, ImageParams imageParams, String labelExpression,
+            String anchorTarget, String anchorEdge, Integer anchorDx, Integer anchorDy) {
         throw new UnsupportedOperationException("updateViewObject not implemented in test accessor");
     }
 

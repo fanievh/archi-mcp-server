@@ -633,6 +633,14 @@ public class MutationHandler {
             if (opResult.entityName() != null) {
                 opMap.put("entityName", opResult.entityName());
             }
+            // Fan-out operations (e.g. set-view-label-expression) report how many objects
+            // were affected vs left untouched; omitted for single-entity operations.
+            if (opResult.appliedCount() != null) {
+                opMap.put("appliedCount", opResult.appliedCount());
+            }
+            if (opResult.skippedCount() != null) {
+                opMap.put("skippedCount", opResult.skippedCount());
+            }
             opResults.add(opMap);
         }
         resultMap.put(hasFailures ? "succeeded" : "operations", opResults);

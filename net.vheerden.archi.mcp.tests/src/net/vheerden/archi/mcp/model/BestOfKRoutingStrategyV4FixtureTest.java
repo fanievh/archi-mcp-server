@@ -108,7 +108,7 @@ public class BestOfKRoutingStrategyV4FixtureTest {
         for (ViewFixture.FixtureElement e : fixture.getElements()) {
             nodes.add(new AssessmentNode(
                     e.id(), e.x(), e.y(), e.w(), e.h(), e.parentId(),
-                    !e.isChild(), false, e.name(), 0.0, null, null));
+                    !e.isChild(), false, e.name(), 0.0, null, null, 0.0, 0.0, 0.0));
         }
     }
 

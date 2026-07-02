@@ -8,6 +8,9 @@ import org.eclipse.jface.dialogs.MessageDialog;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.custom.ScrolledComposite;
 import org.eclipse.swt.custom.StackLayout;
+import org.eclipse.swt.dnd.Clipboard;
+import org.eclipse.swt.dnd.TextTransfer;
+import org.eclipse.swt.dnd.Transfer;
 import org.eclipse.swt.graphics.Color;
 import org.eclipse.swt.graphics.Font;
 import org.eclipse.swt.graphics.FontData;
@@ -433,11 +436,22 @@ public class PendingApprovalsView extends ViewPart
         // Buttons + interlock.
         Composite buttons = new Composite(cardComp, SWT.NONE);
         buttons.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
-        GridLayout buttonLayout = new GridLayout(3, false);
+        GridLayout buttonLayout = new GridLayout(4, false);
         buttonLayout.marginWidth = 0;
         buttons.setLayout(buttonLayout);
 
-        // Slot 1 of the 3-column buttons bar grabs the horizontal slack so Reject/Approve stay
+        // Slot 1: a secondary, left-aligned "Copy JSON" button that puts the full proposal payload
+        // on the clipboard. Read-only / human-side — it never approves, rejects, or mutates, and it
+        // must NOT grab horizontal slack (that stays with the spacer/toggle below) so Reject/Approve
+        // remain right-aligned.
+        Button copyButton = new Button(buttons, SWT.PUSH);
+        copyButton.setText("Copy JSON");
+        copyButton.setToolTipText("Copy this proposal's full JSON to the clipboard");
+        copyButton.setLayoutData(new GridData(SWT.LEFT, SWT.CENTER, false, false));
+        final String cardCopyJson = card.copyJson();
+        copyButton.addListener(SWT.Selection, e -> copyJsonToClipboard(copyButton, cardCopyJson));
+
+        // Slot 2 of the 4-column buttons bar grabs the horizontal slack so Reject/Approve stay
         // right-aligned. Multi-op: the "Show changes" toggle Link fills it. Single-op:
         // there is no toggle — a leading spacer Label grabs the slack instead, mirroring the header bar.
         Link toggle = null;
@@ -487,6 +501,36 @@ public class PendingApprovalsView extends ViewPart
 
         reject.addListener(SWT.Selection, e -> doReject(card));
         approve.addListener(SWT.Selection, e -> doApprove(card, approve, staleStrip, staleData));
+    }
+
+    /**
+     * Copies the card's full proposal JSON onto the OS clipboard and gives brief visual
+     * confirmation. Read-only and side-effect-free with respect to the approval queue: it never
+     * touches {@link ApprovalService} or the model. The {@link Clipboard} is constructed, used, and
+     * disposed per click so the view holds no clipboard resource.
+     */
+    private void copyJsonToClipboard(Button button, String json) {
+        if (json == null || json.isEmpty()) {
+            return;
+        }
+        Clipboard clipboard = new Clipboard(button.getDisplay());
+        try {
+            clipboard.setContents(new Object[]{json}, new Transfer[]{TextTransfer.getInstance()});
+        } finally {
+            clipboard.dispose();
+        }
+        // Lightweight confirmation: flip the label to "Copied", then restore after a short delay.
+        // No relayout — "Copied" is narrower than "Copy JSON" so it fits the button's existing
+        // bounds; skipping layout() avoids a width jump and any ScrolledComposite min-size reflow.
+        // Runs on the SWT thread (selection listener), and the card is only rebuilt on that same
+        // thread, so the button cannot be concurrently disposed; the timer callback still guards
+        // isDisposed() for the case where a rebuild fires within the delay window.
+        button.setText("Copied");
+        button.getDisplay().timerExec(1500, () -> {
+            if (!button.isDisposed()) {
+                button.setText("Copy JSON");
+            }
+        });
     }
 
     private void addTechnicalDetails(Composite parent, String rawJson) {

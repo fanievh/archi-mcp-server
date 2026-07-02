@@ -139,4 +139,44 @@ public class ViewConnectionDtoTest {
         assertEquals("#00FF00", dto.fontColor());
         assertEquals(Boolean.FALSE, dto.nameVisible());
     }
+
+    // ---- relativePosition (Label Offset anchor) tests ----
+
+    @Test
+    public void shouldIncludeRelativePosition_inCanonicalConstructor() {
+        // 19-field canonical: relativePosition is the trailing field. SOUTH = 4.
+        final int south = 4;
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "ServingRelationship", "vo-1", "vo-2",
+                null, null, null, null, 2,
+                null, null, null, null,
+                "Verdana", 11, "italic", "${name}", south);
+
+        assertEquals(Integer.valueOf(south), dto.relativePosition());
+        assertEquals("${name}", dto.labelExpression());
+    }
+
+    @Test
+    public void shouldDefaultRelativePositionToNull_in18FieldBackCompatConstructor() {
+        // Prior 18-field canonical shape (through labelExpression) must still compile and
+        // default the new field to null so existing call sites stay byte-identical.
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "ServingRelationship", "vo-1", "vo-2",
+                null, null, null, null, 2,
+                null, null, null, null,
+                "Verdana", 11, "italic", "${name}");
+
+        assertEquals("${name}", dto.labelExpression());
+        assertNull("relativePosition must default to null in the 18-field constructor",
+                dto.relativePosition());
+    }
+
+    @Test
+    public void shouldDefaultRelativePositionToNull_inConvenienceConstructor() {
+        ViewConnectionDto dto = new ViewConnectionDto(
+                "vc-1", "rel-1", "Serving", "vo-1", "vo-2", null);
+
+        assertNull("relativePosition should default to null (omitted from JSON)",
+                dto.relativePosition());
+    }
 }

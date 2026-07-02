@@ -17,23 +17,23 @@ public class HasOverlappingElementsTest {
 	// --- Helper ---
 
 	private static AssessmentNode element(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
+		return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 	}
 
 	private static AssessmentNode elementWithParent(String id, double x, double y, double w, double h, String parentId) {
-		return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null);
+		return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 	}
 
 	private static AssessmentNode group(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null);
+		return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 	}
 
 	private static AssessmentNode groupWithParent(String id, double x, double y, double w, double h, String parentId) {
-		return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null);
+		return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 	}
 
 	private static AssessmentNode note(String id, double x, double y, double w, double h) {
-		return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null);
+		return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null, 0.0, 0.0, 0.0);
 	}
 
 	// --- No overlap cases ---

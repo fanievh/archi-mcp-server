@@ -385,22 +385,34 @@ public class TransportConfig {
             // servlet context so every request to /mcp/* and /sse/* is checked before it reaches a
             // servlet. Order (outer -> inner):
             //   SizeLimitHandler (413, guardrail S3) -> Origin/Host (403, default-on)
-            //     -> bearer-token (401, opt-in) -> servlet context.
+            //     -> bearer-token (401, opt-in) -> request-charset header (415, default-on)
+            //     -> request-body UTF-8 (415, default-on) -> servlet context.
             // The size limit is OUTERMOST so an oversized body is bounded for the entire downstream
             // chain: SizeLimitHandler wraps the request's content source, so however far down the
             // body is eventually read (only the servlet reads it), the byte count is capped and a
             // 413 is raised before the heap grows. Origin/Host then 403s a browser DNS-rebind before
             // any auth/crypto work, and on a non-loopback bind (where Origin/Host relaxes to
-            // pass-through) the token wrapper still enforces. The 413, like the 403/401, is
+            // pass-through) the token wrapper still enforces. The 413, like the 403/401/415, is
             // emitted as an HTTP error and rendered by the configured JsonErrorHandler as a JSON-RPC
             // envelope (413 -> 4xx -> -32600, data.httpStatus:413).
             // Trade-off of the outermost position: an oversized request from an unauthenticated /
             // bad-origin client gets 413 before the 401/403, so it learns the body cap exists. This
             // is acceptable here — OOM prevention must be unconditional, and the threat model is a
             // loopback single-user tool where a local attacker already has far more reach.
+            // The two charset guards are INNERMOST (just above the servlet): rejecting a non-UTF-8
+            // body is a request-correctness gate, not a DoS gate, so they run AFTER the security gates
+            // — an unauthenticated / bad-origin client gets 401/403 first and is never told the charset
+            // rules exist. The header guard runs first (cheaper, header-only — never reads the body),
+            // and only an otherwise-acceptable POST reaches the body guard, which buffers the body,
+            // verifies it is well-formed UTF-8, and replays it to the servlet (catching an *undeclared*
+            // mis-encoded body, e.g. a client that sends ISO-8859-1/Windows-1252 bytes with no charset).
+            // The body read goes through the outer SizeLimitHandler, so the 32 MiB cap still applies and
+            // the body guard never lifts it.
             SizeLimitHandler sizeLimitHandler = new SizeLimitHandler(MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES);
             sizeLimitHandler.setHandler(new OriginHostValidationHandler(
-                    new BearerTokenAuthHandler(context, authToken), bindAddress));
+                    new BearerTokenAuthHandler(
+                            new RequestCharsetValidationHandler(
+                                    new RequestBodyUtf8ValidationHandler(context)), authToken), bindAddress));
             jettyServer.setHandler(sizeLimitHandler);
 
             // Register custom JSON error handler (replaces Jetty's default HTML error pages).

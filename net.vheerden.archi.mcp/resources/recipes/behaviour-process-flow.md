@@ -35,6 +35,7 @@ vertically at hand-offs. Assignment is implied by containment, never drawn.
   - Step 4: `relationshipTypes: ["TriggeringRelationship", "FlowRelationship"]` (Assignment excluded — implied by nesting).
   - Step 6: `layout-within-group` `row` (steps sit in flow order within the lane).
   - Step 7: `arrange-groups` `arrangement: "topology"`, `direction: "horizontal"`.
+- **Caveat — a return/back Flow edge reverses ELK's direction.** ELK derives the flow direction from edge direction, so a cycle edge (e.g. a `response`/`ack` Flow from the final step back to the first) flips the whole layout right-to-left. Keep the spine acyclic *for layout*: lay out and route from the forward `TriggeringRelationship` chain only; if a genuine return must be shown, add it **after** layout (or carry it in a note / a short labelled Flow), and never let the back-edge feed `arrange-groups` / ELK `direction`. Numbered step labels anchor the reader's order even if a late edge nudges the layout.
 - **Source:** Cookbook "Business Process Cooperation" + swimlane/nesting pattern; reference [17].
 
 ## Service Design / Customer Journey View (general-purpose — omit `viewpoint`)

@@ -34,7 +34,12 @@ Fetch this checklist before invoking `auto-route-connections` or `auto-layout-an
    └─ All preconditions met → auto-route-connections (or auto-layout-and-route).
 
 2. After routing → assess-layout again. Verify M6 `(layoutTier, routingTier)` improved or held. If layoutTier regressed, return to step 1.
+   │
+   └─ `overallRating` is `fair` but `ratingBreakdown.overallExcludingAcceptedCosmetics` is `good`/`excellent`?
+      → The `fair` is accepted ELK terminal-diagonal cosmetics only. Run auto-route-connections mode `terminals-only` to clear it, or accept it — do NOT keep inflating spacing. When the two readings are EQUAL, the rating is a real defect; keep fixing.
 ```
+
+> **Final close-out:** to triage every diagram in one call, run `assess-layout` with `scope: all-views` — it returns a compact per-view map (`overallRating`, the de-noised `overallExcludingAcceptedCosmetics`, and the key counts). Drill into any `fair`/`poor` view with a single-scope call. If you also exported a view for a visual check, compare the export's `modelVersion` against the latest `assess-layout` `_meta.modelVersion` (numerically) — a lower export value means the image predates a later change and should be re-exported.
 
 ## What is a precondition?
 
@@ -200,7 +205,25 @@ This is the difference between the sound `density_floor_reflow_required` certifi
 | `parentLabelObscuredCount > 0` | `update-view-object` to reposition the offending child (with violator IDs) |
 | `hubPortQualityScore < 0.5` | `detect-hub-elements` (with violator hub IDs) — then `update-view-object` to resize per the suggestion |
 | `coincidentSegmentCount > 2` OR `connectionEdgeCoincidenceCount > 4` on a grouped view | `apply-spacing-recommendations(scope=both)` (composed, control-loop) — or the single-arm convenience siblings if only one axis needs change |
+| Same coincidence pressure with `corridorUtilisationScore >= 0.9` AND `hubPortQualityScore >= 0.5` (saturated container-nested-hub) | `detect-hub-elements` first, then the **resize-vs-reposition** branch below — NOT generic spacing inflation. `assess-layout` emits this as a single diagnostic step that supersedes the spacing row above. |
 | `crossingsPerConnection > 4.0` on a grouped view | `arrange-groups` (topology) and/or `optimize-group-order` |
+
+### Saturated container-nested-hub — resize vs reposition
+
+When a view nests components inside a container element with a central hub and corridors are saturated (`corridorUtilisationScore >= 0.9`) while `hubPortQualityScore` is fine (`>= 0.5`, so the hub-sizing row does not apply), generic spacing inflation does not fit. Run `detect-hub-elements` to confirm a hub, then choose by **density** — the two levers diverge, and a metric can disagree with the render:
+
+- **Sparse (spare room around the hub):** enlarge the hub in **both** dimensions with `update-view-object`, then `auto-route-connections`. Re-routing alone is **inert** here (it cannot open corridor headroom). A high `hubPortQualityScore` does **not** mean enlarging won't help — port distribution is orthogonal to corridor headroom.
+- **Dense (enlarging would crowd neighbours):** do **not** resize. Revert the hub to its normal size, run `auto-layout-and-route` (ELK) to re-place elements, then a **full** `auto-route-connections`.
+- **ELK traps:** (1) an **oversized** hub left in before ELK produces **interior terminations** (connections land *inside* the big box) — revert the hub to normal size first. (2) After ELK, `terminals-only` is the **wrong** follow-up — it vetoes terminations that would land inside the re-placed elements; use a **full** `auto-route-connections`.
+- **Acceptance is render-authoritative:** the rating number alone can score a crowded resize `good` (no metric penalises hub-to-neighbour crowding yet). Confirm with `export-view` and look — do not accept on the rating.
+
+### Informational label/visual detections (no rating impact)
+
+These do **not** drive the rating and are not in `nextSteps`, but they tell you a diagram will not read cleanly to a human — act on them before presenting a view:
+
+- **`labelOverlapCount`** flags a connection label on an element box, including a Middle label on its **own** endpoint. On Archi 5.10 the routing tools clear the own-endpoint case automatically via the connection Label Offset (just run `auto-route-connections`); otherwise move the label with `labelPosition` or hide it with `showLabel: false`.
+- **`noteClipCount`** flags a note whose text is taller than its box. Omit the note `height` so the server auto-fits it, raise the height, or reduce the font size.
+- **`imageSiblingOverlapCount`** flags a custom image or specialization icon overlapping a sibling. Increase spacing, reposition the image, or shrink the icon.
 
 ## Auto-route structured warnings
 

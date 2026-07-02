@@ -27,6 +27,7 @@ import org.junit.Test;
 import com.archimatetool.editor.model.IEditorModelManager;
 import com.archimatetool.model.FolderType;
 import com.archimatetool.model.IArchimateDiagramModel;
+import com.archimatetool.model.IArchimateConcept;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IArchimateRelationship;
@@ -1016,6 +1017,86 @@ public class ArchiModelAccessorImplTest {
                 json.contains("\"labelExpression\""));
     }
 
+    /**
+     * Omission (runs on every platform): a connection with no Label Offset surfaces
+     * {@code relativePosition == null} and the field is omitted from JSON — byte-identical wire
+     * whether the platform lacks the feature (older Archi) or the anchor is the un-offset default.
+     */
+    @Test
+    public void getViewContents_shouldOmitRelativePosition_whenUnset() {
+        IArchimateModel model = createTestModelWithViewContents();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelArchimateObject actorVisual =
+                (IDiagramModelArchimateObject) view.getChildren().get(0);
+        IDiagramModelArchimateObject compVisual =
+                (IDiagramModelArchimateObject) view.getChildren().get(1);
+
+        IDiagramModelArchimateConnection conn = IArchimateFactory.eINSTANCE
+                .createDiagramModelArchimateConnection();
+        conn.setId("conn-nooffset-1");
+        conn.setArchimateRelationship((IArchimateRelationship) model
+                .getFolder(FolderType.RELATIONS).getElements().get(0));
+        // connect() registers the connection in compVisual.getSourceConnections()
+        // (which collectConnections iterates) — no view.getChildren().add() needed.
+        conn.connect(compVisual, actorVisual);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+
+        Optional<ViewContentsDto> result = accessor.getViewContents("view-001");
+        assertTrue(result.isPresent());
+        ViewConnectionDto dto = result.get().connections().stream()
+                .filter(c -> "conn-nooffset-1".equals(c.viewConnectionId()))
+                .findFirst().orElseThrow();
+        assertNull("un-offset connection must read relativePosition as null", dto.relativePosition());
+        String json = c3SerializeJson(dto);
+        assertFalse("un-offset connection JSON must omit relativePosition: " + json,
+                json.contains("\"relativePosition\""));
+    }
+
+    /**
+     * Round-trip (feature-gated): with the Label Offset feature present, an anchor set on a connection
+     * surfaces through {@code get-view-contents} as its exact bitmask. Assumption-skipped on an older
+     * target. This is the programmatic verification channel the offset otherwise lacks (neither
+     * {@code assess-layout} nor {@code export-view} reflect it).
+     */
+    @Test
+    public void getViewContents_shouldSurfaceRelativePosition_whenOffsetSet() {
+        IArchimateModel model = createTestModelWithViewContents();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelArchimateObject actorVisual =
+                (IDiagramModelArchimateObject) view.getChildren().get(0);
+        IDiagramModelArchimateObject compVisual =
+                (IDiagramModelArchimateObject) view.getChildren().get(1);
+
+        IDiagramModelArchimateConnection conn = IArchimateFactory.eINSTANCE
+                .createDiagramModelArchimateConnection();
+        Assume.assumeTrue("Label-offset feature is only present on newer platforms",
+                RelativePositionFeature.isSupported(conn));
+
+        final int south = 4;
+        conn.setId("conn-offset-1");
+        conn.setArchimateRelationship((IArchimateRelationship) model
+                .getFolder(FolderType.RELATIONS).getElements().get(0));
+        // connect() registers the connection in compVisual.getSourceConnections()
+        // (which collectConnections iterates) — no view.getChildren().add() needed.
+        conn.connect(compVisual, actorVisual);
+        RelativePositionFeature.set(conn, south);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+
+        Optional<ViewContentsDto> result = accessor.getViewContents("view-001");
+        assertTrue(result.isPresent());
+        ViewConnectionDto dto = result.get().connections().stream()
+                .filter(c -> "conn-offset-1".equals(c.viewConnectionId()))
+                .findFirst().orElseThrow();
+        assertEquals("offset connection must surface its anchor bitmask",
+                Integer.valueOf(south), dto.relativePosition());
+    }
+
     // ---- getRootFolders tests ----
 
     @Test
@@ -1567,6 +1648,40 @@ public class ArchiModelAccessorImplTest {
             assertEquals("created", result.operations().get(1).action());
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    @Test
+    public void shouldFanOutSetViewLabelExpression_throughBulkDispatch() {
+        // Covers the ArchiModelAccessorImpl wiring (prepareOperation case + buildOperationResult
+        // arm) that the command-level test cannot reach: one op fans out to every named element
+        // on the view and the per-op result carries the view name + applied/skipped counts.
+        // The fixture view "view-001" holds two named element objects (User, Web App); the latent
+        // connection is not a child, so appliedCount=2 / skippedCount=0.
+        IArchimateModel model = createTestModelWithViewContents();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> operations = List.of(
+                    new BulkOperation("set-view-label-expression", Map.of(
+                            "viewId", "view-001",
+                            "labelExpression", "${name} ${property:evidenceMark}")));
+
+            BulkMutationResult result = accessor.executeBulk("default", operations, null, false);
+
+            assertNotNull(result);
+            assertEquals(1, result.operations().size());
+            BulkOperationResult op = result.operations().get(0);
+            assertEquals("set-view-label-expression", op.tool());
+            assertEquals("updated", op.action());
+            assertEquals("view-001", op.entityId());
+            assertEquals("DiagramModel", op.entityType());
+            assertEquals("Main View", op.entityName());
+            assertEquals(Integer.valueOf(2), op.appliedCount());
+            assertEquals(Integer.valueOf(0), op.skippedCount());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime", false);
         }
     }
 
@@ -5823,6 +5938,44 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
+    public void addNoteToView_shouldAutofitMultilineNoteLinearly_whenHeightOmitted() {
+        // Red-on-revert pin for the measureText single-line-height fix.
+        // A note whose content is several explicit '\n'-separated short lines, with height
+        // omitted, must auto-fit to a height that grows LINEARLY with the line count.
+        // Before the fix, measureText set lineHeight = textExtent(wholeBlock).y (≈ N×trueLineHeight)
+        // and fitTextBoxHeightToContent multiplied that by the line count again, so a 10-line note
+        // ballooned past 600 and clamped exactly to MAX_NOTE_HEIGHT. After the fix lineHeight is a
+        // single line, so the same note resolves to roughly N×trueLineHeight (well under 400).
+        // The pin runs in the PDE/real-EMF lane because measureText needs an SWT Display; the
+        // pure-geometry ElementSizerTest constructs FontMetrics directly and cannot exercise it.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        StringBuilder tenLines = new StringBuilder();
+        for (int i = 1; i <= 10; i++) {
+            if (i > 1) {
+                tenLines.append('\n');
+            }
+            tenLines.append("Line ").append(i);
+        }
+
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", tenLines.toString(),
+                null, null, 50, 50, 220, null, null, null, null);
+
+        assertNotNull(result);
+        int h = result.entity().height();
+        // Grows past the floor (it is multi-line) ...
+        assertTrue("Multi-line note must grow past DEFAULT_NOTE_HEIGHT (80): got " + h, h > 80);
+        // ... but LINEARLY, nowhere near the quadratic-then-clamped 600. A 10-line note at any
+        // ordinary font line-height (~13–25px) lands well below 400; the pre-fix value was 600.
+        assertTrue("Multi-line note must grow linearly, not quadratically/clamped (expected < 400): got "
+                + h, h < 400);
+        assertTrue("Multi-line note must not reach MAX_NOTE_HEIGHT clamp (600): got " + h, h < 600);
+    }
+
+    @Test
     public void addGroupToView_shouldKeepDefaultHeight_whenShortLabel_AC15() {
         // Pin: short label + height==null + width==null (default 300×200) MUST
         // produce setBounds(x, y, w, 200) with 200 literally — byte-identical to today.
@@ -8504,59 +8657,152 @@ public class ArchiModelAccessorImplTest {
     // ---- Folder-layer validation tests ----
 
     @Test
-    public void shouldReturnStrategyFolderType_forCapability() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldThrowFolderLayerMismatch_whenJunctionInApplicationFolder() {
+        // The literal dogfood bug: a Junction (an "Other"-folder concept) placed under the
+        // Application layer was silently accepted, then made the model un-saveable in Archi.
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.STRATEGY,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createCapability()));
+
+        IArchimateConcept junction = IArchimateFactory.eINSTANCE.createJunction();
+        IFolder appRoot = model.getFolder(FolderType.APPLICATION);
+
+        try {
+            accessor.validateFolderLayerMatch(junction, appRoot);
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
+            assertTrue(e.getMessage().contains("Junction"));
+            assertTrue(e.getMessage().contains("Other"));
+            assertTrue(e.getMessage().contains("Application"));
+        }
     }
 
     @Test
-    public void shouldReturnStrategyFolderType_forValueStream() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldSucceedValidation_whenJunctionInOtherFolder() {
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.STRATEGY,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createValueStream()));
+
+        IArchimateConcept junction = IArchimateFactory.eINSTANCE.createJunction();
+        IFolder otherRoot = model.getFolder(FolderType.OTHER);
+
+        // Should not throw — the Other folder IS the Junction's governing folder.
+        accessor.validateFolderLayerMatch(junction, otherRoot);
     }
 
     @Test
-    public void shouldReturnBusinessFolderType_forBusinessActor() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldThrowFolderLayerMismatch_whenGroupingInBusinessFolder() {
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.BUSINESS,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createBusinessActor()));
+
+        IArchimateConcept grouping = IArchimateFactory.eINSTANCE.createGrouping();
+        IFolder businessRoot = model.getFolder(FolderType.BUSINESS);
+
+        try {
+            accessor.validateFolderLayerMatch(grouping, businessRoot);
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
+            assertTrue(e.getMessage().contains("Grouping"));
+        }
     }
 
     @Test
-    public void shouldReturnApplicationFolderType_forApplicationComponent() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldThrowFolderLayerMismatch_whenLocationInBusinessFolder() {
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.APPLICATION,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createApplicationComponent()));
+
+        IArchimateConcept location = IArchimateFactory.eINSTANCE.createLocation();
+        IFolder businessRoot = model.getFolder(FolderType.BUSINESS);
+
+        try {
+            accessor.validateFolderLayerMatch(location, businessRoot);
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
+            assertTrue(e.getMessage().contains("Location"));
+            assertTrue(e.getMessage().contains("Other"));
+        }
     }
 
     @Test
-    public void shouldReturnTechnologyFolderType_forNode() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldThrowFolderLayerMismatch_whenRelationshipInBusinessFolder() {
+        // Relationships belong in the Relations folder; delegating to Archi's own picker
+        // means the validator covers relationships for free.
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.TECHNOLOGY,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createNode()));
+
+        IArchimateConcept rel = IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        IFolder businessRoot = model.getFolder(FolderType.BUSINESS);
+
+        try {
+            accessor.validateFolderLayerMatch(rel, businessRoot);
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
+            assertTrue(e.getMessage().contains("Relations"));
+        }
     }
 
     @Test
-    public void shouldReturnMotivationFolderType_forGoal() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldSucceedValidation_whenRelationshipInRelationsFolder() {
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.MOTIVATION,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createGoal()));
+
+        IArchimateConcept rel = IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        IFolder relationsRoot = model.getFolder(FolderType.RELATIONS);
+
+        // Should not throw — relationships belong in the Relations folder.
+        accessor.validateFolderLayerMatch(rel, relationsRoot);
     }
 
     @Test
-    public void shouldReturnImplMigrationFolderType_forWorkPackage() {
-        stubModelManager.setModels(Collections.emptyList());
+    public void shouldThrowFolderLayerMismatch_whenMovingElementToWrongLayer() {
+        // move-to-folder must reject the same violation create-element does (sibling symmetry).
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        IArchimateElement actor = IArchimateFactory.eINSTANCE.createBusinessActor();
+        actor.setId("move-actor-1");
+        actor.setName("Actor");
+        model.getFolder(FolderType.BUSINESS).getElements().add(actor);
+        IFolder appSub = IArchimateFactory.eINSTANCE.createFolder();
+        appSub.setName("App Sub");
+        appSub.setType(FolderType.USER);
+        appSub.setId("app-sub-1");
+        model.getFolder(FolderType.APPLICATION).getFolders().add(appSub);
+        stubModelManager.setModels(List.of(model));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
-        assertEquals(FolderType.IMPLEMENTATION_MIGRATION,
-                accessor.getExpectedFolderType(IArchimateFactory.eINSTANCE.createWorkPackage()));
+
+        try {
+            accessor.prepareMoveToFolder("move-actor-1", "app-sub-1");
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
+            assertTrue(e.getMessage().contains("BusinessActor"));
+        }
+    }
+
+    @Test
+    public void shouldSucceedMove_whenElementStaysWithinCorrectLayer() {
+        IArchimateModel model = createTestModelWithDefaultFolders();
+        IArchimateElement actor = IArchimateFactory.eINSTANCE.createBusinessActor();
+        actor.setId("move-actor-2");
+        actor.setName("Actor");
+        model.getFolder(FolderType.BUSINESS).getElements().add(actor);
+        IFolder bizSub = IArchimateFactory.eINSTANCE.createFolder();
+        bizSub.setName("People");
+        bizSub.setType(FolderType.USER);
+        bizSub.setId("biz-sub-1");
+        model.getFolder(FolderType.BUSINESS).getFolders().add(bizSub);
+        stubModelManager.setModels(List.of(model));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+
+        // Should not throw — staying within the Business layer.
+        accessor.prepareMoveToFolder("move-actor-2", "biz-sub-1");
     }
 
     @Test
@@ -10468,5 +10714,179 @@ public class ArchiModelAccessorImplTest {
         // parent.h (124) + DEFAULT_GROUP_PADDING (10) = 144.
         assertTrue("Grandparent group cascaded: height grew to >= 144 (was 120 pre-W2)",
                 grandparent.getBounds().getHeight() >= 144);
+    }
+
+    // ---- Literal HTML/XML entity rejection on names / labels / expressions ----
+    //
+    // Wire tests: the entity grammar itself is exhaustively unit-tested in
+    // InputValidationTest; these pin the delegation at each accessor entry point.
+    // Each REJECT proves the guard fires (INVALID_PARAMETER, model unmutated); the
+    // create-element ACCEPT proves a bare ampersand is stored byte-identically.
+
+    @Test
+    public void rejectsLiteralEntity_inCreateElementName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createElement("default", "BusinessActor", "R &amp; D", null, null, null, null);
+            fail("expected rejection of literal &amp; in element name");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void acceptsBareAmpersand_inCreateElementName_storedByteIdentical() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ElementDto> result = accessor.createElement(
+                "default", "BusinessActor", "R & D", null, null, null, null);
+
+        // Bare ampersand is not an entity token: accepted and stored verbatim (single &).
+        assertEquals("R & D", result.entity().name());
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inCreateViewName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createView("default", "&lt;bad&gt;", null, null, null);
+            fail("expected rejection of literal entities in view name");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inUpdateElementName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.updateElement("default", "ba-001", "Acme &amp; Co", null, null, null);
+            fail("expected rejection of literal &amp; in update-element name");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inAddGroupToViewLabel() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.addGroupToView("default", "view-001", "Team &amp; Ops",
+                    50, 50, null, null, null, null, null);
+            fail("expected rejection of literal &amp; in group label");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inUpdateViewObjectText() {
+        // Use a pre-populated view (pure EMF, no OSGi command execution); the guard rejects
+        // at prepare time, before the command is ever dispatched.
+        IArchimateModel model = createTestModelWithViewContents();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String voId = firstViewObjectId(model);
+
+        try {
+            accessor.updateViewObject("default", voId, null, null, null, null,
+                    "A &amp; B", null, null, null);
+            fail("expected rejection of literal &amp; in view-object text");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inUpdateViewObjectLabelExpression() {
+        IArchimateModel model = createTestModelWithViewContents();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String voId = firstViewObjectId(model);
+
+        try {
+            // x provided so the update reaches the command construction where the
+            // labelExpression guard fires.
+            accessor.updateViewObject("default", voId, 60, null, null, null,
+                    null, null, null, "${name} &amp; x");
+            fail("expected rejection of literal &amp; in labelExpression");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    /** First diagram view-object id on view-001 of a createTestModelWithViewContents() model. */
+    private static String firstViewObjectId(IArchimateModel model) {
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        return view.getChildren().get(0).getId();
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inSetViewLabelExpression_viaBulk() {
+        IArchimateModel model = createTestModelWithViewContents();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        List<BulkOperation> operations = List.of(
+                new BulkOperation("set-view-label-expression", Map.of(
+                        "viewId", "view-001",
+                        "labelExpression", "${name} &amp; ${property:evidenceMark}")));
+
+        // The labelExpression guard is pure Java in SetViewLabelExpressionCommand.prepare and
+        // runs before any view mutation, so no OSGi/display is required to prove rejection.
+        try {
+            accessor.executeBulk("default", operations, null, false);
+            fail("expected rejection of literal &amp; in set-view-label-expression template");
+        } catch (ModelAccessException e) {
+            // Raw reject surfaces as INVALID_PARAMETER; the bulk driver may re-wrap it as
+            // BULK_VALIDATION_FAILED — either proves the guard fired before any mutation.
+            assertTrue("guard must fire (INVALID_PARAMETER or wrapped BULK_VALIDATION_FAILED)",
+                    e.getErrorCode() == ErrorCode.INVALID_PARAMETER
+                            || e.getErrorCode() == ErrorCode.BULK_VALIDATION_FAILED);
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inUpdateModelName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.updateModel("default", "Acme &amp;amp; Co", null, null);
+            fail("expected rejection of literal entity in model name");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void rejectsLiteralEntity_inUpdateSpecializationNewName() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.createSpecialization("default", "Old Name", "Node");
+        try {
+            accessor.updateSpecialization("default", "Old Name", "Node", "New &amp; Name", null, false);
+            fail("expected rejection of literal &amp; in specialization newName");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
     }
 }

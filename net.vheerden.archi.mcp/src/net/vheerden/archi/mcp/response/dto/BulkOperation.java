@@ -45,6 +45,7 @@ public record BulkOperation(String tool, Map<String, Object> params) {
             "remove-from-view",
             "update-view-object",
             "update-view-connection",
+            "set-view-label-expression",
             "clear-view",
             "delete-element",
             "delete-relationship",

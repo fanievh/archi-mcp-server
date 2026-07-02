@@ -77,6 +77,9 @@ record LayoutAssessmentResult(
         double crossingsPerConnection,
         int noteOverlapCount,
         List<String> noteOverlapDescriptions,
+        // Note-text-clip detection (informational; no rating impact)
+        int noteClipCount,
+        List<String> noteClipDescriptions,
         boolean hasGroups,
         int coincidentSegmentCount,
         int nonOrthogonalTerminalCount,
@@ -106,7 +109,80 @@ record LayoutAssessmentResult(
         // Successor D parallelConnectionGap (appended; backwards-compat)
         Double vAxisParallelGapP10,
         int vAxisParallelGapNarrow25Count,
-        ParallelConnectionGapDetail parallelConnectionGapDetail) {
+        ParallelConnectionGapDetail parallelConnectionGapDetail,
+        // Hub-to-neighbour crowding (appended; 2026-06-25). Min px clearance from a detected
+        // hub's edge to its nearest spoke row; -1.0 sentinel when no hub face qualifies.
+        double hubNeighbourClearanceMin,
+        // Coverage declaration (appended). Per-dimension {checked|not-checked|not-applicable}
+        // driven by the assessor's canonical dimension registry, so that a never-computed
+        // dimension is distinguishable from one that ran and found nothing (absence != zero).
+        // Informational only — no rating impact.
+        Map<String, String> coverage,
+        // Connection-through-note/image (appended). Count of (connection, Note-or-Image)
+        // penetrations and their descriptions. Informational only — no rating impact; the
+        // element-only connectionPassThroughs count and its tier contribution are unchanged.
+        int connectionThroughNoteCount,
+        List<String> connectionThroughNoteDescriptions,
+        // Redundant (collinear / removable) bendpoints (appended). Count of bendpoints that are
+        // collinear with their neighbours and lie between them — removable without changing the
+        // route shape — and their descriptions. Informational only — no rating impact; distinct
+        // from the reversal-based zigzagCount and the cross-connection coincidentSegmentCount.
+        int connectionRedundantBendpointCount,
+        List<String> connectionRedundantBendpointDescriptions,
+        // Non-orthogonal interior (mid) segments (appended). Count of connections with at least
+        // one off-cardinal segment strictly between the two terminal segments, and their
+        // descriptions. Informational only — no rating impact; distinct from the rating-affecting
+        // nonOrthogonalTerminalCount (terminals) and from interiorTerminationCount (a bendpoint
+        // inside an element rect).
+        int nonOrthogonalInteriorSegmentCount,
+        List<String> nonOrthogonalInteriorSegmentDescriptions,
+        // Containers whose AUTHORED fill equals a nested child's fill (the flat-blob backstop for
+        // the container-recession emitter), and their descriptions. Informational only — no rating
+        // impact; the emitter prevents the unauthored-fill blob, this surfaces the authored residue.
+        int containerFillEqualsChildCount,
+        List<String> containerFillEqualsChildDescriptions,
+        // Connection grazing a note/image BORDER (appended). Count of (connection, Note-or-Image)
+        // border-grazes — a route touching a visual's outer band (the ring the through-visual 10px
+        // inset discards), including visuals too small to inset — and their descriptions.
+        // Informational only — no rating impact; DISJOINT from connectionThroughNoteCount (interior
+        // penetration): a single crossing is classified as exactly one of through or graze.
+        int connectionGrazesVisualCount,
+        List<String> connectionGrazesVisualDescriptions,
+        // Connection labels rendered on a Note rectangle (appended). Count of (connection-label,
+        // Note) overlaps and their descriptions. Informational only — no rating impact. Independent
+        // of connectionThroughNoteCount / connectionGrazesVisualCount: a label is positioned off the
+        // line, so it can sit on a note while the route runs clear (and vice-versa).
+        int labelOnNoteCount,
+        List<String> labelOnNoteDescriptions,
+        // Connection labels rendered on a visual Group's TITLE BAND (appended). Count of
+        // (connection-label, group-title-band) overlaps and their descriptions. The label-vs-element
+        // overlap detector skips groups wholesale (transparent containers a label may legitimately sit
+        // within), which also hides the one defect: a label colliding with the group's own title text.
+        // This tests only the top title strip, so a label deep in the group body does NOT flag.
+        // Informational only — no rating impact.
+        int labelOnGroupCount,
+        List<String> labelOnGroupDescriptions,
+        // Per-element edge-coincidence enumeration (appended). Counts every distinct
+        // (connection, element) graze across the view; the rating-bearing
+        // connectionEdgeCoincidenceCount above counts CONNECTIONS-with-a-graze (stops at the first).
+        // A single trunk grazing three element edges contributes 3 here, 1 there.
+        // Informational only — no rating impact.
+        int edgeCoincidenceGrazedElementCount,
+        // Terminal routes that depart an element face then run parallel to and hug that face (the
+        // first exterior segment travels along the departed face within OFF_FACE_MIN_STUB_PX of it),
+        // and their descriptions. Counted per connection (a route hugging at either terminal counts
+        // once). Informational only — no rating impact; distinct from the rating-bearing
+        // nonOrthogonalTerminalCount (raw terminal-segment angle), which is unchanged.
+        int offFaceParallelTerminalCount,
+        List<String> offFaceParallelTerminalDescriptions,
+        // Coincident same-face ports (appended). Count of element faces on which two or more
+        // connection terminals land within HUB_PORT_SLOT_TOLERANCE_PX of each other along the face
+        // axis (a visible port collision), and their descriptions. Informational only — no rating
+        // impact; the rating-bearing hubPortQualityScore (M5) is unchanged. Enumerates the same-face
+        // collision M5 misses on any face below its four-connection guard (a 2–3-connection coincident
+        // face reads a vacuous hubPortQualityScore of 1.0).
+        int coincidentFacePortCount,
+        List<String> coincidentFacePortDescriptions) {
 
     /**
      * Per-face hub-port allocation detail (M5).

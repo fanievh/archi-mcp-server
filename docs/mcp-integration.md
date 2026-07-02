@@ -113,6 +113,15 @@ Handlers can add flags to the envelope after initial formatting:
 - `addCacheHitFlag(envelope)` — response served from session cache
 - `addSessionWarning(envelope, warning)` — session health warning
 
+### Render Staleness Stamp (`export-view`)
+
+`export-view` stamps every response with the model's monotonic mutation counter (the same `getModelVersion()` token described under `_meta.modelVersion`) so a consumer can detect that a render predates a later model change — i.e. the exported image is stale. The value is read **once, after the export**, so every response path reports the same number, and it lands in a format-appropriate slot:
+
+- **Inline modes** (`png`, `jpg`, `svg`, `pdf` returned base64/blob) — a top-level `modelVersion` field on the image wrapper (alongside `metadata`).
+- **File mode** (written to disk) — `_meta.modelVersion`, via the standard envelope.
+
+The counter is **decimal-encoded; compare it as an integer, not a string** (a lexicographic compare would order `"10"` before `"9"`). Against a later `assess-layout` `_meta.modelVersion`: if the export's `modelVersion` is numerically **lower**, the model changed after the render and the image should be re-exported before relying on it for a visual close-out. (Before this change the inline formats carried no version and the file mode stamped `null`.)
+
 ### Implementation Notes
 
 - Jackson ObjectMapper with `NON_NULL` inclusion (null fields omitted from JSON)
@@ -293,6 +302,27 @@ The token itself is managed by `BearerTokenStore`: a 256-bit `SecureRandom` valu
 This composes with the loopback/DNS-rebinding `OriginHostValidationHandler` (which returns `403` for disallowed `Origin`/`Host` on a browser, loopback bind only): Origin/Host validation is the outer guard, the bearer token the inner one enforced on every request regardless of bind address.
 
 **Source:** `server/BearerTokenAuthHandler.java`, `server/BearerTokenStore.java`
+
+### Request Validation (charset / UTF-8)
+
+The wire protocol is JSON, which MCP requires to be UTF-8. Two default-on Jetty `Handler.Wrapper`s reject a mis-encoded request body with **HTTP 415**, rendered as the canonical JSON-RPC error envelope (`-32600`, `data.httpStatus: 415`) by the shared `JsonErrorHandler`:
+
+- **`RequestCharsetValidationHandler`** — a header-only check. It rejects any request whose `Content-Type` declares a non-UTF-8 `charset` (e.g. `charset=iso-8859-1`). It never reads the body, so it composes cleanly with the async transport servlets and the size cap; charset extraction reuses Jetty's `MimeTypes.getCharsetFromContentType`, and the header is lowercased first so a case-insensitive parameter name (`CHARSET=`) cannot bypass it. No charset, or `charset=utf-8`, passes through unchanged.
+- **`RequestBodyUtf8ValidationHandler`** — a body-scanning check that catches an *undeclared* mis-encoded body (a client sending ISO-8859-1 / Windows-1252 bytes with **no** charset, which the header check cannot see). For a POST it reads the body once via `Content.Source.asByteBuffer` (still bounded by the outer size cap, so the 32 MiB / 413 limit applies), tests strict UTF-8 **well-formedness** with a `CharsetDecoder` in REPORT mode — *not* a `U+FFFD`-literal scan, so a body legitimately containing a genuine replacement character is accepted — and either returns 415 or replays the identical bytes to the servlet via a `Request.Wrapper`.
+
+Each has a kill switch (`-Darchi.mcp.rejectNonUtf8=false`, `-Darchi.mcp.scanBodyUtf8=false`). Both live in the `server/` layer, which stays Jetty/JDK-only (no Jackson).
+
+#### Guard chain ordering
+
+The Jetty handler wrappers are nested **outermost-first**, so a request passes the DoS and security gates before the request-correctness gates:
+
+```text
+SizeLimit → Origin/Host → Bearer → charset-header → body-UTF-8 → transport servlet
+```
+
+The DoS gate (`SizeLimitHandler`) is outermost; the security gates (Origin/Host, then Bearer) come next, so an unauthenticated or bad-origin client receives `403`/`401` **before** any body-correctness work; the two charset gates are innermost, just in front of the servlet.
+
+**Source:** `server/RequestCharsetValidationHandler.java`, `server/RequestBodyUtf8ValidationHandler.java`, `server/JsonErrorHandler.java`
 
 ### Server Lifecycle
 

@@ -636,6 +636,6 @@ public class ParallelConnectionGapMetricTest {
     }
 
     private static AssessmentNode node(String id, double x, double y, double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 }

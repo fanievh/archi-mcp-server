@@ -1026,6 +1026,66 @@ public class MutationHandlerTest {
     }
 
     @Test
+    public void shouldSurfaceFanOutCounts_inBulkSetViewLabelExpressionResponse() throws Exception {
+        // Regression guard: the per-op result Map built by formatBulkResponse must carry
+        // appliedCount/skippedCount for fan-out ops — they are populated on BulkOperationResult
+        // but the hand-assembled response Map has to copy them onto the wire.
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "set-view-label-expression", "updated",
+                    "view-1", "DiagramModel", "Main View", 11, 1));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "set-view-label-expression",
+                        "params", Map.of(
+                                "viewId", "view-1",
+                                "labelExpression", "${name} ${property:evidenceMark}"))
+        ));
+
+        Map<String, Object> result = callAndParse("bulk-mutate", args);
+        Map<String, Object> bulkResult = getResult(result);
+        assertTrue((Boolean) bulkResult.get("allSucceeded"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations =
+                (List<Map<String, Object>>) bulkResult.get("operations");
+        assertEquals(1, operations.size());
+        Map<String, Object> op = operations.get(0);
+        assertEquals("set-view-label-expression", op.get("tool"));
+        assertEquals("DiagramModel", op.get("entityType"));
+        assertEquals("Main View", op.get("entityName"));
+        assertEquals(11, ((Number) op.get("appliedCount")).intValue());
+        assertEquals(1, ((Number) op.get("skippedCount")).intValue());
+    }
+
+    @Test
+    public void shouldOmitFanOutCounts_forSingleEntityBulkOpResponse() throws Exception {
+        // Single-entity ops use the 6-arg result (null counts) → the keys must be absent.
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "update-view-object", "updated",
+                    "vo-1", "BusinessActor", "Test"));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewObjectId", "vo-1"))
+        ));
+
+        Map<String, Object> result = callAndParse("bulk-mutate", args);
+        Map<String, Object> bulkResult = getResult(result);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations =
+                (List<Map<String, Object>>) bulkResult.get("operations");
+        Map<String, Object> op = operations.get(0);
+        assertFalse("single-entity op must not carry appliedCount", op.containsKey("appliedCount"));
+        assertFalse("single-entity op must not carry skippedCount", op.containsKey("skippedCount"));
+    }
+
+    @Test
     public void shouldFlowEmptyLabelExpression_inBulkUpdateViewObject_AC3() throws Exception {
         final java.util.concurrent.atomic.AtomicReference<List<BulkOperation>> capturedOps =
                 new java.util.concurrent.atomic.AtomicReference<>();

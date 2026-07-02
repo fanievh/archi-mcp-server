@@ -830,6 +830,12 @@ public interface ArchiModelAccessor {
      * @param styling         styling parameters, or null for no styling change
      * @param imageParams     image parameters, or null for no image change
      * @param labelExpression new label expression, or null to leave unchanged; empty string clears
+     * @param anchorTarget    view-object id this object is anchored to, or null to leave the anchor
+     *                        unchanged; empty string clears the anchor
+     * @param anchorEdge      the target edge to track ({@code below}/{@code above}/{@code right}/{@code left}),
+     *                        or null to default to {@code below} when setting an anchor
+     * @param anchorDx        offset along/against the anchor edge (x), or null for 0
+     * @param anchorDy        gap from the anchor edge (y), or null for 0
      * @return MutationResult containing the updated ViewObjectDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view object not found, no fields to update, or text on element
@@ -837,7 +843,20 @@ public interface ArchiModelAccessor {
     MutationResult<ViewObjectDto> updateViewObject(String sessionId,
             String viewObjectId, Integer x, Integer y, Integer width, Integer height,
             String text, StylingParams styling, ImageParams imageParams,
-            String labelExpression);
+            String labelExpression, String anchorTarget, String anchorEdge,
+            Integer anchorDx, Integer anchorDy);
+
+    /**
+     * Backward-compatible overload without anchor parameters — forwards with a null anchor
+     * (no anchor change). Existing callers keep the pre-anchor 10-argument signature.
+     */
+    default MutationResult<ViewObjectDto> updateViewObject(String sessionId,
+            String viewObjectId, Integer x, Integer y, Integer width, Integer height,
+            String text, StylingParams styling, ImageParams imageParams,
+            String labelExpression) {
+        return updateViewObject(sessionId, viewObjectId, x, y, width, height, text,
+                styling, imageParams, labelExpression, null, null, null, null);
+    }
 
     /**
      * Replaces the bendpoints of a connection on a view.

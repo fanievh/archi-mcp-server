@@ -29,6 +29,19 @@ import net.vheerden.archi.mcp.response.dto.BatchSummaryDto;
  * <p>Thread safety: All public methods are synchronized. One session maps
  * to one Jetty thread at a time, but synchronization guards against any
  * concurrent access edge cases.</p>
+ *
+ * <p><strong>The absence of direct references from {@code ArchiModelAccessorImpl} is by design.</strong>
+ * The model facade interacts with batch and proposal state <em>exclusively</em> through
+ * {@link MutationDispatcher}, which owns one {@code MutationContext} per session (its
+ * {@code batchSessions} map). A "find usages" of this class from the facade therefore
+ * returns nothing — that is correct encapsulation of package-private per-session state,
+ * not an indication that this class is unused. The live reference path is
+ * facade&nbsp;→&nbsp;{@link MutationDispatcher}&nbsp;→&nbsp;{@code MutationContext}.</p>
+ *
+ * <p>This concrete per-session state holder is also distinct from any prospective
+ * refactoring that would route the facade's mutation-preparation glue through a
+ * context or parameter object: such a change would build upon this class, not
+ * supersede it.</p>
  */
 class MutationContext {
 

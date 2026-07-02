@@ -910,6 +910,86 @@ public class LayoutQualityAssessorTest {
     }
 
     @Test
+    public void estimateLabelBounds_shouldApplyRenderWidthFactorToGlyphRun() {
+        // Width = length * CHAR_WIDTH * RENDER_WIDTH_FACTOR + PADDING_X (padding chrome not scaled).
+        // "Test" (4 chars): 4 * 8.0 * 1.35 + 10.0 = 53.2
+        AssessmentConnection conn = new AssessmentConnection("c1", "a", "b",
+                List.of(new double[]{0, 0}, new double[]{100, 0}), "Test", 1);
+        LayoutQualityAssessor.LabelBounds lb = assessor.estimateLabelBounds(conn);
+        assertNotNull(lb);
+        // Hardcoded literal so an accidental change to ANY of the three constants is caught
+        // (a self-referential `expected` computed from the constants would pass under a wrong value):
+        //   "Test" (4 chars): 4 * 8.0 * 1.35 + 10.0 = 53.2
+        assertEquals(53.2, lb.width(), 0.001);
+        // Height is not scaled by the render-width factor: 14.0 + 6.0 = 20.0
+        assertEquals(20.0, lb.height(), 0.001);
+    }
+
+    @Test
+    public void countLabelOverlaps_renderCalibration_shouldFlagThirdPartyOverlapMissedByRawEstimate() {
+        // A third-party box sits just beyond the raw (8.0/char) label box but within the rendered
+        // (~1.35x) glyph width. The raw estimate misses it (count 0); the calibrated width catches it.
+        // Geometry (label "CalibrationProbeLabel", 21 chars, midpoint x=350):
+        //   raw glyph 168 -> box half 89  -> inset right 429, proximity right 439  -> clear of obs@450
+        //   cal glyph 226.8 -> box half ~118.4 -> inset right ~458.4               -> overlaps obs@450
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("obs", 450, 0, 100, 50),
+                node("b", 600, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{650, 25}),
+                        "CalibrationProbeLabel", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertTrue("Calibrated label width should flag the third-party element overlap",
+                result.count() > 0);
+        assertTrue("Description should name the overlapping element",
+                result.descriptions().stream().anyMatch(s -> s.contains("overlaps element 'obs'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_renderCalibration_shortSegmentUsesCalibratedWidth() {
+        // The short-segment "exceeds segment length" path shares the calibrated width by design: a label
+        // whose RAW box fits the hosting segment but whose RENDERED (1.35x) glyph overflows it is flagged.
+        // "Probe" (5 ch): raw 5*8+10 = 50 (fits a 50px segment); calibrated 5*8*1.35+10 = 64 (overflows).
+        List<AssessmentNode> nodes = List.of(
+                node("a", -60, 0, 50, 50),
+                node("b", 60, 0, 50, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{0, 25}, new double[]{50, 25}),
+                        "Probe", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertTrue("Calibrated glyph overflows the hosting segment → short-segment guidance fires",
+                result.shortSegmentCount() > 0);
+        assertTrue("Short-segment description should name the exceeded segment",
+                result.descriptions().stream().anyMatch(s -> s.contains("exceeds segment length")));
+    }
+
+    @Test
+    public void countLabelOverlaps_renderCalibration_substantialOwnEndpointBleedIsFlagged() {
+        // Policy: a label whose calibrated box bleeds a SUBSTANTIAL fraction (>= LABEL_OWN_ENDPOINT_OVERLAP_FRACTION)
+        // onto its own endpoints is rendered on the box and is flagged (counted ONCE, naming the more-overlapped
+        // endpoint). "VeryLongLabelThatBleeds" (23 ch) at the midpoint of (50,25)->(250,25): box [20.8,279.2],
+        // bleeds 79.2/258.4 ≈ 31% onto a[0,100] and the same onto b[200,300] — above the 0.30 bar.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "VeryLongLabelThatBleeds", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Substantial own-endpoint bleed is flagged once", 1, result.count());
+    }
+
+    @Test
     public void assess_withLabelOverlaps_shouldIncludeInResult() {
         List<AssessmentNode> nodes = List.of(
                 node("a", 0, 0, 100, 50),
@@ -927,13 +1007,13 @@ public class LayoutQualityAssessorTest {
     }
 
     @Test
-    public void countLabelOverlaps_shouldExcludeSourceAndTargetElements() {
-        // Label at midpoint on a short connection — likely overlaps source and target
-        // but those should be excluded from the count
+    public void countLabelOverlaps_shortLabelFitsGap_notFlagged() {
+        // A short label that fits the inter-box gap does not bleed onto its endpoints (0% overlap) and
+        // is not flagged. "Uses" (4 ch, ~53px) at the midpoint of (50,25)->(250,25) sits in the 100px
+        // gap between a[0,100] and b[200,300] — clear of both boxes.
         List<AssessmentNode> nodes = List.of(
                 node("a", 0, 0, 100, 50),
                 node("b", 200, 0, 100, 50));
-        // Short path — midpoint label near both elements
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "a", "b",
                         List.of(new double[]{50, 25}, new double[]{250, 25}),
@@ -941,8 +1021,436 @@ public class LayoutQualityAssessorTest {
 
         LayoutQualityAssessor.LabelOverlapResult result =
                 assessor.countLabelOverlaps(connections, nodes);
-        // Label overlaps source "a" and/or target "b" should NOT be counted
-        assertEquals("Source/target overlaps should be excluded", 0, result.count());
+        assertEquals("Short label that fits its gap is not flagged", 0, result.count());
+    }
+
+    // ---- Own-endpoint label-on-element detection (asymmetric overlap-fraction discriminator) ----
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_bleedsOverSource_shouldCount() {
+        // Source-positioned label on a short connection: a large fraction of the label sits over its own
+        // source box. a center (50,25) -> b center (250,25); textPosition 0 (15%): centre x=80, "Flow"
+        // box [53.4,106.6] -> ~87% over a[0,100]. Above the 0.30 own-endpoint bar -> flagged, names 'a'.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}), "Flow", 0));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Label bleeding substantially over its own source counts once", 1, result.count());
+        assertTrue("Description should name the own endpoint 'a'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'a'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_bleedsOverTarget_shouldCount() {
+        // Target-positioned label (85%): centre x=220, "Flow" box [193.4,246.6] -> ~87% over b[200,300].
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}), "Flow", 2));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Label bleeding substantially over its own target counts once", 1, result.count());
+        assertTrue("Description should name the own endpoint 'b'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'b'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_clearOfBothEndpoints_shouldNotCount() {
+        // A Middle label sitting clear in a wide gap overlaps neither endpoint (0%) -> not flagged.
+        // "Reads" box ~[268,332], midpoint of (50,25)->(550,25), clear of a[0,100] and b[500,600].
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 500, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{550, 25}), "Reads", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Label clear of both endpoints is not flagged", 0, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_lightGrazingBelowThreshold_shouldNotCount() {
+        // The TOLERANCE guard (asymmetric design): a label only slightly wider than its gap grazes its
+        // endpoints but stays BELOW the 0.30 bar -> ignored (we don't flood for normal endpoint proximity).
+        // "Synchronizes" (12 ch, ~140px) at midpoint of (50,25)->(250,25), gap a[0,100]..b[200,300]=100:
+        // box [80.2,219.8] -> ~14% over each endpoint -> NOT flagged.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}), "Synchronizes", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Light grazing below the own-endpoint threshold is tolerated", 0, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_groupEndpointExcluded_shouldNotCount() {
+        // A group endpoint is a transparent container; even a label heavily over the group bounds must
+        // NOT be flagged (intentional nesting).
+        List<AssessmentNode> nodes = List.of(
+                group("a", 0, 0, 300, 100),
+                node("b", 360, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{150, 50}, new double[]{410, 25}), "Flow", 0));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Overlap with a GROUP endpoint is not flagged", 0, result.count());
+    }
+
+    // ---- Tiny-endpoint (junction) own-endpoint detection: the box-coverage OR-rule ----
+    // The label-area-normalised fraction is structurally unreachable for a genuinely tiny endpoint box
+    // (an ArchiMate Junction at its ~14x14 default): a label can FULLY enclose it yet cover only a small
+    // fraction of the (much larger) label's own area. The box-coverage rule flags when the label covers a
+    // substantial fraction of the BOX instead.
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_tinyJunctionFullyCovered_shouldCount() {
+        // A 14x14 junction target fully enclosed by a "Flow" label box. The label-area fraction is only
+        // ~0.18 (196 / 1064) — below the 0.30 bar, so the shipped fraction rule MISSES it — but the label
+        // covers 100% of the junction box. Source 'a' is clear of the label (fraction 0), so only the
+        // junction can flag, and only via box-coverage. Hosting segment (60px) >= label width (53.2px) so
+        // the short-segment promotion does NOT apply: this isolates the tiny-box miss.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 40, 50),
+                node("j", 73, 18, 14, 14));   // center (80,25), spans x[73,87] y[18,32]
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "j",
+                        List.of(new double[]{20, 25}, new double[]{80, 25}), "Flow", 2)); // target position
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label fully covering a tiny junction endpoint is flagged once", 1, result.count());
+        assertTrue("Description should name the tiny endpoint 'j'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'j'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_normalBoxLightlyCovered_shouldNotCount() {
+        // AC-3 guard: a NORMAL-sized (100x50) endpoint box that the label merely grazes — fraction ~0.14
+        // (below 0.30) AND box-coverage ~0.03 (far below the box-coverage bar). The box-coverage OR-rule
+        // must NOT newly flag it: a label is far too small to cover a substantial fraction of a normal box,
+        // so the tolerant behaviour is unchanged for ordinary endpoints.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 40, 50),
+                node("t", 90, 0, 100, 50));   // normal target box, lightly grazed
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "t",
+                        List.of(new double[]{20, 25}, new double[]{80, 25}), "Flow", 2));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A normal box lightly grazed is not flagged by the box-coverage rule", 0, result.count());
+    }
+
+    // ---- Junction-aware own-endpoint sensitivity: a label on a junction's dark fill is always a defect ----
+    // A junction renders as a solid dark shape with NO usable interior, so any non-trivial label overlap is
+    // unreadable. The box-coverage branch already catches a TINY junction fully under a label; these tests cover
+    // the OVERSIZED junction (e.g. the 120x55 default) where a small label grazes the fill at a label-area
+    // fraction BELOW the box-tolerant 0.30 bar yet visibly sits on the dark body. The near-zero junction bar
+    // (LABEL_OWN_ENDPOINT_JUNCTION_OVERLAP_FRACTION) flags these; the same geometry on a normal box does not.
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_oversizedJunctionSource_grazedBelowBoxBar_shouldCount() {
+        // An oversized (120x55) junction SOURCE grazed by a source-positioned "Flow" label.
+        // j center (60,27.5); b center (584,27.5); path length 524; textPosition 0 (0.15) -> centre x=138.6,
+        // "Flow" box [112.0,165.2]x[17.5,37.5]. Over j[0,120]: ox=8, oy=20 -> label-area fraction
+        // 160/1064 = 0.150 (BELOW the 0.30 box bar -> the box rule MISSES it) and box-coverage 160/6600 =
+        // 0.024 (far below 0.6 -> the tiny-junction rule cannot catch it either). ONLY the junction bar
+        // (0.05) flags it, naming the junction. Without the junction branch this case is not flagged.
+        List<AssessmentNode> nodes = List.of(
+                junction("j", 0, 0, 120, 55),
+                node("b", 534, 0, 100, 55));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "j", "b",
+                        List.of(new double[]{60, 27.5}, new double[]{584, 27.5}), "Flow", 0));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label grazing an oversized junction's fill below the box bar is flagged once",
+                1, result.count());
+        assertTrue("Description should name the junction endpoint 'j'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'j'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_oversizedJunctionTarget_grazedBelowBoxBar_shouldCount() {
+        // The mirror of the source case — a 120x55 junction TARGET grazed by a target-positioned label.
+        // Proves the junction bar is applied per endpoint (tgtThreshold), not only to the source.
+        // a center (50,27.5); j center (574,27.5); textPosition 2 (0.85) -> centre x=495.4,
+        // "Flow" box [468.8,522.0]. Over j[514,634]: ox=8, oy=20 -> fraction 0.150 (<0.30), coverage 0.024.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 55),
+                junction("j", 514, 0, 120, 55));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "j",
+                        List.of(new double[]{50, 27.5}, new double[]{574, 27.5}), "Flow", 2));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label grazing an oversized junction TARGET below the box bar is flagged once",
+                1, result.count());
+        assertTrue("Description should name the junction endpoint 'j'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'j'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_oversizedNormalBox_grazedBelowBoxBar_shouldNotCount() {
+        // Leak guard: the EXACT geometry of the oversized-junction-source test, but the endpoint is a
+        // NORMAL 120x55 box (isJunction=false) — the single variable. The label-area fraction 0.150 stays
+        // below the tolerant 0.30 box bar and box-coverage 0.024 below 0.6, so it is NOT flagged. The
+        // junction sensitivity must not leak to ordinary boxes. (Passes with OR without the junction branch.)
+        List<AssessmentNode> nodes = List.of(
+                node("j", 0, 0, 120, 55),
+                node("b", 534, 0, 100, 55));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "j", "b",
+                        List.of(new double[]{60, 27.5}, new double[]{584, 27.5}), "Flow", 0));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("The same graze on a NORMAL box stays below the tolerant bar -> not flagged",
+                0, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_tinyJunctionFullyCovered_isJunction_shouldCount() {
+        // No-regression: a real 14x14 Junction (isJunction=true) fully under a "Flow" label still
+        // flags — the box-coverage branch (coverage 196/196=1.0 >= 0.6) catches it regardless of the junction
+        // bar, and the junction bar (fraction 0.184 >= 0.05) now also fires. Either way it remains flagged.
+        // a center (20,25); j[73,87]x[18,32]; textPosition 2 (0.85) on (20,25)->(80,25) -> centre x=71,
+        // "Flow" box [44.4,97.6]x[15,35] fully encloses j.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 40, 50),
+                junction("j", 73, 18, 14, 14));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "j",
+                        List.of(new double[]{20, 25}, new double[]{80, 25}), "Flow", 2));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label fully covering a tiny junction is still flagged once", 1, result.count());
+        assertTrue("Description should name the junction endpoint 'j'",
+                result.descriptions().stream().anyMatch(s -> s.contains("own endpoint 'j'")));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_labelClearOfTinyJunction_shouldNotCount() {
+        // The desired end-state after the build-time fix — the same tiny Junction as the no-regression case
+        // but with the label moved fully clear of its fill. fraction 0 (< the 0.05 junction floor) and coverage 0 (< 0.6),
+        // so the junction endpoint is NOT over-flagged: the near-zero bar has a non-zero floor by design.
+        // a center (20,25); j[273,287]; a Middle "Ok" label on (20,25)->(280,25) -> centre x=150, box
+        // [134.2,165.8] clear of both a[0,40] and j[273,287].
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 40, 50),
+                junction("j", 273, 18, 14, 14));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "j",
+                        List.of(new double[]{20, 25}, new double[]{280, 25}), "Ok", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label fully clear of a tiny junction is not flagged", 0, result.count());
+    }
+
+    // ---- Offset-aware own-endpoint detection: credit an applied "Label Offset" so a lifted label is not re-flagged ----
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_clearingOffsetApplied_shouldNotCount() {
+        // The same Middle bleed as countLabelOverlaps_renderCalibration_substantialOwnEndpointBleedIsFlagged
+        // (box [20.8,279.2] ~31% over a and b), but a NORTH (1) Label Offset has been applied. The metric must
+        // displace the bounds up by LABEL_OFFSET_RENDER_ESTIMATE -> the label clears both boxes -> not flagged.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "VeryLongLabelThatBleeds", 1, 1)); // textPosition=Middle, relativePosition=NORTH
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A clearing NORTH offset lifts the label off its box -> not re-flagged",
+                0, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_centerAnchor_shouldStillCount() {
+        // Regression guard: with no offset (relativePosition=CENTER=2) the same bleed is still flagged —
+        // offset-awareness must leave un-offset behaviour byte-identical to before.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "VeryLongLabelThatBleeds", 1, 2)); // relativePosition=CENTER (un-offset)
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Un-offset (CENTER) label still flagged — behaviour unchanged", 1, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_insufficientOffsetStillCount() {
+        // Truthful, not blunt: a WEST (8) offset shifts the wide label left so it still overlaps its own
+        // source box (here even more) -> still flagged. Proves the metric re-tests the displaced bounds
+        // rather than blindly trusting any non-CENTER anchor.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "VeryLongLabelThatBleeds", 1, 8)); // relativePosition=WEST (does not clear the bleed)
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A non-clearing (WEST) offset still leaves the label on its box -> still flagged",
+                1, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_bleedsBothEndpoints_countsOnce() {
+        // A Middle label bleeding >= 0.30 onto BOTH neighbours is ONE problem, counted once (not per box).
+        // "is realized by" (14 ch, ~161px) at midpoint (90,25) of (30,25)->(150,25): box [9.4,170.6],
+        // ~31% over a[0,60] and ~31% over b[120,180].
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 60, 50),
+                node("b", 120, 0, 60, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{30, 25}, new double[]{150, 25}), "is realized by", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Bleed onto both endpoints counts once", 1, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_selfConnection_countsOnce() {
+        // A self-connection (source == target): the label over the single node counts ONCE, not twice.
+        // "Loop" box [23.4,76.6] fully within a[0,100] (~100% overlap).
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "a",
+                        List.of(new double[]{20, 25}, new double[]{80, 25}), "Loop", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Self-connection own-endpoint counts once, not twice", 1, result.count());
+    }
+
+    // ---- Wide-label-on-short-segment own-endpoint detection (promoted sensitivity) ----
+    // A Middle label far wider than its hosting segment drapes across BOTH endpoint boxes; the
+    // symmetric estimate then splits the bleed so each per-box fraction sits below the normal 0.30
+    // bar even though the label visibly covers the boxes. When the rendered label width exceeds the
+    // hosting segment length the label provably cannot fit, so the per-box bar is promoted (lowered).
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_wideLabelOnShortSegment_drapesBothBoxes_shouldCount() {
+        // The wide-label-on-short-segment miss: a 36-char Middle label on a 200px segment. Rendered width
+        // 36*8*1.35 + 10 = 398.8; path (50,25)->(250,25) length 200 < 398.8 -> exceeds its hosting segment.
+        // Box [-49.4,349.4] fully covers a[0,100] (100/398.8 = 0.251) and b[200,300] (0.251): max = 0.251
+        // < 0.30 so the base rule misses it, but the label exceeds its segment and 0.251 >= the promoted
+        // 0.15 bar -> flagged once, naming the connection + endpoint.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "Hosts the embedded model and toolkit", 1)); // 36 ch; any wide caption
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("Wide label draped across both endpoint boxes on a short segment is flagged once",
+                1, result.count());
+        assertTrue("Description names the connection and an endpoint",
+                result.descriptions().stream().anyMatch(s ->
+                        s.contains("c1") && s.contains("own endpoint")));
+    }
+
+    @Test
+    public void assess_wideLabelOnShortSegment_surfacesOwnEndpointDrape_endToEnd() {
+        // End-to-end honesty anchor for the labelOverlaps coverage level (declared "checked"): the
+        // wide-label-on-short-segment class must surface through the FULL assess() pipeline, not only
+        // the countLabelOverlaps helper. Same geometry as the helper test above — a 36-char Middle
+        // label whose rendered width (398.8) exceeds its 200px hosting segment, draping both endpoint
+        // boxes at a per-box label-area fraction (0.251) below the 0.30 base bar but at/above the
+        // promoted 0.15 bar. Two endpoint-only nodes, so the own-endpoint drape is the SOLE
+        // label-overlap contribution (no third-party element, no second label) -> labelOverlapCount
+        // is exactly 1 and the dimension participates in the rating breakdown.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{250, 25}),
+                        "Hosts the embedded model and toolkit", 1)); // 36 ch
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
+        assertEquals("Wide label draped across both boxes on a short segment surfaces through assess()",
+                1, result.labelOverlapCount());
+        assertTrue("labelOverlaps participates in the rating breakdown",
+                result.ratingBreakdown().containsKey("labelOverlaps"));
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_fitsSegmentGrazesAbovePromotedBar_notFlagged() {
+        // Gate guard: a label that FITS its hosting segment keeps the tolerant 0.30 bar even when its
+        // own-endpoint overlap sits in (0.15, 0.30) — i.e. ABOVE the promoted bar but BELOW the base bar.
+        // A blunt "always promote to 0.15" implementation would wrongly flag this; the width-exceeds-segment
+        // gate must suppress promotion. "Hub" (3 ch, W=3*8*1.35+10 = 42.4) on a 400px segment fits.
+        // Source-positioned (textPosition 0 -> 15% point x=110): box [88.8,131.2] grazes a[0,100] by
+        // 11.2px -> 11.2/42.4 = 0.264 (>0.15, <0.30) -> tolerated because the label fits its segment.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 400, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{450, 25}), "Hub", 0));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label that fits its segment keeps the 0.30 bar (no promotion) -> not flagged",
+                0, result.count());
+    }
+
+    @Test
+    public void countLabelOverlaps_ownEndpoint_exceedsShortMidJog_clearOfEndpoints_notFlagged() {
+        // No-over-flag guard: exceeding the hosting segment is NOT sufficient on its own — the label must
+        // still overlap an endpoint. A Middle label sits on a short vertical jog mid-path, far from both
+        // endpoint boxes; it exceeds that tiny jog yet grazes neither box, so it must not be flagged.
+        // Path (50,25)->(350,25)->(350,28)->(650,28): total 603, 50% point = 301.5 lands on the 3px jog
+        // (P1->P2) -> hostingSegmentLength = 3. "MidJog" (6 ch, W=6*8*1.35+10 = 74.8) > 3 -> exceeds.
+        // Label centre (350,26.5) -> box x[312.6,387.4]: clear of a[0,100] and b[600,700] -> fractions 0.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 600, 0, 100, 50));
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "a", "b",
+                        List.of(new double[]{50, 25}, new double[]{350, 25},
+                                new double[]{350, 28}, new double[]{650, 28}), "MidJog", 1));
+
+        LayoutQualityAssessor.LabelOverlapResult result =
+                assessor.countLabelOverlaps(connections, nodes);
+        assertEquals("A label exceeding a short mid-path jog but clear of both endpoints -> not flagged",
+                0, result.count());
     }
 
     @Test
@@ -969,8 +1477,8 @@ public class LayoutQualityAssessorTest {
         // Connection from a (inside group g) to b — label sits inside group g's bounds
         // Group g is an ancestor of source, so should be excluded
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("g", 0, 0, 500, 200, null, true, false, null, 0.0, null, null),
-                new AssessmentNode("a", 10, 10, 100, 50, "g", false, false, null, 0.0, null, null),
+                new AssessmentNode("g", 0, 0, 500, 200, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("a", 10, 10, 100, 50, "g", false, false, null, 0.0, null, null, 0.0, 0.0, 0.0),
                 node("b", 400, 300, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "a", "b",
@@ -989,7 +1497,7 @@ public class LayoutQualityAssessorTest {
         // Groups are transparent containers and should be skipped
         List<AssessmentNode> nodes = List.of(
                 node("a", 0, 0, 100, 50),
-                new AssessmentNode("unrelatedGroup", 150, 0, 200, 100, null, true, false, null, 0.0, null, null),
+                new AssessmentNode("unrelatedGroup", 150, 0, 200, 100, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0),
                 node("b", 400, 0, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "a", "b",
@@ -1007,8 +1515,8 @@ public class LayoutQualityAssessorTest {
         // Connection from parent group g to b — child c is inside g
         // Label near source may overlap child c, but c is descendant of source
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("g", 0, 0, 200, 150, null, true, false, null, 0.0, null, null),
-                new AssessmentNode("child", 10, 10, 80, 40, "g", false, false, null, 0.0, null, null),
+                new AssessmentNode("g", 0, 0, 200, 150, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("child", 10, 10, 80, 40, "g", false, false, null, 0.0, null, null, 0.0, 0.0, 0.0),
                 node("b", 400, 0, 100, 50));
         List<AssessmentConnection> connections = List.of(
                 new AssessmentConnection("c1", "g", "b",
@@ -1385,7 +1893,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grp", 0, 0, 400, 300),
                 childNode("elem", 20, 50, 100, 50, "grp"),
-                new AssessmentNode("n1", 10, 10, 150, 30, "grp", false, true, null, 0.0, null, null));
+                new AssessmentNode("n1", 10, 10, 150, 30, "grp", false, true, null, 0.0, null, null, 0.0, 0.0, 0.0));
 
         LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
@@ -1485,7 +1993,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grpA", 0, 0, 200, 200),
                 group("grpB", 180, 0, 200, 200),
-                new AssessmentNode("n1", 170, 10, 50, 30, "grpA", false, true, null, 0.0, null, null)); // child of grpA, overlaps grpB
+                new AssessmentNode("n1", 170, 10, 50, 30, "grpA", false, true, null, 0.0, null, null, 0.0, 0.0, 0.0)); // child of grpA, overlaps grpB
 
         LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
@@ -1501,7 +2009,7 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = List.of(
                 group("grp", 0, 0, 400, 300),
                 childNode("elem", 20, 50, 100, 50, "grp"),
-                new AssessmentNode("n1", 10, 40, 120, 30, "grp", false, true, null, 0.0, null, null)); // child note overlaps sibling elem
+                new AssessmentNode("n1", 10, 40, 120, 30, "grp", false, true, null, 0.0, null, null, 0.0, 0.0, 0.0)); // child note overlaps sibling elem
 
         LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
 
@@ -1592,6 +2100,337 @@ public class LayoutQualityAssessorTest {
         assertTrue("breakdown should contain overall", result.ratingBreakdown().containsKey("overall"));
     }
 
+    // ---- Coverage declaration tests (absence != zero) ----
+
+    @Test
+    public void coverage_shouldContainAnEntryForEveryRegistryDimension() {
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        Map<String, String> coverage = result.coverage();
+        assertNotNull("coverage map must be present on the main assess() path", coverage);
+        // Every canonical registry dimension has exactly one entry — no key missing, none extra.
+        for (LayoutQualityAssessor.CoverageDimension dim
+                : LayoutQualityAssessor.CoverageDimension.values()) {
+            assertTrue("coverage must declare dimension '" + dim.id + "'",
+                    coverage.containsKey(dim.id));
+        }
+        assertEquals("coverage must have exactly one entry per registry dimension",
+                LayoutQualityAssessor.CoverageDimension.values().length, coverage.size());
+        // Every value is one of the four legal coverage states.
+        for (String v : coverage.values()) {
+            assertTrue("illegal coverage value: " + v,
+                    LayoutQualityAssessor.COVERAGE_CHECKED.equals(v)
+                            || LayoutQualityAssessor.COVERAGE_PARTIAL.equals(v)
+                            || LayoutQualityAssessor.COVERAGE_NOT_CHECKED.equals(v)
+                            || LayoutQualityAssessor.COVERAGE_NOT_APPLICABLE.equals(v));
+        }
+    }
+
+    @Test
+    public void coverage_fullyCheckedDimensionWithZeroFindings_reportsChecked() {
+        // Load-bearing distinction: a view with ZERO overlaps must still report the overlaps
+        // detector as "checked" (it ran and found nothing) — checked+zero is NOT not-checked.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        assertEquals("zero overlaps must still report checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED, result.coverage().get("overlaps"));
+        assertEquals("a clean overlaps dimension scores pass",
+                "pass", result.ratingBreakdown().get("overlaps"));
+        assertEquals("no overlaps found", 0, result.overlapCount());
+    }
+
+    @Test
+    public void coverage_eachDimensionMatchesItsDeclaredLevel() {
+        // Anti-over-claim guard, expressed structurally so it survives future level flips: on a
+        // clean fixture every dimension's reported coverage MUST equal the level it declares on the
+        // registry — no dimension may masquerade as more (or less) covered than it is. The declared
+        // level is the baseline/floor; one dimension (labelOverlaps) downgrades contextually to
+        // "partial" when a label exceeds its hosting segment, which this connection-less fixture does
+        // not exercise — so here every dimension reports its declared level: all declare "checked"
+        // except corridorCentering, which permanently declares (and reports) "not-checked".
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        for (LayoutQualityAssessor.CoverageDimension dim
+                : LayoutQualityAssessor.CoverageDimension.values()) {
+            assertEquals("coverage for " + dim.id + " must match its declared level",
+                    dim.coverage, result.coverage().get(dim.id));
+        }
+    }
+
+    @Test
+    public void coverage_labelOverlaps_shortSegmentClosed_nowChecked() {
+        // The label-overlap class is fully covered: the wide-label-on-short-segment own-endpoint
+        // under-count is caught via the promoted LABEL_OWN_ENDPOINT_SHORT_SEGMENT_OVERLAP_FRACTION
+        // bar, and a label over a Group is covered by the separate labelOnGroup dimension. On a
+        // clean / no-exceeds-segment fixture (this one) labelOverlaps reports its declared "checked"
+        // and the contextual downgrade to "partial" fires only on a run where a label exceeds its
+        // hosting segment (covered by the dedicated test below). The invariant asserted here is that
+        // no dimension is "partial" on a clean run — NOT that the whole map is "checked":
+        // corridorCentering is a permanent "not-checked" (single-route corridor centring has no
+        // detector), an intentional, honest blind spot distinct from the transient "partial" states.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 200, 0, 100, 50));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        assertEquals("connectionThroughNote (interior) is checked — graze closed the route gap",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("connectionThroughNote"));
+        assertEquals("connectionGrazesVisual (border graze) is checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("connectionGrazesVisual"));
+        assertEquals("labelOverlaps short-segment under-count closed (group hosts on labelOnGroup) "
+                        + "— now checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("labelOverlaps"));
+        assertEquals("labelOnNote (connection label on a Note rectangle) is checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("labelOnNote"));
+        assertEquals("labelOnGroup (connection label on a Group title band) is checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("labelOnGroup"));
+        // No dimension should remain "partial" once the last under-counter closes.
+        assertFalse("no coverage dimension remains partial",
+                result.coverage().containsValue(LayoutQualityAssessor.COVERAGE_PARTIAL));
+    }
+
+    /**
+     * A connection whose label is wider than its hosting segment but is positioned in open space so
+     * it CLEARS both endpoint boxes: the symmetric path dips to a short (40px) horizontal jog at the
+     * path midpoint, far from either endpoint. The label "VeryLongLabelName" (~194px rendered) cannot
+     * fit the 40px jog (so the descriptive short-segment signal fires) yet does not geometrically
+     * overlap either box (so the overlap count is honestly 0). This is the live case a wide caption
+     * exhibits when it overruns its segment and visually crowds a neighbour without overlapping it.
+     */
+    private static List<AssessmentConnection> labelExceedsSegmentConn(String labelText) {
+        return List.of(new AssessmentConnection("c1", "a", "b",
+                List.of(new double[]{50, 25}, new double[]{205, 25}, new double[]{205, 100},
+                        new double[]{245, 100}, new double[]{245, 25}, new double[]{400, 25}),
+                labelText, 1));
+    }
+
+    private static List<AssessmentNode> labelExceedsSegmentNodes() {
+        return List.of(node("a", 0, 0, 50, 50), node("b", 400, 0, 50, 50));
+    }
+
+    @Test
+    public void coverage_labelExceedsSegment_downgradesLabelOverlapsToPartial() {
+        // The overlap detector runs and finds nothing (the label clears both boxes), but a label
+        // exceeding its hosting segment is a crowding signal the overlap count cannot certify clean —
+        // so coverage downgrades labelOverlaps from its declared "checked" to "partial" for this run.
+        List<AssessmentNode> nodes = labelExceedsSegmentNodes();
+        List<AssessmentConnection> connections = labelExceedsSegmentConn("VeryLongLabelName");
+
+        // Precondition: the exceeds-segment signal is present (helper-level).
+        assertTrue("fixture must exercise the exceeds-segment signal",
+                assessor.countLabelOverlaps(connections, nodes).shortSegmentCount() > 0);
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
+
+        // Precondition: overlap count is honestly zero — the label does not overlap either box.
+        assertEquals("the label clears both endpoint boxes — no overlap", 0,
+                result.labelOverlapCount());
+        // Behaviour under test: coverage reports partial, not the registry-declared checked.
+        assertEquals("labelOverlaps downgrades to partial when a label exceeds its hosting segment",
+                LayoutQualityAssessor.COVERAGE_PARTIAL,
+                result.coverage().get("labelOverlaps"));
+        // Only labelOverlaps downgrades — every other dimension stays at its declared level.
+        for (LayoutQualityAssessor.CoverageDimension dim
+                : LayoutQualityAssessor.CoverageDimension.values()) {
+            if (dim == LayoutQualityAssessor.CoverageDimension.LABEL_OVERLAPS) continue;
+            assertEquals("non-labelOverlaps dimension " + dim.id + " keeps its declared level",
+                    dim.coverage, result.coverage().get(dim.id));
+        }
+    }
+
+    @Test
+    public void coverage_labelExceedsSegment_ratingUnchangedAndControlStaysChecked() {
+        // Informational projection: the coverage downgrade must NOT move the rating. The same
+        // geometry with the label shortened to FIT its segment ("Hi") yields the same overall rating
+        // and breakdown — only the coverage value differs. The control also confirms a no-exceeds run
+        // keeps labelOverlaps "checked" and leaves the whole map partial-free (clean-run invariant).
+        List<AssessmentNode> nodes = labelExceedsSegmentNodes();
+
+        LayoutAssessmentResult exceeds =
+                assessor.assess(nodes, labelExceedsSegmentConn("VeryLongLabelName"), false);
+        LayoutAssessmentResult fits =
+                assessor.assess(nodes, labelExceedsSegmentConn("Hi"), false);
+
+        // Control fixture genuinely fits its segment → no short-segment signal → no downgrade.
+        assertEquals("control label fits its segment — no short-segment signal", 0,
+                assessor.countLabelOverlaps(labelExceedsSegmentConn("Hi"), nodes).shortSegmentCount());
+        assertEquals("control keeps labelOverlaps checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED, fits.coverage().get("labelOverlaps"));
+        assertFalse("control run leaves no dimension partial",
+                fits.coverage().containsValue(LayoutQualityAssessor.COVERAGE_PARTIAL));
+
+        // Rating identity: the downgrade is informational only.
+        assertEquals("coverage downgrade must not change the overall rating",
+                fits.overallRating(), exceeds.overallRating());
+        assertEquals("coverage downgrade must not change the rating breakdown",
+                fits.ratingBreakdown(), exceeds.ratingBreakdown());
+        assertEquals("overlap count identical across the two label widths",
+                fits.labelOverlapCount(), exceeds.labelOverlapCount());
+    }
+
+    @Test
+    public void coverage_corridorCentering_isNotChecked() {
+        // The R8 corridorUtilisationScore measures multi-occupant corridor occupancy/spread (how
+        // widely two or more parallel routes sharing a wall-pair fan out across the available
+        // width). Whether a single route centers within its corridor band versus hugs an edge is
+        // measured by no detector: a single-occupant corridor is skipped (contributes nothing →
+        // vacuous 1.0) and multi-occupant wall-hugging clamps to 1.0. The corridorCentering
+        // dimension therefore declares not-checked, so a perfect occupancy score is never read as
+        // certifying centering clean — the centering mode must be render-verified. (Red-on-revert
+        // anchor: removing or flipping the CORRIDOR_CENTERING registry entry fails here.)
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        assertEquals("single-route corridor centering has no detector — not-checked",
+                LayoutQualityAssessor.COVERAGE_NOT_CHECKED,
+                result.coverage().get("corridorCentering"));
+        // The occupancy/spread metric itself stays fully checked — only centering is unmeasured.
+        assertEquals("the multi-occupant occupancy/spread metric remains fully covered",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("corridorUtilisation"));
+    }
+
+    /** An assessment node with an explicit parent and fill colour (full canonical form). */
+    private static AssessmentNode cfNode(String id, double x, double y, double w, double h,
+            String parentId, boolean isGroup, String fill) {
+        return new AssessmentNode(id, x, y, w, h, parentId, isGroup, false, null, 0.0,
+                null, null, 0.0, 0.0, 0.0, false, fill);
+    }
+
+    @Test
+    public void containerFillEqualsChild_authoredBlob_isFlagged() {
+        List<AssessmentNode> nodes = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#80FF80"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#80FF80"));
+
+        LayoutQualityAssessor.ContainerFillResult r =
+                assessor.countContainerFillEqualsChild(nodes, true);
+
+        assertEquals("authored same-fill container/child is one blob", 1, r.count());
+        assertEquals(1, r.descriptions().size());
+        assertTrue("violator surfaces the container id", r.violatorIds().contains("c"));
+    }
+
+    @Test
+    public void containerFillEqualsChild_distinctChildFill_notFlagged() {
+        List<AssessmentNode> nodes = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#80FF80"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#3366CC"));
+
+        assertEquals("distinct child fill stands out — no blob", 0,
+                assessor.countContainerFillEqualsChild(nodes, false).count());
+    }
+
+    @Test
+    public void containerFillEqualsChild_unauthoredContainer_notFlagged() {
+        // A null-fill container is the emitter's territory (it recedes at add time), not a blob
+        // the detector should claim — even when a child happens to carry that same null.
+        List<AssessmentNode> nodes = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, null),
+                cfNode("ch", 20, 20, 100, 50, "c", false, null));
+
+        assertEquals(0, assessor.countContainerFillEqualsChild(nodes, false).count());
+    }
+
+    @Test
+    public void containerFillEqualsChild_caseInsensitiveHex() {
+        List<AssessmentNode> nodes = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#ABCDEF"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#abcdef"));
+
+        assertEquals("hex case must not hide a blob", 1,
+                assessor.countContainerFillEqualsChild(nodes, false).count());
+    }
+
+    @Test
+    public void containerFillEqualsChild_coverageReportsChecked() {
+        List<AssessmentNode> nodes = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#80FF80"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#80FF80"));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+
+        assertEquals(LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("containerFillRecession"));
+        assertEquals("the blob surfaces on the result", 1,
+                result.containerFillEqualsChildCount());
+    }
+
+    @Test
+    public void containerFillEqualsChild_hasNoRatingImpact() {
+        // Same geometry; only the child fill differs (blob vs distinct). The informational
+        // container-fill detector must not perturb any rating.
+        List<AssessmentNode> blob = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#80FF80"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#80FF80"));
+        List<AssessmentNode> distinct = List.of(
+                cfNode("c", 0, 0, 300, 200, null, true, "#80FF80"),
+                cfNode("ch", 20, 20, 100, 50, "c", false, "#3366CC"));
+
+        LayoutAssessmentResult blobResult = assessor.assess(blob, List.of(), false);
+        LayoutAssessmentResult distinctResult = assessor.assess(distinct, List.of(), false);
+
+        assertEquals(distinctResult.overallRating(), blobResult.overallRating());
+        assertEquals(distinctResult.layoutRating(), blobResult.layoutRating());
+        assertEquals(distinctResult.routingRating(), blobResult.routingRating());
+        assertEquals(distinctResult.ratingBreakdown(), blobResult.ratingBreakdown());
+        assertEquals("detector counts differ even though ratings do not",
+                1, blobResult.containerFillEqualsChildCount());
+        assertEquals(0, distinctResult.containerFillEqualsChildCount());
+    }
+
+    @Test
+    public void coverage_hasNoRatingImpact_ratingsStayIdentical() {
+        // Rating-identity regression guard: building the coverage map must not perturb any rating.
+        // Two representative multi-element views pin both ends of the rating scale; coverage
+        // is computed AFTER ratings and never feeds back, so these literals must hold.
+        List<AssessmentNode> cleanNodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 0, 100, 100, 50),
+                node("c", 0, 200, 100, 50));
+        LayoutAssessmentResult clean = assessor.assess(cleanNodes, List.of(), false);
+        assertEquals("excellent", clean.overallRating());
+        assertEquals("excellent", clean.layoutRating());
+        assertEquals("excellent", clean.routingRating());
+        // coverage is fully populated alongside an untouched excellent rating.
+        assertEquals(LayoutQualityAssessor.CoverageDimension.values().length,
+                clean.coverage().size());
+
+        List<AssessmentNode> badNodes = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            badNodes.add(node("n" + i, 0, 0, 100, 50));
+        }
+        LayoutAssessmentResult bad = assessor.assess(badNodes, List.of(), false);
+        assertEquals("poor", bad.overallRating());
+        assertEquals(LayoutQualityAssessor.CoverageDimension.values().length,
+                bad.coverage().size());
+
+        // The coverage states must never leak into the rating breakdown values.
+        for (String v : clean.ratingBreakdown().values()) {
+            assertNotEquals(LayoutQualityAssessor.COVERAGE_CHECKED, v);
+            assertNotEquals(LayoutQualityAssessor.COVERAGE_PARTIAL, v);
+            assertNotEquals(LayoutQualityAssessor.COVERAGE_NOT_CHECKED, v);
+        }
+    }
+
     @Test
     public void ratingBreakdown_excellentView_shouldHaveAllPass() {
         // All metrics excellent: 0 overlaps, 0 crossings, good spacing/alignment, 0 labels, 0 pass-throughs
@@ -1608,6 +2447,78 @@ public class LayoutQualityAssessorTest {
         assertEquals("pass", result.breakdown().get("coincidentSegments"));
         assertEquals("pass", result.breakdown().get("nonOrthogonalTerminals"));
         assertEquals("excellent", result.breakdown().get("overall"));
+    }
+
+    @Test
+    public void denoisedHeadline_terminalCosmeticsOnlyFair_excludesToExcellent() {
+        // 3 diagonal terminals over 10 connections (ratio 0.30) → nonOrthogonalTerminals "fair"
+        // (Tier-2R cap-fair), every other metric clean → overall "fair". The de-noised headline
+        // removes the accepted ELK terminal cosmetic, so it reads "excellent".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 3, 10, false);
+
+        assertEquals("fair", result.breakdown().get("nonOrthogonalTerminals"));
+        assertEquals("fair", result.breakdown().get("overall"));
+        assertEquals("excellent",
+                result.breakdown().get("overallExcludingAcceptedCosmetics"));
+    }
+
+    @Test
+    public void denoisedHeadline_realPassThroughDefect_survivesDenoising() {
+        // A real Tier-1R defect (2 pass-throughs → "fair") alongside the same diagonal
+        // terminals. De-noising only removes the terminal cosmetic; the pass-through still
+        // drives the rating, so both headlines read the same.
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 2, 0, 3, 10, false);
+
+        assertEquals("fair", result.breakdown().get("passThroughs"));
+        assertEquals("fair", result.breakdown().get("nonOrthogonalTerminals"));
+        assertEquals("fair", result.breakdown().get("overall"));
+        assertEquals("fair",
+                result.breakdown().get("overallExcludingAcceptedCosmetics"));
+    }
+
+    @Test
+    public void denoisedHeadline_cleanView_bothExcellent() {
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false);
+
+        assertEquals("excellent", result.breakdown().get("overall"));
+        assertEquals("excellent",
+                result.breakdown().get("overallExcludingAcceptedCosmetics"));
+    }
+
+    @Test
+    public void denoisedHeadline_isAlwaysAFloorNeverALift() {
+        // Across a representative sweep the de-noised headline is never more severe than the
+        // live overall (it can only equal or improve it, since it removes a contributor) and
+        // the live "overall" is never altered by the de-noise computation.
+        int[][] cases = {
+                {0, 0, 0, 0, 0},   // clean
+                {0, 0, 0, 3, 10},  // terminal cosmetics only → fair, denoise excellent
+                {0, 0, 0, 6, 10},  // heavy terminals (ratio 0.6 → poor), denoise excellent
+                {0, 2, 0, 3, 10},  // pass-through fair survives
+                {2, 0, 0, 3, 10},  // overlap poor (Tier-1L) survives layout-side
+        };
+        for (int[] c : cases) {
+            LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                    c[0], 0, 50.0, 80, 0, c[1], 0, c[3], c[4], false);
+            int overall = ratingSeverity(result.breakdown().get("overall"));
+            int denoised = ratingSeverity(
+                    result.breakdown().get("overallExcludingAcceptedCosmetics"));
+            assertTrue("de-noised headline must never be more severe than overall",
+                    denoised <= overall);
+        }
+    }
+
+    /** excellent=0 < good=1 < fair=2 < poor=3 — severity ordering for the floor assertion. */
+    private static int ratingSeverity(String rating) {
+        switch (rating) {
+            case "excellent": return 0;
+            case "good": return 1;
+            case "fair": return 2;
+            default: return 3;
+        }
     }
 
     @Test
@@ -1727,8 +2638,15 @@ public class LayoutQualityAssessorTest {
         // pre-existing 8 (overlaps, edgeCrossings, spacing, alignment, labelOverlaps, passThroughs,
         // coincidentSegments, nonOrthogonalTerminals) + new 8 (boundaryViolations, parentLabelObscured,
         // offCanvas, labelTruncations, interiorTerminations, zigzags, connectionEdgeCoincidence,
-        // hubPortQuality) + "overall" = 17.
-        assertEquals(17, result.ratingBreakdown().size());
+        // hubPortQuality) + "overall" = 17. Hub-to-neighbour crowding (2026-06-25) adds a 17th
+        // metric ("hubNeighbourCrowding", present on every call — pass when not crowded) → 18.
+        // Non-orthogonal interior segments (promoted to a rating tier) adds an 18th metric
+        // ("nonOrthogonalInteriorSegments", present on every call — pass when count is zero) → 19.
+        // Connection-through-note/image (promoted to a rating tier) adds a 19th metric
+        // ("connectionThroughNote", present on every call — pass when count is zero) → 20.
+        // The de-noised headline adds "overallExcludingAcceptedCosmetics" (a companion to
+        // "overall", present on every call) → 21.
+        assertEquals(21, result.ratingBreakdown().size());
         assertEquals(result.overallRating(), result.ratingBreakdown().get("overall"));
     }
 
@@ -2017,7 +2935,7 @@ public class LayoutQualityAssessorTest {
     public void detectLabelTruncation_shouldNotDetect_whenLabelFits() {
         // Element 120px wide, 16px type icon = 104px available. Short name fits.
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "Short", 50.0, null, null));
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "Short", 50.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(0, result.count());
         assertTrue(result.descriptions().isEmpty());
@@ -2028,7 +2946,7 @@ public class LayoutQualityAssessorTest {
         // Element 80px wide, 16px type icon = 64px available. Label 250px wide.
         // Estimated lines = ceil(250/64) = 4. Needed height = 4*14 + 6 = 62 > 55 → truncated.
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Very Long Element Name That Wraps Many Lines", 250.0, null, null));
+                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Very Long Element Name That Wraps Many Lines", 250.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(1, result.count());
         assertEquals(1, result.descriptions().size());
@@ -2041,7 +2959,7 @@ public class LayoutQualityAssessorTest {
         // Element 80px wide, 16px type icon = 64px available. Label 100px wide.
         // Estimated lines = ceil(100/64) = 2. Needed height = 2*14 + 6 = 34 < 55 → fits.
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Wraps But Fits", 100.0, null, null));
+                new AssessmentNode("e1", 10, 20, 80, 55, null, false, false, "Wraps But Fits", 100.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(0, result.count());
     }
@@ -2049,7 +2967,7 @@ public class LayoutQualityAssessorTest {
     @Test
     public void detectLabelTruncation_shouldSkipGroups() {
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("g1", 0, 0, 50, 50, null, true, false, "Group Name", 200.0, null, null));
+                new AssessmentNode("g1", 0, 0, 50, 50, null, true, false, "Group Name", 200.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(0, result.count());
     }
@@ -2057,7 +2975,7 @@ public class LayoutQualityAssessorTest {
     @Test
     public void detectLabelTruncation_shouldSkipNotes() {
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("n1", 0, 0, 50, 50, null, false, true, "Note Text", 200.0, null, null));
+                new AssessmentNode("n1", 0, 0, 50, 50, null, false, true, "Note Text", 200.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(0, result.count());
     }
@@ -2065,7 +2983,7 @@ public class LayoutQualityAssessorTest {
     @Test
     public void detectLabelTruncation_shouldSkipNullName() {
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 80, 55, null, false, false, null, 0.0, null, null));
+                new AssessmentNode("e1", 0, 0, 80, 55, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(0, result.count());
     }
@@ -2075,11 +2993,2000 @@ public class LayoutQualityAssessorTest {
         List<AssessmentNode> nodes = new java.util.ArrayList<>();
         for (int i = 0; i < 15; i++) {
             nodes.add(new AssessmentNode("e" + i, i * 100, 0, 50, 55, null, false, false,
-                    "VeryLongName" + i, 200.0, null, null));
+                    "VeryLongName" + i, 200.0, null, null, 0.0, 0.0, 0.0));
         }
         LayoutQualityAssessor.LabelTruncationResult result = assessor.detectLabelTruncation(nodes);
         assertEquals(15, result.count()); // exact count
         assertEquals(10, result.descriptions().size()); // capped at MAX_DESCRIPTIONS
+    }
+
+    // ---- Note text clip tests ----
+
+    /** Builds a top-level note carrying a pre-computed required content height. */
+    private static AssessmentNode noteWithRequired(String id, double x, double y,
+                                                   double w, double h, double requiredHeight) {
+        return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null, requiredHeight, 0.0, 0.0);
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldDetect_whenContentTallerThanBox() {
+        // Box 90px tall, content needs 240px → clipped.
+        List<AssessmentNode> notes = List.of(
+                noteWithRequired("n1", 10, 20, 600, 90, 240.0));
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(1, result.count());
+        assertEquals(1, result.descriptions().size());
+        assertTrue(result.descriptions().get(0).contains("n1"));
+        assertTrue(result.descriptions().get(0).contains("clips"));
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldNotDetect_whenAutoFitted() {
+        // Auto-fitted note: required height == box height (within tolerance) → not clipped.
+        List<AssessmentNode> notes = List.of(
+                noteWithRequired("n1", 0, 0, 600, 120, 120.0));
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(0, result.count());
+        assertTrue(result.descriptions().isEmpty());
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldNotDetect_whenBoxTallerThanContent() {
+        // Generously sized box: required 120px, box 400px → not clipped.
+        List<AssessmentNode> notes = List.of(
+                noteWithRequired("n1", 0, 0, 600, 400, 120.0));
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldSkip_whenRequiredHeightUnavailable() {
+        // requiredHeight == 0 means no content / measurement unavailable → skipped, even if box is tiny.
+        List<AssessmentNode> notes = List.of(
+                noteWithRequired("n1", 0, 0, 600, 5, 0.0));
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldNotDetect_withinTolerance() {
+        // required exceeds box by <= NOTE_CLIP_TOLERANCE (1px) → not flagged.
+        List<AssessmentNode> notes = List.of(
+                noteWithRequired("n1", 0, 0, 600, 120, 121.0));
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectNoteTextClipping_shouldCapDescriptionsAtMax() {
+        List<AssessmentNode> notes = new java.util.ArrayList<>();
+        for (int i = 0; i < 15; i++) {
+            notes.add(noteWithRequired("n" + i, i * 100, 0, 600, 50, 300.0));
+        }
+        LayoutQualityAssessor.NoteClipResult result = assessor.detectNoteTextClipping(notes);
+        assertEquals(15, result.count()); // exact count
+        assertEquals(10, result.descriptions().size()); // capped at MAX_DESCRIPTIONS
+    }
+
+    @Test
+    public void noteTextClipping_shouldNotAffectRating() {
+        // A clipped note must leave the rating byte-identical to the same view without it.
+        List<AssessmentNode> base = createFourNodeGrid();
+        List<AssessmentNode> withClippedNote = new java.util.ArrayList<>(base);
+        withClippedNote.add(noteWithRequired("clip", 400, 0, 600, 40, 300.0));
+
+        LayoutAssessmentResult plain = assessor.assess(base, List.of(), false);
+        LayoutAssessmentResult withNote = assessor.assess(withClippedNote, List.of(), false);
+
+        assertEquals(1, withNote.noteClipCount());
+        assertEquals(0, plain.noteClipCount());
+        // Rating dimensions are unchanged by the informational note-clip signal.
+        assertEquals(plain.overallRating(), withNote.overallRating());
+        assertEquals(plain.layoutRating(), withNote.layoutRating());
+        assertEquals(plain.routingRating(), withNote.routingRating());
+        assertEquals(plain.ratingBreakdown(), withNote.ratingBreakdown());
+    }
+
+    // ---- Connection-through-note/image tests ----
+
+    /** Builds a top-level note (isNote=true) with no clip measurement — used purely as an obstacle. */
+    private static AssessmentNode noteObstacle(String id, double x, double y, double w, double h) {
+        return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null, 0.0, 0.0, 0.0);
+    }
+
+    /** Builds a top-level image-bearing element (imagePath set) with the given image position. */
+    private static AssessmentNode imageElement(String id, double x, double y, double w, double h,
+                                               String position) {
+        return new AssessmentNode(id, x, y, w, h, null, false, false, "Img", 0.0,
+                "img/legend.png", position, 0.0, 0.0, 0.0);
+    }
+
+    /** A straight horizontal connection from src-centre to tgt-centre (2-point path). */
+    private static AssessmentConnection straightConn(String id, String src, String tgt,
+                                                     double srcCx, double tgtCx, double cy) {
+        return new AssessmentConnection(id, src, tgt,
+                List.of(new double[]{srcCx, cy}, new double[]{tgtCx, cy}), "", 1);
+    }
+
+    @Test
+    public void connectionThroughVisual_routeThroughNote_shouldFlagWithDescription() {
+        // src(0,0,100,50) ctr(50,25), tgt(400,0,100,50) ctr(450,25); clipped path is y=25 from x100→x400.
+        // Note (200,0,100,80) sits across that line → penetrated (inset rect x[210,290] y[10,70]).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 0, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(1, result.connectionThroughNoteCount());
+        assertEquals(1, result.connectionThroughNoteDescriptions().size());
+        String desc = result.connectionThroughNoteDescriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description names the note", desc.contains("cap"));
+        assertTrue("description identifies the visual as a note", desc.contains("note"));
+        // The note is invisible to the element pass-through detector (excluded from scoring nodes).
+        assertTrue("element pass-through count is untouched",
+                result.connectionPassThroughs().isEmpty());
+    }
+
+    @Test
+    public void connectionThroughVisual_clearOfNote_shouldNotFlag() {
+        // Same connection at y=25, but the note is well below the line → not penetrated.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 200, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(0, result.connectionThroughNoteCount());
+        assertTrue(result.connectionThroughNoteDescriptions().isEmpty());
+    }
+
+    @Test
+    public void connectionThroughVisual_adjacentToNote_withinInset_shouldNotFlag() {
+        // Note box top is 5px below the y=25 line — inside the 10px PASS_THROUGH_INSET grazing
+        // band. Treated no stricter than an element: grazing does not flag.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 30, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionThroughVisual_routeThroughImageOverhang_shouldFlagAsImage() {
+        // The image rect OVERHANGS its small host box, which is the case detectPassThroughs
+        // (element BOXES only) cannot see — proving the new detector adds genuine capability.
+        // Host box (180,0,60,20) sits well above the y=60 route, but a 100x100 top-left image
+        // extends down to y=100 and IS crossed by the route. Natural dims given so the rendered
+        // image rect is larger than the host box and the default icon size.
+        AssessmentNode img = new AssessmentNode("img1", 180, 0, 60, 20, null, false, false,
+                "Img", 0.0, "img/legend.png", "top-left", 0.0, 100.0, 100.0);
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 40, 80, 40),
+                node("tgt", 400, 40, 80, 40),
+                img);
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 40, 440, 60));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(1, result.connectionThroughNoteCount());
+        String desc = result.connectionThroughNoteDescriptions().get(0);
+        assertTrue("description names the element", desc.contains("img1"));
+        assertTrue("description identifies the visual as an image", desc.contains("image"));
+        // The host box is clear of the route — the overhanging image rect is invisible to the
+        // element pass-through detector, which is exactly the gap this detector closes.
+        assertTrue("image-rect overhang is not an element-box pass-through",
+                result.connectionPassThroughs().isEmpty());
+    }
+
+    @Test
+    public void connectionThroughVisual_imageOnOwnEndpoint_shouldNotFlag() {
+        // The connection terminates AT the image-bearing element — an image on a connection's own
+        // endpoint is not a pass-through (mirrors the element-loop endpoint carve-out).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 80, 50),
+                imageElement("imgTgt", 400, 0, 140, 80, "fill"));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "imgTgt", 40, 470, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionThroughVisual_plainElement_flaggedByPassThroughs_notDoubleCounted() {
+        // A plain (no-image) element across the path is the EXISTING connectionPassThroughs case;
+        // it must NOT also register in the new note/image count.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 80, 50),
+                node("tgt", 400, 0, 80, 50),
+                node("mid", 180, 0, 140, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 40, 440, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals("plain element pass-through still flagged",
+                1, result.connectionPassThroughs().size());
+        assertEquals("plain element not counted as a note/image pass-through",
+                0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionThroughVisual_participatesInRouting_demotesOneTier() {
+        // Rating PARTICIPATION (inverts the v1 non-participation guard): a single connection routed
+        // through a Note now MOVES routingRating. Single variable — the note is present in both runs
+        // and only its Y differs (notes are excluded from every scoring metric, so nothing else can
+        // change), so the through-note run flips connectionThroughNote pass→good and demotes the
+        // otherwise-excellent routing dimension by exactly one tier (excellent → good).
+        List<AssessmentNode> clearNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 200, 100, 80));   // well below the y=25 line → clear
+        List<AssessmentNode> throughNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 0, 100, 80));      // across the y=25 line → penetrated
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult control = assessor.assess(clearNodes, conns, false);
+        LayoutAssessmentResult through = assessor.assess(throughNodes, conns, false);
+
+        assertEquals(0, control.connectionThroughNoteCount());
+        assertEquals(1, through.connectionThroughNoteCount());
+        // The breakdown now ALWAYS carries the key; control is "pass", the through run is "good".
+        assertTrue("breakdown carries the key",
+                through.ratingBreakdown().containsKey("connectionThroughNote"));
+        assertEquals("pass", control.ratingBreakdown().get("connectionThroughNote"));
+        assertEquals("good", through.ratingBreakdown().get("connectionThroughNote"));
+        // The single crossing demotes routing by exactly one tier; element pass-through stays clean,
+        // proving the new entry — not passThroughs — drove the demotion.
+        assertEquals("excellent", control.routingRating());
+        assertEquals("good", through.routingRating());
+        assertEquals("pass", through.ratingBreakdown().get("passThroughs"));
+    }
+
+    @Test
+    public void connectionThroughNote_zeroShouldRatePass() {
+        // Zero crossings → the entry passes; the routing dimension is untouched.
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0, 0);
+        assertEquals("pass", result.breakdown().get("connectionThroughNote"));
+    }
+
+    @Test
+    public void connectionThroughNote_capsAtGood_regardlessOfCount() {
+        // Presence, not magnitude (the >=1 floor + Tier-3 cap): one crossing and three both rate
+        // "good", and the routing dimension is held at "good" — never escalating to fair/poor.
+        LayoutQualityAssessor.RatingResult one = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0, 1);
+        LayoutQualityAssessor.RatingResult three = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0, 3);
+        assertEquals("good", one.breakdown().get("connectionThroughNote"));
+        assertEquals("good", three.breakdown().get("connectionThroughNote"));
+        assertEquals("good", one.routingRating());
+        assertEquals("good", three.routingRating());
+    }
+
+    @Test
+    public void connectionThroughVisual_imageVariant_participatesInRouting() {
+        // The image-rect-overhang variant moves routingRating identically to the note variant.
+        // Single variable: the image-bearing element is present in both runs and only its Y differs
+        // (routing ignores element position), so only the through run flips the entry to "good".
+        AssessmentNode imgThrough = new AssessmentNode("img1", 180, 0, 60, 20, null, false, false,
+                "Img", 0.0, "img/legend.png", "top-left", 0.0, 100.0, 100.0);
+        AssessmentNode imgClear = new AssessmentNode("img1", 180, 200, 60, 20, null, false, false,
+                "Img", 0.0, "img/legend.png", "top-left", 0.0, 100.0, 100.0);
+        List<AssessmentNode> throughNodes = List.of(
+                node("src", 0, 40, 80, 40), node("tgt", 400, 40, 80, 40), imgThrough);
+        List<AssessmentNode> clearNodes = List.of(
+                node("src", 0, 40, 80, 40), node("tgt", 400, 40, 80, 40), imgClear);
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 40, 440, 60));
+
+        LayoutAssessmentResult control = assessor.assess(clearNodes, conns, false);
+        LayoutAssessmentResult through = assessor.assess(throughNodes, conns, false);
+
+        assertEquals(0, control.connectionThroughNoteCount());
+        assertEquals(1, through.connectionThroughNoteCount());
+        assertEquals("good", through.ratingBreakdown().get("connectionThroughNote"));
+        assertEquals("excellent", control.routingRating());
+        assertEquals("good", through.routingRating());
+    }
+
+    @Test
+    public void connectionThroughNote_plainElementCrossing_chargedByPassThroughsNotDoubleCharged() {
+        // No-double-charge: a plain element across the route rates via passThroughs (Tier-1R, "fair"
+        // for one crossing — FAIR_MAX_PASS_THROUGHS is 3) while connectionThroughNote stays "pass".
+        // The two detectors are disjoint, so the crossing is charged exactly once.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 80, 50),
+                node("tgt", 400, 0, 80, 50),
+                node("mid", 180, 0, 140, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 40, 440, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(1, result.connectionPassThroughs().size());
+        assertEquals(0, result.connectionThroughNoteCount());
+        assertEquals("fair", result.ratingBreakdown().get("passThroughs"));
+        assertEquals("pass", result.ratingBreakdown().get("connectionThroughNote"));
+        assertEquals("fair", result.routingRating());
+    }
+
+    @Test
+    public void connectionThroughNote_adjacentWithinInset_doesNotParticipate() {
+        // A note grazing within the 10px inset does NOT flag, so it must NOT move the rating: the
+        // entry stays "pass" and the rating is byte-identical to the note-clear control.
+        List<AssessmentNode> grazeNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 30, 100, 80));     // top 5px below y=25 — within inset
+        List<AssessmentNode> clearNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 200, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult graze = assessor.assess(grazeNodes, conns, false);
+        LayoutAssessmentResult clear = assessor.assess(clearNodes, conns, false);
+
+        assertEquals(0, graze.connectionThroughNoteCount());
+        assertEquals("pass", graze.ratingBreakdown().get("connectionThroughNote"));
+        assertEquals(clear.routingRating(), graze.routingRating());
+        assertEquals(clear.ratingBreakdown(), graze.ratingBreakdown());
+    }
+
+    @Test
+    public void connectionGrazesVisual_routeGrazesNoteBorder_shouldFlagWithDescription() {
+        // Note (200,20,100,80): full rect y[20,100], inset rect y[30,90]. The y=25 route enters the
+        // note's outer 10px band (20..30) but never reaches the inset interior → border graze, NOT a
+        // through-penetration. This is the band the through-visual inset discards (a live-confirmed miss).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 20, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals("border graze flagged", 1, result.connectionGrazesVisualCount());
+        assertEquals(1, result.connectionGrazesVisualDescriptions().size());
+        String desc = result.connectionGrazesVisualDescriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description names the note", desc.contains("cap"));
+        assertTrue("description identifies a border graze", desc.contains("grazes"));
+        // Disjoint: a graze is NOT counted as an interior penetration.
+        assertEquals("graze is not an interior through-penetration",
+                0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionGrazesVisual_throughAndGraze_areDisjoint() {
+        // Both ways: a route that PENETRATES counts as through (graze 0); a route that only touches
+        // the border band counts as graze (through 0). The two counts never co-fire on one crossing.
+        List<AssessmentNode> base = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        // Penetration: note (200,0,100,80) → inset y[10,70] contains the y=25 route.
+        List<AssessmentNode> throughNodes = new ArrayList<>(base);
+        throughNodes.add(noteObstacle("cap", 200, 0, 100, 80));
+        LayoutAssessmentResult through = assessor.assess(throughNodes, conns, false);
+        assertEquals("penetration → through", 1, through.connectionThroughNoteCount());
+        assertEquals("penetration → not a graze", 0, through.connectionGrazesVisualCount());
+
+        // Graze: note (200,20,100,80) → outer band only.
+        List<AssessmentNode> grazeNodes = new ArrayList<>(base);
+        grazeNodes.add(noteObstacle("cap", 200, 20, 100, 80));
+        LayoutAssessmentResult graze = assessor.assess(grazeNodes, conns, false);
+        assertEquals("border touch → graze", 1, graze.connectionGrazesVisualCount());
+        assertEquals("border touch → not a through-penetration", 0, graze.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionGrazesVisual_tinyNoteCrossed_flagsViaGraze() {
+        // A 16x16 note is smaller than 2*PASS_THROUGH_INSET (20px), so pathPassesThroughNode insets
+        // to a negative-size rect and returns false — a route straight through it was previously
+        // SILENT. The graze path tests the un-inset rect and catches the crossing.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("tiny", 242, 17, 16, 16));    // centre (250,25) on the y=25 route
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals("tiny note crossed → graze flagged", 1, result.connectionGrazesVisualCount());
+        assertEquals("tiny note cannot register as an interior penetration",
+                0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionGrazesVisual_imageBorderGraze_shouldFlagAsImage() {
+        // Image rect (180,0,100,100), inset y[10,90]. A y=95 route touches the image's bottom band
+        // (90..100) but not the inset interior → image-border graze. The host box (180,0,60,20) is
+        // well above y=95, so this is invisible to the element-box pass-through detector.
+        AssessmentNode img = new AssessmentNode("img1", 180, 0, 60, 20, null, false, false,
+                "Img", 0.0, "img/legend.png", "top-left", 0.0, 100.0, 100.0);
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 90, 80, 10),
+                node("tgt", 400, 90, 80, 10),
+                img);
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 40, 440, 95));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals("image-border graze flagged", 1, result.connectionGrazesVisualCount());
+        String desc = result.connectionGrazesVisualDescriptions().get(0);
+        assertTrue("description names the element", desc.contains("img1"));
+        assertTrue("description identifies the visual as an image", desc.contains("image"));
+        assertEquals("graze is not an interior penetration", 0, result.connectionThroughNoteCount());
+    }
+
+    @Test
+    public void connectionGrazesVisual_clearOfNote_shouldNotFlag() {
+        // The note is well clear of the route → neither penetration nor graze.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 200, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+
+        assertEquals(0, result.connectionGrazesVisualCount());
+        assertTrue(result.connectionGrazesVisualDescriptions().isEmpty());
+    }
+
+    @Test
+    public void connectionGrazesVisual_informational_noRatingImpact() {
+        // Graze is informational: a view with a border graze rates byte-identically to the clear
+        // control, and the graze never appears as a ratingBreakdown entry.
+        List<AssessmentNode> grazeNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 20, 100, 80));
+        List<AssessmentNode> clearNodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 400, 0, 100, 50),
+                noteObstacle("cap", 200, 200, 100, 80));
+        List<AssessmentConnection> conns = List.of(straightConn("c1", "src", "tgt", 50, 450, 25));
+
+        LayoutAssessmentResult graze = assessor.assess(grazeNodes, conns, false);
+        LayoutAssessmentResult clear = assessor.assess(clearNodes, conns, false);
+
+        assertEquals(1, graze.connectionGrazesVisualCount());
+        assertEquals(0, clear.connectionGrazesVisualCount());
+        assertFalse("graze is not a rating breakdown entry",
+                graze.ratingBreakdown().containsKey("connectionGrazesVisual"));
+        assertEquals("rating unaffected by an informational graze",
+                clear.overallRating(), graze.overallRating());
+        assertEquals(clear.ratingBreakdown(), graze.ratingBreakdown());
+    }
+
+    @Test
+    public void computeRatingWithBreakdown_20ArgOverload_defaultsThroughNotePassByteIdentical() {
+        // The 20-arg overload must delegate with connectionThroughNoteCount=0 → entry "pass", rating
+        // unchanged from the 21-arg form forwarding 0 (the interior-segment overload precedent).
+        LayoutQualityAssessor.RatingResult viaTwenty = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0);
+        LayoutQualityAssessor.RatingResult viaTwentyOneZero = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0, 0);
+        assertEquals(viaTwentyOneZero.rating(), viaTwenty.rating());
+        assertEquals(viaTwentyOneZero.breakdown(), viaTwenty.breakdown());
+        assertEquals("pass", viaTwenty.breakdown().get("connectionThroughNote"));
+    }
+
+    @Test
+    public void connectionThroughVisual_coverageDimensionChecked() {
+        // The connection-route-vs-visual class is now fully covered: connectionThroughNote (interior
+        // penetration) + connectionGrazesVisual (border graze) together close it, so connectionThroughNote
+        // declares "checked". (Red-on-revert anchor for the graze story's coverage flip — reverting the
+        // flip to "partial" fails here.)
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+        assertEquals(LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("connectionThroughNote"));
+    }
+
+    // ---- Label-on-note tests (connection label rendered on a Note rectangle) ----
+    // Label box geometry (estimateLabelBounds): height = LABEL_CHAR_HEIGHT + LABEL_PADDING_Y = 20,
+    // centred on the path fraction point; width = len*LABEL_CHAR_WIDTH*LABEL_RENDER_WIDTH_FACTOR +
+    // LABEL_PADDING_X. For "Accesses" (8 chars) on a (50,25)->(450,25) middle-positioned connection
+    // the box centres at (250,25): x in [201.8,298.2], y in [15,35]; after insetRectOverlap's
+    // min(10,dim/3) inset the test rect is x in [211.8,288.2], y in [21.67,28.33].
+
+    /** A middle-positioned, straight, horizontal connection that carries a label. */
+    private static AssessmentConnection labeledConn(String id, String src, String tgt,
+            double x1, double x2, double y, String label) {
+        return new AssessmentConnection(id, src, tgt,
+                List.of(new double[]{x1, y}, new double[]{x2, y}), label, 1);
+    }
+
+    @Test
+    public void labelOnNote_labelOverNote_shouldFlagWithDescriptionAndViolator() {
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> notes = List.of(noteObstacle("cap", 200, 0, 100, 50));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, true);
+
+        assertEquals(1, r.count());
+        assertEquals(1, r.descriptions().size());
+        String desc = r.descriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description names the note", desc.contains("cap"));
+        assertTrue("description identifies the host as a note", desc.contains("note"));
+        assertTrue("violator surfaces the note id", r.violatorIds().contains("cap"));
+    }
+
+    @Test
+    public void labelOnNote_noLabel_shouldNotFlag() {
+        // Empty label text → estimateLabelBounds returns null → nothing to test against a note.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, ""));
+        List<AssessmentNode> notes = List.of(noteObstacle("cap", 200, 0, 100, 50));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, false);
+
+        assertEquals(0, r.count());
+        assertTrue(r.descriptions().isEmpty());
+    }
+
+    @Test
+    public void labelOnNote_clearOfNote_shouldNotFlag() {
+        // The note sits well clear of the label box (centred at (250,25)).
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> notes = List.of(noteObstacle("cap", 200, 200, 100, 50));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, true);
+
+        assertEquals(0, r.count());
+        assertTrue("no violators when nothing overlaps", r.violatorIds().isEmpty());
+    }
+
+    @Test
+    public void labelOnNote_smallLabelInLargeNote_flagsWithoutDilution() {
+        // A 2-char label box sits fully inside a large note. A boolean inset overlap fires; there is
+        // no label-area fraction to dilute below a threshold, so no box-coverage companion is needed.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Hi"));
+        List<AssessmentNode> notes = List.of(noteObstacle("big", 100, -50, 400, 200));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, false);
+
+        assertEquals(1, r.count());
+    }
+
+    @Test
+    public void labelOnNote_labelOverTinyNote_flags() {
+        // A note far smaller than the label still overlaps it → flags (inverse size regime).
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> notes = List.of(noteObstacle("tiny", 245, 20, 12, 12));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, false);
+
+        assertEquals(1, r.count());
+    }
+
+    @Test
+    public void labelOnNote_overlapsTwoNotes_countsPerPair() {
+        // The label box (inset x in [211.8,288.2]) straddles two adjacent notes → one annotation each.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> notes = List.of(
+                noteObstacle("n1", 210, 0, 50, 50),
+                noteObstacle("n2", 270, 0, 50, 50));
+
+        LayoutQualityAssessor.LabelOnNoteResult r = assessor.countLabelOnNote(conns, notes, true);
+
+        assertEquals(2, r.count());
+        assertTrue(r.violatorIds().contains("n1"));
+        assertTrue(r.violatorIds().contains("n2"));
+    }
+
+    @Test
+    public void labelOnNote_independentOfRoute_andNoRatingImpact() {
+        // The note sits under the LABEL (y in [8,23]) but BELOW the route line (y=25): label-on-note
+        // fires while the route detectors stay clear — proving the dimensions are independent. And the
+        // count is informational: rating is byte-identical to the same view with the note moved clear.
+        List<AssessmentNode> onNoteNodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 400, 0, 100, 50),
+                noteObstacle("cap", 210, 8, 80, 15));
+        List<AssessmentNode> clearNodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 400, 0, 100, 50),
+                noteObstacle("cap", 210, 200, 80, 15));
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+
+        LayoutAssessmentResult onNote = assessor.assess(onNoteNodes, conns, false);
+        LayoutAssessmentResult clear = assessor.assess(clearNodes, conns, false);
+
+        assertEquals("label on the note is counted", 1, onNote.labelOnNoteCount());
+        assertEquals(1, onNote.labelOnNoteDescriptions().size());
+        assertEquals("note moved clear → not counted", 0, clear.labelOnNoteCount());
+        // Independent of the route-vs-visual detectors: the line (y=25) misses the note (y in [8,23]).
+        assertEquals("route does not penetrate the note", 0, onNote.connectionThroughNoteCount());
+        assertEquals("route does not graze the note border", 0, onNote.connectionGrazesVisualCount());
+        // Informational: no rating impact, not a breakdown entry.
+        assertFalse("labelOnNote is not a rating breakdown entry",
+                onNote.ratingBreakdown().containsKey("labelOnNote"));
+        assertEquals("rating unaffected by an informational label-on-note",
+                clear.overallRating(), onNote.overallRating());
+        assertEquals(clear.ratingBreakdown(), onNote.ratingBreakdown());
+    }
+
+    @Test
+    public void labelOnNote_coverageDimensionChecked() {
+        // Red-on-revert anchor for the coverage flip: removing the LABEL_ON_NOTE dimension fails here.
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+        assertEquals(LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("labelOnNote"));
+    }
+
+    // ---- Label-on-group (title band) tests ----
+
+    /** Builds a top-level named visual group (isGroup=true) used as a title-band host. */
+    private static AssessmentNode groupNode(String id, double x, double y, double w, double h,
+            String name) {
+        return new AssessmentNode(id, x, y, w, h, null, true, false, name, 0.0, null, null, 0.0, 0.0, 0.0);
+    }
+
+    @Test
+    public void labelOnGroup_labelOverTitleBand_shouldFlagWithDescriptionAndViolator() {
+        // Label centred at (250,25); the group's title band is the top 20px strip [y in 10..30],
+        // which the label box reaches → flags.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> nodes = List.of(groupNode("g1", 100, 10, 400, 200, "Layer A"));
+
+        LayoutQualityAssessor.LabelOnGroupResult r = assessor.countLabelOnGroup(conns, nodes, true);
+
+        assertEquals(1, r.count());
+        assertEquals(1, r.descriptions().size());
+        String desc = r.descriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description names the group", desc.contains("g1"));
+        assertTrue("description identifies the host region as the group title band",
+                desc.contains("title band") && desc.contains("group"));
+        assertTrue("violator surfaces the group id", r.violatorIds().contains("g1"));
+    }
+
+    @Test
+    public void labelOnGroup_labelDeepInBody_shouldNotFlag_andSingleVarNudgeFlips() {
+        // The calibration crux: a label INSIDE the group body (below the 20px title band) is normal
+        // and must NOT flag, even though it is geometrically inside the full group rectangle. Moving
+        // the label up into the title band (single variable: the connection's y) flips 0 → 1.
+        List<AssessmentNode> nodes = List.of(groupNode("g1", 100, 10, 400, 200, "Layer A"));
+
+        List<AssessmentConnection> bodyLabel =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 100, "Accesses")); // y=100, deep in body
+        List<AssessmentConnection> bandLabel =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 20, "Accesses"));  // y=20, on title band
+
+        assertEquals("label deep in the group body does not flag (band-not-full-rect)",
+                0, assessor.countLabelOnGroup(bodyLabel, nodes, false).count());
+        assertEquals("same label nudged up onto the title band flags",
+                1, assessor.countLabelOnGroup(bandLabel, nodes, false).count());
+    }
+
+    @Test
+    public void labelOnGroup_unnamedGroup_shouldNotFlag() {
+        // An unnamed group has no title text to collide with → skipped even when the label is on its
+        // top strip.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> nodes = List.of(groupNode("g1", 100, 10, 400, 200, null));
+
+        LayoutQualityAssessor.LabelOnGroupResult r = assessor.countLabelOnGroup(conns, nodes, true);
+
+        assertEquals(0, r.count());
+        assertTrue("no violators for an unnamed group", r.violatorIds().isEmpty());
+    }
+
+    @Test
+    public void labelOnGroup_noteAndElementAreNotHosts_shouldNotFlag() {
+        // Only visual Groups are hosts: a note (isNote) and a plain element (isGroup=false) under the
+        // label do not contribute to labelOnGroupCount — they are the concern of labelOnNote /
+        // labelOverlaps respectively.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> nonGroups = List.of(
+                noteObstacle("cap", 200, 10, 100, 50),
+                node("plain", 230, 10, 60, 40));
+
+        LayoutQualityAssessor.LabelOnGroupResult r = assessor.countLabelOnGroup(conns, nonGroups, false);
+
+        assertEquals(0, r.count());
+    }
+
+    @Test
+    public void labelOnGroup_overlapsTwoGroupTitleBands_countsPerPair() {
+        // The label box straddles the title bands of two adjacent named groups → one annotation each.
+        List<AssessmentConnection> conns =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> nodes = List.of(
+                groupNode("g1", 210, 10, 40, 200, "Left"),
+                groupNode("g2", 250, 10, 60, 200, "Right"));
+
+        LayoutQualityAssessor.LabelOnGroupResult r = assessor.countLabelOnGroup(conns, nodes, true);
+
+        assertEquals(2, r.count());
+        assertTrue(r.violatorIds().contains("g1"));
+        assertTrue(r.violatorIds().contains("g2"));
+    }
+
+    @Test
+    public void labelOnGroup_sizeRobustBothWays_flags() {
+        // Boolean inset overlap, no fractional dilution: a small label on a wide group band, and a
+        // wide label on a narrow group band, both flag.
+        List<AssessmentConnection> smallLabel =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Hi"));
+        List<AssessmentNode> wideGroup = List.of(groupNode("wide", 100, 10, 400, 200, "Wide"));
+        assertEquals("small label on a wide group title band flags",
+                1, assessor.countLabelOnGroup(smallLabel, wideGroup, false).count());
+
+        List<AssessmentConnection> wideLabel =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentNode> narrowGroup = List.of(groupNode("narrow", 245, 10, 12, 200, "N"));
+        assertEquals("wide label on a narrow group title band flags",
+                1, assessor.countLabelOnGroup(wideLabel, narrowGroup, false).count());
+    }
+
+    @Test
+    public void labelOnGroup_informational_noRatingImpact_andCoverageChecked() {
+        // Same nodes + same connection path; the only difference is whether the connection carries a
+        // label. The label overlaps no SCORED node (a/b are endpoints, the group is skipped by the
+        // rating-feeding label-overlap detector), so the rating is byte-identical whether or not the
+        // label is present — proving labelOnGroup never reaches the rating.
+        List<AssessmentNode> nodes = List.of(
+                node("a", 0, 0, 100, 50),
+                node("b", 400, 0, 100, 50),
+                groupNode("g1", 100, 10, 400, 200, "Layer A"));
+        List<AssessmentConnection> labelled =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, "Accesses"));
+        List<AssessmentConnection> unlabelled =
+                List.of(labeledConn("c1", "a", "b", 50, 450, 25, ""));
+
+        LayoutAssessmentResult onBand = assessor.assess(nodes, labelled, false);
+        LayoutAssessmentResult control = assessor.assess(nodes, unlabelled, false);
+
+        assertEquals("label on the group title band is counted", 1, onBand.labelOnGroupCount());
+        assertEquals(1, onBand.labelOnGroupDescriptions().size());
+        assertEquals("no label → nothing on the band", 0, control.labelOnGroupCount());
+        assertFalse("labelOnGroup is not a rating breakdown entry",
+                onBand.ratingBreakdown().containsKey("labelOnGroup"));
+        assertEquals("rating unaffected by an informational label-on-group",
+                control.overallRating(), onBand.overallRating());
+        assertEquals(control.ratingBreakdown(), onBand.ratingBreakdown());
+        assertEquals("labelOnGroup coverage dimension is checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED, onBand.coverage().get("labelOnGroup"));
+    }
+
+    // ---- Redundant (collinear / removable) bendpoint tests ----
+
+    @Test
+    public void redundantBendpoint_straightCollinearMidpoint_shouldFlagWithDescription() {
+        // (0,0)→(50,0)→(100,0): the middle point adds nothing — removing it leaves the same line.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0}, new double[]{100, 0}), "", 1);
+
+        LayoutQualityAssessor.RedundantBendpointResult result =
+                assessor.countRedundantBendpoints(List.of(conn), false);
+
+        assertEquals("collinear midpoint is a redundant bendpoint", 1, result.count());
+        assertEquals(1, result.descriptions().size());
+        String desc = result.descriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description identifies it as redundant", desc.contains("redundant"));
+        assertTrue("description names the offending index", desc.contains("index 1"));
+    }
+
+    @Test
+    public void redundantBendpoint_realCorner_shouldNotFlag() {
+        // (0,0)→(50,0)→(50,50): a genuine 90° turn — the bendpoint changes direction, not redundant.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0}, new double[]{50, 50}), "", 1);
+
+        LayoutQualityAssessor.RedundantBendpointResult result =
+                assessor.countRedundantBendpoints(List.of(conn), false);
+
+        assertEquals("a real corner is not redundant", 0, result.count());
+    }
+
+    @Test
+    public void redundantBendpoint_multipleCollinearPoints_countsEach() {
+        // Four collinear interior points on one straight line — counted per bendpoint (not binary).
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{25, 0}, new double[]{50, 0},
+                        new double[]{75, 0}, new double[]{100, 0}), "", 1);
+
+        LayoutQualityAssessor.RedundantBendpointResult result =
+                assessor.countRedundantBendpoints(List.of(conn), false);
+
+        assertEquals("three interior collinear midpoints each count", 3, result.count());
+    }
+
+    @Test
+    public void redundantBendpoint_collinearSpike_shouldNotFlag_butIsAZigzag() {
+        // (0,0)→(0,40)→(0,10): collinear (all x=0) but the middle OVERSHOOTS past the target —
+        // removing it WOULD change the shape. The "between" guard rejects it as redundant; it is
+        // the zigzag detector's concern (opposite-sign reversal), proving the two are independent.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{0, 40}, new double[]{0, 10}), "", 1);
+
+        assertEquals("a collinear out-and-back spike is NOT a redundant bendpoint",
+                0, assessor.countRedundantBendpoints(List.of(conn), false).count());
+        assertEquals("the same spike IS a zigzag (reversal)",
+                1, assessor.countZigzags(List.of(conn), java.util.Set.of(), false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_twoPointPath_shouldNotFlag() {
+        // No interior bendpoint at all — nothing to flag.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0}), "", 1);
+
+        assertEquals(0, assessor.countRedundantBendpoints(List.of(conn), false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_hasNoRatingImpact() {
+        // Rating-identity guard: a redundant midpoint renders the SAME visual line as the straight
+        // route, so every rating value must be byte-identical — the metric is informational only.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 200, 0, 100, 50));
+        AssessmentConnection straight = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{250, 25}), "", 1);
+        AssessmentConnection withRedundant = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{150, 25}, new double[]{250, 25}), "", 1);
+
+        LayoutAssessmentResult plain = assessor.assess(nodes, List.of(straight), false);
+        LayoutAssessmentResult withR = assessor.assess(nodes, List.of(withRedundant), false);
+
+        assertEquals(0, plain.connectionRedundantBendpointCount());
+        assertEquals(1, withR.connectionRedundantBendpointCount());
+        assertEquals(1, withR.connectionRedundantBendpointDescriptions().size());
+        assertEquals(plain.overallRating(), withR.overallRating());
+        assertEquals(plain.layoutRating(), withR.layoutRating());
+        assertEquals(plain.routingRating(), withR.routingRating());
+        assertEquals(plain.ratingBreakdown(), withR.ratingBreakdown());
+    }
+
+    @Test
+    public void redundantBendpoint_coverageDimensionChecked() {
+        // The redundantBendpoints coverage dimension has a detector — must report checked.
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+        assertEquals(LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("redundantBendpoints"));
+    }
+
+    @Test
+    public void redundantBendpoint_collectViolatorIds_surfacesOnlyOffenders() {
+        // collectViolatorIds=true must surface the offending connection's id, and only it.
+        AssessmentConnection redundant = new AssessmentConnection("redundant", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0}, new double[]{100, 0}), "", 1);
+        AssessmentConnection corner = new AssessmentConnection("corner", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0}, new double[]{50, 50}), "", 1);
+
+        LayoutQualityAssessor.RedundantBendpointResult result =
+                assessor.countRedundantBendpoints(List.of(redundant, corner), true);
+
+        assertTrue("offender id is surfaced", result.violatorIds().contains("redundant"));
+        assertFalse("a real corner is not surfaced", result.violatorIds().contains("corner"));
+        // The collectViolatorIds=false path returns an empty, immutable set.
+        assertTrue(assessor.countRedundantBendpoints(List.of(redundant), false)
+                .violatorIds().isEmpty());
+    }
+
+    @Test
+    public void redundantBendpoint_oneCollinearOvershoot_shouldNotFlag() {
+        // Boundary guard: (0,0)→(0,2)→(0,1) is collinear but the midpoint OVERSHOOTS the target
+        // by 1px — removing it would change the shape. The between-guard rejects overshoots greater
+        // than ε (0.5px); a 1px overshoot is well past that. (Sub-ε overshoots are within the
+        // reconstruction-noise floor and are treated as redundant by the widened guard.)
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{0, 2}, new double[]{0, 1}), "", 1);
+
+        assertEquals(0, assessor.countRedundantBendpoints(List.of(conn), false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_diagonalNearCollinearMicroJog_shouldNotFlag() {
+        // (0,0)→(0,1)→(50,1): the middle point is within ~1px of the a→c line at a DIAGONAL angle,
+        // but it is a real orthogonal corner — removing it would replace the L with a diagonal
+        // (0,0)→(50,1) (a visible, non-orthogonal change). The router's exact axis-aligned
+        // removeCollinearPoints keeps it, so it is NOT redundant. thinner span = spanY = 1 > ε(0.5).
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{0, 1}, new double[]{50, 1}), "", 1);
+
+        assertEquals("a diagonal near-collinear micro-jog is not a redundant bendpoint",
+                0, assessor.countRedundantBendpoints(List.of(conn), false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_axisCollinearWithinReconstructionNoise_shouldFlag() {
+        // (0,0)→(50,0.4)→(100,0): a genuinely horizontal-collinear leftover whose midpoint is nudged
+        // 0.4px off-axis — within the ε(0.5px) int→double element-centre reconstruction floor. It is
+        // still redundant (removable with no visible change), so ε must absorb the noise and flag it.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0.4}, new double[]{100, 0}), "", 1);
+
+        assertEquals("an axis-collinear leftover within the reconstruction-noise floor still flags",
+                1, assessor.countRedundantBendpoints(List.of(conn), false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_assessLevel_countsOnlyAxisAlignedLeftover_notDiagonalMicroJog() {
+        // End-to-end payload de-noise through assess(): one routed connection carries BOTH a genuine
+        // horizontal-collinear leftover (indices 0-1-2: (0,100)→(50,100)→(100,100)) AND a diagonal
+        // near-collinear micro-jog (indices 3-4-5: (0,0)→(0,1)→(50,1)); the connecting triples are
+        // real corners. connectionRedundantBendpointCount must count ONLY the axis-aligned leftover.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 200, 0, 100, 50));
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 100}, new double[]{50, 100}, new double[]{100, 100},
+                        new double[]{0, 0}, new double[]{0, 1}, new double[]{50, 1}), "", 1);
+
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(conn), false);
+
+        assertEquals("only the axis-aligned leftover counts; the diagonal micro-jog is excluded",
+                1, result.connectionRedundantBendpointCount());
+    }
+
+    // ---- Terminal egress-stub exclusion (node-aware overload) tests ----
+
+    @Test
+    public void redundantBendpoint_terminalEgressStub_onSourceFace_excluded() {
+        // pathPoints = [srcCenter, port0(on src RIGHT face), next] — all on y=25, so the first triple
+        // is axis-collinear. port0=(100,25) sits on src's right face (x=100), so it is a router-pinned
+        // terminal egress stub, not a removable interior point. The node-aware overload excludes it.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),   // right face x=100
+                node("tgt", 200, 0, 100, 50));
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{100, 25}, new double[]{200, 25}), "", 1);
+
+        assertEquals("a terminal egress port on the source face is not counted as redundant",
+                0, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_terminalEgressStub_onTargetFace_excluded() {
+        // The only axis-collinear removable candidate is the LAST triple's middle — the target port
+        // (250,200) on tgt's TOP face (y=200). The first triple is a genuine corner (contributes 0),
+        // isolating the target-face exclusion: the on-face target port is not counted, so total is 0.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 200, 200, 100, 50)); // top face y=200, x in [200,300]
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{250, 25},
+                        new double[]{250, 200}, new double[]{250, 225}), "", 1);
+
+        assertEquals("a terminal egress port on the target face is not counted as redundant",
+                0, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_twoEdgeAttachStraightConnection_reportsZero() {
+        // Two-edge-attachment straight connection: [srcCenter, srcPort, tgtPort, tgtCenter], all
+        // collinear on y=25, with srcPort on the source right face and tgtPort on the target left
+        // face. BOTH the i==0 and the i==size-3 windows are terminal egress stubs → contributes 0.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),     // right face x=100
+                node("tgt", 200, 0, 100, 50));  // left face x=200
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{100, 25},
+                        new double[]{200, 25}, new double[]{250, 25}), "", 1);
+
+        assertEquals("a straight two-edge-attachment connection has no removable bendpoints",
+                0, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_interiorRedundant_inFirstWindow_stillCounts() {
+        // Discriminator (the single most important correctness constraint): a bendpoint in the i==0
+        // window that is axis-collinear and between its neighbours but lies OFF any element face
+        // (a straight centre-to-centre midpoint far outside both boxes) is a genuine interior-removable
+        // point and MUST still count. Exclusion keys on the FACE test, not the window index — an
+        // off-face point in a terminal window is unaffected by the exclusion.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 200, 0, 100, 50));
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{150, 25}, new double[]{250, 25}), "", 1);
+
+        assertEquals("an off-face collinear point in the first window is still redundant",
+                1, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_terminalStub_faceToleranceBoundary_discriminates() {
+        // Tightly pins the on-face discrimination at ON_FACE_STUB_TOLERANCE_PX (1.5). Two otherwise
+        // identical first-window collinear ports differ ONLY by how far the port sits from the source
+        // right face (x=100): 101.0 is 1.0px past the face — exactly how Archi stores a router-attached
+        // egress port — so it is within the stub band → treated as an on-face terminal stub → excluded
+        // (0); 102.0 is 2.0px past, beyond the band → off-face interior point → still counted (1). This
+        // exercises the face check directly (unlike the far-off-face discriminator above) and guards
+        // that the widened stub band still catches the real 1px-off ports without over-excluding.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),     // right face x=100
+                node("tgt", 300, 0, 100, 50));  // far away — irrelevant to either port
+        AssessmentConnection withinTolerance = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{101.0, 25}, new double[]{250, 25}), "", 1);
+        AssessmentConnection pastTolerance = new AssessmentConnection("c2", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{102.0, 25}, new double[]{250, 25}), "", 1);
+
+        assertEquals("a port within the stub band (1px off, like a stored router port) is excluded",
+                0, assessor.countRedundantBendpoints(List.of(withinTolerance), nodes, false).count());
+        assertEquals("a port beyond the stub band is off-face interior → still counted",
+                1, assessor.countRedundantBendpoints(List.of(pastTolerance), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_terminalStub_storedOnePixelOffFace_excluded() {
+        // Reproduces the real stored geometry of a straight two-edge-attachment connection between two
+        // adjacent boxes: both egress ports are stored exactly 1px past their element faces (source
+        // right face x=326 → port x=327; target left face x=371 → port x=370). The strict 0.5px band
+        // would miss both (leaving a false count of 2); the 1.5px stub band correctly excludes both → 0.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 80, 104, 246, 55),    // right face x=326
+                node("tgt", 371, 104, 246, 55));  // left face x=371
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{203, 131.5}, new double[]{327, 131.5},
+                        new double[]{370, 131.5}, new double[]{494, 131.5}), "", 1);
+
+        assertEquals("both 1px-off-face terminal ports are excluded",
+                0, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_interiorMiddle_offFace_stillCounts() {
+        // A true interior middle (neither neighbour a centre, off any face) with genuine corners at
+        // both terminals: only (200,300) is redundant, and it is strictly interior (i is neither 0
+        // nor size-3), so the terminal exclusion never applies to it — the interior count is preserved.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 20, 20),
+                node("tgt", 500, 500, 20, 20));
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{10, 10}, new double[]{10, 300}, new double[]{200, 300},
+                        new double[]{400, 300}, new double[]{510, 510}), "", 1);
+
+        assertEquals("a strictly-interior off-face collinear middle is still redundant",
+                1, assessor.countRedundantBendpoints(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void redundantBendpoint_terminalStubExclusion_hasNoRatingImpact() {
+        // Informational-only gate: the (narrowed) redundant count feeds no rating — a route whose
+        // terminal egress stubs are excluded (count 0) and one with a genuine interior redundant
+        // point (count 1) are visually the same straight line, so every rating value is byte-identical
+        // regardless of the count. Exercises the exclusion branch through assess() while pinning rating identity.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 0, 0, 100, 50),
+                node("tgt", 200, 0, 100, 50));
+        AssessmentConnection stubOnly = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{100, 25},
+                        new double[]{200, 25}, new double[]{250, 25}), "", 1);
+        AssessmentConnection interior = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{50, 25}, new double[]{150, 25}, new double[]{250, 25}), "", 1);
+
+        LayoutAssessmentResult stub = assessor.assess(nodes, List.of(stubOnly), false);
+        LayoutAssessmentResult inter = assessor.assess(nodes, List.of(interior), false);
+
+        assertEquals("terminal egress stubs are excluded from the count",
+                0, stub.connectionRedundantBendpointCount());
+        assertEquals("the interior redundant point is still counted",
+                1, inter.connectionRedundantBendpointCount());
+        assertEquals(stub.overallRating(), inter.overallRating());
+        assertEquals(stub.layoutRating(), inter.layoutRating());
+        assertEquals(stub.routingRating(), inter.routingRating());
+        assertEquals(stub.ratingBreakdown(), inter.ratingBreakdown());
+    }
+
+    // ---- Non-orthogonal interior (mid) segment tests ----
+
+    @Test
+    public void nonOrthInterior_diagonalMidOrthogonalTerminals_shouldFlag_andTerminalCountZero() {
+        // (0,0)→(100,0)→(150,50)→(250,50): both terminals horizontal, the MIDDLE hop is a 45°
+        // diagonal. The interior detector flags it; the terminal-only detector does not (disjoint).
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{150, 50}, new double[]{250, 50}), "", 1);
+
+        LayoutQualityAssessor.NonOrthogonalInteriorSegmentResult result =
+                assessor.countNonOrthogonalInteriorSegments(List.of(conn), false);
+
+        assertEquals("diagonal interior segment flags the connection once", 1, result.count());
+        assertEquals(1, result.descriptions().size());
+        String desc = result.descriptions().get(0);
+        assertTrue("description names the connection", desc.contains("c1"));
+        assertTrue("description identifies it as a non-orthogonal interior segment",
+                desc.contains("non-orthogonal interior segment"));
+        assertTrue("description names the offending segment index", desc.contains("index 1"));
+        // Disjointness: the terminals are orthogonal, so the terminal-only detector sees nothing.
+        assertEquals("terminal detector must not see the interior diagonal",
+                0, assessor.countNonOrthogonalTerminals(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_allOrthogonalStaircase_shouldNotFlag() {
+        // (0,0)→(100,0)→(100,50)→(200,50): every segment is horizontal or vertical.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{100, 50}, new double[]{200, 50}), "", 1);
+
+        assertEquals("an all-orthogonal staircase has no non-orthogonal interior segment",
+                0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_singleBendpointCorner_shouldNotFlag() {
+        // (0,0)→(50,0)→(50,50): one bendpoint → two TERMINAL segments, zero interior segments.
+        // The 90° corner exists but it is not interior, so the interior detector ignores it.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 0}, new double[]{50, 50}), "", 1);
+
+        assertEquals("a single-bendpoint path has no interior segment",
+                0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_diagonalTerminalOnly_shouldNotFlag_butTerminalCountSeesIt() {
+        // (0,0)→(50,50)→(150,50)→(200,50): the diagonal is the SOURCE terminal segment, the two
+        // interior/target segments are horizontal. Disjointness in the other direction.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{50, 50},
+                        new double[]{150, 50}, new double[]{200, 50}), "", 1);
+
+        assertEquals("a diagonal terminal is not an interior segment",
+                0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+        assertTrue("the terminal detector still sees the diagonal terminal",
+                assessor.countNonOrthogonalTerminals(List.of(conn), false).count() >= 1);
+    }
+
+    @Test
+    public void nonOrthInterior_twoDiagonalMidSegments_countsConnectionOnce_twoDescriptions() {
+        // (0,0)→(80,0)→(120,40)→(160,80)→(240,80): orthogonal terminals, TWO diagonal mid hops.
+        // Per-connection count = 1 (mirrors the terminal count); one description per offending segment.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{80, 0}, new double[]{120, 40},
+                        new double[]{160, 80}, new double[]{240, 80}), "", 1);
+
+        LayoutQualityAssessor.NonOrthogonalInteriorSegmentResult result =
+                assessor.countNonOrthogonalInteriorSegments(List.of(conn), false);
+
+        assertEquals("counted once per connection regardless of how many segments bend",
+                1, result.count());
+        assertEquals("each offending interior segment yields a description",
+                2, result.descriptions().size());
+    }
+
+    @Test
+    public void nonOrthInterior_twoPointPath_shouldNotFlag() {
+        // No bendpoints at all → no interior segment.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0}), "", 1);
+
+        assertEquals(0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_justUnderFiveDegrees_shouldNotFlag() {
+        // Interior segment (100,0)→(200,8): atan2(8,100) ≈ 4.57° < 5° threshold → not flagged.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{200, 8}, new double[]{300, 8}), "", 1);
+
+        assertEquals("a near-cardinal interior segment below 5° is not flagged",
+                0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_justOverFiveDegrees_shouldFlag() {
+        // Interior segment (100,0)→(200,10): atan2(10,100) ≈ 5.71° > 5° threshold → flagged.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{200, 10}, new double[]{300, 10}), "", 1);
+
+        assertEquals("an interior segment above 5° is flagged",
+                1, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_zeroLengthInteriorSegment_shouldNotFlag() {
+        // (0,0)→(100,0)→(100,0)→(200,0): the single interior segment is zero-length (duplicate
+        // bendpoints). Inherits isNonOrthogonal's zero-length guard — not flagged, no exception.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{100, 0}, new double[]{200, 0}), "", 1);
+
+        assertEquals(0, assessor.countNonOrthogonalInteriorSegments(List.of(conn), false).count());
+    }
+
+    @Test
+    public void nonOrthInterior_participatesInRouting_lowRatioDemotesOneTier() {
+        // Rating PARTICIPATION (inverts the v1 non-participation guard): toggling a connection's
+        // MIDDLE segment from orthogonal to diagonal — all else constant — now moves routingRating.
+        // Low-ratio fixture: ten connections, only one with a diagonal interior hop and orthogonal
+        // terminals, so the interior entry rates "good" (1/10 = NON_ORTH_RATIO_GOOD) and the
+        // otherwise-clean routing dimension is demoted by exactly one tier (excellent → good).
+        List<AssessmentNode> nodes = new ArrayList<>();
+        nodes.add(node("src", 0, 0, 40, 40));
+        nodes.add(node("tgt", 400, 60, 40, 40));
+        // Nine clean, isolated, straight orthogonal connections (no interior segments), stacked far
+        // below so they neither cross nor run collinear with each other or the offender — keeping
+        // every routing entry except the interior one at "pass" in both runs.
+        List<AssessmentConnection> clean = new ArrayList<>();
+        for (int i = 0; i < 9; i++) {
+            int y = 300 + i * 100;
+            nodes.add(node("ca" + i, 0, y, 40, 40));
+            nodes.add(node("cb" + i, 200, y, 40, 40));
+            clean.add(new AssessmentConnection("clean" + i, "ca" + i, "cb" + i,
+                    List.of(new double[]{40, y + 20}, new double[]{200, y + 20}), "", 1));
+        }
+        // Offender terminals are horizontal at the box edges; only the mid segment differs.
+        AssessmentConnection orthogonalOffender = new AssessmentConnection("off", "src", "tgt",
+                List.of(new double[]{40, 20}, new double[]{200, 20},
+                        new double[]{200, 80}, new double[]{400, 80}), "", 1);
+        AssessmentConnection diagonalOffender = new AssessmentConnection("off", "src", "tgt",
+                List.of(new double[]{40, 20}, new double[]{200, 20},
+                        new double[]{260, 80}, new double[]{400, 80}), "", 1);
+
+        List<AssessmentConnection> controlConns = new ArrayList<>(clean);
+        controlConns.add(orthogonalOffender);
+        List<AssessmentConnection> diagConns = new ArrayList<>(clean);
+        diagConns.add(diagonalOffender);
+
+        LayoutAssessmentResult control = assessor.assess(nodes, controlConns, false);
+        LayoutAssessmentResult withDiag = assessor.assess(nodes, diagConns, false);
+
+        assertEquals(0, control.nonOrthogonalInteriorSegmentCount());
+        assertEquals(1, withDiag.nonOrthogonalInteriorSegmentCount());
+        assertEquals(1, withDiag.nonOrthogonalInteriorSegmentDescriptions().size());
+        // The breakdown now ALWAYS carries the key; control is "pass", the diagonal run is "good".
+        assertEquals("pass", control.ratingBreakdown().get("nonOrthogonalInteriorSegments"));
+        assertEquals("good", withDiag.ratingBreakdown().get("nonOrthogonalInteriorSegments"));
+        // The single diagonal mid-segment demotes routing by exactly one tier; the terminal
+        // detector stays clean (the diagonal is interior-only), proving the new entry drove it.
+        assertEquals("excellent", control.routingRating());
+        assertEquals("good", withDiag.routingRating());
+        assertEquals("pass", withDiag.ratingBreakdown().get("nonOrthogonalTerminals"));
+    }
+
+    @Test
+    public void nonOrthInterior_coverageDimensionChecked() {
+        // The nonOrthogonalInteriorSegments coverage dimension has a detector — must report checked.
+        List<AssessmentNode> nodes = List.of(node("a", 0, 0, 100, 50));
+        LayoutAssessmentResult result = assessor.assess(nodes, List.of(), false);
+        assertEquals(LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_collectViolatorIds_surfacesOnlyOffenders() {
+        // collectViolatorIds=true surfaces the offending connection id, and only it.
+        AssessmentConnection offender = new AssessmentConnection("offender", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{150, 50}, new double[]{250, 50}), "", 1);
+        AssessmentConnection clean = new AssessmentConnection("clean", "src", "tgt",
+                List.of(new double[]{0, 0}, new double[]{100, 0},
+                        new double[]{100, 50}, new double[]{200, 50}), "", 1);
+
+        LayoutQualityAssessor.NonOrthogonalInteriorSegmentResult result =
+                assessor.countNonOrthogonalInteriorSegments(List.of(offender, clean), true);
+
+        assertTrue("offender id is surfaced", result.violatorIds().contains("offender"));
+        assertFalse("an all-orthogonal route is not surfaced", result.violatorIds().contains("clean"));
+        // The collectViolatorIds=false path returns an empty, immutable set.
+        assertTrue(assessor.countNonOrthogonalInteriorSegments(List.of(offender), false)
+                .violatorIds().isEmpty());
+    }
+
+    // ---- Off-face parallel-terminal detection (the route-hugs-departed-face mode) ----
+    // Fixture geometry: source element bottom face at y=109; the route exits 1px off the face
+    // (BP at y=110) then runs a horizontal trunk parallel to and hugging the bottom face, finally
+    // approaching the target VERTICALLY so the target terminal segment stays orthogonal (keeps
+    // nonOrthogonalTerminalCount=0 — the off-face metric is isolated and disjoint).
+
+    private List<AssessmentNode> offFaceFixtureNodes() {
+        // src bottom face = 50 + 59 = 109; tgt top face = 300, x-range 620..680.
+        return List.of(node("src", 400, 50, 100, 59), node("tgt", 620, 300, 60, 50));
+    }
+
+    @Test
+    public void offFaceParallel_hugBelowDepartedBottomFace_flagsOnce() {
+        // BP1 1px below the bottom face (y=110), horizontal trunk, then vertical approach to tgt.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), true);
+        assertEquals("a terminal hugging the departed face counts once", 1, result.count());
+        assertEquals("one offending terminal → one description", 1, result.descriptions().size());
+        assertTrue("the hugging connection is the violator", result.violatorIds().contains("c1"));
+        // Disjoint from the rating-bearing terminal metric: the 1px exit stub is sub-perceptible
+        // (suppressed by the visible-length guard) and the target approach is vertical, so the
+        // angular terminal detector sees nothing.
+        assertEquals("off-face hug is NOT double-counted by the terminal-angle metric",
+                0, assessor.countNonOrthogonalTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_cleanLExitWithAmpleStub_singleVarOff_doesNotFlag() {
+        // SINGLE-VARIABLE control: only the trunk's perpendicular clearance changes (y 110 → 120,
+        // stub 1px → 11px ≥ OFF_FACE_MIN_STUB_PX). Everything else identical → count flips to 0.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 120},
+                        new double[]{650, 120}, new double[]{650, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_perpendicularExit_doesNotFlag() {
+        // A clean perpendicular departure (straight down from the bottom face) is not a hug —
+        // isolates the parallel condition.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{450, 130}, new double[]{450, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_parallelTrunkButAmpleStub_doesNotFlag() {
+        // Trunk runs parallel to the bottom face but a healthy 21px below it → not a hug.
+        // Isolates the stub condition (parallel alone is not enough).
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 130},
+                        new double[]{650, 130}, new double[]{650, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_tinyStubButPerpendicularTrunk_doesNotFlag() {
+        // BP1 1px off the face (tiny stub) but the trunk runs straight down (perpendicular) → not a
+        // hug. Isolates the parallel condition from the stub condition.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{450, 110}, new double[]{450, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_bothTerminalsHug_countsOnce_twoDescriptions() {
+        // Source hugs its bottom face (y=110) and target hugs its top face (y=299, top=300).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),   // bottom face = 109
+                node("tgt", 400, 300, 100, 50)); // top face = 300
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{430, 110}, new double[]{560, 110},
+                        new double[]{560, 299}, new double[]{430, 299}, new double[]{450, 325}), "", 1);
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(conn), nodes, false);
+        assertEquals("both ends hug, but the connection is counted once", 1, result.count());
+        assertEquals("each hugging terminal yields a description", 2, result.descriptions().size());
+    }
+
+    @Test
+    public void offFaceParallel_hugBesideDepartedRightFace_flagsWithFaceInDescription() {
+        // Vertical-face coverage: element RIGHT face at x=300; route exits 2px off it then runs a
+        // vertical trunk hugging the face. Exercises the dy>=dx parallel branch and the x-axis stub.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 200, 100, 100, 80),    // RIGHT face = 300, y-range 100..180
+                node("tgt", 272, 400, 60, 50));    // far below — its terminal is not a hug
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{250, 140}, new double[]{302, 150},
+                        new double[]{302, 250}, new double[]{302, 425}), "", 1);
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(conn), nodes, false);
+        assertEquals("a vertical hug beside the RIGHT face flags", 1, result.count());
+        assertEquals(1, result.descriptions().size());
+        assertTrue("the description names the departed RIGHT face",
+                result.descriptions().get(0).contains("RIGHT"));
+    }
+
+    @Test
+    public void offFaceParallel_rightFaceAmpleStub_singleVarOff_doesNotFlag() {
+        // SINGLE-VARIABLE control on the vertical (x) axis: trunk x 302 → 310 (stub 2px → 10px ≥ min).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 200, 100, 100, 80),
+                node("tgt", 272, 400, 60, 50));
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{250, 140}, new double[]{310, 150},
+                        new double[]{310, 250}, new double[]{310, 425}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), nodes, false).count());
+    }
+
+    @Test
+    public void offFaceParallel_twoPointPath_hasNoTrunk_doesNotFlag() {
+        // A bare center-to-center path has no exterior trunk segment to evaluate.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{650, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_absentNode_terminalSkipped() {
+        // Without the element rect there is no face to measure against → the detector is a no-op.
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+        assertEquals(0,
+                assessor.countOffFaceParallelTerminals(List.of(conn), List.of(), false).count());
+    }
+
+    @Test
+    public void offFaceParallel_collectFalse_returnsEmptyImmutableViolatorSet() {
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+        assertTrue(assessor.countOffFaceParallelTerminals(List.of(conn), offFaceFixtureNodes(), false)
+                .violatorIds().isEmpty());
+    }
+
+    @Test
+    public void offFaceParallel_assessLevel_surfacesCountCoverageAndViolator_ratingUntouched() {
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+        LayoutAssessmentResult result =
+                assessor.assess(offFaceFixtureNodes(), List.of(conn), true);
+        assertEquals("assess surfaces the off-face hug", 1, result.offFaceParallelTerminalCount());
+        assertEquals("one description on the result", 1,
+                result.offFaceParallelTerminalDescriptions().size());
+        assertEquals("the dimension has a detector → checked",
+                LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("offFaceParallelTerminals"));
+        assertTrue("violator surfaced under the new key",
+                result.violatorIds().get("offFaceParallelTerminals").contains("c1"));
+        // Measurement-only: the rating-bearing terminal metric is untouched (disjoint geometry).
+        assertEquals("rating-bearing nonOrthogonalTerminalCount unchanged by the new informational metric",
+                0, result.nonOrthogonalTerminalCount());
+    }
+
+    @Test
+    public void offFaceParallel_terminalsOnlyEgressClearance_clearsTheHug_oracleCrossCheck() {
+        // ORACLE CROSS-CHECK: the terminals-only egress clearance produces exactly the geometry the
+        // off-face detector reads as clean. A terminals-only rectified path whose source exit hugs the
+        // departed bottom face (count ≥ 1) is lifted by RoutingPipeline.terminalsOnlyEnforceEgressClearance
+        // and the SAME detector then reads 0 on the lifted geometry.
+        RoutingRect src = new RoutingRect(400, 50, 100, 59, "src");  // bottom face y=109, centerX 450
+        RoutingRect tgt = new RoutingRect(620, 300, 60, 50, "tgt");  // center (650,325)
+        List<AbsoluteBendpointDto> rectified = List.of(
+                new AbsoluteBendpointDto(450, 110),   // vertical egress from centerX, 1px below face
+                new AbsoluteBendpointDto(650, 110));  // horizontal trunk hugging the bottom face
+
+        AssessmentConnection before = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{450, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+        assertEquals("pre-clearance terminals-only hug is flagged", 1,
+                assessor.countOffFaceParallelTerminals(List.of(before), offFaceFixtureNodes(), false).count());
+
+        List<AbsoluteBendpointDto> cleared =
+                RoutingPipeline.terminalsOnlyEnforceEgressClearance(src, tgt, rectified);
+
+        AssessmentConnection after = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79},
+                        new double[]{cleared.get(0).x(), cleared.get(0).y()},
+                        new double[]{cleared.get(1).x(), cleared.get(1).y()},
+                        new double[]{650, 325}), "", 1);
+        assertEquals("post-clearance the same detector reads the lifted route as clean", 0,
+                assessor.countOffFaceParallelTerminals(List.of(after), offFaceFixtureNodes(), false).count());
+    }
+
+    // ---- Off-face remedy honesty: layout remedy on a corridor too tight for a healthy lift ----
+    // The router only lifts a hug perpendicular off the face when doing so keeps a healthy
+    // parallel-connection gap. When the corridor beside the hug is narrower than that floor
+    // (HEALTHY_PARALLEL_GAP_PX), the router (correctly) declines, so re-routing changes nothing and
+    // the honest remedy is layout — widen the corridor. This is a DESCRIPTION-only branch: count,
+    // violators, coverage and rating are all unaffected (asserted below).
+
+    // Bottom-face hug identical to offFaceParallel_hugBelowDepartedBottomFace_flagsOnce (BP y=110,
+    // horizontal trunk x 473..650), so only the corridor beside it varies across these tests.
+    private AssessmentConnection tightCorridorHug() {
+        return new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 79}, new double[]{473, 110},
+                        new double[]{650, 110}, new double[]{650, 325}), "", 1);
+    }
+
+    @Test
+    public void offFaceParallel_tightCorridorByObstacle_prescribesLayoutRemedy() {
+        // An element sits 9px below the departed bottom face (top edge y=118, face y=109), overlapping
+        // the trunk's x-span — under the 15px a healthy lift needs. The router would decline the lift.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),      // bottom face = 109
+                node("tgt", 620, 300, 60, 50),
+                node("block", 500, 118, 80, 40));   // top edge 118 → 9px clearance on the push side
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(tightCorridorHug()), nodes, true);
+        assertEquals("the hug is still detected — only the remedy text changes", 1, result.count());
+        String desc = result.descriptions().get(0);
+        assertTrue("a tight corridor gets the LAYOUT remedy (widen the corridor): " + desc,
+                desc.contains("widen the corridor"));
+        assertFalse("a tight corridor is confidently layout-bound — not the deferred auto-route hedge: "
+                + desc, desc.contains("run auto-route-connections"));
+    }
+
+    @Test
+    public void offFaceParallel_tightCorridorByNeighbourRun_prescribesLayoutRemedy() {
+        // No near obstacle; a NEIGHBOURING connection run (horizontal, y=118) sits 9px below the face
+        // and overlaps the trunk's span. Exercises the co-axial connection-run clearance scan (the
+        // quantity the router's parallel-gap floor actually protects). The 2-point neighbour has no
+        // exterior trunk, so it is never itself flagged.
+        AssessmentConnection neighbour = new AssessmentConnection("n2", "s2", "t2",
+                List.of(new double[]{500, 118}, new double[]{600, 118}), "", 1);
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(
+                        List.of(tightCorridorHug(), neighbour), offFaceFixtureNodes(), true);
+        assertEquals("only the hug is flagged; the 2-point neighbour has no trunk", 1, result.count());
+        String desc = result.descriptions().get(0);
+        assertTrue("a run 9px away makes the corridor layout-bound: " + desc,
+                desc.contains("widen the corridor"));
+        assertFalse("confidently layout-bound — not the deferred auto-route hedge: " + desc,
+                desc.contains("run auto-route-connections"));
+    }
+
+    @Test
+    public void offFaceParallel_wideCorridor_singleVarOff_defersToAutoRoute() {
+        // SINGLE-VARIABLE control against offFaceParallel_tightCorridorByObstacle: only the block's
+        // top edge moves (y 118 → 130 → 21px clearance ≥ 15). With ≥15px local room the assessor
+        // cannot know offline whether the router will keep or (for a view-wide reason) decline the
+        // lift, so it defers to auto-route-connections rather than over-promising a re-route.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),
+                node("tgt", 620, 300, 60, 50),
+                node("block", 500, 130, 80, 40));   // top edge 130 → 21px clearance
+        String desc = assessor.countOffFaceParallelTerminals(List.of(tightCorridorHug()), nodes, true)
+                .descriptions().get(0);
+        assertTrue("a wide corridor defers to auto-route (the authoritative layout-bound signal): "
+                + desc, desc.contains("run auto-route-connections"));
+        assertTrue("and cross-references the auto-route warning code: " + desc,
+                desc.contains("EGRESS_LIFT_LAYOUT_BOUND"));
+        assertFalse("a wide corridor must not confidently prescribe the layout remedy: " + desc,
+                desc.contains("widen the corridor"));
+    }
+
+    @Test
+    public void offFaceParallel_clearanceExactlyAtFloor_defersToAutoRoute() {
+        // Boundary: clearance == HEALTHY_PARALLEL_GAP_PX (block top edge 124 → exactly 15px) is NOT
+        // below the floor, so it takes the ≥15 branch → defer to auto-route (not the confident layout
+        // remedy).
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),
+                node("tgt", 620, 300, 60, 50),
+                node("block", 500, 124, 80, 40));   // 124 - 109 = 15.0 == floor
+        String desc = assessor.countOffFaceParallelTerminals(List.of(tightCorridorHug()), nodes, true)
+                .descriptions().get(0);
+        assertTrue("clearance == floor takes the deferred auto-route branch: " + desc,
+                desc.contains("run auto-route-connections"));
+        assertFalse("clearance == floor is not confidently layout-bound: " + desc,
+                desc.contains("widen the corridor"));
+    }
+
+    @Test
+    public void offFaceParallel_clearanceJustBelowFloor_prescribesLayoutRemedy() {
+        // Boundary: clearance just under the floor (block top edge 123 → 14px < 15) flips to layout.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),
+                node("tgt", 620, 300, 60, 50),
+                node("block", 500, 123, 80, 40));   // 123 - 109 = 14.0 < floor
+        String desc = assessor.countOffFaceParallelTerminals(List.of(tightCorridorHug()), nodes, true)
+                .descriptions().get(0);
+        assertTrue("clearance just below the floor flips to the layout remedy: " + desc,
+                desc.contains("widen the corridor"));
+    }
+
+    @Test
+    public void offFaceParallel_tightCorridorOnLeftFace_prescribesLayoutRemedy() {
+        // Vertical-face coverage of the remedy branch (the live view-2.3 case is a LEFT-face hug). The
+        // route exits 2px off the LEFT face (x=398, face x=400) and runs a vertical trunk hugging it;
+        // an element sits 9px to the LEFT (right edge x=391) overlapping the trunk's y-span.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 100, 100, 80),     // LEFT face = 400, y-range 100..180
+                node("tgt", 372, 400, 60, 50),      // far below — its terminal is not a hug
+                node("block", 300, 200, 91, 40));   // right edge 391 → 9px left of the departed face
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 140}, new double[]{398, 150},
+                        new double[]{398, 250}, new double[]{402, 425}), "", 1);
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(conn), nodes, true);
+        assertEquals("the LEFT-face hug is detected", 1, result.count());
+        String desc = result.descriptions().get(0);
+        assertTrue("the description names the departed LEFT face: " + desc, desc.contains("LEFT"));
+        assertTrue("a 9px corridor on a LEFT-face hug gets the layout remedy: " + desc,
+                desc.contains("widen the corridor"));
+        assertFalse("confidently layout-bound — not the deferred auto-route hedge: " + desc,
+                desc.contains("run auto-route-connections"));
+        assertFalse("a single connection on the face is not contested — no spread clause: " + desc,
+                desc.contains("spread them across the element's other faces"));
+    }
+
+    @Test
+    public void offFaceParallel_contestedHubFace_remedyNamesSpreadingConnections() {
+        // Two connections exit src's LEFT face — c1 hugs it in a 9px-tight corridor, c2 exits cleanly
+        // perpendicular. The SHARED face is a contested hub face: widening alone would only re-crowd it
+        // (as the live view-2.3 confirmation showed), so the remedy additionally names spreading the
+        // connections across the element's other faces.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 100, 100, 80),     // LEFT face = 400
+                node("tgt", 372, 400, 60, 50),
+                node("block", 300, 200, 91, 40));   // right edge 391 → 9px tight corridor for c1
+        AssessmentConnection c1 = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{450, 140}, new double[]{398, 150},
+                        new double[]{398, 250}, new double[]{402, 425}), "", 1);   // LEFT-face hug
+        AssessmentConnection c2 = new AssessmentConnection("c2", "src", "far",
+                List.of(new double[]{450, 120}, new double[]{399, 120},
+                        new double[]{350, 120}, new double[]{300, 120}), "", 1);   // clean LEFT exit, not a hug
+        LayoutQualityAssessor.OffFaceParallelTerminalResult result =
+                assessor.countOffFaceParallelTerminals(List.of(c1, c2), nodes, true);
+        assertEquals("only the hugging connection is flagged (c2 exits perpendicular)", 1, result.count());
+        String desc = result.descriptions().get(0);
+        assertTrue("still the confident layout remedy (tight local corridor): " + desc,
+                desc.contains("widen the corridor"));
+        assertTrue("contested face → remedy also names spreading the connections: " + desc,
+                desc.contains("spread them across the element's other faces"));
+    }
+
+    @Test
+    public void offFaceParallel_obstacleFlushOnFaceLine_isZeroClearanceLayoutRemedy() {
+        // A neighbour flush on the departed face line (block top edge == face y=109 → 0px corridor) is
+        // the tightest possible corridor. It must be treated as clearance 0 (layout remedy), NOT
+        // silently ignored as "no neighbour" (which would misreport the corridor as open). Pins the
+        // >= 0 boundary in offFaceLiftClearance.
+        List<AssessmentNode> nodes = List.of(
+                node("src", 400, 50, 100, 59),      // bottom face = 109
+                node("tgt", 620, 300, 60, 50),
+                node("block", 500, 109, 80, 40));   // top edge exactly on the face line → 0px
+        String desc = assessor.countOffFaceParallelTerminals(List.of(tightCorridorHug()), nodes, true)
+                .descriptions().get(0);
+        assertTrue("a 0px (flush) corridor is layout-bound: " + desc, desc.contains("widen the corridor"));
+        assertTrue("the reported clearance is 0.0px: " + desc, desc.contains("0.0px wide"));
+    }
+
+    @Test
+    public void offFaceParallel_remedyBranch_ratingByteIdentical_informationalOnly() {
+        // The remedy branch touches only the description string. A tight vs wide corridor produced by
+        // moving a rating-neutral neighbouring run (endpoints are not nodes → no terminal/crossing
+        // contribution; parallelConnectionGap is informational) must leave the rating identical while
+        // the description differs. Guards the "informational-only" contract (no rating regression).
+        AssessmentConnection runTight = new AssessmentConnection("n2", "s2", "t2",
+                List.of(new double[]{500, 118}, new double[]{600, 118}), "", 1);   // 9px → layout
+        AssessmentConnection runWide = new AssessmentConnection("n2", "s2", "t2",
+                List.of(new double[]{500, 130}, new double[]{600, 130}), "", 1);   // 21px → routing
+        LayoutAssessmentResult tight =
+                assessor.assess(offFaceFixtureNodes(), List.of(tightCorridorHug(), runTight), true);
+        LayoutAssessmentResult wide =
+                assessor.assess(offFaceFixtureNodes(), List.of(tightCorridorHug(), runWide), true);
+
+        assertEquals("both corridors flag the same single hug", 1, tight.offFaceParallelTerminalCount());
+        assertEquals("both corridors flag the same single hug", 1, wide.offFaceParallelTerminalCount());
+        assertTrue("tight corridor description is the confident layout remedy",
+                tight.offFaceParallelTerminalDescriptions().get(0).contains("widen the corridor"));
+        assertTrue("wide corridor description defers to auto-route",
+                wide.offFaceParallelTerminalDescriptions().get(0).contains("run auto-route-connections"));
+        assertEquals("overallRating byte-identical (remedy text is informational)",
+                tight.overallRating(), wide.overallRating());
+        assertEquals("layoutRating byte-identical", tight.layoutRating(), wide.layoutRating());
+        assertEquals("routingRating byte-identical", tight.routingRating(), wide.routingRating());
+        assertEquals("ratingBreakdown byte-identical", tight.ratingBreakdown(), wide.ratingBreakdown());
+    }
+
+    // ---- Coincident same-face port detection (informational; no rating impact) ----
+
+    @Test
+    public void coincidentFacePorts_twoConnsSameLeftSlot_flagsFaceOnce_namesPair() {
+        // Hub LEFT face (x=200, y 100..300); two spokes both anchor at slot y=200 → one perimeter
+        // point carries two ports. This face has only 2 connections, BELOW M5's four-connection guard,
+        // so M5 never scores it — this detector is what surfaces the collision.
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 150, 50, 30);
+        AssessmentNode p2 = node("p2", 0, 250, 50, 30);
+        AssessmentConnection c1 = connToHubLeft("c1", p1, hub, 200);
+        AssessmentConnection c2 = connToHubLeft("c2", p2, hub, 200);
+        LayoutQualityAssessor.CoincidentFacePortResult result =
+                assessor.countCoincidentFacePorts(List.of(c1, c2), List.of(hub, p1, p2), true);
+        assertEquals("one colliding face", 1, result.count());
+        assertEquals("one description for the colliding face", 1, result.descriptions().size());
+        assertTrue("description names the LEFT face", result.descriptions().get(0).contains("LEFT"));
+        assertTrue("description names both colliding connections",
+                result.descriptions().get(0).contains("c1") && result.descriptions().get(0).contains("c2"));
+        assertTrue("violators are the two colliding connection ids",
+                result.violatorIds().contains("c1") && result.violatorIds().contains("c2"));
+    }
+
+    @Test
+    public void coincidentFacePorts_twoConnsDistinctBottomSlots_doesNotFlag() {
+        // Hub BOTTOM face (y=200); the two spokes anchor at DISTINCT slots x=150 and x=250 → spread,
+        // no collision — the healthy-hub control that must not over-flag.
+        AssessmentNode hub = node("hub", 100, 100, 200, 100);
+        AssessmentNode p1 = node("p1", 0, 400, 50, 30);
+        AssessmentNode p2 = node("p2", 300, 400, 50, 30);
+        AssessmentConnection c1 = connFromHubBottom("c1", hub, p1, 150);
+        AssessmentConnection c2 = connFromHubBottom("c2", hub, p2, 250);
+        assertEquals("distinct bottom-face slots do not collide", 0,
+                assessor.countCoincidentFacePorts(List.of(c1, c2), List.of(hub, p1, p2), false).count());
+    }
+
+    @Test
+    public void coincidentFacePorts_singleVarSlotSeparation_flipsCountToZero() {
+        // SINGLE-VARIABLE control: two LEFT-face spokes coincident at y=200 (count 1); move ONE spoke's
+        // slot to y=250 (> HUB_PORT_SLOT_TOLERANCE_PX) and the collision — and the count — disappears.
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 150, 50, 30);
+        AssessmentNode p2 = node("p2", 0, 250, 50, 30);
+        assertEquals("coincident at y=200", 1, assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 200)),
+                List.of(hub, p1, p2), false).count());
+        assertEquals("separated to y=250 → no collision", 0, assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 250)),
+                List.of(hub, p1, p2), false).count());
+    }
+
+    @Test
+    public void coincidentFacePorts_fourConnFaceWithCollision_stillCounted_intentionalM5Overlap() {
+        // A face with four coincident LEFT-face spokes is ALSO an M5 hub face (quality 4/1 = 0.25).
+        // The enumeration deliberately overlaps M5: M5 rates the ratio, this counts the colliding face.
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 110, 50, 20);
+        AssessmentNode p2 = node("p2", 0, 160, 50, 20);
+        AssessmentNode p3 = node("p3", 0, 230, 50, 20);
+        AssessmentNode p4 = node("p4", 0, 280, 50, 20);
+        List<AssessmentConnection> conns = List.of(
+                connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 200),
+                connToHubLeft("c3", p3, hub, 200), connToHubLeft("c4", p4, hub, 200));
+        List<AssessmentNode> nodes = List.of(hub, p1, p2, p3, p4);
+        assertEquals("the coincident face is counted once", 1,
+                assessor.countCoincidentFacePorts(conns, nodes, false).count());
+        LayoutAssessmentResult result = assessor.assess(nodes, conns, false);
+        assertEquals("M5 rates the four-way collision at 0.25", 0.25, result.hubPortQualityScore(), 1e-9);
+        assertEquals("and the informational count also flags the face", 1, result.coincidentFacePortCount());
+    }
+
+    @Test
+    public void coincidentFacePorts_singleConnectionFace_returnsZeroAndEmptyDescriptions() {
+        // A face with only ONE terminal cannot collide → sentinel/empty (safety path).
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 150, 50, 30);
+        LayoutQualityAssessor.CoincidentFacePortResult result = assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200)), List.of(hub, p1), true);
+        assertEquals(0, result.count());
+        assertTrue(result.descriptions().isEmpty());
+        assertTrue(result.violatorIds().isEmpty());
+    }
+
+    @Test
+    public void coincidentFacePorts_collectFalse_returnsEmptyImmutableViolatorSet() {
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 150, 50, 30);
+        AssessmentNode p2 = node("p2", 0, 250, 50, 30);
+        Set<String> violators = assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 200)),
+                List.of(hub, p1, p2), false).violatorIds();
+        assertTrue(violators.isEmpty());
+        assertThrows("collectFalse must return an immutable empty set",
+                UnsupportedOperationException.class, () -> violators.add("x"));
+    }
+
+    @Test
+    public void coincidentFacePorts_chainedNearTolerance_namesOnlyTrueCluster_notTransitiveClosure() {
+        // Slots 200, 200.6, 201.1 on the LEFT face with a 1.0px tolerance: 200↔200.6 (0.6) and
+        // 200.6↔201.1 (0.5) overlap, but 200↔201.1 (1.1) do NOT. Clustering from the cluster's first
+        // slot puts {200, 200.6} together (c1, c2) and leaves 201.1 (c3) as its own distinct port. The
+        // colliding set must be exactly {c1, c2}; c3 must not be named (an all-pairs union would wrongly
+        // pull it in via the chain).
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 130, 50, 20);
+        AssessmentNode p2 = node("p2", 0, 180, 50, 20);
+        AssessmentNode p3 = node("p3", 0, 240, 50, 20);
+        LayoutQualityAssessor.CoincidentFacePortResult result = assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 200.6),
+                        connToHubLeft("c3", p3, hub, 201.1)),
+                List.of(hub, p1, p2, p3), true);
+        assertEquals("the face still has a collision", 1, result.count());
+        assertTrue("the true cluster's pair is named",
+                result.violatorIds().contains("c1") && result.violatorIds().contains("c2"));
+        assertFalse("the non-overlapping third port is NOT named (no transitive closure)",
+                result.violatorIds().contains("c3"));
+        assertFalse("nor does the description name it", result.descriptions().get(0).contains("c3"));
+        assertTrue("the description reports two distinct ports",
+                result.descriptions().get(0).contains("2 distinct"));
+    }
+
+    @Test
+    public void coincidentFacePorts_selfLoopSameConnection_notCountedAsCollision() {
+        // A self-association (source == target) registers its two terminals on ONE face at ONE slot,
+        // both carrying the same connection id. That is one connection, not two contending ports, so it
+        // must NOT be counted (requiring two DISTINCT connections per cluster).
+        AssessmentNode hub = node("hub", 200, 100, 100, 200); // center (250, 200), LEFT x=200
+        AssessmentConnection selfLoop = new AssessmentConnection("c1", "hub", "hub",
+                List.of(new double[]{250, 200}, new double[]{200, 200}, new double[]{250, 200}), "", 1);
+        LayoutQualityAssessor.CoincidentFacePortResult result =
+                assessor.countCoincidentFacePorts(List.of(selfLoop), List.of(hub), true);
+        assertEquals("one connection cannot collide with itself", 0, result.count());
+        assertTrue(result.descriptions().isEmpty());
+        assertTrue(result.violatorIds().isEmpty());
+    }
+
+    @Test
+    public void coincidentFacePorts_exactlyAtTolerance_collides_justOverDoesNot() {
+        // Boundary pin on HUB_PORT_SLOT_TOLERANCE_PX (1.0px): a separation of exactly the tolerance is a
+        // collision (inclusive <=); a hair beyond it is not.
+        AssessmentNode hub = node("hub", 200, 100, 100, 200);
+        AssessmentNode p1 = node("p1", 0, 150, 50, 30);
+        AssessmentNode p2 = node("p2", 0, 250, 50, 30);
+        assertEquals("separation == tolerance collides", 1, assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 201.0)),
+                List.of(hub, p1, p2), false).count());
+        assertEquals("separation just over tolerance does not", 0, assessor.countCoincidentFacePorts(
+                List.of(connToHubLeft("c1", p1, hub, 200), connToHubLeft("c2", p2, hub, 201.01)),
+                List.of(hub, p1, p2), false).count());
+    }
+
+    @Test
+    public void coincidentFacePorts_assessLevel_surfacesCountCoverageViolator_ratingUntouched() {
+        // Reproduces the live view-2.3 shape: a hub LEFT face with two coincident ports (below M5's
+        // guard) AND a hub BOTTOM face with two SPREAD ports (must not flag).
+        AssessmentNode hub = node("hub", 200, 100, 100, 200); // LEFT x=200 y100..300; BOTTOM y=300
+        AssessmentNode left1 = node("l1", 0, 150, 50, 30);
+        AssessmentNode left2 = node("l2", 0, 250, 50, 30);
+        AssessmentNode bot1 = node("b1", 180, 450, 40, 30);
+        AssessmentNode bot2 = node("b2", 280, 450, 40, 30);
+        AssessmentConnection cl1 = connToHubLeft("cl1", left1, hub, 200);   // LEFT slot 200
+        AssessmentConnection cl2 = connToHubLeft("cl2", left2, hub, 200);   // LEFT slot 200 (coincident)
+        AssessmentConnection cb1 = connFromHubBottom("cb1", hub, bot1, 220); // BOTTOM slot 220
+        AssessmentConnection cb2 = connFromHubBottom("cb2", hub, bot2, 280); // BOTTOM slot 280 (spread)
+        LayoutAssessmentResult result = assessor.assess(
+                List.of(hub, left1, left2, bot1, bot2), List.of(cl1, cl2, cb1, cb2), true);
+        assertEquals("only the LEFT face collides", 1, result.coincidentFacePortCount());
+        assertEquals("one description", 1, result.coincidentFacePortDescriptions().size());
+        assertTrue("description names the LEFT face and its pair",
+                result.coincidentFacePortDescriptions().get(0).contains("LEFT")
+                        && result.coincidentFacePortDescriptions().get(0).contains("cl1")
+                        && result.coincidentFacePortDescriptions().get(0).contains("cl2"));
+        assertEquals("dimension has a detector → checked", LayoutQualityAssessor.COVERAGE_CHECKED,
+                result.coverage().get("coincidentFacePorts"));
+        assertTrue("colliding ids under the new violator key",
+                result.violatorIds().get("coincidentFacePorts").contains("cl1")
+                        && result.violatorIds().get("coincidentFacePorts").contains("cl2"));
+        // Informational-only: the rating-bearing M5 metric is BLIND to the 2-connection LEFT face
+        // (below its four-connection guard) → hubPortQualityScore stays a vacuous 1.0, unchanged, and
+        // no coincidentFacePorts entry enters the rating breakdown.
+        assertEquals("M5 hubPortQualityScore untouched (2-conn face below its guard)",
+                1.0, result.hubPortQualityScore(), 1e-9);
+        assertFalse("coincident ports never enter the rating breakdown",
+                result.ratingBreakdown().containsKey("coincidentFacePorts"));
+    }
+
+    // ---- Non-orthogonal interior segment RATING tests (ratio buckets mirror the terminal sibling) ----
+
+    @Test
+    public void nonOrthInterior_zeroShouldRatePass() {
+        // Zero interior segments → the entry passes, exactly like the terminal sibling at zero.
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0);
+        assertEquals("pass", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_lowDensityShouldRateGood() {
+        // 1 interior / 10 connections = 10% → exactly at NON_ORTH_RATIO_GOOD boundary (≤) → "good".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 1);
+        assertEquals("good", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_midDensityShouldRateFair() {
+        // 5 interior / 20 connections = 25% → between 10% and 30% → "fair".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 20, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 5);
+        assertEquals("fair", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_exactlyThirtyPercentShouldRateFair() {
+        // 6 interior / 20 connections = 30% → exactly at NON_ORTH_RATIO_FAIR boundary (≤) → "fair".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 20, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 6);
+        assertEquals("fair", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_highDensityShouldRatePoor() {
+        // 4 interior / 10 connections = 40% → above NON_ORTH_RATIO_FAIR → "poor".
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 4);
+        assertEquals("poor", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_zeroConnectionsFallbackShouldRateFair() {
+        // Non-zero interior count but zero connections (edge case) → "fair" (mirrors terminal).
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 0, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 3);
+        assertEquals("fair", result.breakdown().get("nonOrthogonalInteriorSegments"));
+    }
+
+    @Test
+    public void nonOrthInterior_disjointCap_bothDiagonalEqualsOneAtSameRatio() {
+        // Routing tier disjoint-cap invariant: the tier combines members by Math.max, not by sum.
+        // A connection diagonal at BOTH a terminal and an interior segment must rate exactly like a
+        // terminal-only (or interior-only) view at the same ratio — no additive double demotion.
+        // Ratio 3/10 = 30% → each entry rates "fair" → routing tier-2 = fair in all three cases.
+        LayoutQualityAssessor.RatingResult terminalOnly = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 3, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0);
+        LayoutQualityAssessor.RatingResult interiorOnly = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 3);
+        LayoutQualityAssessor.RatingResult both = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 3, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 3);
+        assertEquals("fair", terminalOnly.routingRating());
+        assertEquals("fair", interiorOnly.routingRating());
+        assertEquals("both-diagonal must equal terminal-only at the same ratio (Math.max, no sum)",
+                terminalOnly.routingRating(), both.routingRating());
+        assertEquals(interiorOnly.routingRating(), both.routingRating());
+    }
+
+    @Test
+    public void nonOrthInterior_terminalSiblingByteIdentical_whenInteriorZero() {
+        // Regression guard: with zero interior segments the terminal sibling and the routing rating
+        // are exactly what they were before the interior entry existed. 3/10 terminals = 30% →
+        // terminal "fair", interior "pass", routing capped at fair by the terminal entry alone.
+        LayoutQualityAssessor.RatingResult result = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 3, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0);
+        assertEquals("fair", result.breakdown().get("nonOrthogonalTerminals"));
+        assertEquals("pass", result.breakdown().get("nonOrthogonalInteriorSegments"));
+        assertEquals("fair", result.routingRating());
+    }
+
+    @Test
+    public void computeRatingWithBreakdown_19ArgOverload_defaultsInteriorPassByteIdentical() {
+        // The 19-arg overload must delegate with interiorCount=0 → entry "pass", rating unchanged
+        // from the 20-arg form forwarding 0 (the hub-crowding overload precedent).
+        LayoutQualityAssessor.RatingResult viaNineteen = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false);
+        LayoutQualityAssessor.RatingResult viaTwentyZero = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false, 0);
+        assertEquals(viaTwentyZero.rating(), viaNineteen.rating());
+        assertEquals(viaTwentyZero.breakdown(), viaNineteen.breakdown());
+        assertEquals("pass", viaNineteen.breakdown().get("nonOrthogonalInteriorSegments"));
     }
 
     // ---- Parent label obscured tests ----
@@ -2088,8 +4995,8 @@ public class LayoutQualityAssessorTest {
     public void detectParentLabelObscured_shouldNotDetect_whenChildBelowLabel() {
         // Parent at y=0, label needs 20px. Child at y=30 (relative) = y=30 (absolute) — below label.
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null),
-                new AssessmentNode("child", 10, 30, 80, 40, "parent", false, false, "Child", 40.0, null, null));
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("child", 10, 30, 80, 40, "parent", false, false, "Child", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
         assertEquals(0, result.count());
     }
@@ -2098,8 +5005,8 @@ public class LayoutQualityAssessorTest {
     public void detectParentLabelObscured_shouldDetect_whenChildOverlapsLabel() {
         // Parent at y=0, label needs 20px. Child at y=10 (absolute) — inside label area.
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null),
-                new AssessmentNode("child", 10, 10, 80, 40, "parent", false, false, "Child", 40.0, null, null));
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("child", 10, 10, 80, 40, "parent", false, false, "Child", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
         assertEquals(1, result.count());
         assertEquals(1, result.descriptions().size());
@@ -2109,7 +5016,7 @@ public class LayoutQualityAssessorTest {
     @Test
     public void detectParentLabelObscured_shouldNotDetect_whenNoChildren() {
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null));
+                new AssessmentNode("parent", 0, 0, 200, 150, null, true, false, "Parent Group", 80.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
         assertEquals(0, result.count());
     }
@@ -2118,10 +5025,10 @@ public class LayoutQualityAssessorTest {
     public void detectParentLabelObscured_shouldCountOnlyObscuredParents() {
         // Two parents: one with child below label, one with child in label
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("p1", 0, 0, 200, 150, null, true, false, "OK Parent", 80.0, null, null),
-                new AssessmentNode("c1", 10, 30, 80, 40, "p1", false, false, "OK Child", 40.0, null, null),
-                new AssessmentNode("p2", 300, 0, 200, 150, null, true, false, "Bad Parent", 80.0, null, null),
-                new AssessmentNode("c2", 310, 5, 80, 40, "p2", false, false, "Bad Child", 40.0, null, null));
+                new AssessmentNode("p1", 0, 0, 200, 150, null, true, false, "OK Parent", 80.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("c1", 10, 30, 80, 40, "p1", false, false, "OK Child", 40.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("p2", 300, 0, 200, 150, null, true, false, "Bad Parent", 80.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("c2", 310, 5, 80, 40, "p2", false, false, "Bad Child", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ParentLabelObscuredResult result = assessor.detectParentLabelObscuredByChild(nodes);
         assertEquals(1, result.count());
         assertTrue(result.descriptions().get(0).contains("Bad Parent"));
@@ -2145,9 +5052,9 @@ public class LayoutQualityAssessorTest {
         // not overlap the label area.
         List<AssessmentNode> nodes = List.of(
                 new AssessmentNode("default-group", 0, 0, 300, 200, null, true, false,
-                        "Banking Products", 80.0, null, null),
+                        "Banking Products", 80.0, null, null, 0.0, 0.0, 0.0),
                 new AssessmentNode("child-below-label", 10, 30, 120, 55, "default-group",
-                        false, false, "Customer", 40.0, null, null));
+                        false, false, "Customer", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ParentLabelObscuredResult result =
                 assessor.detectParentLabelObscuredByChild(nodes);
         assertEquals("AC-13 regression: default-sized group with short label + child below "
@@ -2161,8 +5068,8 @@ public class LayoutQualityAssessorTest {
     public void detectImageSiblingOverlap_shouldNotDetect_whenNoSiblingOverlap() {
         // Element with image at bottom-left, sibling far away
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left"),
-                new AssessmentNode("e2", 200, 0, 120, 55, null, false, false, "Other", 40.0, null, null));
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left", 0.0, 0.0, 0.0),
+                new AssessmentNode("e2", 200, 0, 120, 55, null, false, false, "Other", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
         assertEquals(0, result.count());
     }
@@ -2171,8 +5078,8 @@ public class LayoutQualityAssessorTest {
     public void detectImageSiblingOverlap_shouldDetect_whenFillImageOverlappedBySibling() {
         // Element with fill image, sibling overlaps its bounds
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "FillImg", 60.0, "img/bg.png", "fill"),
-                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Overlapper", 60.0, null, null));
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "FillImg", 60.0, "img/bg.png", "fill", 0.0, 0.0, 0.0),
+                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Overlapper", 60.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
         assertEquals(1, result.count());
         assertTrue(result.descriptions().get(0).contains("FillImg"));
@@ -2183,8 +5090,8 @@ public class LayoutQualityAssessorTest {
     public void detectImageSiblingOverlap_shouldNotDetect_whenBottomLeftNotOverlapped() {
         // Element with bottom-left image (24x24 at bottom-left corner), sibling only overlaps top-right area
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left"),
-                new AssessmentNode("e2", 100, 0, 120, 30, null, false, false, "TopOnly", 40.0, null, null));
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "ImgElem", 60.0, "img/icon.png", "bottom-left", 0.0, 0.0, 0.0),
+                new AssessmentNode("e2", 100, 0, 120, 30, null, false, false, "TopOnly", 40.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
         assertEquals(0, result.count());
     }
@@ -2192,10 +5099,72 @@ public class LayoutQualityAssessorTest {
     @Test
     public void detectImageSiblingOverlap_shouldSkipElementsWithoutImage() {
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "NoImg", 60.0, null, null),
-                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Other", 60.0, null, null));
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "NoImg", 60.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("e2", 50, 10, 120, 55, null, false, false, "Other", 60.0, null, null, 0.0, 0.0, 0.0));
         LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
         assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldUseNaturalDimensions_whenProvided() {
+        // e1 carries a top-right icon. At its true 80x80 size the icon spans
+        // x in [40,120], y in [0,80] and reaches the neighbour e2 at (50,0,30,30).
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "Icon", 0.0, "img/icon.png", "top-right", 0.0, 80.0, 80.0),
+                new AssessmentNode("e2", 50, 0, 30, 30, null, false, false, "Neighbour", 0.0, null, null, 0.0, 0.0, 0.0));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(1, result.count());
+        assertTrue(result.descriptions().get(0).contains("Icon"));
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldFallBackToFixedIconSize_whenNaturalDimensionsAbsent() {
+        // Identical layout, but no natural dimensions → the icon is sized at the fixed
+        // 24px (x in [96,120]), which does NOT reach e2's box [50,80] → no overlap.
+        // This is the headless/read-failure fallback that keeps behaviour safe.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "Icon", 0.0, "img/icon.png", "top-right", 0.0, 0.0, 0.0),
+                new AssessmentNode("e2", 50, 0, 30, 30, null, false, false, "Neighbour", 0.0, null, null, 0.0, 0.0, 0.0));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void detectImageSiblingOverlap_shouldNotFlagContainment_whenChildImageInsideParent() {
+        // A child with a large fill image nested in a parent: the parent is NOT a
+        // sibling (different parentId), so containment must not be flagged even with
+        // a big image rect.
+        List<AssessmentNode> nodes = List.of(
+                new AssessmentNode("parent", 0, 0, 300, 200, null, false, false, "Parent", 0.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("child", 10, 10, 100, 80, "parent", false, false, "Child", 0.0, "img/bg.png", "fill", 0.0, 200.0, 200.0));
+        LayoutQualityAssessor.ImageSiblingOverlapResult result = assessor.detectImageSiblingOverlap(nodes);
+        assertEquals(0, result.count());
+    }
+
+    @Test
+    public void assess_imageSiblingOverlap_shouldNotAffectRating() {
+        // e1's true 200x200 top-right icon overlaps e2 → image-sibling overlap is
+        // detected. The same geometry with no image must yield an identical rating:
+        // image-sibling overlap is informational and never feeds the rating.
+        List<AssessmentNode> withImageOverlap = List.of(
+                new AssessmentNode("e1", 0, 0, 120, 55, null, false, false, "E1", 0.0, "img/icon.png", "top-right", 0.0, 200.0, 200.0),
+                new AssessmentNode("e2", 100, 0, 120, 55, null, false, false, "E2", 0.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("e3", 0, 200, 120, 55, null, false, false, "E3", 0.0, null, null, 0.0, 0.0, 0.0));
+        List<AssessmentNode> withoutImage = List.of(
+                node("e1", 0, 0, 120, 55),
+                node("e2", 100, 0, 120, 55),
+                node("e3", 0, 200, 120, 55));
+
+        LayoutAssessmentResult withFields = assessor.assess(withImageOverlap, List.of(), false);
+        LayoutAssessmentResult withoutFields = assessor.assess(withoutImage, List.of(), false);
+
+        // The overlap really was detected (otherwise the test proves nothing).
+        assertTrue(withFields.imageSiblingOverlapCount() >= 1);
+        // ...yet none of the rating outputs move.
+        assertEquals(withoutFields.overallRating(), withFields.overallRating());
+        assertEquals(withoutFields.layoutRating(), withFields.layoutRating());
+        assertEquals(withoutFields.routingRating(), withFields.routingRating());
+        assertEquals(withoutFields.ratingBreakdown(), withFields.ratingBreakdown());
     }
 
     // ---- Rating regression test (REPLACED under Assessor.Redesign M6, 2026-04-26) ----
@@ -2208,10 +5177,10 @@ public class LayoutQualityAssessorTest {
     public void assess_withB53Fields_shouldNotChangeRating() {
         // Same layout as existing tests, but with the styling/label fields populated — rating must be identical
         List<AssessmentNode> nodes = List.of(
-                new AssessmentNode("a", 0, 0, 120, 55, null, false, false, "Very Long Name That Gets Truncated", 200.0, "img/bg.png", "fill"),
-                new AssessmentNode("b", 200, 0, 120, 55, null, false, false, "B", 10.0, null, null),
-                new AssessmentNode("c", 0, 100, 120, 55, null, false, false, "C", 10.0, null, null),
-                new AssessmentNode("d", 200, 100, 120, 55, null, false, false, "D", 10.0, null, null));
+                new AssessmentNode("a", 0, 0, 120, 55, null, false, false, "Very Long Name That Gets Truncated", 200.0, "img/bg.png", "fill", 0.0, 0.0, 0.0),
+                new AssessmentNode("b", 200, 0, 120, 55, null, false, false, "B", 10.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("c", 0, 100, 120, 55, null, false, false, "C", 10.0, null, null, 0.0, 0.0, 0.0),
+                new AssessmentNode("d", 200, 100, 120, 55, null, false, false, "D", 10.0, null, null, 0.0, 0.0, 0.0));
 
         // Same layout without the styling/label fields
         List<AssessmentNode> nodesWithout = List.of(
@@ -2296,31 +5265,38 @@ public class LayoutQualityAssessorTest {
 
     private static AssessmentNode node(String id, double x, double y,
                                         double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 
     /** Creates a group container (top-level, no parent). */
     private static AssessmentNode group(String id, double x, double y,
                                          double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
+    }
+
+    /** Creates a leaf element flagged as an ArchiMate Junction (isJunction=true) — the only difference
+     *  from {@link #node} is the junction flag, so a junction/box pair forms a single-variable contrast. */
+    private static AssessmentNode junction(String id, double x, double y,
+                                            double w, double h) {
+        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0, true);
     }
 
     /** Creates a child element inside a group. */
     private static AssessmentNode childNode(String id, double x, double y,
                                              double w, double h, String parentId) {
-        return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, parentId, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 
     /** Creates a child group (nested group inside a parent group). */
     private static AssessmentNode childGroup(String id, double x, double y,
                                               double w, double h, String parentId) {
-        return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, parentId, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 
     /** Creates a top-level note. */
     private static AssessmentNode note(String id, double x, double y,
                                         double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, null, false, true, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 
     private List<AssessmentNode> createFourNodeGrid() {
@@ -3292,6 +6268,134 @@ public class LayoutQualityAssessorTest {
     }
 
     @Test
+    public void detectPassThroughs_shouldNotFlagOwnParentElement_whenChildConnectsOutward() {
+        // A child element nested inside a NON-GROUP parent element connects to a target
+        // outside the parent. The route necessarily crosses the parent's box on its way
+        // out, but the parent is an ancestor of the source and must not be counted as a
+        // cross-element pass-through. A non-group parent is essential here: a group parent
+        // would also be excluded by the transparent-container skip, which would mask the
+        // ancestor carve-out this test is meant to pin.
+        List<AssessmentNode> nodes = List.of(
+                node("p", 100, 100, 400, 300),           // parent container element
+                childNode("c", 140, 230, 60, 40, "p"),   // child nested inside p
+                node("t", 600, 230, 80, 50));            // external target, right of p
+
+        // Route exits p's right wall at y=250 and runs to t.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn", "c", "t",
+                        List.of(new double[]{170, 250}, new double[]{550, 250},
+                                new double[]{620, 250}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertEquals("Own parent element must not count as a cross-element pass-through",
+                0, result.crossElementCount());
+        assertFalse("No description should name the parent element",
+                result.descriptions().stream().anyMatch(d -> d.contains("'p'")));
+    }
+
+    @Test
+    public void detectPassThroughs_shouldNotFlagOwnParentElement_whenExternalSourceConnectsToNestedChild() {
+        // Mirror of the source-side case with the nesting on the target: an external
+        // source connects into a child nested inside a non-group parent element. The
+        // parent is an ancestor of the target and must not be flagged.
+        List<AssessmentNode> nodes = List.of(
+                node("s", 0, 230, 80, 50),               // external source, left of p
+                node("p", 200, 100, 400, 300),           // parent container element
+                childNode("c", 400, 230, 60, 40, "p"));  // child target nested inside p
+
+        // Route enters p's left wall at y=250 and runs to the nested target c.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn", "s", "c",
+                        List.of(new double[]{40, 255}, new double[]{250, 250},
+                                new double[]{430, 250}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertEquals("Own parent element of the target must not count as a pass-through",
+                0, result.crossElementCount());
+        assertFalse("No description should name the parent element",
+                result.descriptions().stream().anyMatch(d -> d.contains("'p'")));
+    }
+
+    @Test
+    public void detectPassThroughs_shouldExcludeAllAncestorElements_whenChildIsDeeplyNested() {
+        // Three nesting levels of non-group elements: grandparent contains parent contains
+        // child. The grandparent is reachable only by walking the full parentId chain
+        // (child -> parent -> grandparent), so this pins the transitive ancestor exclusion,
+        // not merely the immediate parent.
+        List<AssessmentNode> nodes = List.of(
+                node("gp", 100, 100, 500, 400),            // grandparent
+                childNode("p", 120, 120, 400, 300, "gp"),  // parent inside grandparent
+                childNode("c", 160, 240, 60, 40, "p"),     // child inside parent
+                node("t", 700, 240, 80, 50));              // external target
+
+        // Route exits both the parent and grandparent walls at y=260 and runs to t.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn", "c", "t",
+                        List.of(new double[]{190, 260}, new double[]{650, 260},
+                                new double[]{720, 260}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertEquals("Both ancestor elements (parent and grandparent) must be excluded",
+                0, result.crossElementCount());
+        assertFalse("No description should name the parent element",
+                result.descriptions().stream().anyMatch(d -> d.contains("'p'")));
+        assertFalse("No description should name the grandparent element",
+                result.descriptions().stream().anyMatch(d -> d.contains("'gp'")));
+    }
+
+    @Test
+    public void detectPassThroughs_shouldNotFlagOwnParentGroup_whenChildConnectsOutward() {
+        // Same outward-routing geometry as the element-parent case, but the parent is a
+        // GROUP. A group ancestor is excluded both by the transparent-container skip and by
+        // the ancestor carve-out, so this stays at zero either way. It is the contrast case
+        // confirming the element-parent tests above exercise the ancestor exclusion
+        // specifically and not the group skip.
+        List<AssessmentNode> nodes = List.of(
+                group("pg", 100, 100, 400, 300),          // parent GROUP container
+                childNode("c", 140, 230, 60, 40, "pg"),   // child nested inside the group
+                node("t", 600, 230, 80, 50));             // external target
+
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn", "c", "t",
+                        List.of(new double[]{170, 250}, new double[]{550, 250},
+                                new double[]{620, 250}), "", 1));
+
+        LayoutQualityAssessor.PassThroughResult result =
+                assessor.detectPassThroughs(connections, nodes, false);
+
+        assertEquals("Own parent group must not count as a pass-through",
+                0, result.crossElementCount());
+    }
+
+    @Test
+    public void assess_nestedChildConnectsOutward_shouldNotPenaliseOwnParent() {
+        // End-to-end through assess(): the nested-child-outward route must leave
+        // connectionPassThroughs empty and the passThroughs rating unaffected.
+        List<AssessmentNode> nodes = List.of(
+                node("p", 100, 100, 400, 300),
+                childNode("c", 140, 230, 60, 40, "p"),
+                node("t", 600, 230, 80, 50));
+
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("conn", "c", "t",
+                        List.of(new double[]{170, 250}, new double[]{550, 250},
+                                new double[]{620, 250}), "", 1));
+
+        LayoutAssessmentResult result = assessor.assess(nodes, connections, false);
+
+        assertTrue("Own parent must not appear as a cross-element pass-through",
+                result.connectionPassThroughs().isEmpty());
+        assertEquals("passThroughs rating must remain pass when only the own parent is crossed",
+                "pass", result.ratingBreakdown().get("passThroughs"));
+    }
+
+    @Test
     public void rating_selfElementPTOnly_shouldNotPenalise() {
         // 3 self-element PTs, 0 cross-element → passThroughs rating should be "pass"
         // computeRatingWithBreakdown receives crossElementCount (0), not total
@@ -4154,6 +7258,78 @@ public class LayoutQualityAssessorTest {
                 1, result.connectionEdgeCoincidenceCount());
     }
 
+    @Test
+    public void m4_grazedElementCount_enumeratesAllGrazedElements_whenTrunkGrazesThree() {
+        // One horizontal trunk at y=148 grazes the TOP edge (y=150, gap 2px) of THREE foreign
+        // elements spread along it. The rating-bearing connectionEdgeCoincidenceCount counts the
+        // CONNECTION once (stops at the first graze); the informational
+        // edgeCoincidenceGrazedElementCount enumerates all three. Removing either break in
+        // countConnectionEdgeCoincidence collapses the enumeration to 1 (red-on-revert anchor).
+        AssessmentNode source = node("src", 0, 0, 50, 50);
+        AssessmentNode target = node("tgt", 600, 0, 50, 50);
+        AssessmentNode fA = node("fA", 110, 150, 80, 100); // TOP y=150, x[110,190]
+        AssessmentNode fB = node("fB", 250, 150, 80, 100); // TOP y=150, x[250,330]
+        AssessmentNode fC = node("fC", 400, 150, 80, 100); // TOP y=150, x[400,480]
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{25, 25}, new double[]{100, 148}, new double[]{500, 148},
+                        new double[]{625, 25}), "", 1);
+
+        LayoutAssessmentResult result = assessor.assess(
+                List.of(source, target, fA, fB, fC), List.of(conn), true);
+
+        assertEquals("M4: shipped per-connection count stays 1 (stops at first graze)",
+                1, result.connectionEdgeCoincidenceCount());
+        assertEquals("M4: per-element enumeration counts all three grazed elements",
+                3, result.edgeCoincidenceGrazedElementCount());
+        assertEquals("M4: connection-id violator key unchanged (the one connection)",
+                Set.of("c1"), result.violatorIds().get("edgeCoincidence"));
+        assertEquals("M4: grazed-element violator key lists all three element ids",
+                Set.of("fA", "fB", "fC"),
+                result.violatorIds().get("edgeCoincidenceGrazedElements"));
+    }
+
+    @Test
+    public void m4_grazedElementCount_equalsConnectionCount_whenEachConnectionGrazesOne() {
+        // Parity sanity: a connection grazing exactly one element → both counts agree.
+        AssessmentNode source = node("src", 0, 0, 50, 50);
+        AssessmentNode target = node("tgt", 600, 0, 50, 50);
+        AssessmentNode foreign = node("foreign", 200, 150, 200, 100);
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{25, 25}, new double[]{100, 148}, new double[]{500, 148},
+                        new double[]{625, 25}), "", 1);
+
+        LayoutAssessmentResult result = assessor.assess(
+                List.of(source, target, foreign), List.of(conn), false);
+
+        assertEquals("M4: single graze → connection count 1",
+                1, result.connectionEdgeCoincidenceCount());
+        assertEquals("M4: single graze → enumeration also 1 (parity)",
+                1, result.edgeCoincidenceGrazedElementCount());
+    }
+
+    @Test
+    public void m4_grazedElementCount_includesOwnSourceFace_v1Default() {
+        // The enumeration matches the shipped detector's scope: own source/target faces ARE in
+        // scope (M4.RemoveSelfExclusion). A vertical segment hugging the connection's own source
+        // RIGHT face is counted in edgeCoincidenceGrazedElementCount (no own-source carve-out in
+        // v1). Pins the baseline a future carve-out decision would have to flip symmetrically.
+        AssessmentNode source = node("src", 100, 100, 100, 100); // RIGHT at x=200, y[100,200]
+        AssessmentNode target = node("tgt", 500, 0, 50, 30);
+        AssessmentConnection conn = new AssessmentConnection("c1", "src", "tgt",
+                List.of(new double[]{150, 150}, new double[]{200, 150}, new double[]{200, 100},
+                        new double[]{525, 15}), "", 1);
+
+        LayoutAssessmentResult result = assessor.assess(
+                List.of(source, target), List.of(conn), true);
+
+        assertEquals("M4: own-source graze flags the shipped count",
+                1, result.connectionEdgeCoincidenceCount());
+        assertEquals("M4: own-source graze IS enumerated (v1 default, no carve-out)",
+                1, result.edgeCoincidenceGrazedElementCount());
+        assertEquals("M4: the own source id is the grazed element",
+                Set.of("src"), result.violatorIds().get("edgeCoincidenceGrazedElements"));
+    }
+
     // ---- M5: Hub-port allocation quality (Task 1.8) ----
 
     @Test
@@ -4686,5 +7862,183 @@ public class LayoutQualityAssessorTest {
         assertEquals("M4=7 routing tier is poor", "poor", m4Egregious.routingRating());
         assertEquals("M4=7 layout tier unaffected (still excellent)",
                 "excellent", m4Egregious.layoutRating());
+    }
+
+    // ---- Hub-to-neighbour crowding / clearance (2026-06-25) ----
+
+    /**
+     * Hub (320×160 at origin) plus {@code spokeCount} sibling spokes forming a row {@code gap}px
+     * below the hub's bottom edge, each x-overlapping the hub. Mirrors the live 2.3 resize-tight
+     * config (hub 320×160, 7 inbound spokes ~45px below).
+     */
+    private static List<AssessmentNode> hubWithBottomSpokeRow(int spokeCount, double gap) {
+        List<AssessmentNode> nodes = new ArrayList<>();
+        nodes.add(node("hub", 0, 0, 320, 160));
+        double y = 160 + gap;
+        for (int i = 0; i < spokeCount; i++) {
+            nodes.add(node("s" + i, i * 45.0, y, 40, 40));
+        }
+        return nodes;
+    }
+
+    /** One inbound connection per spoke (spoke → hub). Paths are clean vertical segments. */
+    private static List<AssessmentConnection> spokeConnections(int spokeCount, double gap) {
+        List<AssessmentConnection> conns = new ArrayList<>();
+        double spokeTop = 160 + gap;
+        for (int i = 0; i < spokeCount; i++) {
+            double sx = i * 45.0 + 20;
+            conns.add(new AssessmentConnection("c" + i, "s" + i, "hub",
+                    List.of(new double[]{sx, spokeTop}, new double[]{sx, 160}), "", 1));
+        }
+        return conns;
+    }
+
+    @Test
+    public void computeHubNeighbourCrowding_crowdedBottomRow_reportsClearanceAndCrowded() {
+        LayoutQualityAssessor.HubNeighbourCrowdingResult result =
+                assessor.computeHubNeighbourCrowding(spokeConnections(7, 45),
+                        hubWithBottomSpokeRow(7, 45));
+        assertEquals(45.0, result.minClearance(), 0.001);
+        assertTrue("hub edge 45px from a 7-spoke row is crowded", result.crowded());
+    }
+
+    @Test
+    public void computeHubNeighbourCrowding_sparseRow_reportsClearanceNotCrowded() {
+        LayoutQualityAssessor.HubNeighbourCrowdingResult result =
+                assessor.computeHubNeighbourCrowding(spokeConnections(7, 90),
+                        hubWithBottomSpokeRow(7, 90));
+        assertEquals(90.0, result.minClearance(), 0.001);
+        assertFalse("hub edge 90px from the row keeps a readable corridor", result.crowded());
+    }
+
+    @Test
+    public void computeHubNeighbourCrowding_belowHubThreshold_returnsSentinel() {
+        // 4 connections < HUB_DETECTION_THRESHOLD (5) → not a hub → sentinel, not crowded.
+        LayoutQualityAssessor.HubNeighbourCrowdingResult result =
+                assessor.computeHubNeighbourCrowding(spokeConnections(4, 30),
+                        hubWithBottomSpokeRow(4, 30));
+        assertEquals(LayoutQualityAssessor.NO_HUB_NEIGHBOUR_CLEARANCE,
+                result.minClearance(), 0.001);
+        assertFalse(result.crowded());
+    }
+
+    @Test
+    public void computeHubNeighbourCrowding_fewerThanKOnAnyFace_returnsSentinel() {
+        // 6-connection hub but only 2 neighbours per face (< CROWDING_MIN_ADJACENT_K=3): no face
+        // forms a row, so over-flag discipline yields the sentinel even though clearances are small.
+        List<AssessmentNode> nodes = new ArrayList<>();
+        nodes.add(node("hub", 0, 0, 320, 160));
+        nodes.add(node("b0", 0, 200, 40, 40));
+        nodes.add(node("b1", 60, 200, 40, 40));
+        nodes.add(node("t0", 0, -60, 40, 40));
+        nodes.add(node("t1", 60, -60, 40, 40));
+        nodes.add(node("r0", 360, 0, 40, 40));
+        nodes.add(node("r1", 360, 60, 40, 40));
+        List<double[]> p = List.of(new double[]{0, 0}, new double[]{1, 1});
+        List<AssessmentConnection> conns = List.of(
+                new AssessmentConnection("cb0", "b0", "hub", p, "", 1),
+                new AssessmentConnection("cb1", "b1", "hub", p, "", 1),
+                new AssessmentConnection("ct0", "t0", "hub", p, "", 1),
+                new AssessmentConnection("ct1", "t1", "hub", p, "", 1),
+                new AssessmentConnection("cr0", "r0", "hub", p, "", 1),
+                new AssessmentConnection("cr1", "r1", "hub", p, "", 1));
+        LayoutQualityAssessor.HubNeighbourCrowdingResult result =
+                assessor.computeHubNeighbourCrowding(conns, nodes);
+        assertEquals(LayoutQualityAssessor.NO_HUB_NEIGHBOUR_CLEARANCE,
+                result.minClearance(), 0.001);
+        assertFalse(result.crowded());
+    }
+
+    @Test
+    public void computeHubNeighbourCrowding_nestedChildren_excludedAsContainment() {
+        // Children are positioned BELOW the hub (y=205, 45px gap) so they WOULD form a crowded
+        // 6-spoke BOTTOM row if treated as neighbours — only the containment-pair exclusion keeps
+        // this from firing. This genuinely exercises the isContainmentPair guard (a child nested
+        // INSIDE the hub would be filtered by face-classification before the guard is reached).
+        List<AssessmentNode> nodes = new ArrayList<>();
+        nodes.add(node("hub", 0, 0, 320, 160));
+        List<AssessmentConnection> conns = new ArrayList<>();
+        List<double[]> p = List.of(new double[]{0, 0}, new double[]{1, 1});
+        for (int i = 0; i < 6; i++) {
+            nodes.add(childNode("ch" + i, i * 50.0, 205, 40, 40, "hub"));
+            conns.add(new AssessmentConnection("c" + i, "hub", "ch" + i, p, "", 1));
+        }
+        LayoutQualityAssessor.HubNeighbourCrowdingResult result =
+                assessor.computeHubNeighbourCrowding(conns, nodes);
+        assertEquals("containment children must be excluded → no spoke row → sentinel",
+                LayoutQualityAssessor.NO_HUB_NEIGHBOUR_CLEARANCE, result.minClearance(), 0.001);
+        assertFalse(result.crowded());
+    }
+
+    @Test
+    public void computeRatingWithBreakdown_hubCrowded_capsOverallAtFair() {
+        // Otherwise-pristine inputs rate excellent; the crowded flag must cap overall at fair (Tier 2L).
+        LayoutQualityAssessor.RatingResult clean = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false);
+        LayoutQualityAssessor.RatingResult crowded = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, true);
+        assertEquals("clean baseline rates excellent", "excellent", clean.rating());
+        assertEquals("crowded breakdown entry is fair", "fair",
+                crowded.breakdown().get("hubNeighbourCrowding"));
+        assertEquals("crowding caps overall at fair (not good/excellent)", "fair", crowded.rating());
+        assertEquals("crowding is a layout-tier defect", "fair", crowded.layoutRating());
+    }
+
+    @Test
+    public void computeRatingWithBreakdown_18ArgOverload_defaultsCrowdingPassByteIdentical() {
+        // The 18-arg overload must delegate with crowded=false → entry "pass", rating unchanged.
+        LayoutQualityAssessor.RatingResult viaEighteen = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0);
+        LayoutQualityAssessor.RatingResult viaNineteenFalse = assessor.computeRatingWithBreakdown(
+                0, 0, 50.0, 80, 0, 0, 0, 0, 10, false,
+                0, 0, 0, 0, 0, 0, 0, 1.0, false);
+        assertEquals(viaNineteenFalse.rating(), viaEighteen.rating());
+        assertEquals("pass", viaEighteen.breakdown().get("hubNeighbourCrowding"));
+    }
+
+    @Test
+    public void crowdingFloor_boundaryBehaviour_pinsCalibration() {
+        // Calibration pin for CROWDING_FLOOR_PX: a row exactly at the floor is NOT crowded;
+        // one px inside it is. Locks the live-calibrated constant against silent drift.
+        assertFalse("clearance == floor is not crowded (>= floor)",
+                assessor.computeHubNeighbourCrowding(
+                        spokeConnections(5, LayoutQualityAssessor.CROWDING_FLOOR_PX),
+                        hubWithBottomSpokeRow(5, LayoutQualityAssessor.CROWDING_FLOOR_PX)).crowded());
+        assertTrue("clearance one px inside the floor is crowded",
+                assessor.computeHubNeighbourCrowding(
+                        spokeConnections(5, LayoutQualityAssessor.CROWDING_FLOOR_PX - 1),
+                        hubWithBottomSpokeRow(5, LayoutQualityAssessor.CROWDING_FLOOR_PX - 1)).crowded());
+        assertEquals(60.0, LayoutQualityAssessor.CROWDING_FLOOR_PX, 0.001);
+    }
+
+    @Test
+    public void assess_crowdedHub_capsRatingAndReportsClearance() {
+        LayoutAssessmentResult result =
+                assessor.assess(hubWithBottomSpokeRow(7, 45), spokeConnections(7, 45), false);
+        assertEquals(45.0, result.hubNeighbourClearanceMin(), 0.001);
+        assertEquals("fair", result.ratingBreakdown().get("hubNeighbourCrowding"));
+        // Otherwise-clean fixture (no overlaps/crossings/routing defects) → crowding caps it at
+        // exactly fair (Tier 2L cap-fair, never poor).
+        assertEquals("crowding caps overall at exactly fair", "fair", result.overallRating());
+    }
+
+    @Test
+    public void assess_sparseHub_doesNotFireAndReportsClearance() {
+        LayoutAssessmentResult result =
+                assessor.assess(hubWithBottomSpokeRow(7, 90), spokeConnections(7, 90), false);
+        assertEquals(90.0, result.hubNeighbourClearanceMin(), 0.001);
+        assertEquals("pass", result.ratingBreakdown().get("hubNeighbourCrowding"));
+    }
+
+    @Test
+    public void assess_noHub_reportsSentinelClearanceAndPass() {
+        // Plain 4-node grid, no element with >= HUB_DETECTION_THRESHOLD connections.
+        LayoutAssessmentResult result = assessor.assess(createFourNodeGrid(), List.of(), false);
+        assertEquals(LayoutQualityAssessor.NO_HUB_NEIGHBOUR_CLEARANCE,
+                result.hubNeighbourClearanceMin(), 0.001);
+        assertEquals("pass", result.ratingBreakdown().get("hubNeighbourCrowding"));
     }
 }

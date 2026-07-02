@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.regex.Pattern;
 
+import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IBorderType;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
@@ -929,6 +930,61 @@ final class StylingHelper {
     static String readConnectionLabelExpression(IDiagramModelConnection conn) {
         String value = conn.getFeatures().getString("labelExpression", null);
         return (value == null || value.isEmpty()) ? null : value;
+    }
+
+    /**
+     * Reads a connection's label-offset anchor (the "Label Offset" compass introduced on newer Archi,
+     * backed by the {@code "textRelativePosition"} feature). Returns {@code null} when the running
+     * platform lacks the feature (older Archi — the field is then omitted via NON_NULL, no wire cost and
+     * no surprise) or when the anchor is the un-offset default ({@code CENTER}), mirroring the
+     * omit-at-default discipline of the other connection readers. Otherwise returns the platform's anchor
+     * bitmask (the offset directions NORTH=1/SOUTH=4/WEST=8/EAST=16/NE=17/NW=9/SE=20/SW=12; the remaining
+     * value CENTER=2 is the un-offset default and is suppressed to null, so it never appears on the wire).
+     * Read-only counterpart to the offset the routing optimizer writes via {@link RelativePositionFeature}.
+     */
+    static Integer readConnectionRelativePosition(IDiagramModelConnection conn) {
+        if (!RelativePositionFeature.isSupported(conn)) {
+            return null;
+        }
+        int value = RelativePositionFeature.get(conn);
+        return value == RelativePositionFeature.CENTER ? null : Integer.valueOf(value);
+    }
+
+    /**
+     * Resolves the displayed label text of a view connection for label-width
+     * reservation during layout, mirroring the read path used elsewhere.
+     *
+     * <ul>
+     *   <li>A manually suppressed label (name not visible) resolves to empty so
+     *       it reserves no layout space — keeping manual suppression an effective
+     *       escape hatch.</li>
+     *   <li>When set, a {@code labelExpression} overrides the relationship name
+     *       (consistent with {@link #readConnectionLabelExpression}). The raw
+     *       expression string is used as the width basis since the layout path
+     *       cannot evaluate the template headlessly — an approximation (a
+     *       literal-heavy template over-reserves; a short variable template such
+     *       as {@code ${name}} can under-reserve relative to its expansion, no
+     *       worse than the pre-change zero-reservation baseline).</li>
+     *   <li>Otherwise the underlying relationship name is used, falling back to
+     *       the connection's own name.</li>
+     * </ul>
+     *
+     * @return the label text (never null); empty string when nothing is displayed
+     */
+    static String resolveConnectionLabelText(IDiagramModelConnection conn) {
+        if (!conn.isNameVisible()) {
+            return "";
+        }
+        if (conn instanceof IDiagramModelArchimateConnection archConn) {
+            String labelExpression = readConnectionLabelExpression(conn);
+            if (labelExpression != null) {
+                return labelExpression;
+            }
+            IArchimateRelationship rel = archConn.getArchimateRelationship();
+            return (rel != null && rel.getName() != null) ? rel.getName() : "";
+        }
+        String name = conn.getName();
+        return name != null ? name : "";
     }
 
 }

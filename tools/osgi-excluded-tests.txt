@@ -30,6 +30,7 @@ net.vheerden.archi.mcp.model.ViewExportServiceTest                          # al
 net.vheerden.archi.mcp.model.ImagePathArchiveValidationTest                 # all tests Assume IArchiveManager — 0 run headlessly
 net.vheerden.archi.mcp.integration.DeleteViewCascadeIntegrationTest         # Assume IEditorModelManager/save-reload — 0 run headlessly
 net.vheerden.archi.mcp.integration.RemoveFromViewCascadeIntegrationTest     # Assume IEditorModelManager/save-reload — 0 run headlessly
+net.vheerden.archi.mcp.model.MultiViewCompoundDeleteCascadeIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
 
 # --- Group B: require a live SWT display (pass with `--swt` / xvfb; AC-9 escape hatch) ---
 # CI: RUN in the `ci-pde` lane via `xvfb-run bash tools/run-tests.sh <these 3 FQCNs>` (explicit-FQCN

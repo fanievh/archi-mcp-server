@@ -658,6 +658,9 @@ public class ViewHandler {
                         + "viewObjectId (the visual ids to pass to remove-from-view / update-view-object; the edge/node id "
                         + "are model ids those tools reject), format=summary for condensed text overview. "
                         + "Elements in results include specialization field showing the primary specialization name (null if none). "
+                        + "On Archi 5.10, a connection also carries relativePosition — the \"Label Offset\" anchor set by "
+                        + "auto-route-connections to lift a Middle label off its own box — which is the only programmatic read-back "
+                        + "for the offset (omitted on Archi 5.7 and for the un-offset default; export-view does not render it). "
                         + "Related: get-element (full element details), "
                         + "get-relationships (connections beyond this view), "
                         + "export-view (visual verification of connection routing).")

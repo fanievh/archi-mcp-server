@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 
@@ -45,6 +47,31 @@ public class DeleteElementCommand extends Command {
     private final List<CascadedViewReference> cascadedViewReferences;
     private final List<IDiagramModelConnection> viewConnectionsToDisconnect;
 
+    // Successor anchors captured at construction (prepare time, when every folder
+    // and container still holds its full original membership). undo() restores
+    // each removed object directly BEFORE its surviving successor rather than at a
+    // stale absolute index. This keeps paint order (view z-order) AND model-tree
+    // folder order exact when SEVERAL delete commands are grouped in one compound:
+    // such a compound undoes its members in reverse, so a later member restores
+    // into a list whose earlier members are not yet back — an absolute index then
+    // lands in the wrong slot, whereas the surviving successor is a stable anchor.
+    //
+    // Exactness guarantee: order is restored exactly whenever each removed item's
+    // captured successor is a SURVIVOR or is restored before the item (always true
+    // for single deletes, for the intra-command cascade — sorted descending and
+    // restored ascending — and for a compound whose same-container removals are
+    // listed in ascending index order, which is what the discovery walk and a
+    // top-to-bottom bulk request produce). Residual: a run of 3+ co-deleted
+    // siblings listed in a non-monotonic order (e.g. indices [2,0,1]) can leave a
+    // middle item whose only anchor is another not-yet-restored co-deleted sibling;
+    // the absolute-index fallback then mis-places it among the collapsed survivors.
+    // Membership/connection integrity is always preserved; only paint order can
+    // drift in that rare case. A fully order-independent fix would require the
+    // compound itself to restore same-container removals in global index order.
+    private final EObject elementSuccessor;
+    private final List<EObject> relationshipSuccessors;
+    private final List<IDiagramModelObject> viewReferenceSuccessors;
+
     /**
      * Creates a command to delete an element and cascade-remove all dependencies.
      *
@@ -70,6 +97,22 @@ public class DeleteElementCommand extends Command {
         this.cascadedRelationships = List.copyOf(cascadedRelationships);
         this.cascadedViewReferences = List.copyOf(cascadedViewReferences);
         this.viewConnectionsToDisconnect = List.copyOf(viewConnectionsToDisconnect);
+        // Capture surviving-successor anchors NOW, while the model is still intact.
+        this.elementSuccessor = successorOf(elementFolder.getElements(), element);
+        List<EObject> relSuccessors = new ArrayList<>(this.cascadedRelationships.size());
+        for (CascadedRelationship rel : this.cascadedRelationships) {
+            relSuccessors.add(successorOf(rel.folder().getElements(), rel.relationship()));
+        }
+        // Note: successor lists may legitimately contain null (a removed item
+        // that was last in its container has no successor anchor), so they use
+        // unmodifiableList rather than List.copyOf, which rejects null elements.
+        this.relationshipSuccessors = Collections.unmodifiableList(relSuccessors);
+        List<IDiagramModelObject> viewSuccessors =
+                new ArrayList<>(this.cascadedViewReferences.size());
+        for (CascadedViewReference ref : this.cascadedViewReferences) {
+            viewSuccessors.add(successorOf(ref.container().getChildren(), ref.viewObject()));
+        }
+        this.viewReferenceSuccessors = Collections.unmodifiableList(viewSuccessors);
         setLabel("Delete " + element.eClass().getName() + ": " + element.getName());
     }
 
@@ -98,19 +141,21 @@ public class DeleteElementCommand extends Command {
     @Override
     public void undo() {
         // 4. Re-add element to folder
-        safeAddElement(elementFolder, elementIndex, element);
+        safeAddElement(elementFolder, elementIndex, element, elementSuccessor);
 
         // 3. Re-add and reconnect relationships (reverse order preserves indices)
         for (int i = cascadedRelationships.size() - 1; i >= 0; i--) {
             CascadedRelationship rel = cascadedRelationships.get(i);
-            safeAddElement(rel.folder, rel.indexInFolder, rel.relationship);
+            safeAddElement(rel.folder, rel.indexInFolder, rel.relationship,
+                    relationshipSuccessors.get(i));
             rel.relationship.connect(rel.source, rel.target);
         }
 
         // 2. Re-add view objects (reverse order preserves indices)
         for (int i = cascadedViewReferences.size() - 1; i >= 0; i--) {
             CascadedViewReference ref = cascadedViewReferences.get(i);
-            safeAddChild(ref.container, ref.indexInContainer, ref.viewObject);
+            safeAddChild(ref.container, ref.indexInContainer, ref.viewObject,
+                    viewReferenceSuccessors.get(i));
         }
 
         // 1. Reconnect all view connections
@@ -121,8 +166,23 @@ public class DeleteElementCommand extends Command {
 
     // Default redo() calls execute() — safe because all state is in final fields
 
-    private static void safeAddElement(IFolder folder, int index, EObject element) {
-        if (index >= 0 && index <= folder.getElements().size()) {
+    /** The item that immediately followed {@code item} in {@code list}, or
+     *  {@code null} if it was last / not present. Used to capture a stable
+     *  re-insertion anchor at construction time. Relies on EMF default identity
+     *  equality for {@code indexOf} (the model types here do not override
+     *  {@code equals}), so a value-equal twin cannot shadow the real anchor. */
+    private static <T> T successorOf(List<T> list, T item) {
+        int i = list.indexOf(item);
+        return (i >= 0 && i + 1 < list.size()) ? list.get(i + 1) : null;
+    }
+
+    private static void safeAddElement(IFolder folder, int index, EObject element,
+                                       EObject successorAnchor) {
+        int anchorIndex = (successorAnchor != null)
+                ? folder.getElements().indexOf(successorAnchor) : -1;
+        if (anchorIndex >= 0) {
+            folder.getElements().add(anchorIndex, element);
+        } else if (index >= 0 && index <= folder.getElements().size()) {
             folder.getElements().add(index, element);
         } else {
             folder.getElements().add(element);
@@ -130,8 +190,13 @@ public class DeleteElementCommand extends Command {
     }
 
     private static void safeAddChild(IDiagramModelContainer container, int index,
-                                      IDiagramModelObject child) {
-        if (index >= 0 && index <= container.getChildren().size()) {
+                                      IDiagramModelObject child,
+                                      IDiagramModelObject successorAnchor) {
+        int anchorIndex = (successorAnchor != null)
+                ? container.getChildren().indexOf(successorAnchor) : -1;
+        if (anchorIndex >= 0) {
+            container.getChildren().add(anchorIndex, child);
+        } else if (index >= 0 && index <= container.getChildren().size()) {
             container.getChildren().add(index, child);
         } else {
             container.getChildren().add(child);

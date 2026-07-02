@@ -66,6 +66,14 @@ public class CompoundChildTargetsTest {
         assertTrue(CompoundChildTargets.collect(compound, "view-1").contains("c2"));
     }
 
+    @Test
+    public void shouldTrackConnectionId_forSetTextRelativePositionCommand() {
+        CompoundCommand compound = new CompoundCommand();
+        compound.add(new SetTextRelativePositionCommand(conn("c3"), 16)); // EAST
+
+        assertTrue(CompoundChildTargets.collect(compound, "view-1").contains("c3"));
+    }
+
     // ---- auto-connect: track pre-existing endpoints, NOT the created connection ----
 
     @Test

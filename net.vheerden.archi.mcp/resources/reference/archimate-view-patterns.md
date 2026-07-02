@@ -130,6 +130,8 @@ Use `auto-connect-view` to batch-create visual connections for all existing mode
 
 Use `add-connection-to-view` as a **fallback** for individual connections — e.g., when you need to connect specific relationships one at a time. Both `add-connection-to-view` and `update-view-connection` accept optional styling (`lineColor`, `fontColor`, `lineWidth`), `showLabel: false` to suppress the relationship name label, and `labelPosition` (`"source"`, `"middle"`, or `"target"`) to control where the label sits along the connection path. Use `labelPosition` to reduce label overlaps on dense diagrams — e.g., place labels near the target end when source-end labels collide with nearby elements.
 
+**Lifting a Middle label off its own box (Archi 5.10):** when a `"middle"` label still renders *on* its source or target box (the along-path positions can't always avoid it), `auto-route-connections` and `auto-layout-and-route` automatically apply the Archi 5.10 connection **Label Offset** (`relativePosition`) to nudge the label clear in the perpendicular direction — no parameter needed. On a hand-placed view you keep, `auto-route-connections` is the tool to run, since the offset is the only channel that clears own-endpoint bleed without moving elements. Confirm it via `get-view-contents` (`relativePosition`) and verify in the **live editor**, not `export-view` (the export renderer does not draw the offset). On Archi 5.7 this is a silent no-op — use `labelPosition` or `showLabel: false` instead.
+
 **Anti-pattern:** Do NOT use `bulk-mutate` with repeated `add-connection-to-view` operations when `auto-connect-view` can do it in one call.
 
 **Nesting implies the structural relationship — exclude it from the filter:** When an element is visually nested inside its parent element or group (e.g., a part-component inside its component, a process inside its performing role's swimlane, availability zones inside a cloud region), the containment **already states** the `CompositionRelationship` / `AggregationRelationship` / owner-`AssignmentRelationship`. Do NOT also draw a connector for it: pass an `auto-connect-view` `relationshipTypes` filter that lists only the relationships that carry information beyond containment (e.g. `relationshipTypes: ["ServingRelationship", "FlowRelationship"]`), and leave Composition/Aggregation/owner-Assignment out of that list. Drawing the structural arrow on top of the nesting is an error — it duplicates the containment and clutters the diagram.
@@ -182,6 +184,12 @@ On views with hub-and-spoke topologies (e.g., integration architecture with an E
 - **After resizing, re-run `layout-within-group`** on the group containing the resized hub — this prevents the enlarged hub from overlapping sibling elements. Then re-run `auto-route-connections` — the larger element surfaces give the router more attachment point options.
 
 **When to apply:** After `optimize-group-order` and before `auto-route-connections` in the grouped view workflow. Hub heightening + wide inter-group spacing (80-100px+ via `arrange-groups`) work together — taller hubs spread attachment points while wider spacing creates routing corridors.
+
+**Resize vs reposition on a saturated container-nested-hub view (and metric/readability divergence).** When components are nested inside a container with a central hub and corridors are saturated (`assess-layout` reports high `corridorUtilisationScore` with edge-coincidence pressure but `hubPortQualityScore` is fine), enlarging the hub is not always right. On a **sparse** view it opens corridors (edge-coincidence drops, the view stays roomy); on a **dense** view the same resize trades edge-coincidence for hub-to-neighbour **crowding** — and no metric penalises that crowding yet, so the crowded layout can still rate `good` while reading worse than an ELK reposition that only rates `fair`. Decide by density: sparse → resize the hub (both dimensions) then `auto-route-connections`; dense → revert the hub to normal size, `auto-layout-and-route` (ELK), then a **full** `auto-route-connections` (an oversized hub before ELK causes interior terminations; `terminals-only` after ELK vetoes interior-landing terminals). **Acceptance is render-authoritative — verify with `export-view`, not the rating alone.** `assess-layout` emits this as a diagnostic next-step; the full decision tree is in `archimate://prompts/routing-preconditions-checklist`.
+
+**A shared dependency of many *nested siblings* → place it as a wide bar adjacent to the container, not inside it or off to one side.** When one element is the common dependency of many children nested together in a container (e.g. a facade/accessor that serves 8 nested handlers), routing it from *inside* the container or from *beside* it produces zigzags and a self-pass-through — every sibling's edge competes for the same perimeter. Instead give the shared element its own **wide, short bar placed directly beneath (or above) the container**, spanning its width: each nested sibling then drops a short near-vertical edge to the bar, crossings collapse (typically to ≤1), and the shared dependency reads as a base the siblings sit on. This is the nested-siblings analogue of the hub-sizing rule — adjacency and perimeter, not nesting or side-placement, resolve the fan-in.
+
+**Caveat — `autoWidth` on an *outer* container shrinks *inner* sub-containers to their label width.** When a container nests its own sub-containers, running `layout-within-group autoWidth` on the outer container resizes each inner sub-container down to its label, clipping the grandchildren nested inside it. Lay out **inner-first**: run `layout-within-group` (with `autoWidth`) on the innermost containers, then run the outer container with `autoWidth` **off**, so the outer pass sizes to the already-correct inner boxes instead of collapsing them.
 
 ### Containment & Parent Movement
 
@@ -500,7 +508,7 @@ Always add title notes AFTER completing layout, routing, and assessment. Use `po
 
 **Anti-pattern:** Do NOT place notes at hardcoded coordinates (e.g., x=10, y=10) before layout — ELK and other algorithms will reposition elements into the note's space, causing overlaps.
 
-## Label Expressions (`labelExpression` on `update-view-object`)
+## Label Expressions (`labelExpression` on `update-view-object` / `set-view-label-expression`)
 
 A **label expression** is a dynamic rendering template stored on a view object that Archi evaluates at render time. Unlike `text` (which sets a literal stored label for groups and notes), `labelExpression` is the *computed* rendering instruction — when the underlying element changes, every view that uses the expression updates automatically.
 
@@ -511,7 +519,7 @@ A **label expression** is a dynamic rendering template stored on a view object t
 | `${name}` | The element's current name | Show the latest element name on this view object, no manual sync |
 | `${property:KEY}` | The value of the element property named `KEY` | `${property:Owner}` renders the value of an `Owner` property on the element |
 
-Archi supports a richer grammar (model name, documentation, type, modifiers). See the Archi user-guide topic *"Label Expressions"* for the full token catalog. This MCP server does not parse or validate expressions — Archi owns the grammar; unknown tokens render as the literal `${...}`.
+Archi supports a richer grammar (model name, documentation, type, modifiers). See the Archi user-guide topic *"Label Expressions"* for the full token catalog. This MCP server does not parse the grammar — Archi owns it; unknown tokens render as the literal `${...}`. The one server-side check rejects a template containing a literal HTML/XML entity token (e.g. `&amp;amp;`, `&amp;lt;`, `&amp;#160;`) with a corrective hint, so use the actual character (`&`, `<`, a non-breaking space) rather than its escaped form — a bare `&` and `${name} & ${property:x}` are fine.
 
 **Semantics on `update-view-object`:**
 
@@ -519,12 +527,16 @@ Archi supports a richer grammar (model name, documentation, type, modifiers). Se
 - Pass a non-empty string → set the expression verbatim.
 - Pass `""` (empty string) → clear the expression; Archi falls back to rendering the element's static name.
 
+**Stamping one template across a whole view (`set-view-label-expression`):**
+
+To apply the *same* expression to every eligible object on a view in one shot — the common case when retro-fitting an evidence-mark or status glyph onto an existing diagram — use the `set-view-label-expression` `bulk-mutate` operation instead of one `update-view-object` call per object. It writes all matched objects in a single atomic command (one undo unit), is idempotent, and is type-filterable: the default scope is ArchiMate **element** objects, and an optional `objectTypes` array widens it to `note` / `group`. A blank-named object is **skipped** when *setting* a template (so it never renders a half-empty glyph) but **included** when *clearing* (an empty/blank `labelExpression` removes the override everywhere); the result reports `appliedCount` / `skippedCount`.
+
 **`text` vs `labelExpression`:**
 
 - `text` writes the literal stored label for **groups** (`setName(...)`) or **notes** (`setContent(...)`). Rejected for element view objects.
 - `labelExpression` writes the rendering template for any view object. When both are set, Archi's `labelExpression` wins at render time.
 
-**Scope:** label expressions are stored per-view-object and are exposed on `update-view-object` only. Setting a label expression on the underlying ArchiMate element (via `update-element`) is **not supported** — Archi's renderer reads label expressions from the view-object layer, not the model-element layer.
+**Scope:** label expressions are stored per-view-object and are exposed on `update-view-object` (per object) and `set-view-label-expression` (one template across a view). Setting a label expression on the underlying ArchiMate element (via `update-element`) is **not supported** — Archi's renderer reads label expressions from the view-object layer, not the model-element layer.
 
 ## Styling Completeness
 
@@ -554,6 +566,12 @@ The styling rail on `add-to-view` / `add-group-to-view` / `add-note-to-view` / `
 
 **outlineOpacity (view objects):**
 - 0-255, default 255. Distinct from `opacity` (fill opacity) — controls just the outline line's alpha.
+
+**Container fill recession (auto-backdrop):**
+- When `add-to-view` / `add-group-to-view` nests a child *inside* a container whose fill you have **not** explicitly set, the parent's fill auto-recedes to a subtle backdrop (`#F4F4F4`) so the nesting reads as depth, not a flat single-colour block ("the container is the canvas, the children are the figures").
+- Provenance-gated and idempotent: only an unauthored (null) fill is touched; an explicitly coloured container is left untouched; an already-receded parent is a no-op; the root view is excluded.
+- The recede rides the placement as one undo unit. Pass `recede: false` to opt out for a call.
+- Prefer letting the recession run over hand-colouring a container backdrop. If you *do* set a container fill, keep it distinct (lighter) from its children — `assess-layout` flags a container whose authored fill equals a child's (`containerFillEqualsChildCount`).
 
 **Read-back discipline:** all styling fields are omitted from JSON when the underlying EMF state is at Archi's default. Set fields are echoed in the response DTO under the same names. All changes execute as a single undo unit alongside the basic styling fields.
 

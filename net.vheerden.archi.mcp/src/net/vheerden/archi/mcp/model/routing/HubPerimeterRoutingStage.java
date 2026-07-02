@@ -443,6 +443,56 @@ public class HubPerimeterRoutingStage {
         return percentileP10(gaps);
     }
 
+    /**
+     * H-axis mirror of {@link #computeVAxisParallelGapP10}: nearest-neighbour parallel-gap p10
+     * over HORIZONTAL connection segments (segments constant on Y), with the gap measured on the
+     * Y axis. Used by {@link TerminalEgressClearancePass} (Option B, 2026-06-29) to gate a
+     * horizontal-hug egress push on the correct (horizontal) parallel field — the V-axis stat
+     * is the wrong axis for a horizontal hug. Same overlap/percentile convention as the V-axis
+     * stat, so it adds no new assessor-mirror drift surface.
+     */
+    static Double computeHAxisParallelGapP10(List<List<AbsoluteBendpointDto>> paths) {
+        if (paths == null) return null;
+        // Per-segment record: fixedCoord (Y), spanLow (X), spanHigh (X).
+        List<double[]> hSegs = new ArrayList<>();
+        for (List<AbsoluteBendpointDto> path : paths) {
+            if (path == null || path.size() < 2) continue;
+            for (int i = 0; i < path.size() - 1; i++) {
+                AbsoluteBendpointDto p = path.get(i);
+                AbsoluteBendpointDto q = path.get(i + 1);
+                double dx = Math.abs(q.x() - p.x());
+                double dy = Math.abs(q.y() - p.y());
+                if (dx < PARALLEL_GAP_AXIS_TOLERANCE_PX && dy < PARALLEL_GAP_AXIS_TOLERANCE_PX) continue;
+                if (dy < PARALLEL_GAP_AXIS_TOLERANCE_PX && dx >= PARALLEL_GAP_AXIS_TOLERANCE_PX) {
+                    double fixedY = (p.y() + q.y()) / 2.0;
+                    double spanLow = Math.min(p.x(), q.x());
+                    double spanHigh = Math.max(p.x(), q.x());
+                    hSegs.add(new double[] {fixedY, spanLow, spanHigh});
+                }
+                // diagonal + V pairs are out of scope for the H-axis check.
+            }
+        }
+        if (hSegs.isEmpty()) return null;
+
+        List<Double> gaps = new ArrayList<>();
+        int n = hSegs.size();
+        for (int i = 0; i < n; i++) {
+            double[] s = hSegs.get(i);
+            Double bestGap = null;
+            for (int j = 0; j < n; j++) {
+                if (j == i) continue;
+                double[] s2 = hSegs.get(j);
+                double overlap = Math.min(s[2], s2[2]) - Math.max(s[1], s2[1]);
+                if (overlap <= 0.0) continue;
+                double gap = (s[0] == s2[0]) ? 0.0 : Math.abs(s[0] - s2[0]);
+                if (bestGap == null || gap < bestGap) bestGap = gap;
+            }
+            if (bestGap != null) gaps.add(bestGap);
+        }
+        if (gaps.isEmpty()) return null;
+        return percentileP10(gaps);
+    }
+
     private static double percentileP10(List<Double> values) {
         List<Double> xs = new ArrayList<>(values);
         Collections.sort(xs);

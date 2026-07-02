@@ -10,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import net.vheerden.archi.mcp.response.dto.PendingProposalView;
@@ -43,6 +44,7 @@ import net.vheerden.archi.mcp.response.dto.ProposalDto;
  * @param intentText     the agent's intent note (hollow notes suppressed), or {@code null} when absent
  * @param rows           expanded per-change rows with destructive rows hoisted to the top
  * @param rawDetailsJson pretty-printed raw params for the {@code Technical details} auditor disclosure
+ * @param copyJson       full pretty-printed proposal payload for the per-card Copy JSON action
  */
 public record ApprovalCardModel(
         String sessionId,
@@ -53,9 +55,13 @@ public record ApprovalCardModel(
         boolean hasDestructive,
         String intentText,
         List<ChangeRow> rows,
-        String rawDetailsJson) {
+        String rawDetailsJson,
+        String copyJson) {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    // NON_NULL so the copied/raw payloads omit null fields without depending on per-DTO
+    // annotations — matches the project-wide JSON convention (camelCase + null omission).
+    private static final ObjectMapper MAPPER = new ObjectMapper()
+            .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
     /** Oldest-first by creation instant; stable, so equal/unparseable timestamps keep encounter order. */
     private static final Comparator<ApprovalCardModel> BY_CREATED =
@@ -350,11 +356,12 @@ public record ApprovalCardModel(
         List<ChangeRow> rows = deriveRows(dto.tool(), dto.effectDescription(), dto.description(),
                 dto.proposedChanges(), dto.currentState());
         String raw = buildRawJson(dto);
+        String copy = buildCopyJson(dto);
         // Populate the agent's-note slot, suppressing hollow notes so vagueness never occupies
         // the trust slot (the view keeps the slot zero-height when this is null).
         String intentText = deriveIntent(dto.intent(), dto.tool());
         return new ApprovalCardModel(view.sessionId(), dto.proposalId(), dto.tool(),
-                dto.createdAt(), rollup, hasDestructive, intentText, rows, raw);
+                dto.createdAt(), rollup, hasDestructive, intentText, rows, raw, copy);
     }
 
     /**
@@ -545,6 +552,24 @@ public record ApprovalCardModel(
             return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(raw);
         } catch (Exception e) {
             return String.valueOf(raw);
+        }
+    }
+
+    /**
+     * Builds the full proposal payload for the per-card Copy JSON action. Serializes the whole
+     * {@link ProposalDto} (which is {@code @JsonInclude(NON_NULL)}), so the copied text is the
+     * wire-accurate structured change — proposalId, tool, status, description, currentState,
+     * proposedChanges, validationSummary, createdAt, and the nullable effectDescription / intent
+     * when present — with null fields omitted. The session routing key is not part of the DTO and
+     * is intentionally excluded.
+     */
+    private static String buildCopyJson(ProposalDto dto) {
+        try {
+            return MAPPER.writerWithDefaultPrettyPrinter().writeValueAsString(dto);
+        } catch (Exception e) {
+            // Keep the fallback valid JSON — this payload is meant to be pasted into a JSON
+            // parser / log, so a record toString() dump would be worse than a structured error.
+            return "{\"error\": \"Could not serialize proposal to JSON\"}";
         }
     }
 

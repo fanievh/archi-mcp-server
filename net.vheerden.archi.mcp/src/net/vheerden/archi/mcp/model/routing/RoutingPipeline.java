@@ -1561,6 +1561,14 @@ public class RoutingPipeline {
             }
         }
 
+        // 5.0b. Dissolve coincident same-face terminal ports.
+        // The per-face distributor spreads co-grouped terminals to distinct slots, but later terminal
+        // stages (center-alignment / restoration) can pull a source-exit and a target-entry sharing a
+        // face back onto its centre line, collapsing them onto one perimeter port. This final pass
+        // re-fans any such collision — collision-gated, crossing-aware, on-line, distinguishability-
+        // floored — so a face's ports stay distinct; non-colliding faces are left byte-identical.
+        spreadCoincidentFacePorts(routed, connections);
+
         // 5.1. Recommendation engine — only runs if failed list non-empty
         List<MoveRecommendation> recommendations = List.of();
         if (!failed.isEmpty()) {
@@ -1572,7 +1580,389 @@ public class RoutingPipeline {
         }
 
         return new RoutingResult(routed, failed, recommendations, violatedRoutes,
-                optimalPositions.size(), optimalPositions, straightLineCrossings);
+                optimalPositions.size(), optimalPositions, straightLineCrossings, egressResult.rolled());
+    }
+
+    /**
+     * Along-face slot tolerance below which two same-face terminals are one visible port.
+     * Mirrors the layout assessor's coincident-face-port predicate (its
+     * {@code HUB_PORT_SLOT_TOLERANCE_PX}); kept as a local copy because that constant is
+     * package-private to the assessor's package. The gate fires on exactly what the assessor
+     * enumerates, so a spread here drives the assessor's coincident-face-port reading to zero.
+     */
+    private static final double COINCIDENT_PORT_SLOT_TOLERANCE_PX = 1.0;
+
+    /**
+     * Elements with this many or more incident connections are hubs, whose ports are laid out by the
+     * dedicated hub distribution / perimeter-routing machinery (reduced-port packing, per-face
+     * redistribution). The coincident-port spread stays clear of them — it targets the ordinary
+     * low-degree element where a source-exit and a target-entry collapse onto one face-centre port.
+     * Mirrors {@code LayoutQualityAssessor.HUB_DETECTION_THRESHOLD} (package-private to that package).
+     */
+    private static final int HUB_DEGREE_THRESHOLD = 5;
+
+    /** One connection terminal that sits on a low-degree element's perimeter — a spread candidate. */
+    private record PortRef(List<AbsoluteBendpointDto> path, ConnectionEndpoints conn, boolean isSource,
+            RoutingRect elem, boolean slotAlongY, double slot) {}
+
+    /**
+     * Final pass: dissolves coincident same-face terminal ports across all routed connections.
+     *
+     * <p>Terminals on low-degree, on-perimeter elements are grouped by element face, clustered by
+     * along-face slot, and each colliding cluster is separated by moving whichever members CAN move
+     * (an on-line terminal whose stub stays perpendicular) off the ones that cannot (e.g. a terminal
+     * whose stub hugs the face line — moving it would defeat orthogonality). Every move is
+     * collision-gated, distinguishability-floored, crossing-aware, and obstacle-safe; a face whose
+     * ports are already distinct, or that cannot be separated without breaking a gate, is left
+     * byte-identical. Dense hubs (degree ≥ {@link #HUB_DEGREE_THRESHOLD}) are excluded — their ports
+     * are owned by the dedicated hub distribution machinery.</p>
+     *
+     * @param routed      routed paths (connectionId -> bendpoints), mutated in place
+     * @param connections all connection endpoints, providing stable order and element resolution
+     */
+    void spreadCoincidentFacePorts(Map<String, List<AbsoluteBendpointDto>> routed,
+            List<ConnectionEndpoints> connections) {
+        Map<String, ConnectionEndpoints> connectionMap = new HashMap<>();
+        // Port degree per element, memoised once (a self-referencing connection counts once, matching
+        // "connections incident on the element").
+        Map<String, Integer> degreeByElement = new HashMap<>();
+        for (ConnectionEndpoints c : connections) {
+            connectionMap.put(c.connectionId(), c);
+            degreeByElement.merge(c.source().id(), 1, Integer::sum);
+            if (!c.target().id().equals(c.source().id())) {
+                degreeByElement.merge(c.target().id(), 1, Integer::sum);
+            }
+        }
+        // Group spread-candidate terminals by element face (stable order).
+        Map<String, List<PortRef>> faceGroups = new LinkedHashMap<>();
+        for (ConnectionEndpoints c : connections) {
+            List<AbsoluteBendpointDto> path = routed.get(c.connectionId());
+            if (path == null || path.size() < 2) {
+                continue;
+            }
+            collectPortRef(faceGroups, path, c, true, c.source(), degreeByElement);
+            collectPortRef(faceGroups, path, c, false, c.target(), degreeByElement);
+        }
+        for (List<PortRef> refs : faceGroups.values()) {
+            resolveFaceGroup(refs, routed, connectionMap);
+        }
+    }
+
+    /** Records a terminal as a spread candidate when it is on a low-degree element's perimeter. */
+    private static void collectPortRef(Map<String, List<PortRef>> faceGroups,
+            List<AbsoluteBendpointDto> path, ConnectionEndpoints conn, boolean isSource,
+            RoutingRect elem, Map<String, Integer> degreeByElement) {
+        // Hubs are handled by the dedicated hub distribution machinery — leave their ports untouched.
+        if (degreeByElement.getOrDefault(elem.id(), 0) >= HUB_DEGREE_THRESHOLD) {
+            return;
+        }
+        AbsoluteBendpointDto term = path.get(isSource ? 0 : path.size() - 1);
+        // Only a terminal exactly on the perimeter is a candidate — the slot math and the perpendicular
+        // stub reconstruction assume an on-line terminal.
+        if (!isOnElementPerimeter(term, elem)) {
+            return;
+        }
+        EdgeAttachmentCalculator.Face face =
+                determineFaceFromTerminal(new int[]{term.x(), term.y()}, elem);
+        boolean slotAlongY = (face == EdgeAttachmentCalculator.Face.LEFT
+                || face == EdgeAttachmentCalculator.Face.RIGHT);
+        double slot = slotAlongY ? term.y() : term.x();
+        faceGroups.computeIfAbsent(elem.id() + "|" + face, k -> new ArrayList<>())
+                .add(new PortRef(path, conn, isSource, elem, slotAlongY, slot));
+    }
+
+    /** Clusters a face's terminals by slot and separates every cluster that carries a real collision. */
+    private void resolveFaceGroup(List<PortRef> refs,
+            Map<String, List<AbsoluteBendpointDto>> routed,
+            Map<String, ConnectionEndpoints> connectionMap) {
+        if (refs.size() < 2) {
+            return;
+        }
+        refs.sort((a, b) -> Double.compare(a.slot(), b.slot()));
+        int i = 0;
+        while (i < refs.size()) {
+            double first = refs.get(i).slot();
+            int j = i + 1;
+            while (j < refs.size()
+                    && Math.abs(refs.get(j).slot() - first) <= COINCIDENT_PORT_SLOT_TOLERANCE_PX) {
+                j++;
+            }
+            if (j - i >= 2 && distinctConnectionCount(refs.subList(i, j)) >= 2) {
+                // Avoid EVERY other terminal already on this face (its current slot), not just the
+                // colliding cluster — otherwise a spread could land on a previously-distinct sibling and
+                // manufacture a new collision. Current slots are re-read so an earlier cluster's moves
+                // are respected.
+                List<Double> fixedAvoid = new ArrayList<>();
+                for (int x = 0; x < refs.size(); x++) {
+                    if (x < i || x >= j) {
+                        fixedAvoid.add(currentSlot(refs.get(x)));
+                    }
+                }
+                resolveCluster(refs.subList(i, j), fixedAvoid, routed, connectionMap);
+            }
+            i = j;
+        }
+    }
+
+    /** Distinct connection ids in a cluster (a self-referencing connection contributes only once). */
+    private static int distinctConnectionCount(List<PortRef> cluster) {
+        Set<String> ids = new HashSet<>();
+        for (PortRef r : cluster) {
+            ids.add(r.conn().connectionId());
+        }
+        return ids.size();
+    }
+
+    /** A terminal's live along-face slot, re-read from its (possibly already-moved) path. */
+    private static double currentSlot(PortRef r) {
+        List<AbsoluteBendpointDto> p = r.path();
+        AbsoluteBendpointDto t = p.get(r.isSource() ? 0 : p.size() - 1);
+        return r.slotAlongY() ? t.y() : t.x();
+    }
+
+    /**
+     * Separates one coincident cluster: keeps the first member as the anchor and moves each other
+     * member to a distinct free slot ≥ the floor from every already-occupied slot (both the fixed
+     * non-cluster face ports and the committed cluster ports). When a member cannot move (its
+     * relocation would break a gate) and only the anchor is committed, the anchor is moved off the
+     * immovable member instead — so a movable/immovable pair (e.g. a clean stub colliding with a
+     * face-hug stub) still separates.
+     *
+     * @param fixedAvoid current slots of every other terminal on this face (never moved by this cluster)
+     */
+    private void resolveCluster(List<PortRef> cluster, List<Double> fixedAvoid,
+            Map<String, List<AbsoluteBendpointDto>> routed,
+            Map<String, ConnectionEndpoints> connectionMap) {
+        List<Double> occupied = new ArrayList<>(fixedAvoid);
+        int anchorIdx = occupied.size();
+        occupied.add(cluster.get(0).slot());
+        for (int k = 1; k < cluster.size(); k++) {
+            PortRef m = cluster.get(k);
+            Double moved = trySpreadTerminal(m, occupied, routed, connectionMap);
+            if (moved != null) {
+                occupied.add(moved);
+            } else if (occupied.size() == fixedAvoid.size() + 1) {
+                // m is immovable and only the anchor has been committed → move the anchor off m instead,
+                // still avoiding every fixed face slot.
+                List<Double> anchorAvoid = new ArrayList<>(fixedAvoid);
+                anchorAvoid.add(m.slot());
+                Double anchorMoved = trySpreadTerminal(cluster.get(0), anchorAvoid, routed, connectionMap);
+                if (anchorMoved != null) {
+                    occupied.set(anchorIdx, anchorMoved);
+                }
+                occupied.add(m.slot());
+            } else {
+                occupied.add(m.slot());
+            }
+        }
+    }
+
+    /**
+     * Attempts to move one terminal to a free on-line slot ≥ the distinguishability floor from every
+     * {@code avoidSlots}, nearest its natural approach coordinate. Returns the new slot, or null when
+     * the terminal does not collide, no distinguishable slot exists (too-short face — accept the
+     * collision), or the relocation would break terminal orthogonality, add an edge crossing, or hit an
+     * obstacle (in which case the path is restored byte-identical). The terminal stays on the face line,
+     * so {@code TerminalAnchoring.preservesTerminalAnchoring} holds.
+     */
+    private Double trySpreadTerminal(PortRef m, List<Double> avoidSlots,
+            Map<String, List<AbsoluteBendpointDto>> routed,
+            Map<String, ConnectionEndpoints> connectionMap) {
+        List<AbsoluteBendpointDto> path = m.path();
+        if (path.size() < 2) {
+            return null;
+        }
+        boolean isSource = m.isSource();
+        boolean slotAlongY = m.slotAlongY();
+        RoutingRect elem = m.elem();
+        ConnectionEndpoints conn = m.conn();
+        int termIdx = isSource ? 0 : path.size() - 1;
+        int adjIdx = isSource ? 1 : path.size() - 2;
+        AbsoluteBendpointDto term = path.get(termIdx);
+        double slot = slotAlongY ? term.y() : term.x();
+
+        // Gate 1: provable collision under the assessor's predicate.
+        boolean collides = false;
+        for (double s : avoidSlots) {
+            if (Math.abs(s - slot) <= COINCIDENT_PORT_SLOT_TOLERANCE_PX) {
+                collides = true;
+                break;
+            }
+        }
+        if (!collides) {
+            return null;
+        }
+
+        // Gate 2: a free on-line slot ≥ the distinguishability floor from every avoided slot, within the
+        // corner-margin-inset usable span, nearest the natural approach coordinate.
+        int margin = EdgeAttachmentCalculator.DEFAULT_CORNER_MARGIN;
+        double spanStart = (slotAlongY ? elem.y() : elem.x()) + margin;
+        double spanEnd = (slotAlongY ? elem.y() + elem.height() : elem.x() + elem.width()) - margin;
+        if (spanEnd <= spanStart) {
+            return null;
+        }
+        RoutingRect far = isSource ? conn.target() : conn.source();
+        double approach = slotAlongY ? far.centerY() : far.centerX();
+        Double newSlot = chooseFreeSlot(avoidSlots, spanStart, spanEnd, approach,
+                EdgeAttachmentCalculator.VISUAL_DISTINGUISHABILITY_THRESHOLD);
+        if (newSlot == null) {
+            return null; // face too short to seat a distinguishable port — accept the collision
+        }
+        int newSlotI = (int) Math.round(newSlot);
+        if ((slotAlongY && newSlotI == term.y()) || (!slotAlongY && newSlotI == term.x())) {
+            return null; // no movement needed
+        }
+
+        // Snapshot for revert, then relocate the terminal on the face line.
+        List<AbsoluteBendpointDto> before = new ArrayList<>(path);
+        int fixedAxis = slotAlongY ? term.x() : term.y();
+        AbsoluteBendpointDto newTerm = slotAlongY
+                ? new AbsoluteBendpointDto(fixedAxis, newSlotI)
+                : new AbsoluteBendpointDto(newSlotI, fixedAxis);
+        path.set(termIdx, newTerm);
+        // Insert an L-corner so the terminal stub stays perpendicular to the face; redundant corners
+        // are dropped by the collinear/dup cleanup below (equivalent to shifting the existing corner).
+        AbsoluteBendpointDto adj = path.get(adjIdx);
+        AbsoluteBendpointDto corner = slotAlongY
+                ? new AbsoluteBendpointDto(adj.x(), newSlotI)
+                : new AbsoluteBendpointDto(newSlotI, adj.y());
+        path.add(isSource ? 1 : path.size() - 1, corner);
+        // Clean up until stable: a multi-bend stub can leave a doubled-back spur that a single collinear
+        // pass only partly resolves — loop so no redundant (collinear) bendpoint survives the relocation.
+        int prevSize;
+        do {
+            prevSize = path.size();
+            removeDuplicatePoints(path);
+            removeCollinearPoints(path);
+        } while (path.size() < prevSize);
+
+        // Gate 3: reject if the spread breaks terminal orthogonality (degenerate corner → face-parallel
+        // stub), introduces an edge crossing, or introduces an obstacle crossing.
+        boolean nonOrthogonal = !terminalSegmentPerpendicular(path, isSource, slotAlongY);
+        int crossingsBefore = crossingsAgainstOthers(before, conn, routed, connectionMap);
+        int crossingsAfter = crossingsAgainstOthers(path, conn, routed, connectionMap);
+        boolean obstacleHit = findFirstObstacleViolation(withCenters(path, conn), conn.obstacles()) != null;
+        if (nonOrthogonal || crossingsAfter > crossingsBefore || obstacleHit) {
+            path.clear();
+            path.addAll(before);
+            return null;
+        }
+        return (double) newSlotI;
+    }
+
+    /**
+     * True when the relocated terminal's first segment is perpendicular to its face — horizontal for a
+     * LEFT/RIGHT face (shared Y), vertical for a TOP/BOTTOM face (shared X). A path reduced to a single
+     * point cannot express a terminal segment and is treated as non-perpendicular (revert).
+     */
+    private static boolean terminalSegmentPerpendicular(List<AbsoluteBendpointDto> path,
+            boolean isSource, boolean slotAlongY) {
+        if (path.size() < 2) {
+            return false;
+        }
+        AbsoluteBendpointDto term = isSource ? path.get(0) : path.get(path.size() - 1);
+        AbsoluteBendpointDto next = isSource ? path.get(1) : path.get(path.size() - 2);
+        return slotAlongY ? term.y() == next.y() : term.x() == next.x();
+    }
+
+    /**
+     * Picks the point in [{@code spanStart}, {@code spanEnd}] nearest {@code approach} that is at
+     * least {@code minGap} from every occupied slot. Returns null when no such point exists (the
+     * face cannot seat a distinguishable port), leaving the collision accepted.
+     */
+    static Double chooseFreeSlot(List<Double> occupied, double spanStart, double spanEnd,
+            double approach, double minGap) {
+        List<Double> sorted = new ArrayList<>(occupied);
+        Collections.sort(sorted);
+        Double best = null;
+        double bestDist = Double.MAX_VALUE;
+        // Candidate feasible intervals: before first, between consecutive, after last.
+        double lo = spanStart;
+        for (int i = 0; i <= sorted.size(); i++) {
+            double intervalLo = (i == 0) ? spanStart : sorted.get(i - 1) + minGap;
+            double intervalHi = (i == sorted.size()) ? spanEnd : sorted.get(i) - minGap;
+            if (intervalLo > intervalHi) {
+                continue;
+            }
+            double cand = Math.max(intervalLo, Math.min(approach, intervalHi));
+            double dist = Math.abs(cand - approach);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = cand;
+            }
+        }
+        return best;
+    }
+
+    /** Prepends the source centre and appends the target centre to a bendpoint path. */
+    private static List<AbsoluteBendpointDto> withCenters(List<AbsoluteBendpointDto> path,
+            ConnectionEndpoints conn) {
+        List<AbsoluteBendpointDto> full = new ArrayList<>(path.size() + 2);
+        full.add(new AbsoluteBendpointDto(conn.source().centerX(), conn.source().centerY()));
+        full.addAll(path);
+        full.add(new AbsoluteBendpointDto(conn.target().centerX(), conn.target().centerY()));
+        return full;
+    }
+
+    /** Counts edge crossings between one connection's full path and every other routed connection. */
+    private static int crossingsAgainstOthers(List<AbsoluteBendpointDto> path, ConnectionEndpoints conn,
+            Map<String, List<AbsoluteBendpointDto>> routed,
+            Map<String, ConnectionEndpoints> connectionMap) {
+        List<AbsoluteBendpointDto> self = withCenters(path, conn);
+        int crossings = 0;
+        for (Map.Entry<String, List<AbsoluteBendpointDto>> e : routed.entrySet()) {
+            if (e.getKey().equals(conn.connectionId())) {
+                continue;
+            }
+            ConnectionEndpoints other = connectionMap.get(e.getKey());
+            if (other == null) {
+                continue;
+            }
+            crossings += countOrthogonalCrossings(self, withCenters(e.getValue(), other));
+        }
+        return crossings;
+    }
+
+    /** Counts proper perpendicular crossings between the orthogonal segments of two polylines.
+     *  <p>Deliberately counts only H×V interior crossings, not collinear same-axis overlaps: the gate
+     *  compares this count before vs after a spread, and the collision being resolved is itself a
+     *  collinear overlap of the mover with its sibling — folding collinear overlap into the count would
+     *  let that expected pre-existing overlap mask a genuinely new crossing introduced by the move. A
+     *  spread that merely runs flush along an unrelated trunk (a rare collinear coincidence, distinct
+     *  from a crossing) is instead caught by the assessor's separate edge-coincidence metric; empirically
+     *  the pass introduces none on the corpus or the live view.</p> */
+    static int countOrthogonalCrossings(List<AbsoluteBendpointDto> a,
+            List<AbsoluteBendpointDto> b) {
+        int count = 0;
+        for (int i = 0; i < a.size() - 1; i++) {
+            for (int j = 0; j < b.size() - 1; j++) {
+                if (orthSegmentsCross(a.get(i), a.get(i + 1), b.get(j), b.get(j + 1))) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /** True when a horizontal and a vertical segment cross at an interior point. */
+    private static boolean orthSegmentsCross(AbsoluteBendpointDto p1, AbsoluteBendpointDto p2,
+            AbsoluteBendpointDto q1, AbsoluteBendpointDto q2) {
+        boolean pHorizontal = p1.y() == p2.y();
+        boolean pVertical = p1.x() == p2.x();
+        boolean qHorizontal = q1.y() == q2.y();
+        boolean qVertical = q1.x() == q2.x();
+        if (pHorizontal && qVertical) {
+            return strictlyBetween(q1.x(), p1.x(), p2.x()) && strictlyBetween(p1.y(), q1.y(), q2.y());
+        }
+        if (pVertical && qHorizontal) {
+            return strictlyBetween(p1.x(), q1.x(), q2.x()) && strictlyBetween(q1.y(), p1.y(), p2.y());
+        }
+        return false;
+    }
+
+    /** True when {@code v} lies strictly between {@code a} and {@code b} (exclusive). */
+    private static boolean strictlyBetween(int v, int a, int b) {
+        return v > Math.min(a, b) && v < Math.max(a, b);
     }
 
     /**
@@ -1922,6 +2312,219 @@ public class RoutingPipeline {
             return null;
         }
         return result;
+    }
+
+    /**
+     * Terminals-only entry point that orthogonalises the terminal segments AND enforces a minimum
+     * perpendicular egress clearance. This is the composition the EMF-aware terminals-only dispatcher
+     * calls: {@link #terminalsOnlyRectify} followed by {@link #terminalsOnlyEnforceEgressClearance}.
+     *
+     * <p>The egress step also runs when {@code terminalsOnlyRectify} returns {@code null} (the terminal
+     * segments were already within the orthogonal tolerance): an ELK-placed bendpoint can sit a couple
+     * of pixels off the face with an already-orthogonal terminal segment, so the route hugs the face it
+     * just exited without {@code terminalsOnlyRectify} having anything to rectify. Running the clearance
+     * over {@code existingAbs} in that case lets the off-face hug be lifted even though no rectification
+     * was needed.</p>
+     *
+     * @return the final bendpoint list to commit, or {@code null} only when the fully processed path is
+     *         byte-equal to {@code existingAbs} (a genuine no-op — the dispatcher counts it as already
+     *         orthogonal). Non-null is returned whenever the result differs from the input: after
+     *         rectification, after an egress lift, OR after the interior collinear collapse removes a
+     *         pre-existing redundant point even though rectification and egress were both no-ops. When
+     *         non-null, the terminal segments are orthogonal, any first exterior trunk that was hugging
+     *         its departed face has been pushed clear, and no interior collinear point remains.
+     */
+    public static List<AbsoluteBendpointDto> terminalsOnlyRectifyAndClearEgress(
+            RoutingRect source, RoutingRect target,
+            List<AbsoluteBendpointDto> existingAbs) {
+        List<AbsoluteBendpointDto> rectified = terminalsOnlyRectify(source, target, existingAbs);
+        List<AbsoluteBendpointDto> base = (rectified != null) ? rectified : existingAbs;
+        List<AbsoluteBendpointDto> cleared =
+                terminalsOnlyEnforceEgressClearance(source, target, base);
+        // Interior collinear collapse. terminalsOnlyRectify prepends/appends an L-bend without any
+        // collinear sweep (by design, to avoid touching intermediate BPs), so an inserted L-bend that
+        // lands collinear with the existing trunk leaves an exactly-collinear INTERIOR bendpoint that the
+        // full router would have removed. Sweep it here. This removes only interior points (the sweep
+        // needs a bendpoint to be the middle of three), so the prepended/appended terminal L-bends
+        // themselves are never removed — the terminals-only orthogonal-egress contract is preserved. Runs
+        // even when rectify/egress were no-ops so a pre-existing interior survivor is still collapsed;
+        // the removal is geometrically invisible (same polyline, one fewer stored vertex on a straight run).
+        List<AbsoluteBendpointDto> collapsed = new ArrayList<>(cleared);
+        removeCollinearPoints(collapsed);
+        // Genuine no-op only when the final path is byte-equal to the stored input.
+        if (collapsed.equals(existingAbs)) {
+            return null;
+        }
+        return collapsed;
+    }
+
+    /**
+     * Enforces a minimum perpendicular egress clearance on a terminals-only path: when a terminal
+     * departs an element face and its first exterior trunk runs <b>parallel to that face within</b>
+     * {@link TerminalEgressClearancePass#OFF_FACE_MIN_STUB_PX} of it (the off-face parallel hug the
+     * assessor flags via {@code countOffFaceParallelTerminals}), the hugging trunk is pushed
+     * perpendicular-out so it clears the face by {@link TerminalEgressClearancePass#HEALTHY_PARALLEL_GAP_PX}.
+     *
+     * <p>This mirrors the full-route {@link TerminalEgressClearancePass} transform in the terminals-only
+     * (center-based, no terminal-anchor) geometry model. The full-route pass cannot be reused directly
+     * here: it requires the hug to be the terminal-incident segment on a path whose first point is a
+     * terminal anchor on the face line, whereas a terminals-only path renders {@code elementCenter →
+     * L-bend → trunk}, so the terminal-incident segment is a proper perpendicular egress and the hug is
+     * the trunk one segment further in.</p>
+     *
+     * <p>Detection mirrors the assessor oracle exactly (the {@code OFF_FACE_MIN_STUB_PX} threshold), so a
+     * terminal that already clears the face by &ge; that distance is left untouched — the returned list is
+     * reference-equal to {@code rectified}. The push targets {@code HEALTHY_PARALLEL_GAP_PX} for a healthy
+     * margin. A lift that would make the egress segment or the segment beyond the moved trunk
+     * non-orthogonal is declined (returns {@code rectified} unchanged), so the result is always fully
+     * orthogonal at the terminals; the dispatcher's interior/zigzag/obstacle/crossing vetoes guard the
+     * rest. Idempotent: a lifted trunk clears the threshold, so a second pass does not re-fire.</p>
+     *
+     * <p>Pure geometry — no EMF/SWT/PDE; callable from standard JUnit.</p>
+     *
+     * @param source    source element rect
+     * @param target    target element rect
+     * @param rectified  the terminals-only bendpoint list (absolute coords; no terminal anchors)
+     * @return a new list with hugging terminal trunks lifted, or {@code rectified} unchanged
+     *         (reference-equal) when nothing hugged or every candidate lift was declined
+     */
+    public static List<AbsoluteBendpointDto> terminalsOnlyEnforceEgressClearance(
+            RoutingRect source, RoutingRect target,
+            List<AbsoluteBendpointDto> rectified) {
+        if (rectified == null || rectified.size() < 2) {
+            return rectified;
+        }
+        List<AbsoluteBendpointDto> work = new ArrayList<>(rectified);
+        boolean changed = false;
+        if (tryLiftTerminalHug(work, source, true, target)) {
+            changed = true;
+        }
+        if (tryLiftTerminalHug(work, target, false, source)) {
+            changed = true;
+        }
+        return changed ? work : rectified;
+    }
+
+    /**
+     * Attempts to lift one terminal's hugging trunk in {@code work} (mutated in place on success).
+     * Source side inspects {@code work[0]} (exit point) and {@code work[1]} (trunk end); target side
+     * inspects {@code work[last]} and {@code work[last-1]}. Returns true iff a lift was applied.
+     *
+     * <p>Fires only when: the trunk is axis-aligned and parallel to a resolved departure face; the exit
+     * point sits on/beyond that face within the face's parallel extent; the perpendicular clearance is
+     * below {@link TerminalEgressClearancePass#OFF_FACE_MIN_STUB_PX}; and the lift keeps both the egress
+     * segment (element center → exit point) and the segment beyond the moved trunk axis-aligned. The
+     * element center is the connection's rendered terminal anchor (ChopboxAnchor), so the egress check
+     * uses {@code elem.centerX()/centerY()}.</p>
+     *
+     * <p>The segment beyond the moved trunk end runs to the adjacent interior bendpoint when one exists;
+     * on a short two-bendpoint path it runs to the OPPOSITE element's centre (the trunk end is then also
+     * the opposite terminal's bendpoint, whose terminal segment to that centre must stay orthogonal).
+     * {@code opposite} supplies that implicit anchor so the orthogonality check is not skipped — a lift
+     * that would bend the trunk end's run to the opposite centre into a diagonal is declined.</p>
+     */
+    private static boolean tryLiftTerminalHug(
+            List<AbsoluteBendpointDto> work, RoutingRect elem, boolean sourceSide,
+            RoutingRect opposite) {
+        int n = work.size();
+        if (elem == null || n < 2) {
+            return false;
+        }
+        int bpIdx = sourceSide ? 0 : n - 1;
+        int trunkIdx = sourceSide ? 1 : n - 2;
+        AbsoluteBendpointDto bp = work.get(bpIdx);
+        AbsoluteBendpointDto trunkEnd = work.get(trunkIdx);
+
+        int trunkDx = trunkEnd.x() - bp.x();
+        int trunkDy = trunkEnd.y() - bp.y();
+        boolean trunkHorizontal = trunkDy == 0 && trunkDx != 0;
+        boolean trunkVertical = trunkDx == 0 && trunkDy != 0;
+        if (!trunkHorizontal && !trunkVertical) {
+            return false; // diagonal or degenerate trunk — not a clean parallel hug
+        }
+
+        int left = elem.x();
+        int right = elem.x() + elem.width();
+        int top = elem.y();
+        int bottom = elem.y() + elem.height();
+
+        int faceLine;
+        int awaySign;
+        boolean perpIsY; // true → push along Y (parallel face TOP/BOTTOM); false → push along X
+        if (trunkHorizontal) {
+            // Trunk parallel to a TOP/BOTTOM face → the exit must depart vertically. Require the exit
+            // point within the face's horizontal extent, else the assessor would resolve a side face.
+            if (bp.x() < left || bp.x() > right) {
+                return false;
+            }
+            if (bp.y() >= bottom) {
+                faceLine = bottom;
+                awaySign = +1;
+            } else if (bp.y() <= top) {
+                faceLine = top;
+                awaySign = -1;
+            } else {
+                return false; // exit point inside the vertical band — interior / side departure
+            }
+            perpIsY = true;
+            if (Math.abs(bp.y() - faceLine) >= TerminalEgressClearancePass.OFF_FACE_MIN_STUB_PX) {
+                return false; // already clears the face — leave byte-identical
+            }
+        } else {
+            // Trunk parallel to a LEFT/RIGHT face → exit departs horizontally.
+            if (bp.y() < top || bp.y() > bottom) {
+                return false;
+            }
+            if (bp.x() >= right) {
+                faceLine = right;
+                awaySign = +1;
+            } else if (bp.x() <= left) {
+                faceLine = left;
+                awaySign = -1;
+            } else {
+                return false;
+            }
+            perpIsY = false;
+            if (Math.abs(bp.x() - faceLine) >= TerminalEgressClearancePass.OFF_FACE_MIN_STUB_PX) {
+                return false;
+            }
+        }
+
+        int pushed = faceLine + awaySign * TerminalEgressClearancePass.HEALTHY_PARALLEL_GAP_PX;
+        AbsoluteBendpointDto newBp = perpIsY
+                ? new AbsoluteBendpointDto(bp.x(), pushed)
+                : new AbsoluteBendpointDto(pushed, bp.y());
+        AbsoluteBendpointDto newTrunkEnd = perpIsY
+                ? new AbsoluteBendpointDto(trunkEnd.x(), pushed)
+                : new AbsoluteBendpointDto(pushed, trunkEnd.y());
+
+        // Orthogonality backstop. (1) The egress segment center → newBp must stay axis-aligned (it is
+        // perpendicular in the normal hug case; if the egress was somehow parallel, declining here keeps
+        // the result orthogonal). (2) The segment from the moved trunk end to its further neighbour must
+        // stay axis-aligned, so moving the trunk end does not create a diagonal where it turns.
+        if (newBp.x() != elem.centerX() && newBp.y() != elem.centerY()) {
+            return false;
+        }
+        int neighbourIdx = sourceSide ? trunkIdx + 1 : trunkIdx - 1;
+        AbsoluteBendpointDto neighbour;
+        if (neighbourIdx >= 0 && neighbourIdx < n) {
+            neighbour = work.get(neighbourIdx);
+        } else if (opposite != null) {
+            // No interior bendpoint beyond the trunk end (short two-bendpoint path): the trunk end
+            // connects directly to the opposite element's centre, so that centre is the segment's far
+            // endpoint the lift must keep orthogonal.
+            neighbour = new AbsoluteBendpointDto(opposite.centerX(), opposite.centerY());
+        } else {
+            neighbour = null;
+        }
+        if (neighbour != null
+                && newTrunkEnd.x() != neighbour.x() && newTrunkEnd.y() != neighbour.y()) {
+            return false;
+        }
+
+        work.set(bpIdx, newBp);
+        work.set(trunkIdx, newTrunkEnd);
+        return true;
     }
 
     /**

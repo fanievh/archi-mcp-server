@@ -39,6 +39,7 @@ import net.vheerden.archi.mcp.response.dto.AutoLayoutAssessmentSummaryDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
 import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+import net.vheerden.archi.mcp.response.dto.ViewDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
@@ -51,6 +52,8 @@ import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.OptimizeGroupOrderResultDto;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.RoutingViolationDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
@@ -1174,6 +1177,54 @@ public class ViewPlacementHandlerTest {
         assertNull("lineColor should be null when not provided", captured.lineColor());
     }
 
+    // ---- anchor handler-level flow tests ----
+
+    @Test
+    public void shouldThreadAnchorParamsToAccessor_whenAnchorSet() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewObjectId", "vo-1");
+        args.put("anchorTarget", "target-1");
+        args.put("anchorEdge", "below");
+        args.put("anchorDx", 4);
+        args.put("anchorDy", 12);
+
+        Map<String, Object> result = callAndParse("update-view-object", args);
+        assertNotNull("anchor-only update should succeed", getResult(result));
+
+        assertEquals("target-1", accessor.lastUpdateViewObjectAnchorTarget);
+        assertEquals("below", accessor.lastUpdateViewObjectAnchorEdge);
+        assertEquals(Integer.valueOf(4), accessor.lastUpdateViewObjectAnchorDx);
+        assertEquals(Integer.valueOf(12), accessor.lastUpdateViewObjectAnchorDy);
+    }
+
+    @Test
+    public void shouldPassEmptyAnchorTarget_whenClearRequested() throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewObjectId", "vo-1");
+        args.put("anchorTarget", "");
+
+        callAndParse("update-view-object", args);
+
+        assertEquals("", accessor.lastUpdateViewObjectAnchorTarget);
+    }
+
+    @Test
+    public void shouldRejectInvalidAnchorEdge() throws Exception {
+        accessor.lastUpdateViewObjectAnchorTarget = "sentinel";
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewObjectId", "vo-1");
+        args.put("anchorTarget", "target-1");
+        args.put("anchorEdge", "diagonal");
+
+        McpSchema.CallToolResult result = callTool("update-view-object", args);
+
+        assertTrue("invalid anchorEdge must produce an error response", result.isError());
+        String content = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(content.contains("INVALID_PARAMETER"));
+        assertEquals("accessor must not be called on invalid edge",
+                "sentinel", accessor.lastUpdateViewObjectAnchorTarget);
+    }
+
     // ---- labelExpression handler-level flow tests ----
 
     @Test
@@ -1406,6 +1457,79 @@ public class ViewPlacementHandlerTest {
         assertEquals("#00FF00", captured.fillColor());
         assertEquals(Integer.valueOf(128), captured.opacity());
         assertNull("lineColor should be null when not provided", captured.lineColor());
+    }
+
+    @Test
+    public void shouldPassRecedeOptOut_whenAddToViewRecedeFalse() throws Exception {
+        // A lone recede:false (no other styling) must still reach the accessor — it cannot be
+        // dropped as "no styling", or the container-recession opt-out would be silently ignored.
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("elementId", "e-1");
+        args.put("recede", false);
+
+        Map<String, Object> result = callAndParse("add-to-view", args);
+        assertNotNull("add-to-view with recede opt-out should succeed", getResult(result));
+
+        StylingParams captured = ((StubViewPlacementAccessor) accessor).lastAddToViewStyling;
+        assertNotNull("a lone recede:false must produce a non-null StylingParams", captured);
+        assertEquals("recede opt-out carried to the accessor", Boolean.FALSE, captured.recede());
+        assertNull("no fill styling was provided", captured.fillColor());
+    }
+
+    @Test
+    public void shouldPassRecedeOptOut_whenAddGroupToViewRecedeFalse() throws Exception {
+        // Symmetric to the add-to-view opt-out: a lone recede:false on add-group-to-view must
+        // reach the accessor (the bulk and single paths share extractStylingParams, but the
+        // group handler branch is wired independently).
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("label", "My Group");
+        args.put("recede", false);
+
+        Map<String, Object> result = callAndParse("add-group-to-view", args);
+        assertNotNull("add-group-to-view with recede opt-out should succeed", getResult(result));
+
+        StylingParams captured = ((StubViewPlacementAccessor) accessor).lastAddGroupToViewStyling;
+        assertNotNull("a lone recede:false must produce a non-null StylingParams", captured);
+        assertEquals("recede opt-out carried to the accessor", Boolean.FALSE, captured.recede());
+        assertNull("no fill styling was provided", captured.fillColor());
+    }
+
+    @Test
+    public void recedeDefaultsToNull_whenAddToViewOmitsIt() throws Exception {
+        // Absent recede = default auto-recede (null), carried only when other styling is present.
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "v-1");
+        args.put("elementId", "e-1");
+        args.put("fillColor", "#00FF00");
+
+        callAndParse("add-to-view", args);
+        StylingParams captured = ((StubViewPlacementAccessor) accessor).lastAddToViewStyling;
+        assertNotNull(captured);
+        assertNull("recede defaults to null (auto-recede) when omitted", captured.recede());
+    }
+
+    @Test
+    public void addToViewSpec_includesRecedeProperty() {
+        McpServerFeatures.SyncToolSpecification spec = registry.getToolSpecifications().stream()
+                .filter(s -> "add-to-view".equals(s.tool().name()))
+                .findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> props = (Map<String, Object>) spec.tool().inputSchema().properties();
+        assertTrue("add-to-view should expose the recede opt-out property",
+                props.containsKey("recede"));
+    }
+
+    @Test
+    public void addGroupToViewSpec_includesRecedeProperty() {
+        McpServerFeatures.SyncToolSpecification spec = registry.getToolSpecifications().stream()
+                .filter(s -> "add-group-to-view".equals(s.tool().name()))
+                .findFirst().orElseThrow();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> props = (Map<String, Object>) spec.tool().inputSchema().properties();
+        assertTrue("add-group-to-view should expose the recede opt-out property",
+                props.containsKey("recede"));
     }
 
     @Test
@@ -2667,6 +2791,124 @@ public class ViewPlacementHandlerTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    public void assessLayout_shouldStampModelVersionInMeta() throws Exception {
+        // The assessment is computed against the current model state; its _meta must carry
+        // the model's monotonic mutation stamp so a consumer can compare it against an
+        // export-view stamp and detect a render that predates a later mutation.
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("viewId", "v-1"));
+
+        Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+        assertNotNull("assess-layout envelope should have _meta", meta);
+        assertEquals("assess-layout _meta should carry the model mutation stamp",
+                accessor.getModelVersion(), meta.get("modelVersion"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void assessLayout_allViewsScope_shouldReturnCompactPerViewMap() throws Exception {
+        accessor.setViews(List.of(
+                new ViewDto("v-a", "View A", "Layered", "/"),
+                new ViewDto("v-b", "View B", "Layered", "/")));
+        accessor.setAssessLayoutBehavior(vId -> {
+            String overall = "v-a".equals(vId) ? "fair" : "good";
+            Map<String, String> bd = new LinkedHashMap<>();
+            bd.put("overall", overall);
+            bd.put("overallExcludingAcceptedCosmetics", "v-a".equals(vId) ? "excellent" : "good");
+            return new AssessLayoutResultDto(
+                    vId, 5, 3, 0, 0, 2, 0.67, 45.5, 70, overall, bd,
+                    null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                    0, null, 0, null, 0, null, null,
+                    List.of("ok"));
+        });
+
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("scope", "all-views"));
+        Map<String, Object> result = getResult(envelope);
+
+        assertEquals("one compact entry per view", 2, result.size());
+        Map<String, Object> a = (Map<String, Object>) result.get("v-a");
+        assertNotNull("per-view entry keyed by view id", a);
+        // Exactly the eight compact keys — no breakdown / violatorIds / descriptions.
+        assertEquals(8, a.size());
+        assertEquals("View A", a.get("name"));
+        assertEquals("fair", a.get("overallRating"));
+        assertEquals("excellent", a.get("overallExcludingAcceptedCosmetics"));
+        assertEquals(5, a.get("elementCount"));
+        assertEquals(3, a.get("connectionCount"));
+        assertEquals(0, a.get("overlapCount"));
+        assertEquals(0, a.get("nonOrthogonalTerminalCount"));
+        assertEquals(0, a.get("connectionPassThroughCount"));
+
+        Map<String, Object> b = (Map<String, Object>) result.get("v-b");
+        assertEquals("good", b.get("overallRating"));
+        assertEquals("good", b.get("overallExcludingAcceptedCosmetics"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void assessLayout_allViewsScope_nullBreakdown_keepsDenoisedKeyEqualToOverall()
+            throws Exception {
+        // A degenerate view can return a DTO with a null/absent ratingBreakdown. The compact
+        // entry must still carry overallExcludingAcceptedCosmetics (the response mapper omits
+        // null fields, which would silently drop it) — falling back to overallRating.
+        accessor.setViews(List.of(new ViewDto("v-x", "View X", "Layered", "/")));
+        accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
+                vId, 1, 0, 0, 0, 0, 0.0, 0.0, 0, "excellent", null,
+                null, null, null, null, 0, null, 0, null, 0, null, false, 0, 0, null,
+                0, null, 0, null, 0, null, null,
+                List.of("ok")));
+
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("scope", "all-views"));
+        Map<String, Object> result = getResult(envelope);
+        Map<String, Object> x = (Map<String, Object>) result.get("v-x");
+
+        assertEquals("the eight compact keys are present even with a null breakdown",
+                8, x.size());
+        assertEquals("excellent", x.get("overallRating"));
+        assertEquals("excellent", x.get("overallExcludingAcceptedCosmetics"));
+    }
+
+    @Test
+    public void assessLayout_allViewsScope_emptyModel_shouldReturnEmptyMap() throws Exception {
+        accessor.setViews(List.of());
+
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("scope", "all-views"));
+        Map<String, Object> result = getResult(envelope);
+
+        assertTrue("empty model yields an empty per-view map", result.isEmpty());
+    }
+
+    @Test
+    public void assessLayout_allViewsScope_shouldIgnoreSuppliedViewId() throws Exception {
+        accessor.setViews(List.of(new ViewDto("only", "Only", "Layered", "/")));
+
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("scope", "all-views", "viewId", "ignored-id"));
+        Map<String, Object> result = getResult(envelope);
+
+        // The map is keyed by the model's actual view id, not the supplied (ignored) viewId.
+        assertTrue("all-views keys by real view ids", result.containsKey("only"));
+        assertFalse("supplied viewId is ignored in all-views scope",
+                result.containsKey("ignored-id"));
+    }
+
+    @Test
+    public void assessLayout_singleScope_explicit_shouldReturnFullDto() throws Exception {
+        // scope="single" (explicit) behaves identically to the default single-view path.
+        Map<String, Object> envelope = callAndParse("assess-layout",
+                Map.of("viewId", "v-1", "scope", "single"));
+        Map<String, Object> entity = getResult(envelope);
+
+        assertEquals("v-1", entity.get("viewId"));
+        assertEquals(5, entity.get("elementCount"));
+        assertEquals("good", entity.get("overallRating"));
+    }
+
+    @Test
     public void assessLayout_shouldIncludeLayoutSuggestionForPoorRating() throws Exception {
         accessor.setAssessLayoutBehavior(vId -> new AssessLayoutResultDto(
                 vId, 10, 5, 4, 0, 15, 3.0, 8.0, 20, "poor", null,
@@ -2973,6 +3215,235 @@ public class ViewPlacementHandlerTest {
         assertTrue("Export-view terminal step must be present", exportIdx >= 0);
         assertTrue("Composite-remedy must come before export-view (terminal step)",
                 compositeIdx < exportIdx);
+    }
+
+    // ----- Saturated container-nested-hub diagnostic step -----
+    // Trigger: corridorUtilisationScore >= 0.9 AND (edgeCoincidence > 4 OR coincidentSegments > 2)
+    // AND hubPortQualityScore >= 0.5. Diagnostic (detect-hub-first, hub-existence-safe), both levers
+    // + render caveat; supersedes the generic spacing step; suppressed when hub-port quality already
+    // flagged (< 0.5) or corridors are not saturated.
+
+    /**
+     * Build a DTO with the saturated-nested-hub knobs set; everything else neutral. Uses the 45-arg
+     * delegating ctor, so {@code hubNeighbourClearanceMin} defaults to the negative sentinel →
+     * these DTOs exercise the emitter's hub-existence-safe present-both branch. Tests that need the
+     * sparse/dense branch use {@link #nestedHubDtoWithClearance} instead.
+     */
+    private static AssessLayoutResultDto nestedHubDto(double corridorUtil, int edgeCoinc,
+            int coincidentSeg, double hpq, String rating, boolean hasGroups) {
+        return new AssessLayoutResultDto(
+                "v-1", 8, 8, 0, 0, 0, 0.0, 50.0, 80, rating, null,
+                null, null, List.<String>of(), null, 0, null, 0, null, 0, null,
+                hasGroups, coincidentSeg, 0, null,
+                0, null, 0, null, 0, null, null, List.<String>of(),
+                0, null, 0, null, edgeCoinc, null, hpq, null,
+                rating, rating,
+                corridorUtil, null);
+    }
+
+    private static String saturatedStep(List<String> steps) {
+        return steps.stream()
+                .filter(s -> s.contains("Saturated layout (corridorUtilisation"))
+                .findFirst().orElse(null);
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedNestedHub_emitsDiagnosticStep() {
+        // corridorUtil 0.95, edgeCoinc 6 (>4), hpq 1.0 (>=0.5) → trigger fires.
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.95, 6, 0, 1.0, "fair", false));
+
+        String diag = saturatedStep(steps);
+        assertNotNull("Saturated container-nested-hub diagnostic step must be present", diag);
+
+        // The step is diagnostic and hub-existence-safe: it names detect-hub-elements first and
+        // gates all resize/reposition advice behind "If a hub is present" — there is no
+        // unconditional resize imperative (the enlarge lever follows the conditional gate).
+        assertTrue("Step must name detect-hub-elements first",
+                diag.contains("detect-hub-elements"));
+        assertTrue("Step must be conditional on a hub being present",
+                diag.contains("If a hub is present"));
+        assertTrue("The conditional gate must precede any enlarge directive (no unconditional resize)",
+                diag.indexOf("If a hub is present") < diag.indexOf("enlarge"));
+        assertTrue("detect-hub-elements must precede the enlarge directive",
+                diag.indexOf("detect-hub-elements") < diag.indexOf("enlarge"));
+
+        // Both levers present (resize + ELK reposition), each with its specific caveat.
+        assertTrue("Resize lever: enlarge in both dimensions then auto-route-connections",
+                diag.contains("BOTH") && diag.contains("update-view-object")
+                        && diag.contains("auto-route-connections"));
+        assertTrue("Resize caveat: re-routing alone is inert", diag.contains("inert"));
+        assertTrue("Resize caveat: high hubPortQualityScore does not mean resize won't help",
+                diag.contains("hubPortQualityScore"));
+        assertTrue("Reposition lever: revert hub to normal size + ELK",
+                diag.contains("normal size") && diag.contains("auto-layout-and-route"));
+        assertTrue("Reposition lever: FULL auto-route, not terminals-only",
+                diag.contains("terminals-only"));
+        assertTrue("Render-authoritative caveat: verify with export-view, not the rating",
+                diag.contains("export-view") && diag.contains("do not accept on"));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedViaCoincidentSegments_emitsDiagnosticStep() {
+        // Second arm of the OR: coincidentSegments 3 (>2), edgeCoinc 0 → trigger still fires.
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.92, 0, 3, 1.0, "fair", true));
+        assertNotNull("coincidentSegments>2 must also trip the diagnostic",
+                saturatedStep(steps));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedNestedHub_suppressesSpacingStepAndPrecedesRatingSwitch() {
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.95, 6, 0, 1.0, "fair", true));
+
+        // Block #2 (generic spacing inflation) must be suppressed — no two conflicting spacing remedies.
+        assertFalse("Generic spacing-tightness step must be suppressed when the diagnostic fires",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+
+        // Ordered before the terminal export-view step. (Match the terminal step's exact text —
+        // the diagnostic's own render-authoritative caveat also mentions export-view.)
+        int diagIdx = -1, terminalIdx = -1;
+        for (int i = 0; i < steps.size(); i++) {
+            if (diagIdx == -1 && steps.get(i).contains("Saturated layout (corridorUtilisation")) {
+                diagIdx = i;
+            }
+            if (terminalIdx == -1 && steps.get(i).contains("visually inspect the current layout")) {
+                terminalIdx = i;
+            }
+        }
+        assertTrue("Diagnostic step must precede the terminal export-view step",
+                diagIdx >= 0 && terminalIdx >= 0 && diagIdx < terminalIdx);
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_triggerNotMet_block2FiresUnchanged() {
+        // corridorUtil 0.5 (< 0.9) → diagnostic does NOT fire, but Block #2's condition (edgeCoinc>4)
+        // is met → the generic spacing step fires unchanged.
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.5, 6, 0, 1.0, "fair", true));
+
+        assertNull("Diagnostic must not fire when corridors are not saturated",
+                saturatedStep(steps));
+        assertTrue("Block #2 spacing-tightness step fires unchanged when its condition is met",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_lowHubPortQuality_block1FiresDiagnosticSuppressed() {
+        // hpq 0.25 (< 0.5) → Block #1 fires; the new diagnostic is suppressed (no double hub advice).
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.95, 6, 0, 0.25, "fair", false));
+
+        assertNull("Diagnostic must be suppressed when hub-port quality already flagged (<0.5)",
+                saturatedStep(steps));
+        assertTrue("Block #1 hub-port-quality step fires unchanged",
+                steps.stream().anyMatch(s -> s.contains("Hub-port quality")));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_lowCorridorUtil_noDiagnostic() {
+        // corridorUtil 0.89 (< 0.9), edgeCoinc 6 but Block #2 also fires — diagnostic stays off.
+        // Boundary mirror of triggerNotMet: just-below the threshold must still suppress the
+        // diagnostic AND let Block #2 fire (guards against the threshold drifting to <=0.89).
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(0.89, 6, 0, 1.0, "fair", false));
+        assertNull("Diagnostic must not fire below the corridor-saturation threshold",
+                saturatedStep(steps));
+        assertTrue("Block #2 fires unchanged when corridors are just below saturation",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_edgeCoinc4OrBelow_noDiagnostic() {
+        // edgeCoinc 4 (NOT >4) and coincidentSeg 2 (NOT >2), corridors saturated → no trigger.
+        // Pins the boundary so a saturated-but-low-coincidence view is byte-clean of the new step.
+        List<String> steps =
+                handler.buildAssessLayoutNextSteps(nestedHubDto(1.0, 4, 2, 1.0, "good", false));
+        assertNull("Diagnostic must not fire when coincidence pressure is at/below threshold",
+                saturatedStep(steps));
+        assertFalse("And Block #2 must also stay off at/below its threshold",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+    }
+
+    // ----- Density-branched diagnostic (hub-neighbour clearance) -----
+    // When the assessor measures a hub-to-spoke-row clearance, the diagnostic branches:
+    // clearance >= floor → resize lever only (sparse); 0..floor → reposition lever only (dense);
+    // sentinel (no measurement) → present both (hub-existence-safe, covered above).
+
+    /** Saturated-nested-hub DTO with the hub-neighbour clearance scalar set (canonical ctor). */
+    private static AssessLayoutResultDto nestedHubDtoWithClearance(double corridorUtil,
+            int edgeCoinc, int coincidentSeg, double hpq, String rating, boolean hasGroups,
+            double clearance) {
+        return new AssessLayoutResultDto(
+                "v-1", 8, 8, 0, 0, 0, 0.0, 50.0, 80, rating, null,
+                null, null, List.<String>of(), null, 0, null, 0, null, 0, null,
+                0, null,
+                hasGroups, coincidentSeg, 0, null,
+                0, null, 0, null, 0, null, null, List.<String>of(),
+                0, null, 0, null, edgeCoinc, null, hpq, null,
+                rating, rating,
+                corridorUtil, null,
+                null, 0, null,
+                clearance);
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedSparseHub_emitsResizeLeverOnly() {
+        // clearance 90px (>= 60 floor) → SPARSE → resize lever only, present-both text gone.
+        List<String> steps = handler.buildAssessLayoutNextSteps(
+                nestedHubDtoWithClearance(0.95, 6, 0, 1.0, "fair", false, 90.0));
+        String diag = saturatedStep(steps);
+        assertNotNull("Diagnostic step must still be present", diag);
+        assertTrue("Names detect-hub-elements first", diag.contains("detect-hub-elements"));
+        assertTrue("Conditional on a hub being present", diag.contains("If a hub is present"));
+        assertTrue("Sparse → room to grow", diag.contains("room to grow"));
+        assertTrue("Sparse → enlarge in BOTH dimensions", diag.contains("BOTH"));
+        assertTrue("Render-authoritative caveat preserved",
+                diag.contains("export-view") && diag.contains("do not accept on"));
+        assertFalse("Present-both MVP replaced — no choose-by-density",
+                diag.contains("choose by density"));
+        assertFalse("Sparse branch must not emit the reposition lever",
+                diag.contains("would crowd its neighbours"));
+        assertFalse("Generic spacing step suppressed when the diagnostic fires",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedDenseHub_emitsRepositionLeverOnly() {
+        // clearance 45px (< 60 floor) → DENSE → reposition lever only, present-both text gone.
+        List<String> steps = handler.buildAssessLayoutNextSteps(
+                nestedHubDtoWithClearance(0.95, 6, 0, 1.0, "fair", false, 45.0));
+        String diag = saturatedStep(steps);
+        assertNotNull("Diagnostic step must still be present", diag);
+        assertTrue("Names detect-hub-elements first", diag.contains("detect-hub-elements"));
+        assertTrue("Conditional on a hub being present", diag.contains("If a hub is present"));
+        assertTrue("Dense → enlarging would crowd neighbours",
+                diag.contains("would crowd its neighbours"));
+        assertTrue("Dense → ELK reposition + revert to normal size",
+                diag.contains("normal size") && diag.contains("auto-layout-and-route"));
+        assertTrue("Dense → FULL auto-route, not terminals-only", diag.contains("terminals-only"));
+        assertTrue("Render-authoritative caveat preserved",
+                diag.contains("export-view") && diag.contains("do not accept on"));
+        assertFalse("Dense branch must not emit the resize lever", diag.contains("room to grow"));
+        assertFalse("Present-both MVP replaced — no choose-by-density",
+                diag.contains("choose by density"));
+        assertFalse("Generic spacing step suppressed when the diagnostic fires",
+                steps.stream().anyMatch(s -> s.contains("Spacing tightness flagged")));
+    }
+
+    @Test
+    public void buildAssessLayoutNextSteps_saturatedSentinelClearance_presentsBothLevers() {
+        // clearance -1 (no hub measured) → hub-existence-safe fallback presents both levers.
+        List<String> steps = handler.buildAssessLayoutNextSteps(
+                nestedHubDtoWithClearance(0.95, 6, 0, 1.0, "fair", false,
+                        AssessLayoutResultDto.NO_HUB_NEIGHBOUR_CLEARANCE));
+        String diag = saturatedStep(steps);
+        assertNotNull("Diagnostic step must be present", diag);
+        assertTrue("Sentinel → present both via choose-by-density",
+                diag.contains("choose by density"));
+        assertTrue("Sentinel fallback still names detect-hub-elements",
+                diag.contains("detect-hub-elements"));
     }
 
     @Test
@@ -3422,6 +3893,73 @@ public class ViewPlacementHandlerTest {
 
         Map<String, Object> data = getResult(result);
         assertEquals(2, ((Number) data.get("connectionsRouted")).intValue());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoRoute_layoutBoundWarning_surfacesLayoutBoundNextStep() throws Exception {
+        // The router rolled back an off-face egress lift (corridor too tight for a healthy lift); the
+        // DTO carries the EGRESS_LIFT_LAYOUT_BOUND structured warning. The handler must translate it
+        // into a layout-bound nextSteps entry directing the caller to widen spacing, not re-route.
+        StructuredWarningDto egress = new StructuredWarningDto(
+                StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND,
+                "1 off-face terminal hug(s) could not be cleared … 15px healthy floor …",
+                "apply-spacing-recommendations", List.of());
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin, mode) ->
+                new MutationResult<>(new AutoRouteResultDto(vId, 5, 0, "orthogonal", false, 0, 0, 0, 0,
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(egress)), null));
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1"));
+
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertTrue("layout-bound decline surfaces a nextSteps entry",
+                nextSteps.stream().anyMatch(s -> s.contains("layout-bound")));
+        assertTrue("nextSteps names the corridor-widening remedy",
+                nextSteps.stream().anyMatch(s -> s.contains("Increase element spacing")));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoRoute_layoutBoundWarning_batched_surfacesLayoutBoundNextStep() throws Exception {
+        // The batched nextSteps branch must apply the same layout-bound guard as the non-batched one.
+        StructuredWarningDto egress = new StructuredWarningDto(
+                StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND,
+                "1 off-face terminal hug(s) could not be cleared … 15px healthy floor …",
+                "apply-spacing-recommendations", List.of());
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin, mode) ->
+                new MutationResult<>(new AutoRouteResultDto(vId, 5, 0, "orthogonal", false, 0, 0, 0, 0,
+                        List.of(), List.of(), List.of(), List.of(), List.of(), List.of(),
+                        List.of(egress)), 2));   // batchSequenceNumber → batched branch
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1"));
+
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertTrue("batched path also surfaces the layout-bound step",
+                nextSteps.stream().anyMatch(s -> s.contains("layout-bound")));
+        assertTrue("batched path still mentions the batch queue",
+                nextSteps.stream().anyMatch(s -> s.contains("batch")));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoRoute_noLayoutBoundWarning_emitsNoLayoutBoundNextStep() throws Exception {
+        // No egress lift was rolled back (kept, or none generated) → no structured warning → no
+        // layout-bound nextSteps entry. Guards against a false signal on a healthy re-route.
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin, mode) ->
+                new MutationResult<>(new AutoRouteResultDto(vId, 5, "orthogonal", false), null));
+
+        Map<String, Object> result = callAndParse("auto-route-connections",
+                Map.of("viewId", "v-1"));
+
+        List<String> nextSteps = (List<String>) result.get("nextSteps");
+        assertNotNull(nextSteps);
+        assertFalse("no layout-bound nextSteps entry without the structured warning",
+                nextSteps.stream().anyMatch(s -> s.contains("layout-bound")));
     }
 
     @Test
@@ -5569,8 +6107,10 @@ public class ViewPlacementHandlerTest {
     @Test
     public void adjustViewSpacing_modelNotLoaded_shouldReturnError() throws Exception {
         accessor = new StubViewPlacementAccessor(false);
+        // callTool invokes the handler method directly, so swapping in the no-model
+        // handler is enough — re-registering its tools onto the already-populated
+        // setUp() registry would be a redundant duplicate registration.
         handler = new ViewPlacementHandler(accessor, formatter, registry, null);
-        handler.registerTools();
 
         Map<String, Object> args = new HashMap<>();
         args.put("viewId", "v-1");
@@ -5753,6 +6293,11 @@ public class ViewPlacementHandlerTest {
         StylingParams lastAutoConnectViewStyling;
         // capture last labelExpression param passed to update-view-object.
         String lastUpdateViewObjectLabelExpression;
+        // capture last anchor params passed to update-view-object.
+        String lastUpdateViewObjectAnchorTarget;
+        String lastUpdateViewObjectAnchorEdge;
+        Integer lastUpdateViewObjectAnchorDx;
+        Integer lastUpdateViewObjectAnchorDy;
         // capture last includeViolatorIds parameter
         boolean lastAssessLayoutIncludeViolatorIds;
 
@@ -6012,9 +6557,14 @@ public class ViewPlacementHandlerTest {
         public MutationResult<ViewObjectDto> updateViewObject(String sessionId,
                 String viewObjectId, Integer x, Integer y, Integer width, Integer height,
                 String text, StylingParams styling, ImageParams imageParams,
-                String labelExpression) {
+                String labelExpression, String anchorTarget, String anchorEdge,
+                Integer anchorDx, Integer anchorDy) {
             this.lastUpdateViewObjectStyling = styling;
             this.lastUpdateViewObjectLabelExpression = labelExpression;
+            this.lastUpdateViewObjectAnchorTarget = anchorTarget;
+            this.lastUpdateViewObjectAnchorEdge = anchorEdge;
+            this.lastUpdateViewObjectAnchorDx = anchorDx;
+            this.lastUpdateViewObjectAnchorDy = anchorDy;
             return updateViewObjectBehavior.apply(sessionId, viewObjectId, x, y, width, height,
                     text);
         }
@@ -6046,6 +6596,18 @@ public class ViewPlacementHandlerTest {
                 List<ViewConnectionSpec> connections, String description) {
             return applyViewLayoutBehavior.apply(sessionId, viewId, positions, connections,
                     description);
+        }
+
+        // Views returned by getViews(null) for scope="all-views" assess tests.
+        private List<ViewDto> stubViews = List.of();
+
+        void setViews(List<ViewDto> views) {
+            this.stubViews = views;
+        }
+
+        @Override
+        public List<ViewDto> getViews(String viewpointFilter) {
+            return stubViews;
         }
 
         @Override

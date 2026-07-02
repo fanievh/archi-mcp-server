@@ -31,6 +31,10 @@ public class RemoveViewObjectCommand extends Command {
     private final IDiagramModelObject diagramObject;
     private final IDiagramModelContainer parent;
     private final int originalIndex;
+    // Sibling that immediately followed diagramObject at construction (null if it
+    // was last). undo() restores BEFORE this surviving anchor so compound undo of
+    // multiple sibling removals preserves paint order — see undo().
+    private final IDiagramModelObject successorAnchor;
 
     // Deferred-capture: populated on first execute(), reused on redo()
     private List<IDiagramModelConnection> capturedConnections;
@@ -46,6 +50,10 @@ public class RemoveViewObjectCommand extends Command {
         this.diagramObject = diagramObject;
         this.parent = parent;
         this.originalIndex = parent.getChildren().indexOf(diagramObject);
+        this.successorAnchor = (originalIndex >= 0
+                && originalIndex + 1 < parent.getChildren().size())
+                        ? parent.getChildren().get(originalIndex + 1)
+                        : null;
         setLabel("Remove " + diagramObject.eClass().getName() + " from view");
     }
 
@@ -80,8 +88,18 @@ public class RemoveViewObjectCommand extends Command {
 
     @Override
     public void undo() {
-        // Re-add at original index
-        if (originalIndex >= 0 && originalIndex <= parent.getChildren().size()) {
+        // Re-add preserving paint order (z-order). Restore directly BEFORE the
+        // surviving successor sibling captured at construction rather than at a
+        // stale absolute index: under a compound that removes several siblings
+        // and undoes in reverse, the absolute index would land in a partially
+        // restored list and perturb order. Fall back to the clamped absolute
+        // index when the object was last or the anchor is (transiently) absent —
+        // which keeps the single-removal case byte-identical.
+        int anchorIndex = (successorAnchor != null)
+                ? parent.getChildren().indexOf(successorAnchor) : -1;
+        if (anchorIndex >= 0) {
+            parent.getChildren().add(anchorIndex, diagramObject);
+        } else if (originalIndex >= 0 && originalIndex <= parent.getChildren().size()) {
             parent.getChildren().add(originalIndex, diagramObject);
         } else {
             parent.getChildren().add(diagramObject);

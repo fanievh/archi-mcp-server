@@ -2,9 +2,17 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.List;
 
+import org.eclipse.swt.graphics.ImageData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.archimatetool.editor.model.IArchiveManager;
+import com.archimatetool.model.IArchimateConcept;
+import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IIconic;
+import com.archimatetool.model.IProfile;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
 
@@ -18,6 +26,8 @@ import net.vheerden.archi.mcp.response.ErrorCode;
 final class ImageHelper {
 
     private ImageHelper() {}
+
+    private static final Logger logger = LoggerFactory.getLogger(ImageHelper.class);
 
     /**
      * Icon-band size in px reserved at a corner of a container Node that
@@ -121,6 +131,60 @@ final class ImageHelper {
             return iconic.getImagePosition();
         }
         return 2; // default: top-right
+    }
+
+    /**
+     * Reads the specialization-icon image path displayed for an ArchiMate element
+     * whose image comes from its profile (rather than a custom image), or null.
+     *
+     * <p>A specialization image lives on the element's {@link IProfile}, not on the
+     * diagram object, so {@link #readImagePath} returns null for it. When the object's
+     * image source is the profile, the displayed icon is the first profile that
+     * carries an image. Returns null for custom-image or image-less objects, and for
+     * non-ArchiMate objects.</p>
+     *
+     * <p>Note: the profile image source is the EMF default, so most ordinary elements
+     * pass the source check; the effective gate is the per-profile non-empty image-path
+     * test below. Together these match exactly when Archi renders the profile icon —
+     * source is profile AND a profile actually carries an image — so resolving that path
+     * reflects what is on screen.</p>
+     */
+    static String readProfileImagePath(IDiagramModelObject obj) {
+        if (!(obj instanceof IDiagramModelArchimateObject archiObj)) return null;
+        if (archiObj.getImageSource() != IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE) {
+            return null;
+        }
+        IArchimateConcept concept = archiObj.getArchimateConcept();
+        if (concept == null) return null;
+        for (IProfile profile : concept.getProfiles()) {
+            String path = profile.getImagePath();
+            if (path != null && !path.isEmpty()) {
+                return path;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Reads the natural (archive) pixel dimensions {@code {width, height}} of an
+     * image, or null when unavailable (no archive manager — e.g. headless — or the
+     * image bytes cannot be decoded). Used to size an element's image rect from
+     * what actually renders instead of a fixed icon assumption.
+     */
+    static int[] readNaturalImageDimensions(IArchimateModel model, String imagePath) {
+        if (model == null || imagePath == null) return null;
+        try {
+            IArchiveManager archiveManager =
+                    (IArchiveManager) model.getAdapter(IArchiveManager.class);
+            if (archiveManager == null) return null;
+            ImageData data = archiveManager.createImageData(imagePath);
+            if (data == null) return null;
+            return new int[] { data.width, data.height };
+        } catch (Exception e) {
+            logger.debug("Failed to read natural dimensions for image '{}': {}",
+                    imagePath, e.getMessage());
+            return null;
+        }
     }
 
     /**

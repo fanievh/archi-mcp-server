@@ -53,8 +53,41 @@ public record ViewObjectDto(
     String borderType,
     Boolean deriveLineColor,
     Integer outlineOpacity,
-    String lineStyle
+    String lineStyle,
+    String anchorTarget,
+    String anchorEdge,
+    Integer anchorDx,
+    Integer anchorDy
 ) {
+
+    /**
+     * Constructor matching the prior 30-field shape (no anchor fields). Delegates to the
+     * canonical 34-field constructor with four trailing nulls (an un-anchored object omits
+     * the anchor fields from JSON via NON_NULL). Preserves existing call sites byte-identically.
+     */
+    public ViewObjectDto(
+            String viewObjectId, String elementId, String elementName, String elementType,
+            int x, int y, int width, int height,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String imagePath, String imagePosition, String showIcon,
+            Double imageCoveragePercent, String imageCoverageWarning,
+            String figureType, String textAlignment, String verticalTextAlignment,
+            String labelExpression,
+            String fontName, Integer fontSize, String fontStyle,
+            String gradient, String borderType, Boolean deriveLineColor,
+            Integer outlineOpacity, String lineStyle) {
+        this(viewObjectId, elementId, elementName, elementType,
+                x, y, width, height,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                imagePath, imagePosition, showIcon,
+                imageCoveragePercent, imageCoverageWarning,
+                figureType, textAlignment, verticalTextAlignment,
+                labelExpression,
+                fontName, fontSize, fontStyle,
+                gradient, borderType, deriveLineColor, outlineOpacity, lineStyle,
+                null, null, null, null);
+    }
 
     /**
      * Constructor matching the 22-field shape (no typography/

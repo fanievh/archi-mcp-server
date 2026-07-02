@@ -286,7 +286,10 @@ public class FolderMutationHandler {
                         + "to a different parent folder. The object is removed from its current "
                         + "folder and placed in the target folder. When moving a folder, all its "
                         + "contents move with it. Cannot move top-level default ArchiMate folders "
-                        + "or create circular folder references. Fully undoable via Ctrl+Z in Archi. "
+                        + "or create circular folder references. A move into a folder whose "
+                        + "ArchiMate layer is illegal for the object is rejected with "
+                        + "FOLDER_LAYER_MISMATCH — the same fail-fast check create-element applies. "
+                        + "Fully undoable via Ctrl+Z in Archi. "
                         + "Respects approval mode (human-gated in Archi). "
                         + "Related: get-folders (find target folder IDs), get-folder-tree "
                         + "(view hierarchy), create-folder (create destination folders first).")

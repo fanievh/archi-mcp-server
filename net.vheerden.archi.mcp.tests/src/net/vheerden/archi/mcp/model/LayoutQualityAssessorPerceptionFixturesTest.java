@@ -295,11 +295,11 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
     @Test
     public void fixture7_overlapBinary_h2_2026_05_06_clone_shouldRatePoor() {
         AssessmentNode integrationGroup = new AssessmentNode(
-                "integration", 592, 20, 400, 1589, null, true, false, null, 0.0, null, null);
+                "integration", 592, 20, 400, 1589, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
         AssessmentNode apiMgmt = new AssessmentNode(
-                "apiMgmt", 50, 74, 300, 415, "integration", false, false, null, 0.0, null, null);
+                "apiMgmt", 50, 74, 300, 415, "integration", false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
         AssessmentNode esb = new AssessmentNode(
-                "esb", 50, 474, 280, 75, "integration", false, false, null, 0.0, null, null);
+                "esb", 50, 474, 280, 75, "integration", false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 
         LayoutAssessmentResult result = assessor.assess(
                 List.of(integrationGroup, apiMgmt, esb), List.of(), false);
@@ -329,9 +329,9 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
     @Test
     public void fixture8_overlapBinary_s3_2026_05_06_clone_shouldRatePoor() {
         AssessmentNode integrationGroup = new AssessmentNode(
-                "integration", 382, 20, 399, 991, null, true, false, null, 0.0, null, null);
+                "integration", 382, 20, 399, 991, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
         AssessmentNode consumersGroup = new AssessmentNode(
-                "consumers", 776, 20, 258, 1379, null, true, false, null, 0.0, null, null);
+                "consumers", 776, 20, 258, 1379, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
 
         LayoutAssessmentResult result = assessor.assess(
                 List.of(integrationGroup, consumersGroup), List.of(), false);
@@ -363,6 +363,6 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
 
     /** Creates a top-level leaf element (non-group, no parent). */
     private static AssessmentNode node(String id, double x, double y, double w, double h) {
-        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null);
+        return new AssessmentNode(id, x, y, w, h, null, false, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
     }
 }

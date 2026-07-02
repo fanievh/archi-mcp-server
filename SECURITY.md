@@ -29,7 +29,7 @@ flowchart LR
         agent["LLM agent<br/>(Claude Code, Cline, …)"]
         subgraph archi["Archi + MCP Server"]
             gate["Default guards:<br/>loopback bind ·<br/>Origin/Host check ·<br/>request limits"]
-            tools["72 MCP tools<br/>(incl. mutate, delete,<br/>file read/write)"]
+            tools["69 MCP tools<br/>(incl. mutate, delete,<br/>file read/write)"]
             human["Human approval gate<br/>(fail-safe GATED)"]
             model["Your ArchiMate model"]
             gate --> tools
@@ -59,6 +59,7 @@ These hold with **zero configuration** — they are on out of the box.
 | **Human-owned approval gate** | Approval mode is owned by the human in Archi, not the agent. A fresh install defaults to **GATED** (fail-safe); the agent has **no tool** to ungate itself or approve its own changes — it can only *observe* that it is gated (`list-pending-approvals`, `approvalMode` on `get-model-info`). Turning the gate *off* requires a desktop confirmation. | An agent (or a prompt-injected agent) silently applying destructive changes. |
 | **Agent-scoped undo/redo** | The `undo`/`redo` tools stop at — and refuse to cross — any human edit on the stack, so the agent can never silently revert your hand-drawn work. | Agent clobbering human work via undo. |
 | **Request-size cap, idle timeout, bounded thread pool** | Jetty rejects oversized request bodies and idle connections, and runs on a bounded worker pool. | Local request-flood / oversized-payload denial of service. |
+| **UTF-8 request-body enforcement** | Requests that declare a non-UTF-8 `charset`, or whose body bytes are not well-formed UTF-8 (even with no declared charset), are rejected with **HTTP 415**. Conformant clients (`charset=utf-8` or none) are unaffected; each check has a kill switch. | Mis-encoded payloads producing silent data corruption or parser confusion. |
 | **Session / cache / batch eviction** | Per-session state, caches, and batch contexts are evicted on an idle TTL rather than living forever. | Memory-exhaustion DoS from fabricated or abandoned session IDs. |
 | **Bounded remote-image download** | Image fetches from a URL are stream-capped *before* buffering, so an oversized or endless response cannot exhaust memory. | Memory DoS via a hostile image URL. |
 | **Secrets in the OS keychain** | The bearer token and the TLS keystore password are stored in Equinox secure storage (macOS Keychain / Windows Credential Store), **never** in cleartext on disk. The server **fails closed** rather than falling back to plaintext or to serving unauthenticated. | Secret-scanner exposure; cleartext secret theft. |

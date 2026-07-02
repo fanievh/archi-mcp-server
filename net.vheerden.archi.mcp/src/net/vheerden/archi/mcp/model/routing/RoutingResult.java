@@ -19,6 +19,10 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * @param labelsOptimized     count of labels whose position was changed by the optimizer
  * @param optimalPositions    map of connectionId to optimal textPosition for changed labels
  * @param straightLineCrossings straight-line crossing estimate before routing
+ * @param egressRolledBack    count of off-face terminal egress lifts the terminal-clearance pass
+ *                            generated then rolled back because applying them would narrow a
+ *                            parallel-connection gap below the healthy floor (a layout-bound
+ *                            decline — diagnostic only, the routed geometry is unaffected)
  */
 public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                              List<FailedConnection> failed,
@@ -26,7 +30,8 @@ public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                              Map<String, List<AbsoluteBendpointDto>> violatedRoutes,
                              int labelsOptimized,
                              Map<String, Integer> optimalPositions,
-                             int straightLineCrossings) {
+                             int straightLineCrossings,
+                             int egressRolledBack) {
 
     /** Compact constructor: null-guard all fields. */
     public RoutingResult {
@@ -37,14 +42,26 @@ public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
         optimalPositions = optimalPositions != null ? optimalPositions : Map.of();
     }
 
-    /** Backward-compatible constructor without straightLineCrossings. */
+    /** Backward-compatible constructor without egressRolledBack (defaults it to 0). */
+    public RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
+                         List<FailedConnection> failed,
+                         List<MoveRecommendation> recommendations,
+                         Map<String, List<AbsoluteBendpointDto>> violatedRoutes,
+                         int labelsOptimized,
+                         Map<String, Integer> optimalPositions,
+                         int straightLineCrossings) {
+        this(routed, failed, recommendations, violatedRoutes, labelsOptimized, optimalPositions,
+                straightLineCrossings, 0);
+    }
+
+    /** Backward-compatible constructor without straightLineCrossings or egressRolledBack. */
     public RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                          List<FailedConnection> failed,
                          List<MoveRecommendation> recommendations,
                          Map<String, List<AbsoluteBendpointDto>> violatedRoutes,
                          int labelsOptimized,
                          Map<String, Integer> optimalPositions) {
-        this(routed, failed, recommendations, violatedRoutes, labelsOptimized, optimalPositions, 0);
+        this(routed, failed, recommendations, violatedRoutes, labelsOptimized, optimalPositions, 0, 0);
     }
 
     /** Backward-compatible constructor without label optimization fields. */
@@ -52,13 +69,13 @@ public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                          List<FailedConnection> failed,
                          List<MoveRecommendation> recommendations,
                          Map<String, List<AbsoluteBendpointDto>> violatedRoutes) {
-        this(routed, failed, recommendations, violatedRoutes, 0, null, 0);
+        this(routed, failed, recommendations, violatedRoutes, 0, null, 0, 0);
     }
 
     /** Backward-compatible constructor without violatedRoutes or label optimization. */
     public RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                          List<FailedConnection> failed,
                          List<MoveRecommendation> recommendations) {
-        this(routed, failed, recommendations, null, 0, null, 0);
+        this(routed, failed, recommendations, null, 0, null, 0, 0);
     }
 }

@@ -907,7 +907,150 @@ public class RenderHandlerTest {
                 mentionsPng);
     }
 
+    // ---- model mutation stamp (staleness detection) ----
+
+    @Test
+    public void shouldStampModelVersion_whenInlinePngExport() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", null, null);
+
+        assertFalse(result.isError());
+        Map<String, Object> wrapper = parseInlineWrapper(result);
+        assertEquals("Inline PNG response should carry the model mutation stamp",
+                "42", wrapper.get("modelVersion"));
+    }
+
+    @Test
+    public void shouldStampModelVersion_whenInlineJpgExport() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "jpg", null, null);
+
+        assertFalse(result.isError());
+        Map<String, Object> wrapper = parseInlineWrapper(result);
+        assertEquals("Inline JPG response should carry the model mutation stamp",
+                "42", wrapper.get("modelVersion"));
+    }
+
+    @Test
+    public void shouldStampModelVersion_whenInlineSvgExport() throws Exception {
+        String svgXml = "<svg/>";
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "svg", "image/svg+xml", null, null, null, 80);
+        ExportResult exportResult = new ExportResult(metadata, null, svgXml);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "svg", null, null);
+
+        assertFalse(result.isError());
+        Map<String, Object> wrapper = parseInlineWrapper(result);
+        assertEquals("Inline SVG response should carry the model mutation stamp",
+                "42", wrapper.get("modelVersion"));
+    }
+
+    @Test
+    public void shouldStampModelVersion_whenInlinePdfExport() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPdfResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "pdf", null, null);
+
+        assertFalse(result.isError());
+        Map<String, Object> wrapper = parseInlineWrapper(result);
+        assertEquals("Inline PDF response should carry the model mutation stamp",
+                "42", wrapper.get("modelVersion"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldStampModelVersionInMeta_whenFileExport() throws Exception {
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600,
+                "/tmp/archi-mcp-export/view-1.png", 200);
+        ExportResult exportResult = new ExportResult(metadata, null, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", false);
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertFalse(result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        Map<String, Object> meta = (Map<String, Object>) envelope.get("_meta");
+        assertNotNull("File export envelope should have _meta", meta);
+        assertEquals("File export _meta should carry the model mutation stamp",
+                "42", meta.get("modelVersion"));
+    }
+
+    @Test
+    public void shouldStampModelVersion_alongsideNote_whenOutputDirIgnored() throws Exception {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600, null, 100);
+        ExportResult exportResult = new ExportResult(metadata, pngBytes, null);
+        StubAccessor accessor = new StubAccessor(true, exportResult);
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("format", "png");
+        args.put("inline", true);
+        args.put("outputDirectory", "/some/dir");
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertFalse(result.isError());
+        Map<String, Object> wrapper = parseInlineWrapper(result);
+        // The stamp must survive alongside the conditional outputDirIgnored note.
+        assertEquals("42", wrapper.get("modelVersion"));
+        assertEquals("outputDirectory is ignored when inline is true",
+                wrapper.get("note"));
+    }
+
+    @Test
+    public void shouldReflectNewModelVersion_afterMutation() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry);
+        handler.registerTools();
+
+        // Export captures the stamp at the model state it rendered against.
+        accessor.modelVersion = "7";
+        McpSchema.CallToolResult before = invokeExportView("view-1", "png", null, null);
+        Object stampBefore = parseInlineWrapper(before).get("modelVersion");
+
+        // A mutation bumps the monotonic counter; a fresh export reflects the new state.
+        accessor.modelVersion = "8";
+        McpSchema.CallToolResult after = invokeExportView("view-1", "png", null, null);
+        Object stampAfter = parseInlineWrapper(after).get("modelVersion");
+
+        assertEquals("7", stampBefore);
+        assertEquals("8", stampAfter);
+        assertNotEquals("A render taken before a mutation must be distinguishable from one after",
+                stampBefore, stampAfter);
+    }
+
     // ---- Helpers ----
+
+    private Map<String, Object> parseInlineWrapper(McpSchema.CallToolResult result)
+            throws Exception {
+        McpSchema.TextContent content = (McpSchema.TextContent) result.content().get(0);
+        return objectMapper.readValue(content.text(),
+                new TypeReference<Map<String, Object>>() {});
+    }
 
     private ExportResult createDefaultJpgResult(int quality) {
         byte[] jpgBytes = new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF };
@@ -971,6 +1114,7 @@ public class RenderHandlerTest {
         int lastQuality;
         boolean lastInline;
         String lastOutputDirectory;
+        String modelVersion = "42";
 
         StubAccessor(boolean modelLoaded) {
             super(modelLoaded);
@@ -979,6 +1123,11 @@ public class RenderHandlerTest {
         StubAccessor(boolean modelLoaded, ExportResult exportResult) {
             super(modelLoaded);
             this.exportResult = exportResult;
+        }
+
+        @Override
+        public String getModelVersion() {
+            return modelVersion;
         }
 
         @Override

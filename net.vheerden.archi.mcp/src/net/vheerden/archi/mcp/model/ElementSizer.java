@@ -47,8 +47,7 @@ public final class ElementSizer {
      * to derive the actual text-wrap content width — Archi's figure renderer reserves a
      * small horizontal margin inside the box, so the wrap-prediction width must be slightly
      * narrower than the outer box width to avoid systematic line-count under-estimation.
-     * Calibrated conservatively (errs toward over-grow) — see review L2 of the
-     * view-title-note-autosize story.
+     * Calibrated conservatively (errs toward over-grow).
      */
     static final int HORIZONTAL_TEXT_INSET = 12;
     /**
@@ -349,7 +348,13 @@ public final class ElementSizer {
 
                 Point fullExtent = gc.textExtent(labelText);
                 int spaceWidth = gc.textExtent(" ").x;
-                int lineHeight = fullExtent.y;
+                // Single-line height. textExtent(labelText).y is the WHOLE-BLOCK height when
+                // labelText contains line breaks (SWT honours '\n'), so using it here would be
+                // multiplied again by the line count in the lineCount*lineHeight consumers,
+                // making multi-line boxes grow quadratically. "Ag" gives the font's
+                // ascender+descender reference, which is glyph-independent and therefore
+                // identical to fullExtent.y for any single-line input (no regression there).
+                int lineHeight = gc.textExtent("Ag").y;
 
                 String[] words = labelText.split("\\s+");
                 int[] wordWidths = new int[words.length];

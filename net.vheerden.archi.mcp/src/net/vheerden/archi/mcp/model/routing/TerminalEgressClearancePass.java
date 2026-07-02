@@ -58,10 +58,24 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *       co-axial horizontal neighbour &mdash; i.e. an H-axis gap can never fall below the
  *       {@code MIN_CONNECTION_GAP_PX}=8 floor, but a strict H-axis-p10 non-regression is NOT
  *       separately claimed (no H-axis p10 metric is computed; both the assessor pin and
- *       {@link #netImproves}'s V_p10 are V-axis). A symmetric H-axis floor is deferred.
+ *       {@link #netImproves}'s V_p10 are V-axis). A symmetric H-axis floor was deferred here — it
+ *       is now IMPLEMENTED by the Option B successor (see the SUPERSEDED note below).
  *       A cheap view-level pre-gate ({@link #PRE_GATE_VP10_PX}) additionally skips the whole
  *       pass when the pre-pass V_p10 is already narrow (the "would have skipped HH wholesale"
- *       filter).</li>
+ *       filter).
+ *       <p><b>SUPERSEDED by Option B (2026-06-29) — the V_p10-monotone invariant was both
+ *       wrong-axis and over-strict.</b> On view 1.2 the original guard wrongly gated a HORIZONTAL
+ *       hug ({@code e5946477}) on the VERTICAL p10 (238) and, even axis-corrected, rolled the only
+ *       available stub back because it reduced a huge-healthy V_p10=238 to a still-healthy ~151 —
+ *       the same absolute "no reduction" rule that correctly blocks the v1 4.0&rarr;3.4 danger-zone
+ *       regression. Option B replaces both halves: {@code requiredConnGap} is now the flat
+ *       {@link #HEALTHY_PARALLEL_GAP_PX} (proposal-time, applied to the axis-correct co-axial
+ *       neighbour set), and {@link #netImproves} enforces a per-axis HEALTHY FLOOR on BOTH
+ *       {@code vP10} and {@code hP10} ({@link HubPerimeterRoutingStage#computeHAxisParallelGapP10}
+ *       is the new H-axis mirror) rather than strict non-regression. The v1 protection is preserved
+ *       (a 4.0&rarr;3.4 push stays blocked: 3.4 &lt; 15); healthy-to-healthy reductions on
+ *       sparse-but-open views are now permitted. Idempotency holds (a fixed hug no longer drops
+ *       M4 → no re-fire), so the floor cannot ratchet a field down across repeated routes.</li>
  * </ol>
  *
  * <p><b>The transform (distinct from {@link TerminalSegmentCorridorMigrator}).</b> The
@@ -92,14 +106,19 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * (ii) a Tier-1 self-check ({@link #tier1Clean}: every segment axis-aligned &mdash; no
  * zigzag &mdash; and no segment strictly pierces a foreign element). Because this pass is the
  * LAST geometry stage, that self-check is evaluated at the final geometry, re-verifying
- * Tier-1 at the final state. Per-view:
- * {@link #netImproves} rolls back any apply that does not strictly drop M4 or that regresses
- * V_p10 / HPQ. The M4 / V_p10 / HPQ computations REUSE the shipped
- * {@link HubPerimeterRoutingStage} package-private mirror statics
- * ({@link HubPerimeterRoutingStage#computeM4Count},
+ * Tier-1 at the final state. Per-view: {@link #netImproves} keeps an apply only when it
+ * STRICTLY improves on at least one of two signals &mdash; M4 (the &ge;10px edge-coincidence
+ * count) OR the off-face parallel-terminal stub count ({@link #computeOffFaceStubCount}, the
+ * sub-M4 signal that catches SHORT &lt;10px own-face micro-hugs M4 cannot see) &mdash; and only
+ * when M4 does not regress, neither parallel-gap axis p10 drops below
+ * {@link #HEALTHY_PARALLEL_GAP_PX} (Option B), and HPQ does not regress. The M4 / V_p10 / H_p10 /
+ * HPQ computations REUSE the shipped {@link HubPerimeterRoutingStage} package-private mirror
+ * statics ({@link HubPerimeterRoutingStage#computeM4Count},
  * {@link HubPerimeterRoutingStage#computeVAxisParallelGapP10},
- * {@link HubPerimeterRoutingStage#computeHpq}) so this pass adds NO new assessor-mirror
- * drift surface.
+ * {@link HubPerimeterRoutingStage#computeHAxisParallelGapP10},
+ * {@link HubPerimeterRoutingStage#computeHpq}); the off-face stub count is computed in-pass
+ * ({@link #computeOffFaceStubCount}, mirroring {@code LayoutQualityAssessor.OFF_FACE_MIN_STUB_PX})
+ * so this pass adds NO new HubPerimeterRoutingStage drift surface.
  *
  * <p><b>MVP scope.</b> One proposal per path (source side preferred, else target side); the
  * hug segment must be the terminal-incident segment and the corner {@code B} must be an
@@ -138,6 +157,14 @@ public class TerminalEgressClearancePass {
     static final double EDGE_COINCIDENCE_TOLERANCE_PX = 3.0;
     /** Mirror of {@code LayoutQualityAssessor.EDGE_COINCIDENCE_MIN_OVERLAP_PX} (10.0). */
     static final double EDGE_COINCIDENCE_MIN_OVERLAP_PX = 10.0;
+    /**
+     * Mirror of {@code LayoutQualityAssessor.OFF_FACE_MIN_STUB_PX} (8.0) — the perpendicular
+     * clearance below which a face-parallel terminal stub counts as an off-face hug. Used by the
+     * sub-M4 keep-signal ({@link #computeOffFaceStubCount}): a SHORT (&lt;10px) own-face micro-hug
+     * is invisible to M4 (which, like the assessor, requires &ge;10px parallel overlap), so the
+     * stub-count drop is what lets {@link #netImproves} keep the fix instead of rolling it back.
+     */
+    static final double OFF_FACE_MIN_STUB_PX = 8.0;
     /** Mirror of {@code LayoutQualityAssessor.ZIGZAG_AXIS_TOLERANCE_PX} (1.0). */
     static final double ZIGZAG_AXIS_TOLERANCE_PX = 1.0;
     /** Safety margin beyond the M4 tolerance the cleared run must hold (parity with migrator). */
@@ -149,11 +176,28 @@ public class TerminalEgressClearancePass {
     static final int MAX_EGRESS_CLEARANCE_PX = 64;
 
     /**
-     * Connection-gap floor (px). The cleared run must stay at least
-     * {@code max(MIN_CONNECTION_GAP_PX, prePassVp10)} from every neighbouring co-axial
-     * connection segment. Mirrors {@code RoutingPipeline.MIN_CLEARANCE} (8).
+     * Absolute connection-gap floor (px), mirroring {@code RoutingPipeline.MIN_CLEARANCE} (8).
+     * <p><b>Superseded as the live floor by {@link #HEALTHY_PARALLEL_GAP_PX}</b> (the old
+     * {@code max(MIN_CONNECTION_GAP_PX, ceil(V_p10))} formula and its helper were removed). Retained
+     * for the historical Fix-2 description in the class Javadoc; not referenced by any current
+     * code path.
      */
     static final int MIN_CONNECTION_GAP_PX = 8;
+
+    /**
+     * Healthy parallel-connection gap floor (px). The egress push must keep the cleared run at
+     * least this far from co-axial neighbour connection segments (proposal-time,
+     * {@link #findClearedOrthogonal}), and {@link #netImproves} rejects any push that drops a
+     * per-axis parallel-gap p10 below it (final-state). This REPLACES the original "never reduce
+     * V_p10" strict-monotone invariant, which (a) over-declined on sparse-but-open views — the only
+     * available egress stub can reduce a huge-healthy V_p10 (e.g. 238) to a still-healthy one (e.g.
+     * ~151), which the absolute guard forbade exactly as it forbids the real v1 danger-zone
+     * 4.0&rarr;3.4 regression — and (b) gated a horizontal hug on the VERTICAL p10 (wrong axis). The
+     * floor preserves the v1 protection (a 4.0&rarr;3.4 push stays blocked: 3.4 &lt; 15) while
+     * permitting healthy-to-healthy reductions. 15 = the assessor's tightest narrow-gap bucket;
+     * revisit if a live render disagrees.
+     */
+    static final int HEALTHY_PARALLEL_GAP_PX = 15;
 
     /**
      * View-level pre-gate (px). When the pre-pass V_p10 parallel-connection gap is
@@ -224,8 +268,12 @@ public class TerminalEgressClearancePass {
         if (prePassVp10 != null && prePassVp10 < PRE_GATE_VP10_PX) {
             return new Result(0, 0, true, 0);
         }
-        // Connection-gap floor: never introduce a gap narrower than the view already had.
-        int requiredConnGap = requiredConnGap(prePassVp10);
+        // Proposal-time connection-gap floor (Option B): keep the cleared run a HEALTHY gap from
+        // co-axial neighbours (axis-correct: collectNeighbouringConnectionSegments already selects
+        // co-axial neighbours by hug orientation). The final-state per-axis netImproves floor is
+        // the soundness backstop. Replaces the old view-wide ceil(V_p10), which was the wrong axis
+        // for horizontal hugs and far larger than the [TARGET,MAX] outward search could satisfy.
+        int requiredConnGap = HEALTHY_PARALLEL_GAP_PX;
 
         int applied = 0;
         int rolled = 0;
@@ -246,10 +294,10 @@ public class TerminalEgressClearancePass {
 
             // Validate against the FINAL pipeline geometry (this IS the last
             // geometry-mutating stage). Roll back any push that does not net-improve.
-            HubPerimeterRoutingStage.MetricSnapshot pre = snapshot(connections, paths, obstacles);
+            EgressMetrics pre = snapshot(connections, paths, obstacles);
             Snapshot snap = apply(p, paths);
             if (snap == null) continue;
-            HubPerimeterRoutingStage.MetricSnapshot post = snapshot(connections, paths, obstacles);
+            EgressMetrics post = snapshot(connections, paths, obstacles);
             if (netImproves(pre, post)) {
                 applied++;
             } else {
@@ -260,45 +308,137 @@ public class TerminalEgressClearancePass {
         return new Result(applied, rolled, false, evaluated);
     }
 
-    /** Clearance floor: {@code max(MIN_CONNECTION_GAP_PX, ceil(prePassVp10))}. */
-    private static int requiredConnGap(Double prePassVp10) {
-        int v = (prePassVp10 == null) ? 0 : (int) Math.ceil(prePassVp10);
-        return Math.max(MIN_CONNECTION_GAP_PX, v);
-    }
+    /**
+     * Final-state metrics for the per-proposal net-improve check (carries BOTH axis p10s). The
+     * {@code offFaceStubCount} is the sub-M4 keep-signal: a count of face-parallel terminal stubs
+     * within {@link #OFF_FACE_MIN_STUB_PX} of their departed face (the assessor's
+     * {@code offFaceParallelTerminalCount} oracle, reconstructed against routing geometry). A short
+     * own-face micro-hug never registers in {@code m4Count} (the 10px-overlap floor), so this count
+     * is what lets {@link #netImproves} keep the lift.
+     */
+    record EgressMetrics(int m4Count, int offFaceStubCount, Double vP10, Double hP10, double hpq) {}
 
     /** Whole-view metric snapshot via the shipped HubPerimeterRoutingStage mirror statics. */
-    private static HubPerimeterRoutingStage.MetricSnapshot snapshot(
+    private static EgressMetrics snapshot(
             List<RoutingPipeline.ConnectionEndpoints> connections,
             List<List<AbsoluteBendpointDto>> paths,
             List<RoutingRect> allObstacles) {
-        return new HubPerimeterRoutingStage.MetricSnapshot(
+        return new EgressMetrics(
                 HubPerimeterRoutingStage.computeM4Count(paths, allObstacles),
+                computeOffFaceStubCount(connections, paths),
                 HubPerimeterRoutingStage.computeVAxisParallelGapP10(paths),
+                HubPerimeterRoutingStage.computeHAxisParallelGapP10(paths),
                 HubPerimeterRoutingStage.computeHpq(connections, paths));
     }
 
     /**
-     * Net-improvement predicate: keep a proposal only if M4 strictly drops AND neither
-     * V_p10 nor HPQ regresses. STRICTER than {@link HubPerimeterRoutingStage#verifyMetricMonotonicity}
-     * (which only forbids M4 increasing) — that "not worse" semantics is exactly why v1's
-     * no-benefit push (M4 stayed 5) was kept and then V_p10 slipped downstream. Tier-1 is
-     * protected by the per-proposal {@link #tier1Clean} (run at final geometry) +
-     * the byte-identical terminal anchor +
-     * outward-only push (so overlap/passThrough/interiorTermination/zigzag cannot be
-     * introduced).
-     *
-     * <p><b>V_p10 here is V-axis only</b> ({@code computeVAxisParallelGapP10}); a horizontal-hug
-     * push that narrowed an H-axis parallel gap would NOT be caught here — it is bounded instead
-     * by the {@code requiredConnGap} floor at proposal time (class Javadoc, H-axis note).
+     * Net-improvement predicate (Option B + short-run story): keep a proposal when it STRICTLY
+     * improves on AT LEAST ONE of (a) M4 (the &ge;10px edge-coincidence count) OR (b) the off-face
+     * parallel-terminal stub count ({@link #computeOffFaceStubCount}, the sub-M4 signal — gated so
+     * M4 must not regress), AND neither parallel-gap axis regresses BELOW the healthy floor AND HPQ
+     * does not regress. The {@code m4Drops} branch is byte-identical to the pre-story strict-M4-drop
+     * predicate (the stub-drop branch is purely ADDITIVE — see {@link #netImproves} body).
+     * STRICTER than {@link HubPerimeterRoutingStage#verifyMetricMonotonicity} (which only forbids
+     * M4 increasing) on M4/HPQ, but the parallel-gap guard is a FLOOR rather than strict
+     * non-regression — see {@link #regressesBelowHealthyFloor}. BOTH axes are checked
+     * ({@code vP10} and {@code hP10}), so a horizontal-hug push (which inserts vertical segments)
+     * and a vertical-hug push (which inserts horizontal segments) are each guarded on the axis
+     * they perturb. Tier-1 is protected by the per-proposal {@link #tier1Clean} (run at final
+     * geometry) + the byte-identical terminal anchor + outward-only push (so
+     * overlap/passThrough/interiorTermination/zigzag cannot be introduced).
      */
-    static boolean netImproves(HubPerimeterRoutingStage.MetricSnapshot pre,
-                               HubPerimeterRoutingStage.MetricSnapshot post) {
-        if (post.m4Count() >= pre.m4Count()) return false;         // M4 MUST strictly drop
-        if (pre.vP10() != null) {                                  // V_p10 must not regress
-            if (post.vP10() == null || post.vP10() < pre.vP10()) return false;
-        }
-        if (post.hpq() < pre.hpq()) return false;                  // HPQ must not regress
+    static boolean netImproves(EgressMetrics pre, EgressMetrics post) {
+        boolean m4Drops = post.m4Count() < pre.m4Count();                    // the original trigger
+        // Sub-M4 keep-signal (short own-face micro-hugs): a <10px own-face hug is invisible to M4,
+        // so the original strict-M4-drop gate would roll the fix back. Accept a strict drop in the
+        // off-face parallel-terminal stub count instead, PROVIDED M4 does not regress. This is
+        // purely ADDITIVE: the m4Drops branch below is byte-identical to the previous predicate, so
+        // no currently-kept corpus push changes verdict — only sub-M4 stub-clearing pushes are
+        // newly kept (and only when they also clear the floors/HPQ guards).
+        boolean stubDrops = post.offFaceStubCount() < pre.offFaceStubCount()
+                && post.m4Count() <= pre.m4Count();
+        if (!m4Drops && !stubDrops) return false;                            // need a strict improvement
+        if (regressesBelowHealthyFloor(pre.vP10(), post.vP10())) return false; // V-axis parallel gap
+        if (regressesBelowHealthyFloor(pre.hP10(), post.hP10())) return false; // H-axis parallel gap
+        if (post.hpq() < pre.hpq()) return false;                            // HPQ must not regress
         return true;
+    }
+
+    /**
+     * A parallel-gap p10 "regresses" only if the push drops it BELOW {@link #HEALTHY_PARALLEL_GAP_PX}.
+     * A reduction that stays at/above the healthy floor is allowed (e.g. 238&rarr;151 on a sparse
+     * open view — the exact case the old strict guard wrongly forbade); a reduction below the floor,
+     * or losing measurability when there was a prior co-axial field, is rejected. This preserves the
+     * v1 danger-zone protection: a 4.0&rarr;3.4 push stays blocked (3.4 &lt; 15), and an already-tight
+     * field (pre &lt; floor) can never be narrowed further.
+     */
+    private static boolean regressesBelowHealthyFloor(Double pre, Double post) {
+        if (pre == null) return false;                 // no prior co-axial field to protect
+        if (post == null) return true;                 // lost measurability → reject (prior strictness)
+        if (post >= pre) return false;                 // not a reduction
+        return post < HEALTHY_PARALLEL_GAP_PX;          // a reduction is allowed only above the floor
+    }
+
+    /**
+     * The sub-M4 keep-signal: count terminals whose first exterior segment runs PARALLEL to, and
+     * within {@link #OFF_FACE_MIN_STUB_PX} of, their departed source/target face — the same
+     * per-terminal hug predicate the assessor's {@code describeOffFaceParallelTerminal} uses,
+     * applied across the whole view against the routing geometry. (NOTE: this counts PER TERMINAL —
+     * both terminals of every connection contribute independently — whereas the assessor's
+     * {@code countOffFaceParallelTerminals} is per connection; per-terminal is the right granularity
+     * for the keep-signal, since clearing ONE terminal's stub must strictly drop the count even when
+     * the connection's other terminal still hugs.) A push that lifts a hug's stub clear of the face
+     * strictly drops this count — the signal {@link #netImproves} uses to KEEP a fix that M4 (10px
+     * overlap) cannot see.
+     */
+    private static int computeOffFaceStubCount(
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths) {
+        if (connections == null || paths == null) return 0;
+        int count = 0;
+        for (int i = 0; i < connections.size() && i < paths.size(); i++) {
+            RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
+            List<AbsoluteBendpointDto> path = paths.get(i);
+            if (conn == null || path == null || path.size() < 2) continue;
+            if (isOffFaceParallelStub(path.get(0), path.get(1), conn.source())) count++;
+            int n = path.size();
+            if (isOffFaceParallelStub(path.get(n - 1), path.get(n - 2), conn.target())) count++;
+        }
+        return count;
+    }
+
+    /**
+     * True when the segment {@code term -> next} departs {@code elem}'s face and immediately runs
+     * PARALLEL to it within {@link #OFF_FACE_MIN_STUB_PX} perpendicular clearance — i.e. the
+     * hugging-exit the assessor's {@code describeOffFaceParallelTerminal} flags. {@code term} is the
+     * terminal bendpoint (on the face line); {@code next} is the next path point. Returns false when
+     * {@code elem} is null, the terminal is not on a resolvable face, the segment is zero-length, or
+     * the first exterior segment is perpendicular (a clean egress).
+     */
+    private static boolean isOffFaceParallelStub(AbsoluteBendpointDto term,
+                                                 AbsoluteBendpointDto next, RoutingRect elem) {
+        if (elem == null) return false;
+        Face face = TerminalSegmentCorridorMigrator.inferAttachedFace(term, elem);
+        if (face == null) return false;
+        double dx = Math.abs((double) next.x() - term.x());
+        double dy = Math.abs((double) next.y() - term.y());
+        if (dx < 1e-9 && dy < 1e-9) return false;           // zero-length — no direction
+        boolean horizontalFace = (face == Face.TOP || face == Face.BOTTOM);
+        // Parallel to the departed face: near-cardinal along the face's PARALLEL axis (horizontal
+        // for TOP/BOTTOM, vertical for LEFT/RIGHT). A perpendicular first segment (a clean egress)
+        // fails this and is not counted. Mirrors LayoutQualityAssessor.describeOffFaceParallelTerminal.
+        boolean parallel = horizontalFace
+                ? (dx > ZIGZAG_AXIS_TOLERANCE_PX && dy <= ZIGZAG_AXIS_TOLERANCE_PX)
+                : (dy > ZIGZAG_AXIS_TOLERANCE_PX && dx <= ZIGZAG_AXIS_TOLERANCE_PX);
+        if (!parallel) return false;
+        double faceLine = switch (face) {
+            case TOP -> elem.y();
+            case BOTTOM -> elem.y() + elem.height();
+            case LEFT -> elem.x();
+            case RIGHT -> elem.x() + elem.width();
+        };
+        double stub = horizontalFace ? Math.abs(term.y() - faceLine) : Math.abs(term.x() - faceLine);
+        return stub < OFF_FACE_MIN_STUB_PX;
     }
 
     // =====================================================================
@@ -309,8 +449,8 @@ public class TerminalEgressClearancePass {
     /**
      * Evaluate every connection for a terminal-egress hug against {@code paths} as given.
      * Emits at most one proposal per path (source side preferred, then target side). Does NOT
-     * mutate {@code paths}. The connection-gap floor is derived from the pre-pass V_p10 of the
-     * supplied {@code paths}. Used by unit tests; production uses {@link #run}.
+     * mutate {@code paths}. The connection-gap floor is the flat {@link #HEALTHY_PARALLEL_GAP_PX}
+     * (no longer derived from V_p10). Used by unit tests; production uses {@link #run}.
      */
     public List<EgressProposal> evaluate(
             List<RoutingPipeline.ConnectionEndpoints> connections,
@@ -320,7 +460,7 @@ public class TerminalEgressClearancePass {
             return List.of();
         }
         List<RoutingRect> obstacles = allObstacles != null ? allObstacles : List.of();
-        int requiredConnGap = requiredConnGap(HubPerimeterRoutingStage.computeVAxisParallelGapP10(paths));
+        int requiredConnGap = HEALTHY_PARALLEL_GAP_PX;
         List<EgressProposal> proposals = new ArrayList<>();
         for (int i = 0; i < connections.size(); i++) {
             RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
@@ -423,12 +563,21 @@ public class TerminalEgressClearancePass {
             spanHi = Math.max(term.y(), corner.y());
         }
 
+        // Edges of elements whose extent overlaps the hug span by >=10px — STILL needed downstream:
+        // the cleared run must clear each of these (foreign-edge clearing in findClearedOrthogonal).
         List<Integer> overlappingEdges = collectOverlappingEdges(orthIsY, spanLo, spanHi, obstacles);
-        // Confirm the current run actually hugs an edge (its own face, by construction within 1px).
-        boolean hugs = false;
-        for (int e : overlappingEdges) {
-            if (Math.abs((double) curOrth - e) <= EDGE_COINCIDENCE_TOLERANCE_PX) { hugs = true; break; }
-        }
+        // Confirm the current run actually hugs its OWN face. The terminal sits exactly on its own
+        // element's face line (curOrth == lineCoord, asserted above) with the run parallel to that
+        // face, and geomEdge = lineCoord - awaySign (|awaySign| == 1), so |curOrth - geomEdge| == 1
+        // <= EDGE_COINCIDENCE_TOLERANCE_PX — i.e. this is ALWAYS an own-face parallel hug here, at
+        // ANY positive run length. This INCLUDES a SHORT (<10px) run that collectOverlappingEdges'
+        // 10px-overlap floor never surfaces (the assessor flags those via its perpendicular
+        // OFF_FACE_MIN_STUB_PX signal; we act on them). The relaxation is strictly own-face:
+        // collectOverlappingEdges (and its reuse for foreign-edge clearing in findClearedOrthogonal)
+        // is UNCHANGED, so a foreign edge still needs >=10px overlap to enter the picture, and corpus
+        // byte-identity holds — a sub-10px own-face hug the keep-signal does not act on is rolled
+        // back byte-identical. The explicit guard is retained defensively (never taken in practice).
+        boolean hugs = Math.abs((double) curOrth - geomEdge) <= EDGE_COINCIDENCE_TOLERANCE_PX;
         if (!hugs) return null;
 
         // Neighbouring co-axial connection segments the cleared run must stay clear of.
@@ -603,8 +752,11 @@ public class TerminalEgressClearancePass {
      * Fix-2a — collect the orthogonal coordinates of every OTHER connection's CO-AXIAL segment
      * (same orientation as the hug run) whose parallel span overlaps the hug's span by at least
      * {@link #EDGE_COINCIDENCE_MIN_OVERLAP_PX}. The cleared run must keep {@code requiredConnGap}
-     * from each of these, so the push can never narrow a parallel-connection gap below the
-     * view's pre-pass V_p10.
+     * from each of these. Under the Option B floor ({@code requiredConnGap = HEALTHY_PARALLEL_GAP_PX})
+     * this keeps the cleared run &ge; the healthy floor from each co-axial neighbour, so the
+     * final-state parallel-gap p10 on that axis cannot drop below the floor — re-checked at the
+     * whole-view level by {@link #netImproves}. (The old design floored on {@code ceil(V_p10)} and
+     * claimed strict V_p10 non-regression; that is no longer the invariant.)
      *
      * @param orthIsY true when the hug run is horizontal (co-axial neighbours are horizontal
      *                segments; their orthogonal coordinate is Y); false → vertical neighbours (X)

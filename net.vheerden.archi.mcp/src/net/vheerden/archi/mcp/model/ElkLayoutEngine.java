@@ -14,6 +14,7 @@ import org.eclipse.elk.core.math.ElkPadding;
 import org.eclipse.elk.core.math.KVector;
 import org.eclipse.elk.core.options.CoreOptions;
 import org.eclipse.elk.core.options.Direction;
+import org.eclipse.elk.core.options.EdgeLabelPlacement;
 import org.eclipse.elk.core.options.EdgeRouting;
 import org.eclipse.elk.core.options.PortAlignment;
 import org.eclipse.elk.core.options.SizeConstraint;
@@ -21,6 +22,7 @@ import org.eclipse.elk.core.util.BasicProgressMonitor;
 import org.eclipse.elk.graph.ElkBendPoint;
 import org.eclipse.elk.graph.ElkEdge;
 import org.eclipse.elk.graph.ElkEdgeSection;
+import org.eclipse.elk.graph.ElkLabel;
 import org.eclipse.elk.graph.ElkNode;
 import org.eclipse.elk.graph.util.ElkGraphUtil;
 import org.slf4j.Logger;
@@ -48,6 +50,35 @@ class ElkLayoutEngine {
 	private static final Logger logger = LoggerFactory.getLogger(ElkLayoutEngine.class);
 
 	private static final double DEFAULT_SPACING = 50.0;
+
+	/**
+	 * Fixed label height (px) handed to ELK for edge-label dummies. Matches the
+	 * label-height estimate the crowding detector uses
+	 * ({@code LABEL_CHAR_HEIGHT 14 + LABEL_PADDING_Y 6}). Height barely affects
+	 * the dominant (between-layer, width-driven) reservation; a fixed value keeps
+	 * the engine headless and SWT-free.
+	 */
+	private static final double EDGE_LABEL_HEIGHT = 20.0;
+
+	/**
+	 * Spacing (px) ELK keeps between an edge label and its edge. Kept small so
+	 * the reserved between-layer gap is driven by the label's own width (the
+	 * thing we want to reserve) rather than gratuitous extra padding around the
+	 * inserted label dummy. Calibration starting point — see the live
+	 * acceptance capture for before/after overlap numbers.
+	 */
+	private static final double EDGE_LABEL_SPACING = 4.0;
+
+	/**
+	 * Non-blank placeholder text for the internal ELK edge-label dummy. ELK's
+	 * Layered label-dummy inserter ignores empty-text labels (empirically: an
+	 * empty-text label with an explicit width reserves no gap; a non-blank one
+	 * triggers the label-dummy insertion pass), so the text must be non-blank.
+	 * The text itself is never applied back to the Archi model (only computed
+	 * positions/bendpoints are); the reserved width comes from
+	 * {@link ElkLabel#setWidth(double)}, not from measuring this string.
+	 */
+	private static final String EDGE_LABEL_DUMMY_TEXT = ".";
 
 	private static volatile boolean elkProvidersRegistered = false;
 
@@ -92,6 +123,11 @@ class ElkLayoutEngine {
 		rootGraph.setProperty(CoreOptions.SPACING_NODE_NODE, effectiveSpacing);
 		rootGraph.setProperty(CoreOptions.SPACING_EDGE_NODE, effectiveSpacing / 2);
 		rootGraph.setProperty(LayeredOptions.SPACING_NODE_NODE_BETWEEN_LAYERS, effectiveSpacing);
+		// Reserve between-layer space for edge labels: ELK widens the inter-layer
+		// gap by a label's width when it is centered on the edge. Edges without a
+		// label carry none, so label-free regions are not over-spaced.
+		rootGraph.setProperty(LayeredOptions.EDGE_LABELS_PLACEMENT, EdgeLabelPlacement.CENTER);
+		rootGraph.setProperty(LayeredOptions.SPACING_EDGE_LABEL, EDGE_LABEL_SPACING);
 
 		// Build node hierarchy: separate top-level and nested nodes
 		Map<String, ElkNode> elkNodes = new LinkedHashMap<>();
@@ -174,6 +210,20 @@ class ElkLayoutEngine {
 			elkEdge.setIdentifier(edgeId);
 			elkEdge.getSources().add(srcNode);
 			elkEdge.getTargets().add(tgtNode);
+
+			// Attach an edge label sized to the connection's reserved label
+			// width so ELK widens the between-layer gap enough to fit it. A
+			// labelWidth of 0 (no visible/suppressed label) attaches nothing,
+			// so that edge does not push elements apart.
+			if (edge.labelWidth() > 0) {
+				ElkLabel label = ElkGraphUtil.createLabel(EDGE_LABEL_DUMMY_TEXT, elkEdge);
+				label.setWidth(edge.labelWidth());
+				label.setHeight(EDGE_LABEL_HEIGHT);
+				// Placement strategy is inherited from the containing graph's
+				// EDGE_LABELS_PLACEMENT (set on root + nested subgraphs) — no
+				// per-label override needed.
+			}
+
 			elkEdges.put(edgeId, elkEdge);
 		}
 
@@ -253,6 +303,9 @@ class ElkLayoutEngine {
 		elkNode.setProperty(CoreOptions.SPACING_NODE_NODE, effectiveSpacing);
 		elkNode.setProperty(CoreOptions.SPACING_EDGE_NODE, effectiveSpacing / 2);
 		elkNode.setProperty(LayeredOptions.SPACING_NODE_NODE_BETWEEN_LAYERS, effectiveSpacing);
+		// Reserve between-layer space for edge labels inside nested subgraphs too.
+		elkNode.setProperty(LayeredOptions.EDGE_LABELS_PLACEMENT, EdgeLabelPlacement.CENTER);
+		elkNode.setProperty(LayeredOptions.SPACING_EDGE_LABEL, EDGE_LABEL_SPACING);
 		// Disconnected children are separate connected components —
 		// their spacing is controlled by SPACING_COMPONENT_COMPONENT
 		elkNode.setProperty(CoreOptions.SPACING_COMPONENT_COMPONENT, effectiveSpacing);

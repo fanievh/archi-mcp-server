@@ -143,6 +143,12 @@ public class RenderHandler {
                         + "PDF is provided by the same bundle). Use for visual verification "
                         + "of layout changes and connection routing via LLM vision "
                         + "capabilities, and for embedding diagrams in reports/wikis. "
+                        + "The response carries the model's monotonic mutation counter as "
+                        + "modelVersion (inline mode: top-level field; file mode: in _meta). "
+                        + "It is a decimal-encoded counter — compare it as an integer, not a "
+                        + "string. Against a later assess-layout _meta.modelVersion: if the "
+                        + "export's modelVersion is numerically lower, the model changed after "
+                        + "this render and the image is stale — re-export before relying on it. "
                         + "Related: get-view-contents (reference vs rendered coords).")
                 .inputSchema(inputSchema)
                 .build();
@@ -201,16 +207,22 @@ public class RenderHandler {
             ExportResult result = accessor.exportView(viewId, format, scale, quality, inline,
                     effectiveOutputDir);
 
+            // Stamp the response with the model's monotonic mutation counter so a consumer
+            // can compare it against a later assess-layout modelVersion and detect that this
+            // render predates a subsequent model change (i.e. the exported image is stale).
+            // Read once, after the export, so every response path reports the same value.
+            String modelVersion = accessor.getModelVersion();
+
             if (inline && "png".equals(format)) {
-                return buildInlinePngResponse(result, outputDirIgnored);
+                return buildInlinePngResponse(result, outputDirIgnored, modelVersion);
             } else if (inline && "jpg".equals(format)) {
-                return buildInlineJpgResponse(result, outputDirIgnored);
+                return buildInlineJpgResponse(result, outputDirIgnored, modelVersion);
             } else if (inline && "svg".equals(format)) {
-                return buildInlineSvgResponse(result, outputDirIgnored);
+                return buildInlineSvgResponse(result, outputDirIgnored, modelVersion);
             } else if (inline && "pdf".equals(format)) {
-                return buildInlinePdfResponse(result, outputDirIgnored);
+                return buildInlinePdfResponse(result, outputDirIgnored, modelVersion);
             } else {
-                return buildFileResponse(result, format);
+                return buildFileResponse(result, format, modelVersion);
             }
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
@@ -223,11 +235,13 @@ public class RenderHandler {
     }
 
     private McpSchema.CallToolResult buildInlinePngResponse(ExportResult result,
-                                                              boolean outputDirIgnored) {
+                                                              boolean outputDirIgnored,
+                                                              String modelVersion) {
         String base64 = Base64.getEncoder().encodeToString(result.imageBytes());
 
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        wrapper.put("modelVersion", modelVersion);
         if (outputDirIgnored) {
             wrapper.put("note", "outputDirectory is ignored when inline is true");
         }
@@ -244,11 +258,13 @@ public class RenderHandler {
     }
 
     private McpSchema.CallToolResult buildInlineJpgResponse(ExportResult result,
-                                                              boolean outputDirIgnored) {
+                                                              boolean outputDirIgnored,
+                                                              String modelVersion) {
         String base64 = Base64.getEncoder().encodeToString(result.imageBytes());
 
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        wrapper.put("modelVersion", modelVersion);
         if (outputDirIgnored) {
             wrapper.put("note", "outputDirectory is ignored when inline is true");
         }
@@ -265,9 +281,11 @@ public class RenderHandler {
     }
 
     private McpSchema.CallToolResult buildInlineSvgResponse(ExportResult result,
-                                                              boolean outputDirIgnored) {
+                                                              boolean outputDirIgnored,
+                                                              String modelVersion) {
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        wrapper.put("modelVersion", modelVersion);
         if (outputDirIgnored) {
             wrapper.put("note", "outputDirectory is ignored when inline is true");
         }
@@ -283,11 +301,13 @@ public class RenderHandler {
     }
 
     private McpSchema.CallToolResult buildInlinePdfResponse(ExportResult result,
-                                                              boolean outputDirIgnored) {
+                                                              boolean outputDirIgnored,
+                                                              String modelVersion) {
         String base64 = Base64.getEncoder().encodeToString(result.imageBytes());
 
         Map<String, Object> wrapper = new LinkedHashMap<>();
         wrapper.put("metadata", result.metadata());
+        wrapper.put("modelVersion", modelVersion);
         if (outputDirIgnored) {
             wrapper.put("note", "outputDirectory is ignored when inline is true");
         }
@@ -309,11 +329,12 @@ public class RenderHandler {
                 .build();
     }
 
-    private McpSchema.CallToolResult buildFileResponse(ExportResult result, String format) {
+    private McpSchema.CallToolResult buildFileResponse(ExportResult result, String format,
+                                                        String modelVersion) {
         Map<String, Object> envelope = formatter.formatSuccess(
                 result.metadata(),
                 buildFileNextSteps(format),
-                null, 1, 1, false);
+                modelVersion, 1, 1, false);
         return HandlerUtils.buildResult(formatter.toJsonString(envelope), false);
     }
 

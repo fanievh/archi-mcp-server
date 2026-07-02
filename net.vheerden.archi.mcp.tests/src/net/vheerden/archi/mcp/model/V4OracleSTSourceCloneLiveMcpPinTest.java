@@ -303,7 +303,7 @@ public class V4OracleSTSourceCloneLiveMcpPinTest {
                     e.name(),
                     0.0,
                     null,
-                    null));
+                    null, 0.0, 0.0, 0.0));
         }
 
         List<AssessmentConnection> connections = new ArrayList<>();

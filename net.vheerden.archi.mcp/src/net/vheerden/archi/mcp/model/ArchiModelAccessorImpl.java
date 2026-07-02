@@ -162,6 +162,7 @@ import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNodeDto;
 import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionSpec;
+import net.vheerden.archi.mcp.response.dto.SetViewLabelExpressionResultDto;
 import net.vheerden.archi.mcp.response.dto.ViewObjectDto;
 import net.vheerden.archi.mcp.response.dto.ViewPositionSpec;
 
@@ -975,7 +976,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         IProfile profile = IArchimateFactory.eINSTANCE.createProfile();
-        profile.setName(name);
+        profile.setName(InputValidation.reject(name, "name"));
         profile.setConceptType(canonicalConceptType);
         // Apply imagePath BEFORE CreateProfileCommand runs (mirror 14-7's
         // pre-command-attribute-application pattern).
@@ -1164,7 +1165,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         Command cmd = new UpdateProfileCommand(profile,
-                willChangeName ? newName : null, imagePathChange);
+                willChangeName ? InputValidation.reject(newName, "name") : null, imagePathChange);
         Map<String, Object> dto = buildProfileMap(effectiveName, canonicalConceptType,
                 layer, null, effectiveImagePath);
         return new PreparedMutation<>(cmd, dto, profile.getId(), profile);
@@ -2515,14 +2516,15 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     @Override
     public MutationResult<ViewObjectDto> updateViewObject(String sessionId, String viewObjectId,
             Integer x, Integer y, Integer width, Integer height, String text,
-            StylingParams styling, ImageParams imageParams, String labelExpression) {
+            StylingParams styling, ImageParams imageParams, String labelExpression, String anchorTarget, String anchorEdge, Integer anchorDx, Integer anchorDy) {
         logger.info("Updating view object: viewObjectId={}, text={}, labelExpression={}",
                 viewObjectId, text != null ? "provided" : "null",
                 labelExpression != null ? "provided" : "null");
         IArchimateModel model = requireAndCaptureModel();
         try {
             PreparedMutation<ViewObjectDto> prepared = prepareUpdateViewObject(
-                    viewObjectId, x, y, width, height, text, styling, imageParams, labelExpression);
+                    viewObjectId, x, y, width, height, text, styling, imageParams, labelExpression,
+                    anchorTarget, anchorEdge, anchorDx, anchorDy);
 
             // Approval gate
             if (mutationDispatcher.isApprovalRequired(sessionId)) {
@@ -2542,7 +2544,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (height != null) proposedChanges.put("height", height);
                 ProposalContext ctx = storeAsProposal(sessionId, "update-view-object",
                         () -> prepareUpdateViewObject(viewObjectId, x, y, width, height, text,
-                                styling, imageParams, labelExpression),
+                                styling, imageParams, labelExpression,
+                                anchorTarget, anchorEdge, anchorDx, anchorDy),
                         targetIds(viewObjectId), prepared.entity(), description,
                         null, proposedChanges, "View object bounds ready for update.");
                 return new MutationResult<>(prepared.entity(), null, ctx);
@@ -2797,7 +2800,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         PreparedMutation<ViewObjectDto> prepared =
                                 prepareUpdateViewObject(pos.viewObjectId(),
                                         pos.x(), pos.y(), pos.width(), pos.height(),
-                                        null, null, null, null); // no text/styling/image/labelExpression for layout
+                                        null, null, null, null, null, null, null, null); // no text/styling/image/labelExpression/anchor for layout
                         commands.add(prepared.command());
                         positionCount++;
                     } catch (ModelAccessException e) {
@@ -2973,8 +2976,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 result.labelOverlapCount(),
                 emptyToNull(result.labelOverlaps()),
                 orphanResult.count(), emptyToNull(orphanResult.descriptions()),
-                result.noteOverlapCount(),
-                emptyToNull(result.noteOverlapDescriptions()),
+                result.noteOverlapCount(), emptyToNull(result.noteOverlapDescriptions()),
+                result.noteClipCount(), emptyToNull(result.noteClipDescriptions()),
                 result.hasGroups(),
                 result.coincidentSegmentCount(),
                 result.nonOrthogonalTerminalCount(),
@@ -3005,7 +3008,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 result.vAxisParallelGapP10() != null
                         ? Math.round(result.vAxisParallelGapP10() * 100.0) / 100.0 : null,
                 result.vAxisParallelGapNarrow25Count(),
-                mapParallelGapDetail(result.parallelConnectionGapDetail()));
+                mapParallelGapDetail(result.parallelConnectionGapDetail()), Math.round(result.hubNeighbourClearanceMin() * 100.0) / 100.0,
+                // Coverage declaration (registry-driven); then connection-through-note/image + redundant-bendpoint + non-orthogonal-interior-segment + container-fill==child (informational)
+                result.coverage(), result.connectionThroughNoteCount(), emptyToNull(result.connectionThroughNoteDescriptions()), result.connectionRedundantBendpointCount(), emptyToNull(result.connectionRedundantBendpointDescriptions()), result.nonOrthogonalInteriorSegmentCount(), emptyToNull(result.nonOrthogonalInteriorSegmentDescriptions()), result.containerFillEqualsChildCount(), emptyToNull(result.containerFillEqualsChildDescriptions()), result.connectionGrazesVisualCount(), emptyToNull(result.connectionGrazesVisualDescriptions()), result.labelOnNoteCount(), emptyToNull(result.labelOnNoteDescriptions()), result.labelOnGroupCount(), emptyToNull(result.labelOnGroupDescriptions()), result.edgeCoincidenceGrazedElementCount(), result.offFaceParallelTerminalCount(), emptyToNull(result.offFaceParallelTerminalDescriptions()), result.coincidentFacePortCount(), emptyToNull(result.coincidentFacePortDescriptions()));
     }
 
     /** Maps internal ParallelConnectionGapDetail to DTO format (Successor D). */
@@ -3835,7 +3840,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 try {
                     routeResult = buildOrthogonalRoutingCommands(
                             diagramModel, targetConnections, nodes, force, snapThreshold, perimeterMargin,
-                            VisibilityGraphRouter.DEFAULT_OCCUPANCY_WEIGHT, enableChannelNudging);
+                            VisibilityGraphRouter.DEFAULT_OCCUPANCY_WEIGHT, enableChannelNudging, true);
                 } catch (RuntimeException e) {
                     logger.warn("Routing pipeline failed for view {} due to degenerate geometry: {}",
                             viewId, e.getMessage());
@@ -3853,6 +3858,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 failedConnections = routeResult.failedConnections;
                 moveRecommendations = routeResult.moveRecommendations;
                 straightLineCrossings = routeResult.straightLineCrossings;
+                AutoRouteWarnings.emitEgressLiftLayoutBound(routeResult.egressRolledBack, warnings, structuredWarnings);
 
                 // 6b. Auto-nudge: apply move recommendations and re-route
                 // Ignored when force=true (force already applies all routes) or clear strategy
@@ -3992,7 +3998,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         try {
                             OrthogonalRoutingResult reRouteResult = buildOrthogonalRoutingCommands(
                                     diagramModel, failedConns, nodes, false, snapThreshold, perimeterMargin,
-                                    VisibilityGraphRouter.DEFAULT_OCCUPANCY_WEIGHT, enableChannelNudging);
+                                    VisibilityGraphRouter.DEFAULT_OCCUPANCY_WEIGHT, enableChannelNudging, true);
                             commands.addAll(reRouteResult.commands);
                             routedCount += reRouteResult.routedCount;
                             labelsOptimized += reRouteResult.labelsOptimized;
@@ -4445,7 +4451,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         node.width(), node.height(),
                         node.parentId(), node.isGroup(), node.isNote(),
                         node.name(), node.labelTextWidth(),
-                        node.imagePath(), node.imagePosition()));
+                        // The note-overflow and image-overlap detection fields are informational and unused on
+                        // this routing-only nudge path, so leave them at the 0.0 sentinel; isJunction + fillColor
+                        // ARE carried through (own-endpoint and container-fill checks re-run after the nudge).
+                        node.imagePath(), node.imagePosition(), 0.0, 0.0, 0.0, node.isJunction(), node.fillColor()));
             } else {
                 adjusted.add(node);
             }
@@ -4517,7 +4526,10 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                         node.id(), adjX, adjY, adjW, adjH,
                         node.parentId(), node.isGroup(), node.isNote(),
                         node.name(), node.labelTextWidth(),
-                        node.imagePath(), node.imagePosition()));
+                        // The note-overflow and image-overlap detection fields are informational and unused on
+                        // this routing-only nudge path, so leave them at the 0.0 sentinel; isJunction + fillColor
+                        // ARE carried through (own-endpoint and container-fill checks re-run after the nudge).
+                        node.imagePath(), node.imagePosition(), 0.0, 0.0, 0.0, node.isJunction(), node.fillColor()));
             } else {
                 adjusted.add(node);
             }
@@ -5942,22 +5954,18 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         int resultLabelsOptimized = bestLabelsOptimized;
 
         if (improved) {
-            // Merge label commands into bestCompound
-            for (Object cmd : labelResult.compound.getCommands()) {
-                bestCompound.add((Command) cmd);
-            }
+            LabelOffsetSupport.merge(bestCompound, labelResult.compound, false); // along-path + offsets
             resultRating = fallbackRating;
             resultScore = fallbackScore;
             resultAssessment = fallbackAssessment;
-
-            // Deduplicate label count: unique connections with SetTextPositionCommand
-            Set<String> optimizedLabelIds = new HashSet<>();
-            for (Object cmd : bestCompound.getCommands()) {
-                if (cmd instanceof SetTextPositionCommand stpc) {
-                    optimizedLabelIds.add(stpc.getConnection().getId());
-                }
-            }
-            resultLabelsOptimized = optimizedLabelIds.size();
+            // Dedup across BOTH command types (a position change + an offset on one connection count once).
+            resultLabelsOptimized = LabelOffsetSupport.countOptimizedLabels(bestCompound);
+        } else if (LabelOffsetSupport.hasOffsetCommand(labelResult.compound)) {
+            // Metric unchanged but the pass found perpendicular offsets clearing an own-endpoint/element
+            // bleed the labelOverlap metric cannot see (it derives bounds from textPosition, not
+            // relativePosition). Keep ONLY the offsets (render-positive, metric-neutral); rating stays best.
+            LabelOffsetSupport.merge(bestCompound, labelResult.compound, true);
+            resultLabelsOptimized = LabelOffsetSupport.countOptimizedLabels(bestCompound);
         }
 
         // Undo label + best compound (2 dispatches)
@@ -6208,13 +6216,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         final Map<String, List<AbsoluteBendpointDto>> routedPaths;
         /** Straight-line crossing estimate. */
         final int straightLineCrossings;
+        final int egressRolledBack;
 
         OrthogonalRoutingResult(List<Command> commands, int routedCount,
                 List<FailedConnection> failedConnections,
                 List<MoveRecommendation> moveRecommendations,
                 int labelsOptimized,
                 Map<String, List<AbsoluteBendpointDto>> routedPaths,
-                int straightLineCrossings) {
+                int straightLineCrossings, int egressRolledBack) {
             this.commands = commands;
             this.routedCount = routedCount;
             this.failedConnections = failedConnections;
@@ -6222,6 +6231,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             this.labelsOptimized = labelsOptimized;
             this.routedPaths = new LinkedHashMap<>(routedPaths);
             this.straightLineCrossings = straightLineCrossings;
+            this.egressRolledBack = egressRolledBack;
         }
     }
 
@@ -6312,7 +6322,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             PreparedMutation<ViewObjectDto> prepared =
                     prepareUpdateViewObject(pos.viewObjectId(),
                             pos.x(), pos.y(), pos.width(), pos.height(),
-                            null, null, null, null);
+                            null, null, null, null, null, null, null, null);
             commands.add(prepared.command());
             positionCount++;
         }
@@ -6540,7 +6550,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     /**
      * EMF-aware orchestrator for terminals-only routing. Iterates over the target
      * connections, decodes stored bendpoints to absolute coordinates, delegates geometry
-     * to {@link RoutingPipeline#terminalsOnlyRectify}, and — per live validation
+     * to {@link RoutingPipeline#terminalsOnlyRectifyAndClearEgress}, and — per live validation
      * on View 3 (retail bank, 2026-04-12) — applies two vetoes before emitting a
      * command:
      *
@@ -6622,7 +6632,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     tgtBounds.getWidth(), tgtBounds.getHeight(), tgtObj.getId());
 
             List<AbsoluteBendpointDto> newAbs =
-                    RoutingPipeline.terminalsOnlyRectify(srcRect, tgtRect, existingAbs);
+                    RoutingPipeline.terminalsOnlyRectifyAndClearEgress(srcRect, tgtRect, existingAbs);
             if (newAbs == null) {
                 alreadyOrthogonal++;
                 continue;
@@ -6836,7 +6846,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         return buildOrthogonalRoutingCommands(diagramModel, targetConnections, nodes,
                 force, snapThreshold, perimeterMargin,
                 VisibilityGraphRouter.DEFAULT_OCCUPANCY_WEIGHT,
-                RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING);
+                RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING, false);
     }
 
     /**
@@ -6850,18 +6860,22 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             double occupancyWeight) {
         return buildOrthogonalRoutingCommands(diagramModel, targetConnections, nodes,
                 force, snapThreshold, perimeterMargin, occupancyWeight,
-                RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING);
+                RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING, false);
     }
 
     /**
-     * Overload with the channel nudging gate.
+     * Canonical overload with the channel nudging gate and the {@code emitLabelOffsets} switch.
+     * {@code emitLabelOffsets} is true only for position-preserving {@code autoRouteConnections} (the
+     * perpendicular "Label Offset" is the only channel that lifts a Middle label off a box when elements
+     * are not moved); false for the auto-layout path, which keeps offsets in {@code executeLabelFallback}.
      */
     private OrthogonalRoutingResult buildOrthogonalRoutingCommands(
             IArchimateDiagramModel diagramModel,
             List<IDiagramModelConnection> targetConnections,
             List<AssessmentNode> nodes,
             boolean force, int snapThreshold, int perimeterMargin,
-            double occupancyWeight, boolean enableChannelNudging) {
+            double occupancyWeight, boolean enableChannelNudging,
+            boolean emitLabelOffsets) {
 
         Map<String, AssessmentNode> nodeMap = new LinkedHashMap<>();
         for (AssessmentNode node : nodes) {
@@ -6954,7 +6968,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         if (batchInput.isEmpty()) {
             return new OrthogonalRoutingResult(
-                    List.of(), 0, List.of(), List.of(), 0, Map.of(), 0);
+                    List.of(), 0, List.of(), List.of(), 0, Map.of(), 0, 0);
         }
 
         // Build unified obstacle list for corridor width and neighbor collision checks.
@@ -7042,27 +7056,22 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             routedCount++;
         }
 
-        // Apply label position optimization results
+        // Apply label positions, plus (auto-route only) the perpendicular "Label Offset" for any Middle label
+        // still ON a box at its chosen position — computed here from the routed paths; feature-guarded (no-op 5.7).
         Map<String, Integer> optimalPositions = routingResult.optimalPositions();
-        if (!optimalPositions.isEmpty()) {
-            // Build connection lookup for efficient text position write-back
-            Map<String, IDiagramModelArchimateConnection> connLookup = new LinkedHashMap<>();
-            for (IDiagramModelArchimateConnection archConn : batchConnections) {
-                connLookup.put(archConn.getId(), archConn);
-            }
-            for (Map.Entry<String, Integer> entry : optimalPositions.entrySet()) {
-                IDiagramModelArchimateConnection conn = connLookup.get(entry.getKey());
-                if (conn != null && conn.getTextPosition() != entry.getValue()) {
-                    commands.add(new SetTextPositionCommand(conn, entry.getValue()));
-                }
-            }
+        Map<String, Integer> labelOffsets = emitLabelOffsets
+                ? new LabelPositionOptimizer().computeOffsetsForPositions(
+                        batchInput, routesToApply, allObstacles, labelExcludeSets, optimalPositions)
+                : Map.of();
+        if (!optimalPositions.isEmpty() || !labelOffsets.isEmpty()) {
+            commands.addAll(LabelOffsetSupport.buildLabelCommands(
+                    optimalPositions, labelOffsets, batchConnections));
         }
 
-        return new OrthogonalRoutingResult(
-                commands, routedCount,
+        return new OrthogonalRoutingResult(commands, routedCount,
                 routingResult.failed(), routingResult.recommendations(),
                 routingResult.labelsOptimized(), routesToApply,
-                routingResult.straightLineCrossings());
+                routingResult.straightLineCrossings(), routingResult.egressRolledBack());
     }
 
     /**
@@ -7445,7 +7454,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 batchInput, batchPaths, allObstacles, labelExcludeSets,
                 trials, new Random(batchInput.size() * 31L + allObstacles.size()));
 
-        if (result.changedPositions().isEmpty()) {
+        // Offsets are metric-neutral (own-endpoint bleed clears with NO along-path change) → need BOTH empty.
+        if (result.changedPositions().isEmpty() && result.offsets().isEmpty()) {
             return null;
         }
 
@@ -7462,6 +7472,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 commands.add(new SetTextPositionCommand(conn, entry.getValue()));
             }
         }
+
+        // Perpendicular "Label Offset" commands (Archi 5.10+); feature-guarded → emits nothing on 5.7.
+        commands.addAll(LabelOffsetSupport.buildOffsetCommands(result.offsets(), connLookup));
 
         if (commands.isEmpty()) {
             return null;
@@ -7536,8 +7549,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 if (target instanceof IDiagramModelObject targetObj
                         && nodeIds.contains(child.getId())
                         && nodeIds.contains(targetObj.getId())) {
-                    edges.add(new LayoutEdge(child.getId(), targetObj.getId(),
-                            conn.getId()));
+                    edges.add(new LayoutEdge(child.getId(), targetObj.getId(), conn.getId(),
+                            LabelWidthEstimator.estimateWidth(StylingHelper.resolveConnectionLabelText(conn))));
                 }
             }
             if (child instanceof IDiagramModelContainer nested) {
@@ -11839,7 +11852,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         IProfile newProfile = IArchimateFactory.eINSTANCE.createProfile();
-        newProfile.setName(specialization);
+        newProfile.setName(InputValidation.reject(specialization, "name"));
         newProfile.setConceptType(conceptType);
         if (cache != null) {
             cache.put(cacheKey, newProfile);
@@ -11911,7 +11924,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         EClass eClass = resolveElementType(type);
         IArchimateElement element = (IArchimateElement) IArchimateFactory.eINSTANCE.create(eClass);
-        element.setName(name);
+        element.setName(InputValidation.reject(name, "name"));
         if (documentation != null && !documentation.isBlank()) {
             element.setDocumentation(documentation);
         }
@@ -12052,7 +12065,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         IArchimateRelationship relationship =
                 (IArchimateRelationship) IArchimateFactory.eINSTANCE.create(relClass);
         if (name != null && !name.isBlank()) {
-            relationship.setName(name);
+            relationship.setName(InputValidation.reject(name, "name"));
         }
         // G1: apply semantic attributes to the EMF relationship BEFORE connect().
         // The typed setters (setAccessType / setDirected / setStrength) work the moment the
@@ -12108,7 +12121,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         IArchimateModel model = requireAndCaptureModel();
 
         IArchimateDiagramModel view = IArchimateFactory.eINSTANCE.createArchimateDiagramModel();
-        view.setName(name);
+        view.setName(InputValidation.reject(name, "name"));
         if (viewpoint != null && !viewpoint.isBlank()) {
             view.setViewpoint(viewpoint);
         }
@@ -12165,7 +12178,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
 
         // 2. Create new view with metadata from source
         IArchimateDiagramModel clonedView = IArchimateFactory.eINSTANCE.createArchimateDiagramModel();
-        clonedView.setName(newName);
+        clonedView.setName(InputValidation.reject(newName, "name"));
         String vp = sourceView.getViewpoint();
         if (vp != null && !vp.isEmpty()) {
             clonedView.setViewpoint(vp);
@@ -12486,9 +12499,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        Command cmd = buildUpdateConceptCommand(element, model, name, documentation, properties,
+        Command cmd = buildUpdateConceptCommand(element, model, InputValidation.reject(name, "name"), documentation, properties,
                 specialization, element.eClass().getName(),
-                () -> new UpdateElementCommand(element, name, documentation, properties));
+                () -> new UpdateElementCommand(element, InputValidation.reject(name, "name"), documentation, properties));
 
         return new PreparedMutation<>(cmd, convertToElementDto(element), element.getId(), element);
     }
@@ -12576,9 +12589,9 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         validateSemanticAttributesForUpdate(attrs, relationship);
 
         RelationshipSemanticAttributes safeAttrs = (attrs != null) ? attrs : RelationshipSemanticAttributes.NONE;
-        Command cmd = buildUpdateConceptCommand(relationship, model, name, documentation, properties,
+        Command cmd = buildUpdateConceptCommand(relationship, model, InputValidation.reject(name, "name"), documentation, properties,
                 specialization, relationship.eClass().getName(),
-                () -> new UpdateRelationshipCommand(relationship, name, documentation, properties,
+                () -> new UpdateRelationshipCommand(relationship, InputValidation.reject(name, "name"), documentation, properties,
                         safeAttrs));
 
         return new PreparedMutation<>(cmd, convertToRelationshipDto(relationship), relationship.getId(), relationship);
@@ -12622,7 +12635,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         boolean clearViewpoint = "".equals(viewpoint);
         String effectiveViewpoint = clearViewpoint ? null : viewpoint;
 
-        Command cmd = new UpdateViewCommand(view, name, effectiveViewpoint,
+        Command cmd = new UpdateViewCommand(view, InputValidation.reject(name, "name"), effectiveViewpoint,
                 clearViewpoint, documentation, properties, routerTypeInt);
 
         return new PreparedMutation<>(cmd, DtoMapper.buildViewDto(view), view.getId(), view);
@@ -12670,7 +12683,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         boolean clearPurpose = "".equals(purpose);
         String effectivePurpose = clearPurpose ? null : purpose;
 
-        Command cmd = new UpdateModelCommand(model, name, effectivePurpose,
+        Command cmd = new UpdateModelCommand(model, InputValidation.reject(name, "name"), effectivePurpose,
                 clearPurpose, properties);
 
         return new PreparedMutation<>(cmd, getModelInfo(), model.getId(), model);
@@ -12921,12 +12934,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         Command w2ParentResize = computeIconBandParentResizeCommand(
                 parentContainer, resolvedX, resolvedY, resolvedWidth, resolvedHeight);
         if (w2ParentResize != null) {
-            NonNotifyingCompoundCommand w2Wrap = new NonNotifyingCompoundCommand(
-                    "Add view object with icon-band parent-resize");
+            NonNotifyingCompoundCommand w2Wrap = new NonNotifyingCompoundCommand("Add view object with icon-band parent-resize");
             w2Wrap.add(w2ParentResize);
             w2Wrap.add(cmd);
             cmd = w2Wrap;
         }
+        cmd = RecedeContainerFillCommand.wrap(cmd, parentContainer, styling); // recede null-fill element/group parent (no-op for root view)
 
         AddToViewResultDto resultDto = new AddToViewResultDto(
                 viewObjectDto, autoConnections, skippedAutoConnections);
@@ -13009,7 +13022,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Interpret escape sequences in group label BEFORE sizing so the
         // helper measures the rendered string (with real newlines) rather than the
         // pre-interpretation escape form. Moved up from after setBounds per review M1.
-        label = TextUtils.interpretEscapes(label);
+        label = TextUtils.interpretEscapes(InputValidation.reject(label, "label"));
 
         // Resolve dimensions
         int resolvedWidth = (width != null) ? width : DEFAULT_GROUP_WIDTH;
@@ -13056,8 +13069,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Apply image at creation time
         ImageHelper.applyImageToNewObject(group, imageParams);
 
-        // Build command
-        Command cmd = new AddGroupToViewCommand(group, parentContainer);
+        // Build command — recede an unauthored (null-fill) element/group parent gaining this child.
+        Command cmd = RecedeContainerFillCommand.wrap(new AddGroupToViewCommand(group, parentContainer), parentContainer, styling);
 
         // Build DTO (include styling; include image fields;
         // include figureType + textAlignment + verticalTextAlignment)
@@ -13167,7 +13180,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // Interpret escape sequences in note content BEFORE sizing so the
         // helper measures the rendered string (with real newlines) rather than the
         // pre-interpretation escape form. Moved up from after setBounds per review M1.
-        content = TextUtils.interpretEscapes(content);
+        content = TextUtils.interpretEscapes(InputValidation.reject(content, "content"));
 
         // Resolve dimensions
         int resolvedWidth = (width != null) ? width : DEFAULT_NOTE_WIDTH;
@@ -13193,14 +13206,14 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             int resolvedGap = (gap != null) ? gap : 10;
             ContentBounds bounds = computeContentBoundsForView(view);
             if (bounds != null) {
-                if ("above-content".equals(position)) {
-                    resolvedX = (int) Math.round(bounds.x());
-                    resolvedY = (int) Math.round(bounds.y() - resolvedHeight - resolvedGap);
-                } else {
-                    // below-content
-                    resolvedX = (int) Math.round(bounds.x());
-                    resolvedY = (int) Math.round(bounds.y() + bounds.height() + resolvedGap);
-                }
+                // Content-relative placement uses the same edge helper as view anchoring (byte-identical).
+                boolean above = "above-content".equals(position);
+                int[] placed = AnchorResolver.resolveByEdge(
+                        above ? AnchorResolver.EDGE_ABOVE : AnchorResolver.EDGE_BELOW,
+                        bounds.x(), bounds.y(), bounds.width(), bounds.height(),
+                        resolvedWidth, resolvedHeight, 0, resolvedGap);
+                resolvedX = placed[0];
+                resolvedY = placed[1];
             } else {
                 // Empty view fallback
                 resolvedX = 10;
@@ -13590,18 +13603,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      * Q1 default — fallback to {@code DEFAULT_IMAGE_VISUAL_*}).
      */
     private int[] tryReadNaturalImageDimensions(IArchimateModel model, String imagePath) {
-        try {
-            IArchiveManager archiveManager =
-                    (IArchiveManager) model.getAdapter(IArchiveManager.class);
-            if (archiveManager == null) return null;
-            ImageData data = archiveManager.createImageData(imagePath);
-            if (data == null) return null;
-            return new int[] { data.width, data.height };
-        } catch (Exception e) {
-            logger.debug("Failed to read natural dimensions for image '{}': {}",
-                    imagePath, e.getMessage());
-            return null;
-        }
+        return ImageHelper.readNaturalImageDimensions(model, imagePath);
     }
 
     /**
@@ -13775,7 +13777,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     private PreparedMutation<ViewObjectDto> prepareUpdateViewObject(
             String viewObjectId, Integer x, Integer y, Integer width, Integer height,
             String text, StylingParams styling, ImageParams imageParams,
-            String labelExpression) {
+            String labelExpression, String anchorTarget, String anchorEdge, Integer anchorDx, Integer anchorDy) {
         IArchimateModel model = requireAndCaptureModel();
 
         // Validate hex colours before any other processing
@@ -13799,12 +13801,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         boolean hasStyling = styling != null && styling.hasAnyValue();
         boolean hasImage = imageParams != null && imageParams.hasAnyValue();
         boolean hasLabelExpression = labelExpression != null;
-        if (x == null && y == null && width == null && height == null && text == null && !hasStyling && !hasImage && !hasLabelExpression) {
+        if (x == null && y == null && width == null && height == null && text == null && !hasStyling && !hasImage && !hasLabelExpression && anchorTarget == null) {
             throw new ModelAccessException(
-                    "At least one of x, y, width, height, text, styling, image, or labelExpression parameter must be provided",
+                    "At least one of x, y, width, height, text, styling, image, labelExpression, or anchorTarget parameter must be provided",
                     ErrorCode.INVALID_PARAMETER,
                     null,
-                    "At least one of x, y, width, height, text, fillColor, lineColor, fontColor, opacity, lineWidth, imagePath, imagePosition, showIcon, labelExpression must be provided.",
+                    "At least one of x, y, width, height, text, fillColor, lineColor, fontColor, opacity, lineWidth, imagePath, imagePosition, showIcon, labelExpression, anchorTarget must be provided.",
                     null);
         }
 
@@ -13835,14 +13837,11 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         validatePositiveDimension(height, "height");
 
         // Interpret escape sequences in text for notes/groups
-        text = TextUtils.interpretEscapes(text);
+        text = TextUtils.interpretEscapes(InputValidation.reject(text, "text"));
 
-        // Read current bounds and merge
-        IBounds bounds = diagramObj.getBounds();
-        int mergedX = (x != null) ? x : bounds.getX();
-        int mergedY = (y != null) ? y : bounds.getY();
-        int mergedWidth = (width != null) ? width : bounds.getWidth();
-        int mergedHeight = (height != null) ? height : bounds.getHeight();
+        // Merge requested bounds with current; when setting an anchor, resolve x/y from the target.
+        int[] merged = AnchorResolver.mergeBounds(diagramObj, x, y, width, height, anchorTarget, anchorEdge, anchorDx, anchorDy);
+        int mergedX = merged[0], mergedY = merged[1], mergedWidth = merged[2], mergedHeight = merged[3];
 
         // W2 icon-band parent-resize at the MUTATION moment (Task-0.6 (iii)).
         // Fires when the LLM sets a bottom-corner `imagePosition` on
@@ -13878,8 +13877,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             }
         }
 
-        // Build command (with optional text, styling, image, and label-expression update)
-        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, text, styling, imageParams, labelExpression);
+        // Build command (with optional text, styling, image, label-expression, and anchor update)
+        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, text, styling, imageParams, InputValidation.reject(labelExpression, "labelExpression"), anchorTarget, anchorEdge, anchorDx, anchorDy);
 
         // Successor H6 (2026-05-14):
         // post-command-build parent-bounds check on the raw update-view-object
@@ -13899,7 +13898,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // When overflow is detected, the user's UpdateViewObjectCommand and the
         // helper's parent-resize commands are wrapped into a single
         // NonNotifyingCompoundCommand so they execute as one undo step.
-        boolean boundsModified = (x != null) || (y != null) || (width != null) || (height != null) || w2IconBandFired;
+        boolean boundsModified = (x != null) || (y != null) || (width != null) || (height != null) || w2IconBandFired || (anchorTarget != null && !anchorTarget.isEmpty());
         if (boundsModified) {
             EObject container = diagramObj.eContainer();
             if (container instanceof IDiagramModelGroup parentGroup) {
@@ -13919,6 +13918,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 }
             }
         }
+        cmd = AnchorResolver.wrapAnchoredChildren(cmd, diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, boundsModified);
 
         // Build DTO — generic for all view object types (include post-execution styling; image;
         // include post-execution figureType + textAlignment + verticalTextAlignment;
@@ -13964,6 +13964,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         // post-state here for the DTO without executing the command — empty string → null
         // (clears), non-null → the new value verbatim, null → existing value unchanged.
         String dtoLabelExpression = computePostLabelExpression(diagramObj, labelExpression);
+        AnchorResolver.AnchorInfo anchor = AnchorResolver.computePostAnchor(diagramObj, anchorTarget, anchorEdge, anchorDx, anchorDy);
 
         ViewObjectDto dto;
         if (diagramObj instanceof IDiagramModelArchimateObject archObj) {
@@ -13978,7 +13979,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     dtoFigureType, dtoTextAlignment, dtoVerticalTextAlignment,
                     dtoLabelExpression,
                     dtoFontName, dtoFontSize, dtoFontStyle,
-                    dtoGradient, dtoBorderType, dtoDeriveLineColor, dtoOutlineOpacity, dtoLineStyle);
+                    dtoGradient, dtoBorderType, dtoDeriveLineColor, dtoOutlineOpacity, dtoLineStyle, anchor.target(), anchor.edge(), anchor.dx(), anchor.dy());
         } else {
             // Group or note — no element association
             dto = new ViewObjectDto(
@@ -13991,7 +13992,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     dtoFigureType, dtoTextAlignment, dtoVerticalTextAlignment,
                     dtoLabelExpression,
                     dtoFontName, dtoFontSize, dtoFontStyle,
-                    dtoGradient, dtoBorderType, dtoDeriveLineColor, dtoOutlineOpacity, dtoLineStyle);
+                    dtoGradient, dtoBorderType, dtoDeriveLineColor, dtoOutlineOpacity, dtoLineStyle, anchor.target(), anchor.edge(), anchor.dx(), anchor.dy());
         }
 
         return new PreparedMutation<>(cmd, dto, viewObjectId);
@@ -14111,7 +14112,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         // Build command (with optional styling, image, and label-expression update)
-        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, null, styling, imageParams, labelExpression);
+        Command cmd = new UpdateViewObjectCommand(diagramObj, mergedX, mergedY, mergedWidth, mergedHeight, null, styling, imageParams, InputValidation.reject(labelExpression, "labelExpression"));
 
         // Successor H6 (2026-05-14): post-command-build parent-bounds check on
         // the bulk-mutate back-reference path — sibling-symmetric with the
@@ -15458,7 +15459,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         }
 
         IFolder newFolder = IArchimateFactory.eINSTANCE.createFolder();
-        newFolder.setName(name);
+        newFolder.setName(InputValidation.reject(name, "name"));
         newFolder.setType(FolderType.USER);
 
         if (documentation != null) {
@@ -15518,7 +15519,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                     null);
         }
 
-        Command cmd = new UpdateFolderCommand(folder, name, documentation, properties);
+        Command cmd = new UpdateFolderCommand(folder, InputValidation.reject(name, "name"), documentation, properties);
 
         // Build the DTO reflecting the proposed new state
         String effectiveName = name != null ? name : folder.getName();
@@ -15619,6 +15620,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                                 + "Use get-folders to find folders under the Views root.",
                         null);
             }
+        }
+
+        // Concepts (elements + relationships) must live under their governing layer folder —
+        // mirror the create-element guard so create and move reject identically (Archi's
+        // save-time checkIntegrity would otherwise refuse to save a mis-filed concept).
+        if (object instanceof IArchimateConcept concept) {
+            validateFolderLayerMatch(concept, targetFolder);
         }
 
         // Determine source index for undo
@@ -16368,7 +16376,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             voStyling, voImageParams, voLabelExpression);
                 }
                 yield prepareUpdateViewObject(viewObjectId, x, y, width, height, text,
-                        voStyling, voImageParams, voLabelExpression);
+                        voStyling, voImageParams, voLabelExpression, null, null, null, null);
             }
             case "update-view-connection" -> {
                 String viewConnectionId = requireParam(params, "viewConnectionId");
@@ -16395,6 +16403,8 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                 yield prepareUpdateViewConnection(viewConnectionId, bendpoints,
                         absoluteBendpoints, connStyling, showLabel, textPosition);
             }
+            case "set-view-label-expression" ->
+                    SetViewLabelExpressionCommand.prepare(requireAndCaptureModel(), params);
             case "clear-view" -> {
                 String viewId = requireParam(params, "viewId");
                 yield prepareClearView(viewId);
@@ -16895,12 +16905,12 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         Command w2ParentResize = computeIconBandParentResizeCommand(
                 parentContainer, resolvedX, resolvedY, resolvedWidth, resolvedHeight);
         if (w2ParentResize != null) {
-            NonNotifyingCompoundCommand w2Wrap = new NonNotifyingCompoundCommand(
-                    "Add view object with icon-band parent-resize (bulk-mutate path)");
+            NonNotifyingCompoundCommand w2Wrap = new NonNotifyingCompoundCommand("Add view object with icon-band parent-resize (bulk-mutate path)");
             w2Wrap.add(w2ParentResize);
             w2Wrap.add(cmd);
             cmd = w2Wrap;
         }
+        cmd = RecedeContainerFillCommand.wrap(cmd, parentContainer, styling); // recede null-fill element/group parent (no-op for root view)
 
         AddToViewResultDto resultDto = new AddToViewResultDto(
                 viewObjectDto, null, null);
@@ -17111,7 +17121,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             case "add-connection-to-view" -> "connected";
             case "remove-from-view" -> "removed";
             case "clear-view" -> "cleared";
-            case "update-model", "update-view", "update-view-object", "update-view-connection", "update-element", "update-relationship", "update-specialization" -> "updated";
+            case "update-model", "update-view", "update-view-object", "update-view-connection", "update-element", "update-relationship", "update-specialization", "set-view-label-expression" -> "updated";
             case "delete-element", "delete-relationship", "delete-view", "delete-folder", "delete-specialization" -> "deleted";
             default -> "created";
         };
@@ -17125,6 +17135,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         Object entity = prepared.entity();
         String entityType = null;
         String entityName = null;
+        Integer appliedCount = null, skippedCount = null;
 
         if (entity instanceof ElementDto dto) {
             entityType = dto.type();
@@ -17162,10 +17173,13 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             Object nm = map.get("name");
             entityType = ct instanceof String s ? "Specialization:" + s : "Specialization";
             entityName = nm instanceof String s ? s : null;
+        } else if (entity instanceof SetViewLabelExpressionResultDto dto) {
+            entityType = "DiagramModel"; entityName = dto.viewName();
+            appliedCount = dto.appliedCount(); skippedCount = dto.skippedCount();
         }
 
         return new BulkOperationResult(index, tool, action,
-                prepared.entityId(), entityType, entityName);
+                prepared.entityId(), entityType, entityName, appliedCount, skippedCount);
     }
 
     // ---- Bulk parameter helpers ----
@@ -17186,16 +17200,6 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
             return str;
         }
         return null;
-    }
-
-    /**
-     * Extracts optional colour param preserving empty strings (for clear-to-default).
-     * Returns null if absent; empty string if explicitly set to "".
-     * Domain-specific alias for {@link #optionalAllowEmptyParam(Map, String)} — kept for
-     * call-site readability on the colour-rail path.
-     */
-    private String optionalColorParam(Map<String, Object> params, String key) {
-        return optionalAllowEmptyParam(params, key);
     }
 
     /**
@@ -17222,17 +17226,16 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
      * {@code extractStylingParams} convention).</p>
      */
     private StylingParams extractBulkStylingParams(Map<String, Object> params) {
-        String fillColor = optionalColorParam(params, "fillColor");
-        String lineColor = optionalColorParam(params, "lineColor");
-        String fontColor = optionalColorParam(params, "fontColor");
+        String fillColor = optionalAllowEmptyParam(params, "fillColor");
+        String lineColor = optionalAllowEmptyParam(params, "lineColor");
+        String fontColor = optionalAllowEmptyParam(params, "fontColor");
         Integer opacity = optionalIntParam(params, "opacity");
         Integer lineWidth = optionalIntParam(params, "lineWidth");
         String figureType = optionalParam(params, "figureType");
         String textAlignment = optionalParam(params, "textAlignment");
         String verticalTextAlignment = optionalParam(params, "verticalTextAlignment");
 
-        // G5 — typography (fontName allows empty for system-default clear);
-        // gradient/borderType/lineStyle allow empty for clear-to-default symmetry.
+        // G5 — typography (fontName allows empty for system-default clear); gradient/borderType/lineStyle allow empty for clear-to-default symmetry.
         String fontName = optionalAllowEmptyParam(params, "fontName");
         Integer fontSize = optionalIntParam(params, "fontSize");
         String fontStyle = optionalParam(params, "fontStyle");
@@ -17241,19 +17244,20 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
         String borderType = optionalAllowEmptyParam(params, "borderType");
         Boolean deriveLineColor = (params.get("deriveLineColor") instanceof Boolean b) ? b : null;
         Integer outlineOpacity = optionalIntParam(params, "outlineOpacity");
+        Boolean recede = (params.get("recede") instanceof Boolean rb) ? rb : null;
 
         if (fillColor == null && lineColor == null && fontColor == null
                 && opacity == null && lineWidth == null
                 && figureType == null && textAlignment == null && verticalTextAlignment == null
                 && fontName == null && fontSize == null && fontStyle == null
                 && lineStyle == null && gradient == null && borderType == null
-                && deriveLineColor == null && outlineOpacity == null) {
+                && deriveLineColor == null && outlineOpacity == null && recede == null) {
             return null;
         }
         return new StylingParams(fillColor, lineColor, fontColor, opacity, lineWidth,
                 figureType, textAlignment, verticalTextAlignment,
                 fontName, fontSize, fontStyle, lineStyle, gradient, borderType,
-                deriveLineColor, outlineOpacity);
+                deriveLineColor, outlineOpacity, recede);
     }
 
     /**
@@ -17388,20 +17392,30 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
     }
 
     /**
-     * Validates that the target folder's root layer matches the element type's expected layer.
-     * User-created subfolders inherit their layer from their root ancestor folder.
+     * Validates that the target folder's root layer matches the concept's expected layer,
+     * as defined by Archi's own default-folder mapping (the same authority host Archi's
+     * save-time checkIntegrity uses). User-created subfolders inherit their layer from their
+     * root ancestor folder. Applies to elements, junctions and relationships alike.
      */
-    void validateFolderLayerMatch(IArchimateElement element, IFolder folder) {
-        FolderType expectedType = getExpectedFolderType(element);
-        if (expectedType == null) {
-            return; // Unknown element type — skip validation
+    void validateFolderLayerMatch(IArchimateConcept concept, IFolder folder) {
+        // Delegate to Archi's own type→folder authority so we are never stricter nor more
+        // forgiving than host Archi — reuses the default-folder picker as the validator.
+        IArchimateModel folderModel = folder.getArchimateModel();
+        IFolder defaultFolder = folderModel == null ? null : folderModel.getDefaultFolderForObject(concept);
+        if (defaultFolder == null) {
+            // Archi assigns no governing folder to this object (non-ArchiMate / outside layer
+            // governance). It is not subject to folder-type checkIntegrity either, so skipping
+            // here stays consistent with host Archi — NOT a silent-acceptance gap. Unreachable
+            // for IArchimateConcept inputs in practice (every element/relationship maps).
+            return;
         }
+        FolderType expectedType = defaultFolder.getType();
 
         IFolder rootFolder = getRootFolder(folder);
         FolderType actualType = rootFolder.getType();
 
         if (actualType != expectedType) {
-            String elementType = element.eClass().getName();
+            String elementType = concept.eClass().getName();
             String expectedLayer = folderTypeToLayerName(expectedType);
             String actualLayer = folderTypeToLayerName(actualType);
             throw new ModelAccessException(
@@ -17416,20 +17430,6 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             + expectedLayer + " root folder.",
                     "ArchiMate 3.2 specification, element classification");
         }
-    }
-
-    /**
-     * Maps an ArchiMate element to its expected root FolderType.
-     */
-    FolderType getExpectedFolderType(IArchimateElement element) {
-        if (element instanceof IStrategyElement) return FolderType.STRATEGY;
-        if (element instanceof IBusinessElement) return FolderType.BUSINESS;
-        if (element instanceof IApplicationElement) return FolderType.APPLICATION;
-        if (element instanceof ITechnologyElement) return FolderType.TECHNOLOGY;
-        if (element instanceof IPhysicalElement) return FolderType.TECHNOLOGY; // Archi stores Physical elements in Technology folder
-        if (element instanceof IMotivationElement) return FolderType.MOTIVATION;
-        if (element instanceof IImplementationMigrationElement) return FolderType.IMPLEMENTATION_MIGRATION;
-        return null;
     }
 
     /**
@@ -18826,7 +18826,7 @@ public class ArchiModelAccessorImpl implements ArchiModelAccessor, PropertyChang
                             StylingHelper.readConnectionFontName(archimateConn),
                             StylingHelper.readConnectionFontSize(archimateConn),
                             StylingHelper.readConnectionFontStyle(archimateConn),
-                            StylingHelper.readConnectionLabelExpression(archimateConn)));
+                            StylingHelper.readConnectionLabelExpression(archimateConn), StylingHelper.readConnectionRelativePosition(archimateConn)));
                 }
             }
         });

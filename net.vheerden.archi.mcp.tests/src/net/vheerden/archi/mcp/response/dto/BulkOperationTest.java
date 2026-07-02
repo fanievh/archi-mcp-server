@@ -124,6 +124,15 @@ public class BulkOperationTest {
     }
 
     @Test
+    public void shouldAcceptSetViewLabelExpressionTool() {
+        BulkOperation op = new BulkOperation("set-view-label-expression",
+                Map.of("viewId", "v1", "labelExpression", "${name}"));
+        op.validate();
+        assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("set-view-label-expression"));
+        assertTrue(BulkOperation.SUPPORTED_TOOLS_ORDERED.contains("set-view-label-expression"));
+    }
+
+    @Test
     public void shouldAcceptClearViewTool() {
         BulkOperation op = new BulkOperation("clear-view",
                 Map.of("viewId", "v1"));
@@ -159,9 +168,10 @@ public class BulkOperationTest {
     }
 
     @Test
-    public void shouldHaveTwentySevenSupportedTools() {
-        // G16: added add-image-to-view (26→27).
-        assertEquals(27, BulkOperation.SUPPORTED_TOOLS.size());
+    public void shouldHaveTwentyEightSupportedTools() {
+        // G16: added add-image-to-view (26→27). Then set-view-label-expression (27→28).
+        assertEquals(28, BulkOperation.SUPPORTED_TOOLS.size());
+        assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("set-view-label-expression"));
         // add-image-to-view (standalone IDiagramModelImage visuals)
         assertTrue(BulkOperation.SUPPORTED_TOOLS.contains("add-image-to-view"));
         // specialization profile management tools

@@ -14,7 +14,8 @@ import com.archimatetool.model.IIdentifier;
  *
  * <p>The layout/route compounds the approval path freezes are built exclusively from this project's own
  * GEF commands — {@link UpdateViewObjectCommand}, {@link UpdateViewConnectionCommand},
- * {@link SetTextPositionCommand}, {@link AddConnectionToViewCommand} — each of which exposes a typed
+ * {@link SetTextPositionCommand}, {@link SetTextRelativePositionCommand}, {@link AddConnectionToViewCommand}
+ * — each of which exposes a typed
  * accessor for the model object it touches. (Archi's accessor-less {@code SetConstraintCommand} is never
  * used here, so the "GEF commands expose no touched-objects generically" caveat does not apply.) Walking
  * {@link CompoundCommand#getCommands()} therefore recovers every affected child id at propose-time with no
@@ -57,6 +58,8 @@ final class CompoundChildTargets {
                 } else if (child instanceof UpdateViewConnectionCommand u) {
                     addId(ids, u.getConnection());
                 } else if (child instanceof SetTextPositionCommand s) {
+                    addId(ids, s.getConnection());
+                } else if (child instanceof SetTextRelativePositionCommand s) {
                     addId(ids, s.getConnection());
                 } else if (child instanceof AddConnectionToViewCommand a) {
                     // Connection is being created (unresolvable until execute) — track its
