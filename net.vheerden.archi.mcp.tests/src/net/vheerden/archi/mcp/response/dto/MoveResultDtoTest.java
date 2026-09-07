@@ -29,6 +29,13 @@ public class MoveResultDtoTest {
         assertTrue(json.contains("\"targetFolderPath\":\"Business/Archived\""));
     }
 
+    /**
+     * The DTO's {@code NON_NULL} contract, not a statement about moves. {@code prepareMoveToFolder}
+     * populates {@code elementType} for every kind it moves — folders included — so this fixture is
+     * a shape no production move produces any more. It stays because the omission rule is the DTO's
+     * own and any future null must still serialize away cleanly; it must NOT be read as evidence
+     * that a moved folder omits the field.
+     */
     @Test
     public void shouldOmitNullElementType() throws Exception {
         MoveResultDto dto = new MoveResultDto(

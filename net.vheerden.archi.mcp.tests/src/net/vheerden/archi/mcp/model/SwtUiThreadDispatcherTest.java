@@ -165,7 +165,7 @@ public class SwtUiThreadDispatcherTest {
     // The SWT-thread-boundary capture is widened from RuntimeException to
     // Throwable: an off-UI-thread Error MUST be re-thrown (same instance),
     // NOT silently swallowed by syncExec. A swallowed boundary Error is
-    // exactly the failure class the Fix-1 arc was created to surface. The
+    // exactly the failure class the marshalling arc was created to surface. The
     // RuntimeException path stays byte-preserved (asserted by the
     // runtimeException/NPE pins above — they must remain GREEN).
     // ==================================================================
@@ -187,7 +187,7 @@ public class SwtUiThreadDispatcherTest {
                 throw expected;
             });
             fail("expected the AssertionError to propagate, not be "
-                    + "silently swallowed (row-775 AC-7(a))");
+                    + "silently swallowed (row-775 case (a))");
         } catch (AssertionError actual) {
             assertSame("propagated Error must be the original instance",
                     expected, actual);
@@ -208,7 +208,7 @@ public class SwtUiThreadDispatcherTest {
             SwtUiThreadDispatcher.runOnUiThread(() -> {
                 throw expected;
             });
-            fail("expected the Error to propagate (row-775 AC-7(a))");
+            fail("expected the Error to propagate (row-775 case (a))");
         } catch (Error actual) {
             assertSame("propagated Error must be the original instance",
                     expected, actual);

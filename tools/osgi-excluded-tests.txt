@@ -1,14 +1,14 @@
-# M0-1 headless test harness — EXCLUDED-CLASS MANIFEST (the single source of truth for exclusions)
+# Headless test harness — EXCLUDED-CLASS MANIFEST (the single source of truth for exclusions)
 #
 # Classes listed here are NOT run by the default `tools/run-tests.sh` headless pass because they
 # cannot run (or cannot pass) in a plain headless JVM. Each line is a fully-qualified class name
-# followed by ` # <reason>`. The harness reads THIS file — exclusions live in data, not code (AC-4).
+# followed by ` # <reason>`. The harness reads THIS file — exclusions live in data, not code.
 # `tools/run-tests.sh` scans net.vheerden.archi.mcp.tests/src for *Test.java and subtracts this set.
 #
 # Produced by classifying ALL 190 *Test.java classes ONCE (TASK-ZERO, 2026-06-13): compile from
 # source, run each headlessly, observe. A class is excluded only if it (a) cannot class-init
 # headlessly (OSGi/Eclipse singleton), (b) is ENTIRELY assumption-skipped headlessly so it
-# contributes zero executed tests (fails the AC-5 testsRun>0 guard), or (c) requires a live SWT
+# contributes zero executed tests (fails the testsRun>0 guard), or (c) requires a live SWT
 # display. Everything else stays in the headless "junit" bucket. 184 of 190 run headlessly.
 #
 # To run the excluded set, use Eclipse PDE (the owner's `AllPluginTestsRunner` gate) for the
@@ -29,12 +29,71 @@ net.vheerden.archi.mcp.ui.McpPreferenceInitializerTest                      # al
 net.vheerden.archi.mcp.model.ViewExportServiceTest                          # all tests Assume PDF/JPG export runtime — 0 run headlessly
 net.vheerden.archi.mcp.model.ImagePathArchiveValidationTest                 # all tests Assume IArchiveManager — 0 run headlessly
 net.vheerden.archi.mcp.integration.DeleteViewCascadeIntegrationTest         # Assume IEditorModelManager/save-reload — 0 run headlessly
+net.vheerden.archi.mcp.integration.DeleteViewNestedConnectionRoundTripIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
+net.vheerden.archi.mcp.integration.DeleteViewSurvivingPlaceholderConnectionRoundTripIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
 net.vheerden.archi.mcp.integration.RemoveFromViewCascadeIntegrationTest     # Assume IEditorModelManager/save-reload — 0 run headlessly
 net.vheerden.archi.mcp.model.MultiViewCompoundDeleteCascadeIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
 
-# --- Group B: require a live SWT display (pass with `--swt` / xvfb; AC-9 escape hatch) ---
-# CI: RUN in the `ci-pde` lane via `xvfb-run bash tools/run-tests.sh <these 3 FQCNs>` (explicit-FQCN
-# mode; `--swt` is a Linux no-op so xvfb provides the display). m0-2b verified 405/405 GREEN.
-net.vheerden.archi.mcp.model.SwtUiThreadDispatcherTest                      # SWT "Invalid thread access" headless; 10/10 GREEN with --swt
-net.vheerden.archi.mcp.model.SpacingControlLoopPartialCommitRegressionTest  # SWT display required; 19/19 GREEN with --swt
-net.vheerden.archi.mcp.model.ArchiModelAccessorImplTest                     # add-to-view GEF/SWT path needs a display (16 err headless); 376/376 GREEN with --swt
+# --- Group B: require a live SWT display (pass with `--swt` / xvfb) ---
+# CI: RUN in the `ci-pde` lane, which derives this exact list from THIS section (the
+# "Group B" block) and runs it via `xvfb-run bash tools/run-tests.sh <FQCNs>` (explicit-FQCN
+# mode; `--swt` is a Linux no-op so xvfb provides the display). Add a display-required class
+# here and the ci-pde lane picks it up automatically — no second list to keep in sync.
+#
+# NOTE ON CLASSIFICATION: the original headless/display split was observed on macOS, where SWT
+# can create a Display via the Cocoa window server even with no X session — so a class that
+# touches SWT/GEF still passes a plain `run-tests.sh` on the dev box. On a display-less Linux CI
+# runner the same class throws `org.eclipse.swt.SWTError: No more handles [gtk_init_check() failed]`.
+# A class belongs in THIS Group B (not the headless bucket) if ANY of its tests realizes SWT/GEF;
+# the harness excludes per class, so one display-dependent test moves the whole class here.
+net.vheerden.archi.mcp.model.TopLevelGroupingSiblingLayoutToolsTest             # auto-layout-and-route + adjust-view-spacing run a real routing/assessment pass; SWT "Invalid thread access" headless; GREEN with a display
+net.vheerden.archi.mcp.model.SwtUiThreadDispatcherTest                          # SWT "Invalid thread access" headless; GREEN with a display
+net.vheerden.archi.mcp.model.SpacingControlLoopPartialCommitRegressionTest      # SWT display required; GREEN with a display
+net.vheerden.archi.mcp.model.ArchiModelAccessorImplTest                         # add-to-view GEF/SWT path needs a display; GREEN with a display
+net.vheerden.archi.mcp.model.ArchiModelAccessorImplAutoRouteConnectionIdsTest   # auto-route uses Display.syncExec/GEF; SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner
+net.vheerden.archi.mcp.model.AssessmentCollectorTest                            # some tests realize SWT/GEF figures; SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner
+net.vheerden.archi.mcp.model.TopLevelGroupingAssessmentTest                     # every fixture element is NAMED, so the real collector calls ElementSizer.measureText; SWTError on a display-less Linux runner (macOS throws SWTException, which the collector catches -- hence green locally, red on CI)
+net.vheerden.archi.mcp.model.TopLevelGroupingRoutingTest                        # same cause: drives assess/auto-route over named fixtures via the real collector; GREEN with a display
+
+# Added 2026-08-01 after `ci-junit` had been red on EVERY commit for days with 15 errors in these
+# three classes. The failures are display-dependency, not code: the CI JUnit XML records
+# `org.eclipse.swt.SWTError: No more handles [gtk_init_check() failed]` for every one of them —
+# the exact signature this Group's classification note describes. They pass a plain headless run on
+# macOS because Cocoa hands out a Display without an X session, which is precisely why the original
+# macOS-observed split misfiled them.
+#
+# This was not a cosmetic red. A chronically-red ci-junit made the OVERALL check red on every
+# commit, so when `ci-pde` went red on `ea7b78af` reporting the REAL regression it was carrying
+# (ArchiModelAccessorImplTest 458 run / 2 failed — the boundary-violation Tier-1L veto), the signal
+# was indistinguishable from the standing noise and shipped. The workflow header already warns
+# about exactly this ("if one lane is chronically red ... a genuine NEW failure in the OTHER lane
+# no longer changes the overall status"). Keeping ci-junit green is what makes ci-pde legible.
+net.vheerden.archi.mcp.model.AdjustViewSpacingCascadeReportingTest              # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner (6 errors); GREEN with a display
+net.vheerden.archi.mcp.model.SpacingConvenienceToolNoMutationPathTest           # drives the accessor over an EMF view (add + assess) — the same shape that throws SWTError on a display-less Linux runner; GREEN with a display
+net.vheerden.archi.mcp.model.BatchFitMapSeedingTest                             # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner; GREEN with a display
+net.vheerden.archi.mcp.model.EffectiveStateContractTest                         # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner (4 errors); GREEN with a display
+
+# Classified by this Group's stated rule, NOT by an observation: it drives a real GEF CommandStack
+# and calls auto-layout-and-route and assess-layout over real diagram objects, so it realizes
+# SWT/GEF exactly as the three classes above it do, and it shares their batch-geometry harness. It
+# passes a plain headless run on macOS — which is precisely the evidence the note above says not to
+# trust. Filing it here costs nothing (the release gate's display pass runs this manifest) and
+# avoids handing the ci-junit lane a fresh chronic red.
+net.vheerden.archi.mcp.model.SpacingRefitQueuedBoundsTest                       # realizes SWT/GEF via the shared batch-geometry harness; Linux behaviour not observed from macOS
+
+# Observed, not inferred: the CI JUnit XML for the run that landed the labelPolicy work records
+# `org.eclipse.swt.SWTError: No more handles [gtk_init_check() failed]` from
+# `ElementSizer.measureText` via `AssessmentCollector` for exactly one of its seven tests. That
+# test is the negative control for the terminals-only refusal — it omits the policy and therefore
+# runs a REAL terminals-only routing pass over real diagram objects instead of stopping at the
+# guard, which is the SWT/GEF realization this Group is about. The other six stop at a parameter
+# check and never touch a Display. The harness excludes per class, so the whole class moves here.
+net.vheerden.archi.mcp.model.AutoLayoutAndRouteLabelPolicyTest                  # the policy-omitted terminals-only test runs a real routing pass; SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner (1 error); GREEN with a display
+
+# Classified by this Group's stated rule: all four of its tests drive real diagram objects through
+# the accessor (auto-route, and the standalone label pass whose own entry point collects the nodes),
+# and every fixture element is NAMED, so the real collector calls ElementSizer.measureText. That is
+# the exact path the note above describes as macOS-green / Linux-red. Filing it here is the whole of
+# the wiring: the ci-pde lane derives its class list from this block, and these are the only
+# executable pins that each of the four routing/label exclusion-set call sites is reached.
+net.vheerden.archi.mcp.model.RoutingDescendantExclusionCallSiteTest             # drives auto-route and the label pass over named fixtures via the real collector; GREEN with a display

@@ -5,7 +5,7 @@ import java.util.List;
 import org.eclipse.gef.commands.Command;
 
 /**
- * Fix-1 — SWT-marshalled
+ * SWT-marshalled
  * speculative replay / reverse-undo of the composer's element-arm accepted
  * commands across the two-arm (element&rarr;group) transition in
  * {@code ArchiModelAccessorImpl.applySpacingRecommendations}.
@@ -27,12 +27,12 @@ import org.eclipse.gef.commands.Command;
  * state (the partial-commit symptom).
  *
  * <p>This is the SAME threading-contract breach {@link SwtUiThreadDispatcher}
- * was created for in Session-9 (Decision-A.1.2): that fix marshalled the loop
+ * was created for: that fix marshalled the loop
  * body's execute/undo (via {@code GefSpacingMutationCommand}); the composer's
  * OWN speculative replay/undo of the <em>unwrapped</em> accepted commands at
- * the two-arm transition was the one path Session-9 did not cover. Fix-1
+ * the two-arm transition was the one path it did not cover. This class
  * routes that replay/undo through the SAME {@link SwtUiThreadDispatcher}
- * boundary — an <em>extension</em> of the Session-9 marshalling, NOT a
+ * boundary — an <em>extension</em> of that marshalling, NOT a
  * re-architecture: the density-aware 2&times;2 discriminator, the 3-state
  * enum, the aggregate-only objective and the loop accept/back-off semantics
  * are all untouched.
@@ -52,7 +52,7 @@ final class ComposerSpeculativeReplay {
      * post-element state). No-op on a {@code null}/empty list. Any
      * {@link RuntimeException} thrown by a command propagates to the caller
      * via {@link SwtUiThreadDispatcher}'s re-throw contract, so the
-     * composer's existing Session-8 graceful-degradation catch and the Fix-1
+     * composer's existing graceful-degradation catch and the
      * envelope {@code logger.error} still see it (the throw is surfaced, not
      * silently swallowed).
      *

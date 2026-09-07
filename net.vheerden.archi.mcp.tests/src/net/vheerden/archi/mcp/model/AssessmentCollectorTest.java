@@ -14,12 +14,15 @@ import com.archimatetool.model.IArchimateDiagramModel;
 import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IApplicationComponent;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IJunction;
 import com.archimatetool.model.IProfile;
+import com.archimatetool.model.ITextAlignment;
+import com.archimatetool.model.ITextPosition;
 
 /**
  * Tests for {@link AssessmentCollector} connection collection, focused on
@@ -106,6 +109,106 @@ public class AssessmentCollectorTest {
         assertTrue("A Junction view object collects with isJunction=true", jNode.isJunction());
         AssessmentNode sNode = nodes.stream().filter(n -> "s".equals(n.id())).findFirst().orElseThrow();
         assertFalse("A normal component collects with isJunction=false", sNode.isJunction());
+    }
+
+    @Test
+    public void shouldReadTextAlignmentFromTheModel_whenCollectingAssessmentNodes() {
+        // The own-icon-over-label detector places an element's title from its textAlignment, so the
+        // value has to come off the MODEL rather than a constant. Only a collector-level test can
+        // show that: a detector test builds AssessmentNode by hand and would pass identically
+        // against a hardcoded default, which is exactly the bug this guards.
+        //
+        // The field genuinely varies in the wild: a Grouping, group or note is stamped LEFT at
+        // creation, an object this server created before it stamped anything holds the EMF default
+        // CENTRE, and any object's alignment can be set explicitly — so a collector that ignored
+        // the feature would report all three populations identically.
+        //
+        // These fixtures are built through EMF directly rather than through the server, so they
+        // carry exactly the alignment set on them here and are unaffected by what the creation
+        // path stamps. That is deliberate: the subject is whether the collector reads the model,
+        // and routing the fixture through the server would couple this test to creation defaults.
+        IArchimateModel model = view.getArchimateModel();
+
+        IDiagramModelArchimateObject leftObj = factory.createDiagramModelArchimateObject();
+        IApplicationComponent leftEl = factory.createApplicationComponent();
+        model.getFolder(FolderType.APPLICATION).getElements().add(leftEl);
+        leftObj.setId("left");
+        leftObj.setArchimateElement(leftEl);
+        leftObj.setBounds(0, 300, 120, 55);
+        leftObj.setTextAlignment(ITextAlignment.TEXT_ALIGNMENT_LEFT);
+        view.getChildren().add(leftObj);
+
+        IDiagramModelArchimateObject rightObj = factory.createDiagramModelArchimateObject();
+        IApplicationComponent rightEl = factory.createApplicationComponent();
+        model.getFolder(FolderType.APPLICATION).getElements().add(rightEl);
+        rightObj.setId("right");
+        rightObj.setArchimateElement(rightEl);
+        rightObj.setBounds(200, 300, 120, 55);
+        rightObj.setTextAlignment(ITextAlignment.TEXT_ALIGNMENT_RIGHT);
+        view.getChildren().add(rightObj);
+
+        List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(view);
+
+        AssessmentNode left = nodes.stream().filter(n -> "left".equals(n.id())).findFirst().orElseThrow();
+        AssessmentNode right = nodes.stream().filter(n -> "right".equals(n.id())).findFirst().orElseThrow();
+        AssessmentNode untouched = nodes.stream().filter(n -> "s".equals(n.id())).findFirst().orElseThrow();
+
+        assertEquals("LEFT must survive the collector, not be flattened to a default",
+                AssessmentNode.TEXT_ALIGNMENT_LEFT, left.textAlignment());
+        assertEquals("RIGHT must survive the collector too — two distinct non-default values, so a\n"
+                        + "  collector returning any single constant fails at least one of them",
+                AssessmentNode.TEXT_ALIGNMENT_RIGHT, right.textAlignment());
+        assertEquals("an object nobody aligned collects at Archi's EMF default, CENTRE",
+                AssessmentNode.TEXT_ALIGNMENT_CENTRE, untouched.textAlignment());
+    }
+
+    @Test
+    public void shouldReadTextPositionFromTheModel_whenCollectingAssessmentNodes() {
+        // The exact counterpart of the alignment test above, and it exists for the identical
+        // reason: the own-icon-over-label detector now anchors an element's title band from its
+        // textPosition, so the value has to come off the MODEL rather than a constant — and every
+        // detector-level test for that band builds AssessmentNode by hand, so all of them would
+        // pass unchanged against a collector that hardcoded TOP. Only a collector-level test can
+        // tell the difference.
+        //
+        // The feature genuinely varies: TOP is Archi's EMF default, and this server's published
+        // verticalTextAlignment parameter writes CENTRE or BOTTOM on any object.
+        //
+        // Built through EMF directly rather than through the server, for the same reason as above:
+        // the subject is whether the collector reads the model, not what a creation path stamps.
+        IArchimateModel model = view.getArchimateModel();
+
+        IDiagramModelArchimateObject centreObj = factory.createDiagramModelArchimateObject();
+        IApplicationComponent centreEl = factory.createApplicationComponent();
+        model.getFolder(FolderType.APPLICATION).getElements().add(centreEl);
+        centreObj.setId("vcentre");
+        centreObj.setArchimateElement(centreEl);
+        centreObj.setBounds(0, 500, 120, 55);
+        centreObj.setTextPosition(ITextPosition.TEXT_POSITION_CENTRE);
+        view.getChildren().add(centreObj);
+
+        IDiagramModelArchimateObject bottomObj = factory.createDiagramModelArchimateObject();
+        IApplicationComponent bottomEl = factory.createApplicationComponent();
+        model.getFolder(FolderType.APPLICATION).getElements().add(bottomEl);
+        bottomObj.setId("vbottom");
+        bottomObj.setArchimateElement(bottomEl);
+        bottomObj.setBounds(200, 500, 120, 55);
+        bottomObj.setTextPosition(ITextPosition.TEXT_POSITION_BOTTOM);
+        view.getChildren().add(bottomObj);
+
+        List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(view);
+
+        AssessmentNode centre = nodes.stream().filter(n -> "vcentre".equals(n.id())).findFirst().orElseThrow();
+        AssessmentNode bottom = nodes.stream().filter(n -> "vbottom".equals(n.id())).findFirst().orElseThrow();
+        AssessmentNode untouched = nodes.stream().filter(n -> "s".equals(n.id())).findFirst().orElseThrow();
+
+        assertEquals("CENTRE must survive the collector, not be flattened to a default",
+                AssessmentNode.TEXT_POSITION_CENTRE, centre.textPosition());
+        assertEquals("BOTTOM must survive it too — two distinct non-default values, so a collector\n"
+                        + "  returning any single constant fails at least one of them",
+                AssessmentNode.TEXT_POSITION_BOTTOM, bottom.textPosition());
+        assertEquals("an object nobody positioned collects at Archi's EMF default, TOP",
+                AssessmentNode.TEXT_POSITION_TOP, untouched.textPosition());
     }
 
     @Test
@@ -196,5 +299,49 @@ public class AssessmentCollectorTest {
         // fallback sentinel — the real-pixel read is exercised at the live gate.
         assertEquals(0.0, src.imageNaturalWidth(), 0.0);
         assertEquals(0.0, src.imageNaturalHeight(), 0.0);
+    }
+
+    /**
+     * Every measurement guard in the collector must catch {@code SWTError}, not only
+     * {@code Exception}.
+     *
+     * <p>This walk measures label text, note content and image dimensions through SWT, and a
+     * display-less {@code Display.getDefault()} raises an {@code SWTError} on some platforms and
+     * an {@code SWTException} on others. A catch written for {@code Exception} alone lets the
+     * {@code Error} straight through — which is exactly what happened: a placement path started
+     * calling this walk, and every annotation placement on a host without a display began
+     * throwing, taking 30 tests across four classes down in the headless lane while passing on a
+     * developer machine that could obtain one.</p>
+     *
+     * <p>The assertion is deliberately about the SHAPE of the guard rather than about behaviour,
+     * because the failure needs a display-less host to reproduce and no automated lane here can
+     * manufacture one on demand. A bare {@code catch (Exception e)} added to this file is
+     * therefore invisible to every other test until CI turns red on another machine.</p>
+     */
+    @Test
+    public void everyMeasurementGuard_shouldCatchSwtErrorAndNotOnlyException() throws Exception {
+        String source = readCollectorSource();
+
+        assertFalse("a bare 'catch (Exception e)' in this collector lets a display-less "
+                + "Display.getDefault() escape as an Error — pair it with SWTError, the way "
+                + "ElementSizer.fitTextBoxHeightToContentOrElse does",
+                source.contains("catch (Exception e)"));
+        assertTrue("the SWTError-paired guard must be the one actually used here",
+                source.contains("catch (Exception | SWTError e)"));
+    }
+
+    /** Reads the collector's own source, failing rather than silently covering nothing. */
+    private static String readCollectorSource() throws Exception {
+        for (String root : new String[]{
+                "../net.vheerden.archi.mcp/src", "net.vheerden.archi.mcp/src"}) {
+            java.nio.file.Path path = java.nio.file.Paths.get(
+                    root, "net/vheerden/archi/mcp/model/AssessmentCollector.java");
+            if (java.nio.file.Files.isRegularFile(path)) {
+                return java.nio.file.Files.readString(path);
+            }
+        }
+        throw new AssertionError("Could not resolve AssessmentCollector.java from "
+                + java.nio.file.Paths.get("").toAbsolutePath()
+                + " — this guard cannot silently cover nothing");
     }
 }

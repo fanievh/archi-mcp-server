@@ -25,23 +25,23 @@ public class BulkOperationTest {
         op.validate();
     }
 
-    // ---- G1 ----
+    // ---- relationship semantic attributes ----
 
     @Test
-    public void shouldAcceptG1ParamsInCreateRelationshipBulkOp_AC2() {
+    public void shouldAcceptSemanticAttributeParamsInCreateRelationshipBulkOp() {
         BulkOperation op = new BulkOperation("create-relationship",
                 Map.of("type", "AccessRelationship",
                         "sourceId", "ba-1",
                         "targetId", "bo-1",
                         "accessType", "read"));
-        // BulkOperation.validate only checks tool membership + non-empty params; G1 params
+        // BulkOperation.validate only checks tool membership + non-empty params; semantic-attribute params
         // ride through unchecked at this layer (validation happens at the prepare boundary).
         op.validate();
         assertEquals("read", op.params().get("accessType"));
     }
 
     @Test
-    public void shouldAcceptG1ParamsInUpdateRelationshipBulkOp_AC3() {
+    public void shouldAcceptSemanticAttributeParamsInUpdateRelationshipBulkOp() {
         BulkOperation op = new BulkOperation("update-relationship",
                 Map.of("id", "rel-1",
                         "accessType", "readwrite",

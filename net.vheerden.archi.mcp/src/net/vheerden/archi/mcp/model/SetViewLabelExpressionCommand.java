@@ -130,8 +130,7 @@ public final class SetViewLabelExpressionCommand extends Command {
     private static IArchimateDiagramModel resolveView(IArchimateModel model, Map<String, Object> params) {
         Object raw = params.get("viewId");
         if (!(raw instanceof String viewId) || viewId.isBlank()) {
-            throw new ModelAccessException(
-                    "Missing required parameter 'viewId'", ErrorCode.INVALID_PARAMETER);
+            throw ParamNameDiagnostics.missingBulkParameter(params, "viewId");
         }
         EObject obj = ArchimateModelUtils.getObjectByID(model, viewId);
         if (!(obj instanceof IArchimateDiagramModel view)) {
@@ -155,7 +154,10 @@ public final class SetViewLabelExpressionCommand extends Command {
             throw new ModelAccessException(
                     "Missing required parameter 'labelExpression' "
                             + "(use \"\" to clear label expressions on the view)",
-                    ErrorCode.INVALID_PARAMETER);
+                    ErrorCode.INVALID_PARAMETER, null,
+                    "Provide a 'labelExpression' string — use \"\" to clear label expressions "
+                            + "on the view",
+                    null);
         }
         return template;
     }

@@ -25,7 +25,8 @@ package net.vheerden.archi.mcp.model;
  * regression). <strong>ZERO false-positives by construction ⇒ it cannot
  * produce a reflow-claimed-while-below-regime failure</strong> — which is
  * precisely what dissolves the central tension: the
- * {@link SpacingControlLoop} firewall is left byte-frozen and the honest claim
+ * {@link SpacingControlLoop} DECISION firewall is left frozen (its diagnosis
+ * copy is not — see the note below) and the honest claim
  * is the <em>narrower, provably-true</em> "your input, on its current canvas,
  * cannot reach the prescribed spacing regime by spacing/hub alone — here is the
  * violated precondition", NOT "reflow will succeed" (canvas growth is a
@@ -84,7 +85,12 @@ package net.vheerden.archi.mcp.model;
  *
  * <p>Pure / static — no OSGi, no EMF, no {@code LayoutQualityAssessor} metric.
  * The EMF read-sites in {@code ArchiModelAccessorImpl} are the thin
- * caller; {@link SpacingControlLoop} is byte-UNTOUCHED.
+ * caller. {@link SpacingControlLoop}'s DECISION surface — its termination
+ * classification, regime gates, escalate condition and trend window — is
+ * untouched by this certificate and by the ordered-axis remedy, which reaches
+ * the loop only as diagnosis wording. (The loop's diagnosis COPY is no longer
+ * byte-frozen: it shares {@link OrderedAxisRemedy} with this class, precisely
+ * so the two producers of that offer cannot diverge.)
  */
 public final class SpacingPreconditionInfeasibilityCertificate {
 
@@ -101,6 +107,22 @@ public final class SpacingPreconditionInfeasibilityCertificate {
     }
 
     /**
+     * Whether this view's viewpoint fixes the meaning of element order, so the
+     * canvas-growing structural-reflow remedy must not be offered.
+     *
+     * <p>Delegates to {@link OrderedAxisRemedy}, which owns the set, this
+     * predicate and the order-preserving remedy copy for BOTH offer
+     * producers — this pre-loop certificate and the in-loop density-floor
+     * diagnosis. Retained here as a named forward so this class's own pins
+     * keep asserting against the surface they have always used.
+     *
+     * @param viewpointType the view's viewpoint id ({@code null} tolerated)
+     */
+    static boolean forbidsReordering(String viewpointType) {
+        return OrderedAxisRemedy.forbidsReordering(viewpointType);
+    }
+
+    /**
      * The SOUND ideal-uniform upper bound on the average inter-element edge
      * spacing achievable on a FIXED canvas: the uniform-grid cell side
      * {@code sqrt(A/N)} minus the mean element footprint. Degenerate inputs
@@ -108,11 +130,11 @@ public final class SpacingPreconditionInfeasibilityCertificate {
      * them (Type-II safe — falls through to today's loop path).
      *
      * @param elementCount         N — the ArchiMate-element count (groups /
-     *                             notes excluded; the Task-0.3 calibration N)
+     *                             notes excluded; the calibrated N)
      * @param canvasAreaPx2        A — the current element-union bounding-box
      *                             area in px² (absolute coordinates)
      * @param avgElementBoxDimPx   mean of {@code (width+height)/2} over the
-     *                             elements (the Task-0.3-validated convention)
+     *                             elements (the validated convention)
      */
     public static double idealUniformAvg(int elementCount,
             double canvasAreaPx2, double avgElementBoxDimPx) {
@@ -158,15 +180,55 @@ public final class SpacingPreconditionInfeasibilityCertificate {
             double avgElementBoxDimPx, double measuredAvgSpacingPx,
             Integer hubWidthPx, Integer hubHeightPx,
             Integer hubConnectionCount) {
+        return evaluate(elementCount, canvasAreaPx2, avgElementBoxDimPx,
+                measuredAvgSpacingPx, hubWidthPx, hubHeightPx,
+                hubConnectionCount, null);
+    }
+
+    /**
+     * As {@link #evaluate(int, double, double, double, Integer, Integer,
+     * Integer)}, but keyed on the view's viewpoint so the OFFERED remedy
+     * respects a view whose element order is load-bearing.
+     *
+     * <p><strong>The viewpoint keys the REMEDY ONLY — never the decision.</strong>
+     * The geometric infeasibility determination above is byte-untouched: the
+     * same views fire, with the same {@code terminationReason}, whatever the
+     * viewpoint. All that branches is which next step we offer, because on an
+     * ordered-axis view the canvas-growing structural reflow is not merely
+     * suboptimal — it is destructive of the view's meaning, so offering it
+     * sends the reader either to a wrong action or (as observed) on a detour to
+     * reason their way past our own advice.
+     *
+     * @param viewpointType the view's viewpoint id ({@code null} / blank /
+     *                      unknown ⇒ byte-identical to today's offer)
+     */
+    public static Decision evaluate(int elementCount, double canvasAreaPx2,
+            double avgElementBoxDimPx, double measuredAvgSpacingPx,
+            Integer hubWidthPx, Integer hubHeightPx,
+            Integer hubConnectionCount, String viewpointType) {
+        // A view with no viewpoint reads back as the EMPTY STRING from the
+        // model, not as null — every other read-site in this package
+        // normalizes that before use. Do it once here so "absent" has ONE
+        // representation downstream: the Decision, the loop's Request and the
+        // remedy predicate all then see null, and the no-fire Decision for a
+        // general-purpose view stays the canonical pass-through value rather
+        // than a look-alike carrying "".
+        String viewpoint = (viewpointType == null || viewpointType.isBlank())
+                ? null : viewpointType;
         double iua = idealUniformAvg(
                 elementCount, canvasAreaPx2, avgElementBoxDimPx);
         if (!(iua < SpacingControlLoop.DENSITY_REGIME_LOWER_PX)) {
-            return Decision.proceed();
+            // Pass through the viewpoint so the caller can hand it to the
+            // loop: the loop's OWN density-floor offer needs the same
+            // ordered-axis rule, and this is where the viewpoint has already
+            // been read. Inert with respect to the decision itself.
+            return Decision.proceed(viewpoint);
         }
         String offer = buildReflowOffer(iua, measuredAvgSpacingPx,
-                hubWidthPx, hubHeightPx, hubConnectionCount);
+                hubWidthPx, hubHeightPx, hubConnectionCount, viewpoint);
         return new Decision(true,
-                REASON_DENSITY_PRECONDITION_REFLOW_REQUIRED, offer);
+                REASON_DENSITY_PRECONDITION_REFLOW_REQUIRED, offer,
+                viewpoint);
     }
 
     /**
@@ -176,11 +238,28 @@ public final class SpacingPreconditionInfeasibilityCertificate {
      * next step → confirms the view is preserved unchanged) so the
      * agent-facing consent-gated contract is consistent with the
      * PASS-honest contract, but a NEW honestly-distinct claim. NOT a copy of
-     * (and does not call) the byte-frozen loop method.
+     * (and does not call) the loop method: the two narratives are written
+     * separately because they report different findings. Only the
+     * order-preserving remedy is shared, via {@link OrderedAxisRemedy}, and
+     * only because that part must not differ between them.
      */
     static String buildReflowOffer(double idealUniformAvg,
             double measuredAvgSpacingPx, Integer hubWidthPx,
             Integer hubHeightPx, Integer hubConnectionCount) {
+        return buildReflowOffer(idealUniformAvg, measuredAvgSpacingPx,
+                hubWidthPx, hubHeightPx, hubConnectionCount, null);
+    }
+
+    /**
+     * As above, with the OFFERED next step keyed on the viewpoint. The
+     * violated-precondition narrative (everything up to the offer) is shared
+     * verbatim across both branches — only the remedy differs, because only the
+     * remedy was ever view-class-dependent.
+     */
+    static String buildReflowOffer(double idealUniformAvg,
+            double measuredAvgSpacingPx, Integer hubWidthPx,
+            Integer hubHeightPx, Integer hubConnectionCount,
+            String viewpointType) {
         StringBuilder sb = new StringBuilder();
         sb.append("PRE-ROUTING INFEASIBLE: this view's input geometry cannot "
                 + "reach the prescribed spacing regime on its current canvas "
@@ -198,8 +277,9 @@ public final class SpacingPreconditionInfeasibilityCertificate {
                     "Measured average spacing is currently %.0fpx. ",
                     measuredAvgSpacingPx));
         }
-        if (hubWidthPx != null && hubHeightPx != null
-                && hubConnectionCount != null) {
+        boolean hasHub = hubWidthPx != null && hubHeightPx != null
+                && hubConnectionCount != null;
+        if (hasHub) {
             sb.append(String.format(
                     "The dominant hub is %dx%dpx absorbing %d connections. ",
                     hubWidthPx, hubHeightPx, hubConnectionCount));
@@ -208,10 +288,24 @@ public final class SpacingPreconditionInfeasibilityCertificate {
                 + "nudge provably cannot lift this input into the regime) and "
                 + "this layout was NOT auto-reflowed (a structural reflow "
                 + "grows the canvas and moves user-placed elements — an "
-                + "explicit-consent boundary). OFFERED next step (requires "
-                + "your consent): re-layout this view with a structural "
-                + "auto-layout (which grows the canvas), then re-run "
-                + "auto-route-connections. The current view is preserved "
+                + "explicit-consent boundary). ");
+        if (!forbidsReordering(viewpointType)) {
+            sb.append("OFFERED next step (requires "
+                    + "your consent): re-layout this view with a structural "
+                    + "auto-layout (which grows the canvas), then re-run "
+                    + "auto-route-connections.");
+        } else {
+            // The order-preserving remedy is SHARED with the in-loop
+            // density-floor diagnosis, which offers the same reflow for a
+            // different reason and must not diverge from this one. The hub
+            // arrives here as three loose wording values; re-assemble it so
+            // the shared remedy can apply the same under-sized test the loop
+            // applies, rather than being told only that a hub exists.
+            sb.append(OrderedAxisRemedy.orderPreservingRemedy(viewpointType,
+                    hasHub ? new HubExtent(hubConnectionCount, hubWidthPx,
+                            hubHeightPx) : null));
+        }
+        sb.append(" The current view is preserved "
                 + "unchanged (no degraded layout was applied).");
         return sb.toString();
     }
@@ -223,16 +317,39 @@ public final class SpacingPreconditionInfeasibilityCertificate {
      * invariant). {@code shortCircuit=true} ⇒ the caller returns a
      * DTO carrying {@code terminationReason} +
      * {@code reflowOffer} WITHOUT constructing the Request / entering the loop.
+     *
+     * <p>{@code viewpointType} is a PASS-THROUGH of the view's viewpoint id,
+     * carried here purely so the caller can hand it to
+     * {@code SpacingControlLoop.Request} without a second read of the same
+     * EMF attribute. It takes NO part in {@code shortCircuit} — the geometric
+     * decision is byte-untouched by it — and is {@code null} whenever the
+     * caller could not resolve a viewpoint, which degrades to the
+     * pre-existing behaviour.
      */
     public record Decision(boolean shortCircuit, String terminationReason,
-            String reflowOffer) {
+            String reflowOffer, String viewpointType) {
 
         private static final Decision PROCEED =
-                new Decision(false, null, null);
+                new Decision(false, null, null, null);
 
-        /** The transparent pass-through (no fire) — loop runs as today. */
+        /**
+         * The transparent pass-through (no fire) — loop runs as today, with
+         * no viewpoint resolved (the ordered-axis remedy then degrades to the
+         * pre-existing offer at the loop's own terminal too).
+         */
         public static Decision proceed() {
             return PROCEED;
+        }
+
+        /**
+         * The transparent pass-through carrying the resolved viewpoint id
+         * onward to the loop. Returns the shared {@link #PROCEED} instance
+         * when there is no viewpoint, so the no-viewpoint pass-through stays
+         * the identical value it has always been.
+         */
+        public static Decision proceed(String viewpointType) {
+            return viewpointType == null || viewpointType.isBlank() ? PROCEED
+                    : new Decision(false, null, null, viewpointType);
         }
     }
 }

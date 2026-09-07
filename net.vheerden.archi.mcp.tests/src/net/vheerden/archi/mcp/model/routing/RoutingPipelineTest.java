@@ -8,12 +8,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.Before;
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.model.DispatchArm;
 import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
 
 /**
  * Tests for {@link RoutingPipeline}.
@@ -852,6 +857,97 @@ public class RoutingPipelineTest {
                     + ") should not intersect obstacle after cleanup",
                     EdgeAttachmentCalculator.lineSegmentIntersectsRect(
                             a.x(), a.y(), b.x(), b.y(),
+                            obstacle.x(), obstacle.y(), obstacle.width(), obstacle.height()));
+        }
+    }
+
+    @Test
+    public void shouldRepositionTerminalOnItsFace_whenTerminalSegmentCrossesObstacle() {
+        // Source element at (100,100,100,100): right face line x = 201, extent y in [100,200].
+        // The terminal sits high on that face and its segment to bp[1] runs diagonally down
+        // through an obstacle. Sliding the terminal down its own face to bp[1]'s row makes the
+        // segment horizontal and clears the obstacle, without deleting the terminal.
+        RoutingRect source = new RoutingRect(100, 100, 100, 100, "src");
+        RoutingRect target = new RoutingRect(600, 300, 100, 100, "tgt");
+        RoutingRect obstacle = new RoutingRect(220, 100, 60, 40, "obs");
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(201, 110),
+                new AbsoluteBendpointDto(300, 190),
+                new AbsoluteBendpointDto(300, 350),
+                new AbsoluteBendpointDto(599, 350)));
+        RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
+                "c1", source, target, List.of(obstacle), null, 0, List.of());
+
+        RoutingPipeline.removeObstacleViolations(path, List.of(obstacle), conn);
+
+        assertEquals("Terminal must not be deleted", 4, path.size());
+        assertEquals("Terminal stays on its own face line", 201, path.get(0).x());
+        assertEquals("Terminal slid to its neighbour's row", 190, path.get(0).y());
+        assertTrue("Terminal stays within the face extent",
+                path.get(0).y() >= source.y()
+                        && path.get(0).y() <= source.y() + source.height());
+        assertTrue("Terminal is on a face line of its element",
+                RoutingPipeline.isOnElementPerimeter(path.get(0), source));
+        for (int i = 0; i < path.size() - 1; i++) {
+            assertFalse("No segment may cross the obstacle after repositioning",
+                    EdgeAttachmentCalculator.lineSegmentIntersectsRect(
+                            path.get(i).x(), path.get(i).y(),
+                            path.get(i + 1).x(), path.get(i + 1).y(),
+                            obstacle.x(), obstacle.y(), obstacle.width(), obstacle.height()));
+        }
+    }
+
+    @Test
+    public void shouldClampRepositionedTerminalToTheFaceExtent_whenNeighbourIsBeyondTheCorner() {
+        // The neighbour sits well below the element, so following it would put the terminal on the
+        // right face LINE but past the element's bottom corner. A face-line match is a test against
+        // the infinite line, not the face segment, so such a terminal passes an off-face census and
+        // still fails a perimeter check — it must be clamped to the end of the face instead.
+        RoutingRect source = new RoutingRect(100, 100, 100, 100, "src");
+        RoutingRect target = new RoutingRect(600, 600, 100, 100, "tgt");
+        RoutingRect obstacle = new RoutingRect(215, 140, 30, 40, "obs");
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(201, 110),
+                new AbsoluteBendpointDto(300, 400),
+                new AbsoluteBendpointDto(599, 400),
+                new AbsoluteBendpointDto(599, 650)));
+        RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
+                "c1", source, target, List.of(obstacle), null, 0, List.of());
+
+        RoutingPipeline.removeObstacleViolations(path, List.of(obstacle), conn);
+
+        assertEquals("Terminal must not be deleted", 4, path.size());
+        assertEquals("Terminal stays on its own face line", 201, path.get(0).x());
+        assertEquals("Terminal is clamped to the bottom of the face, not the neighbour's row",
+                200, path.get(0).y());
+    }
+
+    @Test
+    public void shouldDeleteTerminal_whenItIsOnNoFaceLineToSlideAlong() {
+        // Same geometry, but the terminal is on no face line of its element, so there is no face
+        // to slide along. The repositioning abstains rather than guessing a face, and the
+        // pre-existing deletion behaviour still removes the crossing.
+        RoutingRect source = new RoutingRect(100, 100, 100, 100, "src");
+        RoutingRect target = new RoutingRect(600, 300, 100, 100, "tgt");
+        RoutingRect obstacle = new RoutingRect(220, 100, 60, 40, "obs");
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(205, 110),
+                new AbsoluteBendpointDto(300, 190),
+                new AbsoluteBendpointDto(300, 350),
+                new AbsoluteBendpointDto(599, 350)));
+        RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
+                "c1", source, target, List.of(obstacle), null, 0, List.of());
+        assertFalse("Precondition: the terminal is on no face line",
+                RoutingPipeline.isOnElementPerimeter(path.get(0), source));
+
+        RoutingPipeline.removeObstacleViolations(path, List.of(obstacle), conn);
+
+        assertEquals("Terminal is deleted when no face is available", 3, path.size());
+        for (int i = 0; i < path.size() - 1; i++) {
+            assertFalse("No segment may cross the obstacle",
+                    EdgeAttachmentCalculator.lineSegmentIntersectsRect(
+                            path.get(i).x(), path.get(i).y(),
+                            path.get(i + 1).x(), path.get(i + 1).y(),
                             obstacle.x(), obstacle.y(), obstacle.width(), obstacle.height()));
         }
     }
@@ -2212,6 +2308,36 @@ public class RoutingPipelineTest {
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
     }
 
+    @Test
+    public void shouldAbstain_whenTerminalIsOnNoFaceLine() {
+        RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
+        // One pixel inside the right face line (221) — on no face line of the element at all.
+        // The old fallback chain answered RIGHT here, indistinguishably from a measured RIGHT.
+        int[] justInside = {220, 220};
+        assertFalse("Precondition: the point is on no face line",
+                RoutingPipeline.isOnElementPerimeter(
+                        new AbsoluteBendpointDto(justInside[0], justInside[1]), element));
+        assertNull("A point on no face line has no derivable face",
+                RoutingPipeline.determineFaceFromTerminal(justInside, element));
+
+        // Far away in every direction — the four positional arms the fallback chain used.
+        assertNull(RoutingPipeline.determineFaceFromTerminal(new int[]{160, 50}, element));
+        assertNull(RoutingPipeline.determineFaceFromTerminal(new int[]{160, 400}, element));
+        assertNull(RoutingPipeline.determineFaceFromTerminal(new int[]{20, 220}, element));
+        assertNull(RoutingPipeline.determineFaceFromTerminal(new int[]{900, 220}, element));
+    }
+
+    @Test
+    public void shouldResolveCornerToTheVerticalFace_whenTwoFaceLinesHold() {
+        RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
+        // x = 99 is the left face line and y = 199 is the top face line: both hold. A corner is
+        // NOT an abstention — the vertical faces are tested first, as they always were.
+        assertEquals(EdgeAttachmentCalculator.Face.LEFT,
+                RoutingPipeline.determineFaceFromTerminal(new int[]{99, 199}, element));
+        assertEquals(EdgeAttachmentCalculator.Face.RIGHT,
+                RoutingPipeline.determineFaceFromTerminal(new int[]{221, 241}, element));
+    }
+
     // --- Full pipeline integration test ---
 
     @Test
@@ -2809,6 +2935,103 @@ public class RoutingPipelineTest {
         assertNull("Should not warn when crossings are 1.25x estimate (below 1.5x)", warning);
     }
 
+    // ---- Non-monotonic re-route detection (crossingsBefore vs crossingsAfter) ----
+
+    @Test
+    public void shouldBuildCrossingsRegressedWarning_whenRouteRaisesCrossings() {
+        // Retail-bank business-architecture view: an already-tidy layout whose full
+        // re-route drove crossings 6 -> 17, prompting a manual undo.
+        String warning = RoutingPipeline.buildCrossingsRegressedWarning(6, 17, DispatchArm.APPLIED);
+        assertNotNull("Should warn when a re-route raises crossings above the input", warning);
+        assertTrue("names the before count", warning.contains("6"));
+        assertTrue("names the after count", warning.contains("17"));
+        assertTrue("prescribes the terminals-only remedy",
+                warning.contains("terminals-only"));
+    }
+
+    @Test
+    public void shouldBuildCrossingsRegressedWarning_whenStraightLineEstimateIsZero() {
+        // The application-collaboration view regressed 2 -> 8 while its straight-line
+        // estimate was 0. buildCrossingInflationWarning short-circuits to silence on a
+        // zero estimate, so it cannot see this regression at all — this is precisely the
+        // hole the before/after comparison closes. Both assertions must hold together.
+        assertNull("inflation signal is structurally blind to a zero estimate",
+                RoutingPipeline.buildCrossingInflationWarning(8, 0));
+        assertNotNull("regression signal still fires",
+                RoutingPipeline.buildCrossingsRegressedWarning(2, 8, DispatchArm.APPLIED));
+    }
+
+    @Test
+    public void shouldNotBuildCrossingsRegressedWarning_whenRouteImprovesCrossings() {
+        assertNull("An improving re-route is never flagged",
+                RoutingPipeline.buildCrossingsRegressedWarning(17, 6, DispatchArm.APPLIED));
+    }
+
+    @Test
+    public void shouldNotBuildCrossingsRegressedWarning_whenRouteHoldsCrossings() {
+        assertNull("Holding crossings is not a regression",
+                RoutingPipeline.buildCrossingsRegressedWarning(6, 6, DispatchArm.APPLIED));
+        assertNull("A zero-crossing view routed to zero is not a regression",
+                RoutingPipeline.buildCrossingsRegressedWarning(0, 0, DispatchArm.APPLIED));
+    }
+
+    @Test
+    public void shouldAppendStructuredWarning_whenRouteRegresses() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        RoutingPipeline.appendCrossingWarnings(6, 17, 6, true, DispatchArm.APPLIED, warnings, structured);
+
+        assertEquals("regression emits exactly one structured warning", 1, structured.size());
+        assertEquals(StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED,
+                structured.get(0).code());
+        // Must NOT name the emitting tool: a caller that reads only this field and re-invokes
+        // auto-route-connections would default to full mode and reproduce the regression.
+        assertEquals("undo", structured.get(0).remediationTool());
+        // Free-text carries both signals here: 17 > 6*1.5 trips inflation too.
+        assertEquals("both free-text messages present", 2, warnings.size());
+        assertTrue("structured message is mirrored verbatim in free-text",
+                warnings.contains(structured.get(0).message()));
+    }
+
+    @Test
+    public void shouldAppendNoRegressionWarning_whenInputWasUnrouted() {
+        // First route of an unrouted view: the replaced geometry was straight centre-to-centre
+        // lines (near crossing-minimal), so a rise in crossings is expected and is not a
+        // regression. Reporting one would tell the caller to undo a good first route.
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        RoutingPipeline.appendCrossingWarnings(46, 83, 0, false, DispatchArm.APPLIED, warnings, structured);
+
+        assertTrue("unrouted input emits no regression code", structured.isEmpty());
+        assertTrue("and no regression free-text", warnings.isEmpty());
+        // The same numbers on an already-routed input DO warn — the gate is the only difference.
+        RoutingPipeline.appendCrossingWarnings(46, 83, 0, true, DispatchArm.APPLIED, warnings, structured);
+        assertEquals("routed input with identical counts warns", 1, structured.size());
+    }
+
+    @Test
+    public void shouldAppendNoStructuredWarning_whenRouteImproves() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        RoutingPipeline.appendCrossingWarnings(17, 6, 6, true, DispatchArm.APPLIED, warnings, structured);
+
+        assertTrue("an improving re-route emits no structured warning", structured.isEmpty());
+        assertTrue("and no free-text crossing warning", warnings.isEmpty());
+    }
+
+    @Test
+    public void shouldAppendInflationWarningOnly_whenDenseButNotRegressed() {
+        // Dense layout (17 > 8*1.5) that nonetheless improved on its input (20 -> 17):
+        // the inflation signal fires, the regression signal must not.
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        RoutingPipeline.appendCrossingWarnings(20, 17, 8, true, DispatchArm.APPLIED, warnings, structured);
+
+        assertTrue("improvement emits no regression code", structured.isEmpty());
+        assertEquals("but the density signal still ships", 1, warnings.size());
+        assertTrue(warnings.get(0).contains("straight-line estimate"));
+    }
+
     @Test
     public void shouldNotBuildCrossingInflationWarning_whenAtExactThreshold() {
         // 12 / 8 = 1.5x exactly — not strictly greater than threshold
@@ -2827,6 +3050,134 @@ public class RoutingPipelineTest {
         String warning = RoutingPipeline.buildCrossingInflationWarning(3, 8);
         assertNull("Should not warn when routing reduces crossings", warning);
     }
+
+
+    // ---- The applied arm states the arithmetic, never a whole-view verdict ---------------------
+    //
+    // buildCrossingsRegressedWarning holds two ints and a DispatchArm. It cannot see
+    // interiorTerminations, cross-element pass-throughs, the composite rating, or the view at all
+    // -- the signature is the proof. So a sentence claiming "this re-route is worse than the
+    // geometry it replaced" asserts a whole-view judgment its inputs cannot support, and a caller
+    // acting on it undoes a re-route that may have cleared a far more jarring defect than the
+    // crossings it added. These pins hold what the applied message may say AND what it may not:
+    // asserting only the new sentence would stay green with the old verdict sitting beside it.
+
+    /** The applied-arm regression message, read back from the emitter rather than restated. */
+    private static String appliedCrossingsRegressed() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        RoutingPipeline.appendCrossingWarnings(6, 17, 0, true, DispatchArm.APPLIED,
+                warnings, structured);
+        return structured.get(0).message();
+    }
+
+    private static List<String> tokens(String regex, String text) {
+        List<String> found = new ArrayList<>();
+        Matcher m = Pattern.compile(regex).matcher(text);
+        while (m.find()) {
+            found.add(m.group());
+        }
+        return found;
+    }
+
+    /**
+     * The trailing alternative, captured from the shipped emitter and held here as a literal.
+     *
+     * <p>Pinning it against the constant would only prove the constant equals itself. This is a
+     * copy of what the tool published, so a reorder, a split or a reword of the shared trailer
+     * fails here rather than reaching a caller.</p>
+     */
+    private static final String CROSSINGS_REGRESSED_ALTERNATIVE_AS_PUBLISHED =
+            " To straighten diagonal terminals without re-routing connection interiors (the "
+            + "usual reason a tidy layout regresses here), re-run auto-route-connections with "
+            + "mode 'terminals-only', which declines any rectification that would add crossings.";
+
+    @Test
+    public void shouldNotCallTheRerouteWorse_onTheAppliedArm() {
+        // The banned string is the VERDICT, not the word "worse". The replacement sentence
+        // legitimately says a routed view "can score worse here" -- a statement about the metric,
+        // not a claim about this view -- so a naive contains("worse") would fail on the fix.
+        String applied = appliedCrossingsRegressed();
+        assertFalse("two counts do not license a whole-view verdict:\n" + applied,
+                applied.contains("is worse than the geometry it replaced"));
+    }
+
+    @Test
+    public void shouldKeepBothCountsAndTheAppliedStateClaim_onTheAppliedArm() {
+        String applied = appliedCrossingsRegressed();
+        assertTrue("the measurement is the part the inputs DO license:\n" + applied,
+                applied.contains("Routing increased edge crossings from 6 to 17"));
+        assertTrue("and the caller must still be told the model was written:\n" + applied,
+                applied.contains("The new paths were still applied."));
+        assertTrue("the shared terminals-only alternative closes it, byte for byte:\n" + applied,
+                applied.endsWith(CROSSINGS_REGRESSED_ALTERNATIVE_AS_PUBLISHED));
+    }
+
+    @Test
+    public void shouldQualifyTheMetricAndPriceTheRecovery_onTheAppliedArm() {
+        // Two clauses, two assertions. One contains() over the whole sentence would be a single
+        // assertion wearing two hats: it could not say which half went missing.
+        String applied = appliedCrossingsRegressed();
+        assertTrue("(i) the count is not by itself a quality judgment:\n" + applied,
+                applied.contains("Crossings alone do not determine layout quality"));
+        assertTrue("(ii) and undo costs the whole pass, not just the crossings:\n" + applied,
+                applied.contains("undo reverts the whole routing pass, not just the crossings"));
+    }
+
+    @Test
+    public void shouldStateNoFigureOrQuotedTokenBeyondTheCountsAndTheMode_onTheAppliedArm() {
+        // Mechanical, not stylistic. AutoRouteDeferredArmMessageTest extracts every \d+(px)? and
+        // every '...' span from the APPLIED message and requires each to appear on BOTH deferred
+        // arms, which this change freezes byte-identical. A figure or a quoted token added here
+        // therefore reddens two arms nobody edited -- and quoting the tool name as 'undo' is the
+        // easy way to do it. Asserted by construction rather than left to that check, because the
+        // deferred strings already carry 6 and 17: re-using either token would slip past it.
+        String applied = appliedCrossingsRegressed();
+        assertEquals("the only figures the applied message may state are the two counts",
+                List.of("6", "17"), tokens("\\d+(?:px)?", applied));
+        assertEquals("and the only quoted span is the alternative mode",
+                List.of("'terminals-only'"), tokens("'[^']+'", applied));
+    }
+
+    @Test
+    public void shouldLeaveBothDeferredArmsByteIdentical_whenTheAppliedArmIsRewritten() {
+        // The positive control for the rewrite above: it proves the edit reached the arm it was
+        // aimed at and no other. Held as literals captured from the shipped emitter, so the
+        // control cannot drift along with the code it controls.
+        //
+        // Green here is NOT an endorsement of what these two strings say. Both still carry
+        // "applying this re-route would leave the view worse than it is now" -- the same
+        // whole-view verdict two crossing counts cannot support, which the applied arm was just
+        // rewritten to stop claiming. This pins that wording as UNCHANGED, not as correct, and it
+        // should be re-pointed rather than deleted when the deferred arms are brought into line.
+        assertEquals(QUEUED_AS_PUBLISHED,
+                RoutingPipeline.buildCrossingsRegressedWarning(6, 17, DispatchArm.QUEUED));
+        assertEquals(AWAITING_APPROVAL_AS_PUBLISHED,
+                RoutingPipeline.buildCrossingsRegressedWarning(6, 17,
+                        DispatchArm.AWAITING_APPROVAL));
+    }
+
+    private static final String QUEUED_AS_PUBLISHED =
+            "Routing increased edge crossings from 6 to 17 against the geometry it would "
+            + "replace — applying this re-route would leave the view worse than it is now. "
+            + "Nothing has been applied: the re-route is queued in the open batch, so undo is "
+            + "not the remedy here and would revert whichever command is actually on top of the "
+            + "stack. Discard the queued re-route with end-batch rollback:true, or commit it "
+            + "with end-batch and re-run assess-layout to see what landed. To straighten "
+            + "diagonal terminals without re-routing connection interiors (the usual reason a "
+            + "tidy layout regresses here), re-run auto-route-connections with mode "
+            + "'terminals-only', which declines any rectification that would add crossings.";
+
+    private static final String AWAITING_APPROVAL_AS_PUBLISHED =
+            "Routing increased edge crossings from 6 to 17 against the geometry it would "
+            + "replace — applying this re-route would leave the view worse than it is now. "
+            + "Nothing has been applied: the re-route is waiting on the human's decision, so "
+            + "undo is not the remedy here and would revert whichever command is actually on top "
+            + "of the stack. Rejecting the change in Archi leaves the previous paths exactly as "
+            + "they are. To straighten diagonal terminals without re-routing connection "
+            + "interiors (the usual reason a tidy layout regresses here), re-run "
+            + "auto-route-connections with mode 'terminals-only', which declines any "
+            + "rectification that would add crossings.";
 
     // ---- Orthogonality-preserving propagation tests ----
 
@@ -4831,13 +5182,13 @@ public class RoutingPipelineTest {
                     path.size() >= 2);
             AbsoluteBendpointDto last = path.get(path.size() - 1);
             assertEquals(
-                    "B70 AC-1: " + conn.connectionId() + " last BP must be on hub LEFT "
+                    "B70: " + conn.connectionId() + " last BP must be on hub LEFT "
                             + "perimeter (x == hub.x() - 1); got " + last,
                     leftPerimeterX, last.x());
             lastYs.add(last.y());
         }
         assertEquals(
-                "B70 AC-1: all 5 connections must have distinct last-BP y values "
+                "B70: all 5 connections must have distinct last-BP y values "
                         + "(hub port distribution preserved end-to-end); got " + lastYs,
                 5, lastYs.size());
     }
@@ -6260,7 +6611,7 @@ public class RoutingPipelineTest {
     }
 
     @Test
-    public void b37_shouldNotRemoveB35ClearanceWaypoint_whenSourceTargetExcluded() {
+    public void shouldNotRemoveClearanceWaypoint_whenSourceTargetExcluded() {
         // Simulates Phase B clearance detour around own source element.
         // Source element at (100,100,120,60) — excluded from obstacle list.
         // Path detours around source via clearance waypoint at y=90 (10px above element).
@@ -7748,7 +8099,7 @@ public class RoutingPipelineTest {
                 BE_RELMGR_BASELINE_DETOUR_Y + 2,
                 1810, 2228);
         assertFalse(
-                "AC-3 regression: BE→RelMgr should not route via the y="
+                "regression: BE→RelMgr should not route via the y="
                         + BE_RELMGR_BASELINE_DETOUR_Y + " perimeter detour under B69-B. "
                         + "Actual path: " + beToRelMgrPath,
                 regressedToBaselineDetour);
@@ -7814,7 +8165,7 @@ public class RoutingPipelineTest {
         boolean centredInInteriorCorridor = hasHorizontalRunInside(
                 path, 320, 460, 700, 950);
         assertTrue(
-                "AC-1: Retail Customer → Account Holder must have a horizontal run "
+                "Retail Customer → Account Holder must have a horizontal run "
                         + "inside the interior band y∈[320, 460] (not wall-grazing at y=301). "
                         + "Actual path: " + path,
                 centredInInteriorCorridor);
@@ -7843,9 +8194,10 @@ public class RoutingPipelineTest {
         boolean centreCollinearOnParallel = bp0.x() == rcSrc.centerX()
                 || bp0.y() == rcSrc.centerY();
         assertTrue(
-                "B71 AC-10 diagnostic: V7 Retail Customer bp[0]=" + bp0 + " must be on source "
+                "B71 diagnostic: V7 Retail Customer bp[0]=" + bp0 + " must be on source "
                         + "face line OR centre-collinear on parallel axis. A failure here without "
-                        + "an AC-1 failure indicates wrong-wiring of preservesTerminalAnchoring "
+                        + "a matching failure of the horizontal-run pin below indicates "
+                        + "wrong-wiring of preservesTerminalAnchoring "
                         + "into ChannelNudgingPass — see B71 Dev Notes 'Wiring-regression safety "
                         + "net'.",
                 onFaceLine || centreCollinearOnParallel);
@@ -7947,12 +8299,12 @@ public class RoutingPipelineTest {
             boolean lastAligned = RoutingPipeline.isOnElementPerimeter(last, conn.target())
                     || last.x() == tgtCx || last.y() == tgtCy;
             assertTrue(
-                    "AC-8 (B70-updated): first BP " + first + " must be on source perimeter "
+                    "B70-updated: first BP " + first + " must be on source perimeter "
                             + "or share a coordinate with source center (" + srcCx + "," + srcCy
                             + ") for connection " + conn.connectionId(),
                     firstAligned);
             assertTrue(
-                    "AC-8 (B70-updated): last BP " + last + " must be on target perimeter "
+                    "B70-updated: last BP " + last + " must be on target perimeter "
                             + "or share a coordinate with target center (" + tgtCx + "," + tgtCy
                             + ") for connection " + conn.connectionId(),
                     lastAligned);
@@ -7974,11 +8326,11 @@ public class RoutingPipelineTest {
                 RoutingPipeline.DEFAULT_SNAP_THRESHOLD, true);
 
         assertEquals(
-                "AC-4 idempotence: second call must produce byte-identical routes",
+                "idempotence: second call must produce byte-identical routes",
                 first.routed().keySet(), second.routed().keySet());
         for (String connId : first.routed().keySet()) {
             assertEquals(
-                    "AC-4 idempotence: route " + connId + " must be byte-identical on re-run",
+                    "idempotence: route " + connId + " must be byte-identical on re-run",
                     first.routed().get(connId), second.routed().get(connId));
         }
     }
@@ -8149,9 +8501,9 @@ public class RoutingPipelineTest {
             // Wrap-site invariant: the predicate must hold against the source
             // anchoring on the pipeline-exit path.
             boolean predicateHolds = TerminalAnchoring.preservesTerminalAnchoring(
-                    leftAnchoring, hub, hubCenter, path);
+                    leftAnchoring, hub, path);
             assertTrue(
-                    "AC-8-REVISED: " + conn.connectionId() + " path[0]=" + path.get(0)
+                    "perimeter pin (revised): " + conn.connectionId() + " path[0]=" + path.get(0)
                             + " must satisfy preservesTerminalAnchoring against hub LEFT face. "
                             + "A failure here means one of the five wrap sites permitted a "
                             + "collinear-on-parallel-but-off-face mutation, i.e. the V4 slot 3/7 "
@@ -8337,5 +8689,71 @@ public class RoutingPipelineTest {
         // both g1 and g2 should be detected as top-level.
         List<RoutingRect> topLevel = RoutingPipeline.extractTopLevelGroupBounds(connections);
         assertEquals("Both groups should be top-level", 2, topLevel.size());
+    }
+
+    // =====================================================================
+    // Anchoring refresh after a deliberate face re-selection
+    // =====================================================================
+
+    private static final RoutingRect REFRESH_ELEMENT = new RoutingRect(100, 100, 200, 100, "e");
+
+    private static List<TerminalAnchoring> anchoringList(EdgeAttachmentCalculator.Face face) {
+        List<TerminalAnchoring> list = new ArrayList<>();
+        list.add(new TerminalAnchoring(face));
+        return list;
+    }
+
+    private static List<AbsoluteBendpointDto> pathEndingAt(int x, int y) {
+        return new ArrayList<>(List.of(new AbsoluteBendpointDto(x, y),
+                new AbsoluteBendpointDto(x, y + 40)));
+    }
+
+    @Test
+    public void shouldRewriteTheAnchoring_whenTheTerminalMovedToAnotherFaceLine() {
+        List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
+        // 301 is the element's right face line (x + width + 1).
+        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(301, 150), true, REFRESH_ELEMENT);
+        assertEquals("record follows the terminal onto the face it now sits on",
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), anchorings.get(0));
+    }
+
+    @Test
+    public void shouldLeaveTheAnchoring_whenTheTerminalIsOnNoFaceLine() {
+        List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
+        // 305 is four pixels beyond the right face line — the derived face is RIGHT, but the
+        // terminal is not on its line, so there is no evidence of which face it belongs to.
+        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(305, 150), true, REFRESH_ELEMENT);
+        assertEquals("a stale record is not replaced by an invented one",
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT), anchorings.get(0));
+    }
+
+    @Test
+    public void shouldLeaveTheAnchoring_whenTheTerminalIsStillOnTheRecordedFace() {
+        List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
+        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(99, 150), true, REFRESH_ELEMENT);
+        assertEquals("no face change means no rewrite",
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT), anchorings.get(0));
+    }
+
+    @Test
+    public void shouldLeaveTheAnchoring_whenTheTerminalSitsOnTwoFaceLinesAtOnce() {
+        List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.RIGHT);
+        // (99,99) is the element's left face line AND its top face line. Both are equally true, and
+        // determineFaceFromTerminal breaks the tie by testing the vertical faces first — so without
+        // the corner guard this would silently record LEFT on an arbitrary tie-break.
+        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(99, 99), true, REFRESH_ELEMENT);
+        assertEquals("an arbitrary tie-break is not evidence, so the record is left alone",
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), anchorings.get(0));
+    }
+
+    @Test
+    public void shouldRefreshTheTargetEnd_whenTheLastBendpointMovedToAnotherFaceLine() {
+        List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.TOP);
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(150, 40), new AbsoluteBendpointDto(150, 201)));
+        // 201 is the element's bottom face line (y + height + 1); the target end reads path[last].
+        RoutingPipeline.refreshAnchoring(anchorings, 0, path, false, REFRESH_ELEMENT);
+        assertEquals("the target end is re-derived from the last bendpoint",
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.BOTTOM), anchorings.get(0));
     }
 }

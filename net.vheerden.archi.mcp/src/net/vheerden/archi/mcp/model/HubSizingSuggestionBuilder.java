@@ -10,9 +10,11 @@ import net.vheerden.archi.mcp.response.dto.HubElementEntryDto;
  * EMF-free pure-unit helper that builds hub-element sizing suggestions for
  * {@code detect-hub-elements}. Three branches:
  * <ul>
- *   <li>{@code connectionCount <= 6} — no suggestion.</li>
- *   <li>{@code 7 <= connectionCount <= LARGE_HUB_THRESHOLD} — emit existing
- *       1D-or-1D suggestion (height-or-width inflation, label-aware).</li>
+ *   <li>{@code connectionCount} at or below
+ *       {@link HubSpacingSignal#LARGE_HUB_CONNECTION_COUNT} — no suggestion.</li>
+ *   <li>Above that boundary and at or below {@link #LARGE_HUB_THRESHOLD} — emit
+ *       existing 1D-or-1D suggestion (height-or-width inflation,
+ *       label-aware).</li>
  *   <li>{@code connectionCount > LARGE_HUB_THRESHOLD} — emit existing
  *       1D-or-1D suggestion AND a NEW 2D suggestion that splits the excess
  *       across both axes so ports distribute across all four edges
@@ -35,8 +37,9 @@ public final class HubSizingSuggestionBuilder {
         Objects.requireNonNull(entries, "entries");
         List<String> suggestions = new ArrayList<>();
         for (HubElementEntryDto entry : entries) {
-            if (entry.connectionCount() > 6) {
-                int excess = entry.connectionCount() - 6;
+            if (HubSpacingSignal.isLargeHub(entry)) {
+                int excess = entry.connectionCount()
+                        - HubSpacingSignal.LARGE_HUB_CONNECTION_COUNT;
                 int connectionBasedWidth = entry.width() + 15 * excess;
                 int suggestedHeight = entry.height() + 15 * excess;
                 int labelAwareWidth = entry.maxLabelWidth() > 0
@@ -44,10 +47,11 @@ public final class HubSizingSuggestionBuilder {
                 int suggestedWidth = Math.max(connectionBasedWidth, labelAwareWidth);
 
                 String suggestion = String.format(
-                        "Element '%s' has %d connections (hub threshold: 6). "
+                        "Element '%s' has %d connections (large hub: > %d). "
                         + "Consider increasing height to %dpx (%d + 15 × %d) for horizontal layouts, "
                         + "or width to %dpx (%d + 15 × %d) for vertical layouts.",
                         entry.elementName(), entry.connectionCount(),
+                        HubSpacingSignal.LARGE_HUB_CONNECTION_COUNT,
                         suggestedHeight, entry.height(), excess,
                         suggestedWidth, entry.width(), excess);
                 if (labelAwareWidth > connectionBasedWidth) {

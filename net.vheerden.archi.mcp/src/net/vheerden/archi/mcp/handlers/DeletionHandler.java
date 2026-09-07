@@ -243,6 +243,11 @@ public class DeletionHandler {
                         + "Removes the view and all its visual contents. The underlying model "
                         + "elements and relationships are NOT deleted. Fully undoable via Ctrl+Z "
                         + "in Archi. Respects approval mode (human-gated in Archi). "
+                        + "Returns the deleted view's id and name, viewConnectionsRemoved "
+                        + "(every connection that was in the view, including ones between "
+                        + "nested children), and viewReferencesRemoved (placeholders in OTHER "
+                        + "views that pointed at this one — normally 0, since views are rarely "
+                        + "cross-referenced). "
                         + "Related: get-views (list views), get-view-contents "
                         + "(inspect before deleting).")
                 .inputSchema(inputSchema)
@@ -323,6 +328,18 @@ public class DeletionHandler {
                         + "views, subfolders). Top-level default ArchiMate folders (e.g., "
                         + "'Business', 'Application', 'Views') cannot be deleted. Fully undoable "
                         + "via Ctrl+Z in Archi. Respects approval mode (human-gated in Archi). "
+                        + "Returns the folder's id and name. Without force: true the folder "
+                        + "must be empty when the delete is prepared, so in that case nothing "
+                        + "is cascaded: elementsRemoved, viewsRemoved and foldersRemoved are "
+                        + "absent entirely and the other three read a genuine 0, not a "
+                        + "suppressed measurement. With force: true the counts are a complete "
+                        + "total: a contained view's own connections and placeholders are "
+                        + "folded in too. Every kind of view the folder "
+                        + "holds is counted, including sketch and canvas views. Inside a "
+                        + "batch or a bulk-mutate request the folder is "
+                        + "checked again when the changes are applied: if an earlier operation "
+                        + "in the same request put something into it, this delete is skipped "
+                        + "rather than destroying that content, and the reason is reported. "
                         + "Related: get-folders (inspect folder contents), get-folder-tree "
                         + "(view hierarchy).")
                 .inputSchema(inputSchema)

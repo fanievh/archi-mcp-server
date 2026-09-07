@@ -32,7 +32,7 @@ import net.vheerden.archi.mcp.model.routing.RoutingPipeline.ConnectionEndpoints;
  * {@code argmax} over the K candidates with a <em>strictly-greater</em> replacement
  * rule, so run&nbsp;0 wins every tie. Therefore
  * {@code objective(emitted) &ge; objective(run0) = objective(current main)} for every
- * input, unconditionally. Unlike HPRPS there is nothing to roll back &mdash; the
+ * input, unconditionally. Unlike the hub-perimeter stage there is nothing to roll back &mdash; the
  * current result is always in the candidate set and always wins ties.
  * The only ways to regress are <em>non-quality</em>: a performance-budget breach
  * (mitigated by the wall-clock budget + large-view degrade-to-K=1 guard) or a
@@ -66,8 +66,8 @@ public final class BestOfKRoutingStrategy {
     private static final Logger logger = LoggerFactory.getLogger(BestOfKRoutingStrategy.class);
 
     /**
-     * Default multi-start count (Task-0 spike decision D6): 2&times; the HPRPS
-     * Task-7 6-clone evidence window &mdash; enough headroom for the search to find
+     * Default multi-start count, chosen at the design spike: 2&times; the
+     * hub-perimeter stage's 6-clone evidence window &mdash; enough headroom for the search to find
      * a good ordering while bounding the {@code K&middot;(route+assess)} cost.
      */
     public static final int DEFAULT_K = 12;

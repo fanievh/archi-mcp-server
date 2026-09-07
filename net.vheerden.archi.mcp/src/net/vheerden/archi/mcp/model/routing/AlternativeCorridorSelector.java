@@ -7,7 +7,7 @@ import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * H5 story — Axis 1: corridor-CHOICE diversification primitive.
+ * Hub-perimeter routing — Axis 1: corridor-CHOICE diversification primitive.
  *
  * <p><b>Architectural commitment (load-bearing):</b> for each connection whose
  * post-A* route has a segment hugging a hub face (within
@@ -106,7 +106,8 @@ public class AlternativeCorridorSelector {
      *
      * @param cell                 the (hub, face) cell with its members
      * @param paths                index-parallel per-route bendpoint lists (NOT mutated by this method)
-     * @param allObstacles         all element rectangles on the view (including the hub itself)
+     * @param allObstacles         every non-container view object — elements, notes and images alike
+     *                             (including the hub itself)
      * @param costPremiumBudget    fraction of original path length the shift's |Δ| must not exceed
      * @return one proposal per viable member; empty if cell has no members or all are infeasible
      */

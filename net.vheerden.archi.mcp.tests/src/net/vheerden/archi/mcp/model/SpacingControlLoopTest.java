@@ -359,7 +359,7 @@ public class SpacingControlLoopTest {
         assertEquals(0, result.acceptedCommands().size());
     }
 
-    // ---- (11) per-iteration step cap clamps to cap value (composer Option α) ----
+    // ---- (11) per-iteration step cap clamps to cap value (composer variant) ----
 
     @Test
     public void iterate_perIterationStepCap_clampsAtCap() {
@@ -565,7 +565,7 @@ public class SpacingControlLoopTest {
         try {
             result = SpacingControlLoop.iterate(request, executeThrowsAtIter1);
         } catch (RuntimeException unexpected) {
-            fail("Session 8 patch should recover from cmd.execute() throw. "
+            fail("the partial-commit patch should recover from cmd.execute() throw. "
                     + "Got: " + unexpected.getMessage());
             return;
         }

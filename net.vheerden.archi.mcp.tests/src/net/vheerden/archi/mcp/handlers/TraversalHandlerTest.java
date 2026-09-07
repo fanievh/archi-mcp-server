@@ -1761,7 +1761,7 @@ public class TraversalHandlerTest {
         assertEquals("MODEL_NOT_LOADED", error.get("code"));
     }
 
-    // ---- Combined includeTypes + excludeTypes (L1 review fix) ----
+    // ---- Combined includeTypes + excludeTypes ----
 
     @SuppressWarnings("unchecked")
     @Test
@@ -1786,7 +1786,7 @@ public class TraversalHandlerTest {
         assertEquals("rel-1", resultList.get(0).get("id"));
     }
 
-    // ---- Validation: includeTypes non-list and filterLayer non-string (L2 review fix) ----
+    // ---- Validation: includeTypes non-list and filterLayer non-string ----
 
     @SuppressWarnings("unchecked")
     @Test
@@ -2488,6 +2488,94 @@ public class TraversalHandlerTest {
                 new TypeReference<Map<String, Object>>() {});
     }
 
+    // ---- Read-payload width: what a relationship row may carry, per preset ----------------
+
+    /**
+     * An accessor whose relationships carry every optional field populated.
+     *
+     * <p>The production mapper hardcodes those four to {@code null} today, so the handler's own
+     * field discipline is untested by construction — the fields cannot arrive, so nothing proves
+     * what the handler would do if they did. This stub supplies them, which is what pins the
+     * handler independently of the mapper: whichever way the mapper is later parameterised, the
+     * width of a relationship row on a read tool is decided here, and asserted here.</p>
+     */
+    private static class WideRelationshipAccessor extends StubAccessor {
+        WideRelationshipAccessor() {
+            super(true);
+        }
+
+        @Override
+        public List<RelationshipDto> getRelationshipsForElement(String elementId) {
+            return List.of(new RelationshipDto("rel-1", "Serves", "ServingRelationship",
+                    "Critical", "elem-1", "elem-2", false,
+                    "relationship documentation", List.of(Map.of("key", "owner", "value", "ops")),
+                    "App Component", "Business Process", null, null, null));
+        }
+    }
+
+    private List<Map<String, Object>> relationshipRowsAtDepth0(String fieldsPreset)
+            throws Exception {
+        registry = new CommandRegistry();
+        TraversalHandler handler = new TraversalHandler(
+                new WideRelationshipAccessor(), formatter, registry, null);
+        handler.registerTools();
+        Map<String, Object> args = new HashMap<>();
+        args.put("elementId", "elem-1");
+        args.put("depth", 0);
+        if (fieldsPreset != null) {
+            args.put("fields", fieldsPreset);
+        }
+        Map<String, Object> envelope = parseJson(findToolSpec("get-relationships").callHandler()
+                .apply(null, new McpSchema.CallToolRequest("get-relationships", args)));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) envelope.get("result");
+        assertNotNull("get-relationships must return a result list: " + envelope, rows);
+        return rows;
+    }
+
+    @Test
+    public void shouldOmitTheFourOptionalFields_whenGetRelationshipsUsesTheDefaultPreset()
+            throws Exception {
+        Map<String, Object> row = relationshipRowsAtDepth0(null).get(0);
+
+        assertEquals("the default preset decides the width of every relationship row the read "
+                + "tools return; it was: " + row.keySet(),
+                java.util.Set.of("id", "name", "type", "sourceId", "targetId"), row.keySet());
+    }
+
+    @Test
+    public void shouldDeliverTheFourOptionalFields_whenGetRelationshipsAsksForFull()
+            throws Exception {
+        Map<String, Object> row = relationshipRowsAtDepth0("full").get(0);
+
+        // The preset named these four all along while the mapper guaranteed their absence, so
+        // "full" was byte-identical to "standard" bar specialization. This is the promise landing.
+        assertTrue("full must deliver the fields its preset names; it was: " + row.keySet(),
+                row.keySet().containsAll(java.util.Set.of(
+                        "documentation", "properties", "sourceName", "targetName",
+                        "specialization")));
+        assertEquals("relationship documentation", row.get("documentation"));
+        assertEquals("App Component", row.get("sourceName"));
+    }
+
+    @Test
+    public void shouldOmitTheFourOptionalFields_whenGetRelationshipsAsksForStandard()
+            throws Exception {
+        Map<String, Object> row = relationshipRowsAtDepth0("standard").get(0);
+
+        assertEquals("standard must stay identical to the default; it was: " + row.keySet(),
+                java.util.Set.of("id", "name", "type", "sourceId", "targetId"), row.keySet());
+    }
+
+    @Test
+    public void shouldReturnOnlyIdAndName_whenGetRelationshipsAsksForMinimal() throws Exception {
+        Map<String, Object> row = relationshipRowsAtDepth0("minimal").get(0);
+
+        assertEquals("minimal must stay two fields wide; it was: " + row.keySet(),
+                java.util.Set.of("id", "name"), row.keySet());
+    }
+
+
     // ---- Stub Implementations ----
 
     /**
@@ -2674,5 +2762,63 @@ public class TraversalHandlerTest {
             getRelationshipsCount++;
             return super.getRelationshipsForElement(elementId);
         }
+    }
+
+    /**
+     * The nested relationships a depth-3 expansion carries are put into the response as the DTOs
+     * themselves, not through the field selector every other relationship payload passes through.
+     * Serialisation is then governed only by {@code @JsonInclude(NON_NULL)}, so any field the
+     * accessor populates appears here at EVERY preset — including the two the default is built to
+     * withhold. Harmless while the mapper hardcodes them null; a leak the moment it does not.
+     */
+    @Test
+    public void shouldNotWidenNestedRelationships_whenGetRelationshipsExpandsToDepth3()
+            throws Exception {
+        registry = new CommandRegistry();
+        TraversalHandler handler = new TraversalHandler(
+                new WideRelationshipAccessor(), formatter, registry, null);
+        handler.registerTools();
+        Map<String, Object> args = new HashMap<>();
+        args.put("elementId", "elem-1");
+        args.put("depth", 3);
+        Map<String, Object> envelope = parseJson(findToolSpec("get-relationships").callHandler()
+                .apply(null, new McpSchema.CallToolRequest("get-relationships", args)));
+
+        String json = objectMapper.writeValueAsString(envelope.get("result"));
+        assertFalse("a depth-3 expansion must not carry relationship documentation at the default "
+                + "preset — the nested rows bypass the field selector, so this is the surface that "
+                + "widens silently. Response was: " + json,
+                json.contains("relationship documentation"));
+        assertFalse("nor the resolved endpoint names. Response was: " + json,
+                json.contains("\"sourceName\""));
+        // The other half of the same claim, and the one a leak-only assertion misses: suppressing
+        // the four new fields must not narrow what these rows have always carried. Routing them
+        // through the caller's preset would silently drop specialization here, which is a payload
+        // change no part of this work asked for.
+        assertTrue("a depth-3 nested relationship must keep the specialization it has always "
+                + "carried — closing the leak must not narrow the row. Response was: " + json,
+                json.contains("\"specialization\":\"Critical\""));
+    }
+
+    @Test
+    public void shouldKeepNestedRelationshipWidthStable_whenGetRelationshipsExpandsToDepth3AtMinimal()
+            throws Exception {
+        registry = new CommandRegistry();
+        TraversalHandler handler = new TraversalHandler(
+                new WideRelationshipAccessor(), formatter, registry, null);
+        handler.registerTools();
+        Map<String, Object> args = new HashMap<>();
+        args.put("elementId", "elem-1");
+        args.put("depth", 3);
+        args.put("fields", "minimal");
+        Map<String, Object> envelope = parseJson(findToolSpec("get-relationships").callHandler()
+                .apply(null, new McpSchema.CallToolRequest("get-relationships", args)));
+
+        String json = objectMapper.writeValueAsString(envelope.get("result"));
+        assertTrue("minimal narrows the ELEMENT rows, and never narrowed these nested relationship "
+                + "rows; they must still carry sourceId. Response was: " + json,
+                json.contains("\"sourceId\""));
+        assertFalse("but the four preset-gated fields stay out at minimal too. Response was: "
+                + json, json.contains("relationship documentation"));
     }
 }

@@ -124,7 +124,7 @@ public final class CoincidentSegmentDiagnostic {
                             Map<Integer, ElementRect> targets,
                             List<GroupRect> topLevelGroups) {
         List<CoincidentSegmentDetector.CoincidentPair> pairs = detector.detectPairs(connections);
-        logger.info("=== B76-diag: coincident segment categorization (pairs={}) ===", pairs.size());
+        logger.info("=== Coincident-segment categorization (pairs={}) ===", pairs.size());
         int[] counts = new int[Category.values().length];
 
         for (int i = 0; i < pairs.size(); i++) {
@@ -155,7 +155,7 @@ public final class CoincidentSegmentDiagnostic {
                     pairCat);
         }
 
-        logger.info("=== B76-diag: tally TERMINAL_APPROACH={} GAP_CROSSING={} WITHIN_GROUP={} UNCATEGORIZED={} ===",
+        logger.info("=== Coincident-segment diagnostic: tally TERMINAL_APPROACH={} GAP_CROSSING={} WITHIN_GROUP={} UNCATEGORIZED={} ===",
                 counts[Category.TERMINAL_APPROACH.ordinal()],
                 counts[Category.GAP_CROSSING.ordinal()],
                 counts[Category.WITHIN_GROUP.ordinal()],

@@ -313,6 +313,51 @@ public class GraphFormatterTest {
         assertEquals(2, edges.get(1).get("hopLevel"));
     }
 
+    // ---- formatRelationshipsAsGraph — the two node-naming arms ----
+
+    /**
+     * The fallback arm. Below the {@code full} preset the field selector drops {@code sourceName}
+     * and {@code targetName}, so the graph has no name to give a node and says so explicitly
+     * rather than emitting a nameless node.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void formatRelationshipsAsGraph_shouldLabelNodesReferenced_whenEndpointNamesAbsent() {
+        List<Map<String, Object>> rels = List.of(createMap(
+                "id", "r1", "name", "Serves", "type", "ServingRelationship",
+                "sourceId", "e1", "targetId", "e2"));
+
+        Map<String, Object> graph = GraphFormatter.formatRelationshipsAsGraph(rels);
+
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+        assertEquals(2, nodes.size());
+        assertEquals("(referenced)", nodes.get(0).get("name"));
+        assertEquals("(referenced)", nodes.get(1).get("name"));
+    }
+
+    /**
+     * The named arm. At {@code full} the endpoint names survive field selection, and the graph
+     * uses them — which is what the fallback above exists to stand in for.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void formatRelationshipsAsGraph_shouldNameNodes_whenEndpointNamesPresent() {
+        List<Map<String, Object>> rels = List.of(createMap(
+                "id", "r1", "name", "Serves", "type", "ServingRelationship",
+                "sourceId", "e1", "targetId", "e2",
+                "sourceName", "Payments API", "targetName", "Ledger"));
+
+        Map<String, Object> graph = GraphFormatter.formatRelationshipsAsGraph(rels);
+
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+        assertEquals(2, nodes.size());
+        assertEquals("Payments API", nodes.get(0).get("name"));
+        assertEquals("Ledger", nodes.get(1).get("name"));
+        List<Map<String, Object>> edges = (List<Map<String, Object>>) graph.get("edges");
+        assertEquals("the edge keeps carrying the ids regardless of the naming arm taken",
+                "e1", edges.get(0).get("sourceId"));
+    }
+
     // ---- Helper ----
 
     private static Map<String, Object> createMap(Object... kvPairs) {

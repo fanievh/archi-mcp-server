@@ -132,7 +132,7 @@ public class EgressClearanceView12RegressionTest {
                 (399 - n9569Adj.x()) >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
     }
 
-    /** Idempotency (AC-5): re-running on the fixed geometry is a no-op. */
+    /** Idempotency: re-running on the fixed geometry is a no-op. */
     @Test
     public void view12_isIdempotent() {
         List<RoutingPipeline.ConnectionEndpoints> conns = new ArrayList<>();

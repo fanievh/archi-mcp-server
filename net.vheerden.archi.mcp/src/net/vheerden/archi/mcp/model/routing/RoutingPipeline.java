@@ -12,8 +12,11 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.vheerden.archi.mcp.model.DispatchArm;
 import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
 
 /**
  * Routing pipeline orchestrator for obstacle-aware orthogonal connection routing.
@@ -59,7 +62,7 @@ public class RoutingPipeline {
     private final EdgeAttachmentCalculator edgeAttachmentCalculator;
     private final CoincidentSegmentDetector coincidentDetector;
     private final LabelPositionOptimizer labelPositionOptimizer;
-    /** H5 hub-perimeter routing stage (Axis 1 corridor-CHOICE + Axis 2 SPREAD). */
+    /** Hub-perimeter routing stage (Axis 1 corridor-CHOICE + Axis 2 SPREAD). */
     private final HubPerimeterRoutingStage hubPerimeterRoutingStage = new HubPerimeterRoutingStage();
     /**
      * Corridor-aware terminal-egress clearance. Runs as the LAST geometry-mutating stage
@@ -124,7 +127,10 @@ public class RoutingPipeline {
      *
      * @param source    source element rectangle
      * @param target    target element rectangle
-     * @param obstacles list of obstacle rectangles (caller must exclude source/target/ancestors)
+     * @param obstacles list of obstacle rectangles (caller must exclude source/target and both
+     *                  endpoints' ancestors and descendants, each transitively, and each filtered
+     *                  to those that still overlap the endpoint — a node dragged clear of the
+     *                  endpoint it is nested under is a real obstacle, not interior content)
      * @return list of absolute bendpoints (intermediate path nodes, excluding source/target centers)
      */
     public List<AbsoluteBendpointDto> routeConnection(
@@ -137,8 +143,11 @@ public class RoutingPipeline {
      *
      * @param source           source element rectangle
      * @param target           target element rectangle
-     * @param obstacles        list of obstacle rectangles (caller must exclude source/target/ancestors)
-     * @param groupBoundaries  group rectangles for group-wall clearance cost (excluding ancestor groups)
+     * @param obstacles        list of obstacle rectangles (caller must exclude source/target and
+     *                         both endpoints' ancestors and descendants, each transitively, and
+     *                         each filtered to those that still overlap the endpoint)
+     * @param groupBoundaries  group rectangles for group-wall clearance cost (excluding the
+     *                         ancestor groups that still enclose an endpoint)
      * @return list of absolute bendpoints (intermediate path nodes, excluding source/target centers)
      */
     public List<AbsoluteBendpointDto> routeConnection(
@@ -152,7 +161,9 @@ public class RoutingPipeline {
      *
      * @param source            source element rectangle
      * @param target            target element rectangle
-     * @param obstacles         list of obstacle rectangles (caller must exclude source/target/ancestors)
+     * @param obstacles         list of obstacle rectangles (caller must exclude source/target and
+     *                          both endpoints' ancestors and descendants, each transitively, and
+     *                          each filtered to those that still overlap the endpoint)
      * @param groupBoundaries   group rectangles for group-wall clearance cost
      * @param occupancyTracker  corridor occupancy tracker (nullable — null disables occupancy cost)
      * @return list of absolute bendpoints (intermediate path nodes, excluding source/target centers)
@@ -488,7 +499,10 @@ public class RoutingPipeline {
      * @param connectionId unique identifier for the connection
      * @param source       source element rectangle
      * @param target       target element rectangle
-     * @param obstacles    obstacle rectangles (source/target/ancestors already excluded)
+     * @param obstacles    obstacle rectangles (source/target and both endpoints' ancestors and
+     *                     descendants, each transitively, already excluded — and each ancestry
+     *                     family filtered to those that still overlap the endpoint, so a node
+     *                     dragged clear of it stays an obstacle)
      */
     public record ConnectionEndpoints(String connectionId, RoutingRect source,
                                        RoutingRect target, List<RoutingRect> obstacles,
@@ -508,7 +522,8 @@ public class RoutingPipeline {
      * All coordinates are absolute canvas coordinates.
      *
      * @param connections  list of connection endpoints to route
-     * @param allObstacles all element rectangles on the view (for corridor width computation)
+     * @param allObstacles every non-container view object — elements, notes and images alike
+     *                     (for corridor width computation)
      * @return RoutingResult with routed connections and failed connections
      */
     public RoutingResult routeAllConnections(
@@ -521,6 +536,8 @@ public class RoutingPipeline {
      * When labelExcludeSets is null, exclude sets are built from source/target IDs only.
      * Callers with access to the node hierarchy should provide full exclude sets
      * (source, target, ancestors, descendants) for consistency with LayoutQualityAssessor.
+     * Both families are transitive: a node nested at any depth inside an endpoint is that
+     * endpoint's own content, never an obstacle to a connection terminating on it.
      */
     public RoutingResult routeAllConnections(
             List<ConnectionEndpoints> connections, List<RoutingRect> allObstacles,
@@ -534,7 +551,7 @@ public class RoutingPipeline {
      * are snapped to straight segments to eliminate visually negligible Z-bends.
      *
      * @param connections     list of connection endpoints to route
-     * @param allObstacles    all element rectangles on the view
+     * @param allObstacles    every non-container view object — elements, notes and images alike
      * @param labelExcludeSets per-connection label exclusion sets (nullable)
      * @param snapThreshold   max pixel offset for snap-to-straight (0 disables, default 20)
      * @return RoutingResult with routed connections and failed connections
@@ -555,7 +572,7 @@ public class RoutingPipeline {
      * output to the previous 4-arg overload.</p>
      *
      * @param connections          list of connection endpoints to route
-     * @param allObstacles         all element rectangles on the view
+     * @param allObstacles         every non-container view object — elements, notes and images alike
      * @param labelExcludeSets     per-connection label exclusion sets (nullable)
      * @param snapThreshold        snap-to-straight threshold (0 disables)
      * @param enableChannelNudging when true, channel-global ordered nudging post-pass runs
@@ -571,7 +588,7 @@ public class RoutingPipeline {
 
     /**
      * Route all connections with an explicit connection processing-order override
-     * The best-of-K multi-start seam (spike decision D1).
+     * The best-of-K multi-start seam.
      *
      * <p><b>Purely additive — the narrowest possible seam.</b> When
      * {@code processingOrderOverride == null} this method is <em>byte-identical to
@@ -591,7 +608,7 @@ public class RoutingPipeline {
      * can never crash the pipeline or violate never-worse.</p>
      *
      * @param connections             list of connection endpoints to route
-     * @param allObstacles            all element rectangles on the view
+     * @param allObstacles            every non-container view object — elements, notes and images alike
      * @param labelExcludeSets        per-connection label exclusion sets (nullable)
      * @param snapThreshold           snap-to-straight threshold (0 disables)
      * @param enableChannelNudging    when true, channel-global ordered nudging runs
@@ -634,9 +651,10 @@ public class RoutingPipeline {
         // Parallel arrays for per-connection TerminalAnchoring records,
         // populated by EdgeAttachmentCalculator.applyEdgeAttachments at stage 4.
         // Consumed by the five wrap sites (4 in PathStraightener at stage 4.7i,
-        // 1 in CoincidentSegmentDetector.applyOffsets at stage 4.7h). No new
-        // carrier type — just two more parallel arrays alongside
-        // sourceCenters / targetCenters.
+        // 1 in CoincidentSegmentDetector.applyOffsets, which runs at stage 4.7h
+        // and again at stage 4.7p+1). All five share one rollback policy:
+        // TerminalAnchoringRollbackPolicy. No new carrier type — just two more
+        // parallel arrays alongside sourceCenters / targetCenters.
         List<TerminalAnchoring> sourceAnchorings = new ArrayList<>();
         List<TerminalAnchoring> targetAnchorings = new ArrayList<>();
         CorridorOccupancyTracker occupancyTracker = new CorridorOccupancyTracker();
@@ -656,7 +674,7 @@ public class RoutingPipeline {
             sourceCenters.set(origIdx, srcCenter);
             targetCenters.set(origIdx, tgtCenter);
         }
-        logger.debug("B47: Routed {} connections with occupancy tracking ({} corridors occupied)",
+        logger.debug("Routed {} connections with occupancy tracking ({} corridors occupied)",
                 connections.size(), occupancyTracker.getCorridorOccupancy().size());
 
         // 1.1. Straight-line crossing estimate
@@ -715,7 +733,8 @@ public class RoutingPipeline {
         // Pipeline stages (nudger, label clearance) can shift paths into obstacle boundaries.
         // Must run BEFORE edge attachment so terminal bendpoints are not stripped.
         for (int i = 0; i < nudgedPaths.size(); i++) {
-            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
         }
 
         // 3.8. Enforce orthogonal path segments (Pattern 3)
@@ -726,8 +745,8 @@ public class RoutingPipeline {
 
         // 4. Apply edge attachments (terminal bendpoints at element faces)
         // The 5-arg producer overload also fills sourceAnchorings / targetAnchorings
-        // for the five downstream wrap sites (stage 4.7h applyOffsets +
-        // stage 4.7i PathStraightener × 4).
+        // for the five downstream wrap sites (applyOffsets at stages 4.7h and
+        // 4.7p+1 + stage 4.7i PathStraightener × 4).
         edgeAttachmentCalculator.applyEdgeAttachments(connectionIds, nudgedPaths, connections,
                 sourceAnchorings, targetAnchorings);
 
@@ -753,7 +772,8 @@ public class RoutingPipeline {
         // 4.2. Post-attachment obstacle re-validation
         // Edge attachment and orthogonal enforcement may create segments passing through obstacles
         for (int i = 0; i < nudgedPaths.size(); i++) {
-            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
         }
 
         // 4.4. Snap near-aligned connections to straight segments
@@ -777,7 +797,8 @@ public class RoutingPipeline {
         // 4.6. Final obstacle validation after cleanup
         // Micro-jog removal and collinear cleanup can merge segments into obstacle-crossing paths
         for (int i = 0; i < nudgedPaths.size(); i++) {
-            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+            removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
         }
 
         // 4.6a. Endpoint pass-through correction
@@ -802,13 +823,38 @@ public class RoutingPipeline {
             }
         }
 
+        // 4.6c. Second terminal capture — the seed for the post-clearance realignment below.
+        // Read here because this is the last rung at which the terminals are known to sit on their
+        // assigned face lines: the realignment above has just put them there.
+        //
+        // A fresh read rather than a reuse of the stage-4 arrays, for two reasons that are not the
+        // same reason. The first is that the two express different invariants: the stage-4 arrays
+        // hold the terminals as edge attachment left them, before stages 4.1-4.6a ran, which
+        // coincides with "known good" only for as long as the realignment above sits between them
+        // and this line. The second is null-safety — a path that reached two points only during
+        // 4.1-4.6a has no stage-4 entry, and seeding from one would dereference null.
+        //
+        // Measured: on the current corpus the two captures are byte-identical, because the
+        // realignment above restores exactly the stage-4 coordinate wherever it restores anything.
+        // Seeding the pass below from the stage-4 arrays instead leaves the terminal census
+        // unchanged. That is a property of this corpus and this stage order, not a guarantee.
+        int[][] clearanceSourceTerminals = new int[nudgedPaths.size()][];
+        int[][] clearanceTargetTerminals = new int[nudgedPaths.size()][];
+        for (int i = 0; i < nudgedPaths.size(); i++) {
+            List<AbsoluteBendpointDto> p = nudgedPaths.get(i);
+            if (p.size() >= 2) {
+                clearanceSourceTerminals[i] = new int[]{p.get(0).x(), p.get(0).y()};
+                clearanceTargetTerminals[i] = new int[]{p.get(p.size() - 1).x(), p.get(p.size() - 1).y()};
+            }
+        }
+
         // 4.7. Bendpoint clearance enforcement
         // After all path cleanup stages, ensure intermediate BPs maintain minimum clearance
         // from obstacle boundaries. Terminal BPs (at element faces) are excluded.
         // Axis-constrained nudging preserves orthogonality.
         // Source-side-reversal lane-crossing fix: the clearance passes
         // (4.7 / 4.7b / 4.7c) use the connection's OWN obstacle set, which has the
-        // endpoints' ancestors/children already excluded (built in
+        // endpoints' ancestors/descendants already excluded (built in
         // ArchiModelAccessorImpl#buildOrthogonalRoutingCommands), rather than the
         // full allObstacles. Routing legitimately runs inside its own ancestor
         // container (e.g. a swimlane BusinessRole element that spans the canvas
@@ -817,7 +863,7 @@ public class RoutingPipeline {
         // it to the band's far edge (e.g. corner (390,105) inside a full-width lane
         // -> (12,168)), seeding a source-side reversal / self-pass-through. Using
         // conn.obstacles() makes the clearance passes consistent with the A* router
-        // and with TerminalEgressClearancePass's ancestor-aware Tier-1 check.
+        // and with TerminalEgressClearancePass's hierarchy-aware Tier-1 check.
         // No empty-set fallback to allObstacles (unlike the egress REJECTION check):
         // an empty obstacle set means no foreign elements exist, so there is nothing
         // to clear from and the pass must be a no-op — falling back here would
@@ -836,8 +882,62 @@ public class RoutingPipeline {
                 removeMicroJogs(nudgedPaths.get(i), MICRO_JOG_THRESHOLD);
                 removeDuplicatePoints(nudgedPaths.get(i));
                 removeCollinearPoints(nudgedPaths.get(i));
-                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
             }
+        }
+
+        // 4.7a. Second terminal realignment.
+        // The point-clearance cleanup immediately above runs a micro-jog removal, and that cleanup
+        // propagates a neighbour's coordinate onto the terminal index with no face-line condition.
+        // The realignment at 4.6b is the only pass that repairs such displacement and it has
+        // already run, so without this second pass every terminal that cleanup moves stays off its
+        // face line all the way to the output.
+        //
+        // Placement is load-bearing in both directions:
+        //   - after the point-clearance cleanup, so there is displacement to repair;
+        //   - BEFORE everything that follows. Stages 4.7b through 4.7e run their own terminal
+        //     fixes afterwards and so keep the last word, and the self-element pass-through
+        //     correction (4.7f) and channel-global nudging (4.7o) shape terminals by contract:
+        //     restoring a saved coordinate over a face 4.7f deliberately re-selected would leave
+        //     the terminal on the old face while the anchoring record names the new one, and
+        //     restoring one over a nudged hub port would undo the port distribution. Running
+        //     before all of them makes those hazards unreachable rather than merely guarded
+        //     against. A later placement, after the whole 4.7 series, takes the surviving
+        //     population lower and is rejected: it overrides those stages' own terminal fixes, and
+        //     one such override lands a terminal on a face LINE beyond the element's extent, which
+        //     a face-line census accepts and a perimeter check rejects.
+        for (int i = 0; i < nudgedPaths.size(); i++) {
+            if (clearanceSourceTerminals[i] == null) {
+                continue;
+            }
+            List<AbsoluteBendpointDto> path = nudgedPaths.get(i);
+            if (path.size() < 2) {
+                continue;
+            }
+            ConnectionEndpoints conn = connections.get(i);
+            // Repair only the ends that actually carry the defect. A terminal still sitting on
+            // one of its element's face lines was either never displaced, or was put back on a
+            // face line by the obstacle re-validation that closes the cleanup above; restoring a
+            // saved coordinate over it would overwrite a position that is already correct.
+            // Seeding an end with its own current value makes the restore a no-op for that end
+            // without needing a second entry point into the realignment.
+            int[] sourceSeed = isOnElementPerimeter(path.get(0), conn.source())
+                    ? new int[]{path.get(0).x(), path.get(0).y()}
+                    : clearanceSourceTerminals[i];
+            AbsoluteBendpointDto lastBp = path.get(path.size() - 1);
+            int[] targetSeed = isOnElementPerimeter(lastBp, conn.target())
+                    ? new int[]{lastBp.x(), lastBp.y()}
+                    : clearanceTargetTerminals[i];
+            realignTerminals(path, sourceSeed, targetSeed, conn);
+            // Defence in depth. The cleanup above may have removed a terminal precisely because
+            // its segment crossed an obstacle; restoring the captured coordinate can put that
+            // crossing back, and the stages that would re-check it downstream only run their own
+            // cleanup when they change something. Re-validating here keeps this pass from being
+            // the one place a restored terminal reaches the output uninspected. Not observed to
+            // fire on the fixture corpus — the routed output carries no crossing either way — so
+            // it is a guard rather than a measured repair.
+            removeObstacleViolations(path, conn.obstacles(), conn);
         }
 
         // 4.7b. Segment-based clearance enforcement
@@ -846,7 +946,8 @@ public class RoutingPipeline {
         // segment itself runs too close to an obstacle face.
         int totalSegmentShifts = 0;
         for (int i = 0; i < nudgedPaths.size(); i++) {
-            // conn.obstacles() (ancestor-excluded) — see the source-side-reversal note at stage 4.7.
+            // conn.obstacles() (ancestor- and descendant-excluded) — see the source-side-reversal
+            // note at stage 4.7.
             totalSegmentShifts += enforceSegmentClearance(nudgedPaths.get(i),
                     connections.get(i).obstacles(),
                     connections.get(i).source(), connections.get(i).target());
@@ -859,7 +960,8 @@ public class RoutingPipeline {
                 removeMicroJogs(nudgedPaths.get(i), MICRO_JOG_THRESHOLD);
                 removeDuplicatePoints(nudgedPaths.get(i));
                 removeCollinearPoints(nudgedPaths.get(i));
-                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
             }
         }
 
@@ -869,7 +971,8 @@ public class RoutingPipeline {
         // intermediate BPs/segments for the earlier stages to check.
         int totalTerminalFixes = 0;
         for (int i = 0; i < nudgedPaths.size(); i++) {
-            // conn.obstacles() (ancestor-excluded) — see the source-side-reversal note at stage 4.7.
+            // conn.obstacles() (ancestor- and descendant-excluded) — see the source-side-reversal
+            // note at stage 4.7.
             totalTerminalFixes += enforceTerminalCorridorClearance(nudgedPaths.get(i),
                     connections.get(i).obstacles(),
                     connections.get(i).source(), connections.get(i).target());
@@ -882,7 +985,8 @@ public class RoutingPipeline {
                 removeMicroJogs(nudgedPaths.get(i), MICRO_JOG_THRESHOLD);
                 removeDuplicatePoints(nudgedPaths.get(i));
                 removeCollinearPoints(nudgedPaths.get(i));
-                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
             }
         }
 
@@ -901,7 +1005,8 @@ public class RoutingPipeline {
             for (int i = 0; i < nudgedPaths.size(); i++) {
                 removeDuplicatePoints(nudgedPaths.get(i));
                 removeCollinearPoints(nudgedPaths.get(i));
-                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles());
+                removeObstacleViolations(nudgedPaths.get(i), connections.get(i).obstacles(),
+                    connections.get(i));
             }
         }
 
@@ -937,9 +1042,11 @@ public class RoutingPipeline {
             ConnectionEndpoints conn = connections.get(i);
             if (correctSelfElementPassThrough(nudgedPaths.get(i), conn, true)) {
                 selfSourceFixes++;
+                refreshAnchoring(sourceAnchorings, i, nudgedPaths.get(i), true, conn.source());
             }
             if (correctSelfElementPassThrough(nudgedPaths.get(i), conn, false)) {
                 selfTargetFixes++;
+                refreshAnchoring(targetAnchorings, i, nudgedPaths.get(i), false, conn.target());
             }
         }
         if (selfSourceFixes > 0 || selfTargetFixes > 0) {
@@ -983,8 +1090,10 @@ public class RoutingPipeline {
             // Wrap site #5 (applyOffsets): build per-connection anchoring
             // contexts from the parallel arrays produced by stage 4 and let
             // CoincidentSegmentDetector roll back any segment offset that
-            // would violate TerminalAnchoring.preservesEndpoints. Replaces
-            // the earlier Mode B touchesPerimeterAnchoredTerminal filter.
+            // moves a terminal off a faceline it was on, or relocates one that
+            // had already arrived off-face — decided per end, against the end
+            // the offset actually touched. Replaces the earlier Mode B
+            // touchesPerimeterAnchoredTerminal filter.
             // Load-bearing for V4 Integration Architecture: pre-fix, the
             // legacy offset dragged path[0] off hub LEFT perimeter and
             // collapsed 3 of 7 API Gateway outbound terminals to the face
@@ -1090,7 +1199,7 @@ public class RoutingPipeline {
             centerFixes += fixCenterTerminatedPath(nudgedPaths.get(i), connections.get(i));
         }
         if (centerFixes > 0) {
-            logger.info("B44 center-termination fix: corrected {} terminal(s) at element center",
+            logger.info("Center-termination fix: corrected {} terminal(s) at element center",
                     centerFixes);
         }
         int finalCenterAlignments = 0;
@@ -1099,7 +1208,7 @@ public class RoutingPipeline {
                     connections.get(i));
         }
         if (finalCenterAlignments > 0) {
-            logger.info("B44 final center alignment: re-inserted {} terminal BPs after post-processing",
+            logger.info("Final center alignment: re-inserted {} terminal BPs after post-processing",
                     finalCenterAlignments);
         }
         if (centerFixes > 0 || finalCenterAlignments > 0) {
@@ -1127,20 +1236,20 @@ public class RoutingPipeline {
             AbsoluteBendpointDto first = path.get(0);
             AbsoluteBendpointDto last = path.get(path.size() - 1);
             if (first.x() == conn.source().centerX() && first.y() == conn.source().centerY()) {
-                logger.warn("B44 center-termination detected at SOURCE for connection {} — "
+                logger.warn("Center-termination detected at SOURCE for connection {} — "
                         + "first BP ({},{}) equals source center", conn.connectionId(),
                         first.x(), first.y());
                 centerTerminations++;
             }
             if (last.x() == conn.target().centerX() && last.y() == conn.target().centerY()) {
-                logger.warn("B44 center-termination detected at TARGET for connection {} — "
+                logger.warn("Center-termination detected at TARGET for connection {} — "
                         + "last BP ({},{}) equals target center", conn.connectionId(),
                         last.x(), last.y());
                 centerTerminations++;
             }
         }
         if (centerTerminations > 0) {
-            logger.warn("B44 center-termination safety net: {} terminal(s) at element center "
+            logger.warn("Center-termination safety net: {} terminal(s) at element center "
                     + "across {} connections", centerTerminations, nudgedPaths.size());
         }
 
@@ -1153,7 +1262,7 @@ public class RoutingPipeline {
             interiorFixes += fixInteriorTerminalBPs(nudgedPaths.get(i), connections.get(i));
         }
         if (interiorFixes > 0) {
-            logger.info("B45 interior terminal BP fix: corrected {} BP(s) inside endpoint elements",
+            logger.info("Interior terminal BP fix: corrected {} BP(s) inside endpoint elements",
                     interiorFixes);
             for (int i = 0; i < nudgedPaths.size(); i++) {
                 alignTerminalsWithCenter(nudgedPaths.get(i), connections.get(i));
@@ -1207,7 +1316,7 @@ public class RoutingPipeline {
             int b69bNudges = channelNudging.run(connections, nudgedPaths, allObstacles,
                     topLevelGroupBounds);
             if (b69bNudges > 0 || channelNudging.getRollbackCount() > 0) {
-                logger.info("B69-B channel nudging: {} nudges applied, {} per-route rollbacks",
+                logger.info("Channel nudging: {} nudges applied, {} per-route rollbacks",
                         b69bNudges, channelNudging.getRollbackCount());
                 // Defense-in-depth: re-apply terminal alignment and orthogonality after
                 // the pass. Per-route rollback is the primary safety net; this
@@ -1223,7 +1332,11 @@ public class RoutingPipeline {
             }
         }
 
-        // 4.7m. H5 — Hub-Perimeter Routing Stage.
+        // 4.7o+1. Hub-Perimeter Routing Stage.
+        // The label reads "the stage that runs immediately after 4.7o": the letter sequence has
+        // nothing free between o and p, and this stage carried a duplicate 4.7m label — the same
+        // label as the interior terminal BP fix 80 lines above — until it was renumbered. Unlike
+        // 4.7p+1 this is not a conditional sub-step; it runs unconditionally, in its own right.
         // Conceptually this stage inserts "between ChannelNudgingPass and PathStraightener". In the
         // actual pipeline order PathStraightener (stage 4.7i) runs BEFORE ChannelNudgingPass
         // (4.7o), so the operative interpretation is: after the global-nudging pass has assigned
@@ -1242,7 +1355,7 @@ public class RoutingPipeline {
         if (h5Result.axis1Applied() > 0 || h5Result.axis2Applied() > 0
                 || h5Result.axis1Rolled() > 0 || h5Result.axis2Rolled() > 0
                 || h5Result.migratorApplied() > 0 || h5Result.migratorRolled() > 0) {
-            logger.info("H5 hub-perimeter routing: {} cells, axis1 {}/{} applied/rolled, "
+            logger.info("Hub-perimeter routing: {} cells, axis1 {}/{} applied/rolled, "
                             + "axis2 {}/{} applied/rolled, axis3-migrator {}/{} applied/rolled",
                     h5Result.cellsProcessed(),
                     h5Result.axis1Applied(), h5Result.axis1Rolled(),
@@ -1312,7 +1425,10 @@ public class RoutingPipeline {
         // 4.7q. Approach-3 reconciliation pass for terminal-anchored coincident segments.
         // Runs after the rollback-eligible applyOffsets sites (stage 4.7h post-
         // edge-attach + stage 4.7p+1 post-hug — both invoke the 4-arg overload
-        // with anchoring contexts, so TerminalAnchoring rollback can fire).
+        // with anchoring contexts, so the terminal-anchoring rollback can fire).
+        // Those sites decline to MOVE a terminal; this stage separates the
+        // corridor without moving one, which is why the two compose rather than
+        // compete.
         // Stage 3.5a pre-attach uses the legacy 3-arg overload (Map.of() empty
         // contexts, line ~628) because terminals aren't yet attached at that
         // point, so 3.5a's applyOffsets has no rollback to reconcile from.
@@ -1364,7 +1480,7 @@ public class RoutingPipeline {
             finalInteriorFixes += fixInteriorTerminalBPs(nudgedPaths.get(i), connections.get(i));
         }
         if (finalInteriorFixes > 0) {
-            logger.info("B77 final interior-BP safety net: corrected {} BP(s) inside endpoint elements",
+            logger.info("Final interior-BP safety net: corrected {} BP(s) inside endpoint elements",
                     finalInteriorFixes);
             for (int i = 0; i < nudgedPaths.size(); i++) {
                 removeDuplicatePoints(nudgedPaths.get(i));
@@ -1372,7 +1488,7 @@ public class RoutingPipeline {
             }
         }
 
-        // 4.7s. Terminal-egress corridor-aware clearance (the W3 Lever-B successor).
+        // 4.7s. Terminal-egress corridor-aware clearance (the egress-lift successor).
         // Eliminates the terminal-egress "edge-hug" (a connector that leaves a face, runs
         // hard-parallel ~1px against that element's own edge, then bends 90°) on feasible/open
         // views by lengthening the perpendicular egress stub into the clearance that exists
@@ -1422,8 +1538,10 @@ public class RoutingPipeline {
                 connectionExcludeSets.put(conn.connectionId(), excludeIds);
             }
         }
-        Map<String, Integer> optimalPositions = labelPositionOptimizer.optimize(
-                connections, nudgedPaths, allObstacles, connectionExcludeSets);
+        LabelPositionOptimizer.LabelOptimizationResult labelResult =
+                labelPositionOptimizer.optimizeWithResidual(
+                        connections, nudgedPaths, allObstacles, connectionExcludeSets);
+        Map<String, Integer> optimalPositions = labelResult.changedPositions();
 
         // 5. Final violation check and build RoutingResult
         Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
@@ -1502,13 +1620,13 @@ public class RoutingPipeline {
 
                 // Post-attachment quality stages (mirrors 4.1–4.2)
                 enforceOrthogonalPaths(rerouted);
-                removeObstacleViolations(rerouted, conn.obstacles());
+                removeObstacleViolations(rerouted, conn.obstacles(), conn);
 
                 // Cleanup (mirrors 4.5–4.6)
                 removeMicroJogs(rerouted, MICRO_JOG_THRESHOLD);
                 removeDuplicatePoints(rerouted);
                 removeCollinearPoints(rerouted);
-                removeObstacleViolations(rerouted, conn.obstacles());
+                removeObstacleViolations(rerouted, conn.obstacles(), conn);
 
                 // Terminal quality stages (mirrors 4.6a, 4.7d, 4.7e, 4.7f, 4.7k)
                 correctEndpointPassThroughs(rerouted, conn.source(), conn.target());
@@ -1544,18 +1662,18 @@ public class RoutingPipeline {
                     routed.put(conn.connectionId(), rerouted);
                     violatedRoutes.remove(conn.connectionId());
                     corridorReroutes++;
-                    logger.debug("B31 corridor re-route succeeded for connection {}",
+                    logger.debug("Corridor re-route succeeded for connection {}",
                             conn.connectionId());
                 } else {
                     // Still fails — keep original failure
                     stillFailed.add(fc);
-                    logger.debug("B31 corridor re-route still violates obstacle {} for connection {}",
+                    logger.debug("Corridor re-route still violates obstacle {} for connection {}",
                             reroutedViolation.id(), conn.connectionId());
                 }
             }
 
             if (corridorReroutes > 0) {
-                logger.info("B31 corridor re-route: {} of {} failed connections recovered",
+                logger.info("Corridor re-route: {} of {} failed connections recovered",
                         corridorReroutes, failed.size());
                 failed = stillFailed;
             }
@@ -1580,7 +1698,8 @@ public class RoutingPipeline {
         }
 
         return new RoutingResult(routed, failed, recommendations, violatedRoutes,
-                optimalPositions.size(), optimalPositions, straightLineCrossings, egressResult.rolled());
+                optimalPositions.size(), optimalPositions, straightLineCrossings, egressResult.rolled(),
+                labelResult.unresolvableLabels());
     }
 
     /**
@@ -1762,8 +1881,25 @@ public class RoutingPipeline {
      * {@code avoidSlots}, nearest its natural approach coordinate. Returns the new slot, or null when
      * the terminal does not collide, no distinguishable slot exists (too-short face — accept the
      * collision), or the relocation would break terminal orthogonality, add an edge crossing, or hit an
-     * obstacle (in which case the path is restored byte-identical). The terminal stays on the face line,
-     * so {@code TerminalAnchoring.preservesTerminalAnchoring} holds.
+     * obstacle (in which case the path is restored byte-identical).
+     *
+     * <p><strong>What this does to {@code TerminalAnchoring.preservesTerminalAnchoring} is preserve
+     * its answer, not establish it.</strong> The relocation runs along the face line the terminal is
+     * already on — the collector admits only an on-perimeter terminal, and the face comes from
+     * {@link #determineFaceFromTerminal}, which reads the terminal's own position rather than the
+     * anchoring record. So a terminal that arrived on its recorded face line stays on it, and a
+     * terminal that arrived off it — because the recorded face and the derived face disagree — stays
+     * off it. The pass cannot flip the predicate from true to false, and it cannot repair a terminal
+     * that was already off.
+     *
+     * <p>An earlier revision of this javadoc claimed the predicate simply "holds" here. That was
+     * falsified by a one-off census taken when this comment was corrected: instrumented over the six
+     * view fixtures, the pass relocated 60 terminals, of which 56 held the predicate before and after
+     * and 4 failed it before and after, with none flipping either way. Those figures are a historical
+     * measurement, not a standing fact — nothing re-measures them, and they will drift as the corpus
+     * or the upstream stages change. <strong>The invariance is the durable claim, and it is what
+     * {@code HubPortCollisionSpreadTest} pins.</strong> This javadoc describes behaviour; it is not a
+     * guard, because the pass calls no predicate.
      */
     private Double trySpreadTerminal(PortRef m, List<Double> avoidSlots,
             Map<String, List<AbsoluteBendpointDto>> routed,
@@ -2130,7 +2266,7 @@ public class RoutingPipeline {
             // Ensure perpendicular: insert L-turn if diagonal with BP[1]
             AbsoluteBendpointDto next = path.get(1);
             if (savedFirst[0] != next.x() && savedFirst[1] != next.y()) {
-                EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(
+                EdgeAttachmentCalculator.Face face = faceOrAssumption(
                         savedFirst, conn.source());
                 if (face == EdgeAttachmentCalculator.Face.LEFT
                         || face == EdgeAttachmentCalculator.Face.RIGHT) {
@@ -2151,7 +2287,7 @@ public class RoutingPipeline {
             path.set(path.size() - 1, new AbsoluteBendpointDto(savedLast[0], savedLast[1]));
             AbsoluteBendpointDto prev = path.get(path.size() - 2);
             if (savedLast[0] != prev.x() && savedLast[1] != prev.y()) {
-                EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(
+                EdgeAttachmentCalculator.Face face = faceOrAssumption(
                         savedLast, conn.target());
                 if (face == EdgeAttachmentCalculator.Face.LEFT
                         || face == EdgeAttachmentCalculator.Face.RIGHT) {
@@ -2182,31 +2318,86 @@ public class RoutingPipeline {
      * pipeline.
      */
     static boolean isOnElementPerimeter(AbsoluteBendpointDto bp, RoutingRect elem) {
-        return bp.x() == elem.x() - 1
-                || bp.x() == elem.x() + elem.width() + 1
-                || bp.y() == elem.y() - 1
-                || bp.y() == elem.y() + elem.height() + 1;
+        return isOnElementPerimeter(bp.x(), bp.y(), elem);
     }
 
     /**
-     * Determines which element face a terminal bendpoint is on, based on its
-     * position relative to the element boundary. Terminals are placed 1px outside
-     * the element edge by {@link EdgeAttachmentCalculator#computeAttachmentPoint}.
+     * True when a point sits on a vertical <em>and</em> a horizontal face line of the same element
+     * — an element corner. Two faces hold and nothing in the point's own position says which one
+     * the route departed from, so a caller that must name a single departure face has to decline
+     * rather than take the first match.
+     */
+    private static boolean isOnFaceCorner(int x, int y, RoutingRect elem) {
+        boolean vertical = x == elem.x() - 1 || x == elem.x() + elem.width() + 1;
+        boolean horizontal = y == elem.y() - 1 || y == elem.y() + elem.height() + 1;
+        return vertical && horizontal;
+    }
+
+    /** Coordinate form of {@link #isOnElementPerimeter(AbsoluteBendpointDto, RoutingRect)}. */
+    private static boolean isOnElementPerimeter(int x, int y, RoutingRect elem) {
+        return x == elem.x() - 1
+                || x == elem.x() + elem.width() + 1
+                || y == elem.y() - 1
+                || y == elem.y() + elem.height() + 1;
+    }
+
+    /**
+     * Determines which element face a terminal bendpoint is on, based on its position relative to
+     * the element boundary. Terminals are placed 1px outside the element edge by
+     * {@link EdgeAttachmentCalculator#computeAttachmentPoint}.
+     *
+     * <p><strong>Returns {@code null} when the point is on no face line of the element.</strong>
+     * There is then no evidence of which face it belongs to, and a face returned anyway is a guess
+     * that a caller cannot tell apart from a measurement. The abstention condition is exactly
+     * {@link #isOnElementPerimeter}, not a second opinion about it — a point off every face line is
+     * precisely a point that reaches none of the four equality arms below.</p>
+     *
+     * <p>A point on a corner sits on two face lines and is <em>not</em> an abstention: the vertical
+     * faces are tested first, so it resolves the way it always has. A caller that cannot act on an
+     * ambiguous corner tests for it itself.</p>
+     *
+     * <p>Callers that must still act on an off-line terminal take the positional assumption in
+     * {@link #assumedFaceForOffLineTerminal} explicitly, so the guess is visible at the call site
+     * instead of hidden in here.</p>
      */
     static EdgeAttachmentCalculator.Face determineFaceFromTerminal(
             int[] terminal, RoutingRect element) {
+        if (!isOnElementPerimeter(terminal[0], terminal[1], element)) {
+            return null;
+        }
         if (terminal[0] == element.x() - 1) return EdgeAttachmentCalculator.Face.LEFT;
         if (terminal[0] == element.x() + element.width() + 1) return EdgeAttachmentCalculator.Face.RIGHT;
         if (terminal[1] == element.y() - 1) return EdgeAttachmentCalculator.Face.TOP;
-        if (terminal[1] == element.y() + element.height() + 1) return EdgeAttachmentCalculator.Face.BOTTOM;
-        // Distributed terminal: X or Y varies along the face, but the other axis is at face edge.
-        // Check axis that's fixed for each face pair.
+        return EdgeAttachmentCalculator.Face.BOTTOM;
+    }
+
+    /**
+     * The face a caller assumes for a terminal that is on no face line, when it has to build a
+     * terminal segment anyway and has nothing better to go on.
+     *
+     * <p>This is a <strong>positional assumption, not a derived face</strong>: it reads which side
+     * of the element the point lies on and names the nearest face. It is the fallback chain that
+     * used to sit unlabelled at the end of {@link #determineFaceFromTerminal}, kept verbatim so the
+     * pipeline's geometry is unchanged, but moved out to where a caller has to ask for it. Sites
+     * that would corrupt a record or move a terminal on a wrong answer — the anchoring refresh and
+     * the terminal repositioning in obstacle re-validation — decline instead of calling this.</p>
+     */
+    private static EdgeAttachmentCalculator.Face assumedFaceForOffLineTerminal(
+            int[] terminal, RoutingRect element) {
         if (terminal[1] <= element.y()) return EdgeAttachmentCalculator.Face.TOP;
         if (terminal[1] >= element.y() + element.height()) return EdgeAttachmentCalculator.Face.BOTTOM;
         if (terminal[0] <= element.x()) return EdgeAttachmentCalculator.Face.LEFT;
-        // Default: RIGHT — terminal is at or beyond the right edge (should not reach here
-        // for terminals inside the element, as edge attachment always places them outside).
         return EdgeAttachmentCalculator.Face.RIGHT;
+    }
+
+    /**
+     * Resolves a terminal's face for a caller that must produce one either way: the measured face
+     * when it is knowable, otherwise the explicit positional assumption. Never returns {@code null}.
+     */
+    private static EdgeAttachmentCalculator.Face faceOrAssumption(
+            int[] terminal, RoutingRect element) {
+        EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(terminal, element);
+        return face != null ? face : assumedFaceForOffLineTerminal(terminal, element);
     }
 
     /**
@@ -2684,7 +2875,7 @@ public class RoutingPipeline {
         AbsoluteBendpointDto next = path.get(1);
         if (source.x() != next.x() && source.y() != next.y()) {
             // Diagonal — insert L-turn based on exit face
-            EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(
+            EdgeAttachmentCalculator.Face face = faceOrAssumption(
                     new int[]{source.x(), source.y()}, conn.source());
             if (face == EdgeAttachmentCalculator.Face.LEFT
                     || face == EdgeAttachmentCalculator.Face.RIGHT) {
@@ -2701,7 +2892,7 @@ public class RoutingPipeline {
         AbsoluteBendpointDto last = path.get(path.size() - 1);
         AbsoluteBendpointDto prev = path.get(path.size() - 2);
         if (last.x() != prev.x() && last.y() != prev.y()) {
-            EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(
+            EdgeAttachmentCalculator.Face face = faceOrAssumption(
                     new int[]{last.x(), last.y()}, conn.target());
             if (face == EdgeAttachmentCalculator.Face.LEFT
                     || face == EdgeAttachmentCalculator.Face.RIGHT) {
@@ -2714,6 +2905,62 @@ public class RoutingPipeline {
             fixes++;
         }
         return fixes;
+    }
+
+    /**
+     * Re-derives one end's {@link TerminalAnchoring} from the terminal the pipeline now holds.
+     *
+     * <p>Every other consumer of the anchoring lists only reads them: the face chosen at edge
+     * attachment is carried unchanged through the rest of the pipeline, and the five wrap sites
+     * compare each mutation against it. That is correct as long as no stage deliberately moves a
+     * terminal to a different face. The self-element pass-through correction does exactly that —
+     * it re-selects a face and installs a terminal on it — and without this refresh the record goes
+     * on naming the face the terminal left, so every later wrap site measures the connection
+     * against a line it is no longer supposed to be on.
+     *
+     * <p>The refresh is deliberately conservative on two counts. It only rewrites the record when
+     * the relocated terminal sits exactly on the re-derived face's line — a terminal on no face line
+     * carries no evidence of which face it belongs to, and guessing there would replace a stale
+     * record with an invented one. And it declines outright at an exact corner, where the terminal
+     * lies on one vertical and one horizontal face line at once: both are equally true,
+     * {@link #determineFaceFromTerminal} resolves the tie by testing the vertical faces first, and
+     * persisting an arbitrary tie-break into the record is the same failure in a different costume.
+     *
+     * <p><strong>Applied at the self-element pass-through correction only.</strong> The corridor
+     * re-route for failed connections runs that same corrector on a single-connection batch, and is
+     * deliberately NOT refreshed here: it runs after the routed map is built, by which point nothing
+     * reads the anchoring lists again — the last read is the terminal-anchored reconciliation, which
+     * is several stages upstream. A refresh there would be unobservable, and unobservable code
+     * cannot be tested. If a future stage reads an anchoring after the routed map is built, that
+     * exemption stops holding and the corridor re-route needs this call too.
+     */
+    static void refreshAnchoring(List<TerminalAnchoring> anchorings, int index,
+            List<AbsoluteBendpointDto> path, boolean isSource, RoutingRect element) {
+        if (index >= anchorings.size() || path.size() < 2) {
+            return;
+        }
+        AbsoluteBendpointDto terminal = isSource ? path.get(0) : path.get(path.size() - 1);
+        if (isOnFaceCorner(terminal.x(), terminal.y(), element)) {
+            return;
+        }
+        EdgeAttachmentCalculator.Face face =
+                determineFaceFromTerminal(new int[]{terminal.x(), terminal.y()}, element);
+        if (face == null) {
+            // A terminal on no face line carries no evidence of which face it belongs to, so a
+            // refresh here would replace a stale record with an invented one. This is the same
+            // decline the on-line check below used to make after deriving a guess first.
+            return;
+        }
+        TerminalAnchoring rederived = new TerminalAnchoring(face);
+        if (rederived.equals(anchorings.get(index))) {
+            return;
+        }
+        int onLine = rederived.orthogonalAxis() == TerminalAnchoring.Axis.X
+                ? terminal.x() : terminal.y();
+        if (onLine != rederived.lineCoordinate(element)) {
+            return;
+        }
+        anchorings.set(index, rederived);
     }
 
     /**
@@ -2745,7 +2992,7 @@ public class RoutingPipeline {
         // the face midpoint and destroys hub port distribution.
         boolean sourceOnPerimeter = isOnElementPerimeter(first, source);
 
-        EdgeAttachmentCalculator.Face sourceFace = determineFaceFromTerminal(
+        EdgeAttachmentCalculator.Face sourceFace = faceOrAssumption(
                 new int[]{first.x(), first.y()}, source);
 
         if (sourceFace == EdgeAttachmentCalculator.Face.LEFT
@@ -2772,7 +3019,7 @@ public class RoutingPipeline {
         // Guard (target side): same rationale as source side.
         boolean targetOnPerimeter = isOnElementPerimeter(last, target);
 
-        EdgeAttachmentCalculator.Face targetFace = determineFaceFromTerminal(
+        EdgeAttachmentCalculator.Face targetFace = faceOrAssumption(
                 new int[]{last.x(), last.y()}, target);
 
         if (targetFace == EdgeAttachmentCalculator.Face.LEFT
@@ -2817,7 +3064,7 @@ public class RoutingPipeline {
             int[] edgePt = computeEdgeFaceMidpoint(source, face);
             path.set(0, new AbsoluteBendpointDto(edgePt[0], edgePt[1]));
             fixes++;
-            logger.debug("B44: Fixed source center-termination for connection {} — "
+            logger.debug("Fixed source center-termination for connection {} — "
                     + "moved ({},{}) to {} face ({},{})", conn.connectionId(),
                     first.x(), first.y(), face, edgePt[0], edgePt[1]);
         }
@@ -2832,7 +3079,7 @@ public class RoutingPipeline {
             int[] edgePt = computeEdgeFaceMidpoint(target, face);
             path.set(path.size() - 1, new AbsoluteBendpointDto(edgePt[0], edgePt[1]));
             fixes++;
-            logger.debug("B44: Fixed target center-termination for connection {} — "
+            logger.debug("Fixed target center-termination for connection {} — "
                     + "moved ({},{}) to {} face ({},{})", conn.connectionId(),
                     last.x(), last.y(), face, edgePt[0], edgePt[1]);
         }
@@ -2876,11 +3123,11 @@ public class RoutingPipeline {
                 } else {
                     path.add(1, new AbsoluteBendpointDto(next.x(), edgePt[1]));
                 }
-                logger.debug("B45: Inserted L-bend after source fix for connection {}",
+                logger.debug("Inserted L-bend after source fix for connection {}",
                         conn.connectionId());
             }
             fixes++;
-            logger.debug("B45: Fixed source interior-BP for connection {} — "
+            logger.debug("Fixed source interior-BP for connection {} — "
                     + "moved ({},{}) to {} face ({},{})", conn.connectionId(),
                     first.x(), first.y(), face, edgePt[0], edgePt[1]);
         }
@@ -2902,11 +3149,11 @@ public class RoutingPipeline {
                 } else {
                     path.add(path.size() - 1, new AbsoluteBendpointDto(prev.x(), edgePt[1]));
                 }
-                logger.debug("B45: Inserted L-bend before target fix for connection {}",
+                logger.debug("Inserted L-bend before target fix for connection {}",
                         conn.connectionId());
             }
             fixes++;
-            logger.debug("B45: Fixed target interior-BP for connection {} — "
+            logger.debug("Fixed target interior-BP for connection {} — "
                     + "moved ({},{}) to {} face ({},{})", conn.connectionId(),
                     last.x(), last.y(), face, edgePt[0], edgePt[1]);
         }
@@ -2918,7 +3165,7 @@ public class RoutingPipeline {
                 if (isInsideOrOnBoundary(bp, source) || isInsideOrOnBoundary(bp, target)) {
                     path.remove(i);
                     fixes++;
-                    logger.debug("B45: Removed intermediate BP ({},{}) inside endpoint "
+                    logger.debug("Removed intermediate BP ({},{}) inside endpoint "
                             + "element for connection {}", bp.x(), bp.y(),
                             conn.connectionId());
                 }
@@ -3088,14 +3335,14 @@ public class RoutingPipeline {
                 removeDuplicatePoints(path);
                 removeCollinearPoints(path);
 
-                logger.debug("B35 Phase B: {} face {} → {} for conn {} (re-routed with clearance WP)",
+                logger.debug("Self-pass-through elimination (phase B): {} face {} → {} for conn {} (re-routed with clearance WP)",
                         isSource ? "source" : "target", currentFace, candidateFace,
                         connection.connectionId());
                 return true;
             }
         }
 
-        logger.warn("B35 Phase B: no face eliminates {} pass-through for conn {}",
+        logger.warn("Self-pass-through elimination (phase B): no face eliminates {} pass-through for conn {}",
                 isSource ? "source" : "target", connection.connectionId());
         return false;
     }
@@ -3501,6 +3748,26 @@ public class RoutingPipeline {
      */
     static void removeObstacleViolations(List<AbsoluteBendpointDto> path,
             List<RoutingRect> obstacles) {
+        removeObstacleViolations(path, obstacles, null);
+    }
+
+    /**
+     * As {@link #removeObstacleViolations(List, List)}, but given the connection's endpoints it
+     * repositions a violating terminal along its own element face before falling back to deleting
+     * it. Deleting a terminal promotes its neighbour to the terminal index on whatever coordinate
+     * that neighbour happens to hold, which is off every face line unless it is one by accident,
+     * and no later pass repairs it once both realignments have run.
+     *
+     * <p>Repositioning abstains when the terminal is on no face line: there is then no face to
+     * slide along, and guessing one would place the terminal against an edge the route never
+     * departed from. It also abstains when the <em>one</em> position it tries — the neighbour's
+     * coordinate clamped to the face — is itself obstructed; it does not search the rest of the
+     * face, so a clean position elsewhere on the same face would be missed. In both cases the
+     * deletion still happens, because leaving the crossing in place is the strictly worse
+     * defect.</p>
+     */
+    static void removeObstacleViolations(List<AbsoluteBendpointDto> path,
+            List<RoutingRect> obstacles, ConnectionEndpoints conn) {
         if (path.size() < 2 || obstacles.isEmpty()) {
             return;
         }
@@ -3521,9 +3788,13 @@ public class RoutingPipeline {
                         // Interior segment: try removing point i+1 first, then i
                         path.remove(i + 1);
                     } else if (i == 0 && path.size() > 2) {
-                        path.remove(0);
+                        if (!repositionTerminalOnFace(path, true, conn, obstacles)) {
+                            path.remove(0);
+                        }
                     } else if (i == path.size() - 2 && path.size() > 2) {
-                        path.remove(path.size() - 1);
+                        if (!repositionTerminalOnFace(path, false, conn, obstacles)) {
+                            path.remove(path.size() - 1);
+                        }
                     } else {
                         // Only 2 points left and they intersect — can't fix, leave as-is
                         break;
@@ -3533,6 +3804,63 @@ public class RoutingPipeline {
                 }
             }
         }
+    }
+
+
+    /**
+     * Slides a terminal bendpoint to its neighbour's coordinate along the element face it already
+     * sits on, clamped to that face's extent, and keeps the move only if the resulting segment
+     * clears every obstacle. Returns false — leaving the path untouched — when the connection is
+     * not known, when the terminal is on no face line, or when that single candidate position is
+     * still obstructed; the caller then falls back to deleting the terminal.
+     *
+     * <p><strong>One candidate, not a search.</strong> Only the neighbour-aligned position is
+     * tried, because it is the one that makes the terminal segment perpendicular to the face,
+     * which is the property edge attachment exists to produce. A different point on the same face
+     * might also clear the obstacle while leaving the segment diagonal; that trade is not made
+     * here and the terminal is deleted instead.</p>
+     */
+    private static boolean repositionTerminalOnFace(List<AbsoluteBendpointDto> path,
+            boolean sourceEnd, ConnectionEndpoints conn, List<RoutingRect> obstacles) {
+        if (conn == null) {
+            return false;
+        }
+        RoutingRect elem = sourceEnd ? conn.source() : conn.target();
+        if (elem == null) {
+            return false;
+        }
+        int termIdx = sourceEnd ? 0 : path.size() - 1;
+        int nbrIdx = sourceEnd ? 1 : path.size() - 2;
+        AbsoluteBendpointDto term = path.get(termIdx);
+        AbsoluteBendpointDto nbr = path.get(nbrIdx);
+
+        // Which face line is the terminal on? Abstain rather than guess — a terminal on no face
+        // line has no face to slide along, and one on a corner has two with no way to tell which
+        // the route departed from.
+        EdgeAttachmentCalculator.Face face = determineFaceFromTerminal(
+                new int[]{term.x(), term.y()}, elem);
+        if (face == null || isOnFaceCorner(term.x(), term.y(), elem)) {
+            return false;
+        }
+        boolean verticalFace = face == EdgeAttachmentCalculator.Face.LEFT
+                || face == EdgeAttachmentCalculator.Face.RIGHT;
+
+        AbsoluteBendpointDto moved;
+        if (verticalFace) {
+            int y = Math.max(elem.y(), Math.min(elem.y() + elem.height(), nbr.y()));
+            moved = new AbsoluteBendpointDto(term.x(), y);
+        } else {
+            int x = Math.max(elem.x(), Math.min(elem.x() + elem.width(), nbr.x()));
+            moved = new AbsoluteBendpointDto(x, term.y());
+        }
+        if (moved.x() == term.x() && moved.y() == term.y()) {
+            return false;
+        }
+        if (segmentIntersectsAnyObstacle(moved.x(), moved.y(), nbr.x(), nbr.y(), obstacles)) {
+            return false;
+        }
+        path.set(termIdx, moved);
+        return true;
     }
 
     /**
@@ -3815,7 +4143,7 @@ public class RoutingPipeline {
         path.set(1, corner);
         path.add(2, corrected);
 
-        logger.debug("B72-a source self-hug corrected: face={}, faceLine={}, corridor={}",
+        logger.debug("Source self-hug corrected: face={}, faceLine={}, corridor={}",
                 sourceAnchoring.face(), faceLine, corridorCoord);
         return true;
     }
@@ -3890,7 +4218,7 @@ public class RoutingPipeline {
         path.set(lastIdx - 1, corrected);
         path.add(lastIdx, corner);
 
-        logger.debug("B72-a target self-hug corrected: face={}, faceLine={}, corridor={}",
+        logger.debug("Target self-hug corrected: face={}, faceLine={}, corridor={}",
                 targetAnchoring.face(), faceLine, corridorCoord);
         return true;
     }
@@ -4152,6 +4480,186 @@ public class RoutingPipeline {
     }
 
     /**
+     * Builds the non-monotonic re-route warning: the routed result carries more edge
+     * crossings than the geometry it replaced, so this call made the view worse on the
+     * crossing metric than it was on entry.
+     *
+     * <p>Deliberately distinct from {@link #buildCrossingInflationWarning}, which
+     * compares against a straight-line topology estimate and therefore answers a
+     * different question ("is this layout too dense to route?"). That signal cannot
+     * detect a regression: it never reads the input geometry, and it short-circuits to
+     * silence whenever the straight-line estimate is zero. This one compares against the
+     * view's actual prior geometry.</p>
+     *
+     * <p>Reports only; the caller keeps the route. A full re-route can legitimately
+     * trade crossings — the most tolerable routing defect — for a fix to a far more
+     * jarring one (a connection passing through an element, say), so refusing every
+     * crossing increase would block genuinely good re-routes. Naming the counts and the
+     * remedy lets the caller judge.</p>
+     *
+     * <p><strong>What the message may claim is bounded by what this method can see.</strong>
+     * Two crossing counts. Not {@code interiorTerminations}, not cross-element pass-throughs,
+     * not the composite rating, not the view — the signature is the proof. So the applied arm
+     * states the arithmetic and the cost of the recovery, and never the verdict "this re-route
+     * is worse": a re-route that raises crossings while clearing a connection that ran through
+     * an element has improved the view by the project's own weighting, and a caller who undoes
+     * it on the strength of a crossing count loses that improvement. The whole-view judgment
+     * needs a whole-view comparison, which belongs to the composite-rating comparator and not
+     * here.</p>
+     *
+     * <p><strong>That reasoning is not arm-specific, and the two deferred arms below have not yet
+     * been brought into line with it.</strong> They still say "applying this re-route would leave
+     * the view worse than it is now" — the same unlicensed verdict in the future tense, from the
+     * same two ints. It is left standing deliberately, for two reasons: holding those strings
+     * byte-identical is the control that proves the applied-arm rewrite reached only the arm it
+     * was aimed at, and the rating-aware successor dissolves all three sites at once by emitting
+     * this comparison through the composite-rating comparator on every arm. Until it lands, an
+     * agent that discards a queued re-route on the strength of that sentence loses the same
+     * geometry an {@code undo} would have. Do not read the paragraph above as a description of
+     * all three branches.</p>
+     *
+     * @param crossingsBefore crossing count among targeted connections before routing
+     * @param crossingsAfter  crossing count among the same connections after routing
+     * @return warning string, or null when the re-route held or improved crossings
+     */
+    /**
+     * Note the tense on the two deferred arms: the crossing increase is stated as MEASURED, and
+     * only the claim about the model is conditional.
+     *
+     * <p>The router ran. It built the paths and counted 209 crossings on them where the view
+     * carries 97. That is an established figure whatever becomes of the commands, so writing
+     * "routing WOULD increase crossings" would present a measurement as a prediction and quietly
+     * under-claim it — the mirror of the over-claim this family was fixed for, and just as wrong.
+     * What has not happened is the replacement, so that is what the conditional attaches to. It
+     * also keeps this half in the same grammatical mood as its {@code nextSteps} sibling, which
+     * says the same thing the same way.</p>
+     */
+    public static String buildCrossingsRegressedWarning(int crossingsBefore, int crossingsAfter,
+            DispatchArm arm) {
+        if (crossingsAfter <= crossingsBefore) {
+            return null;
+        }
+        return switch (arm) {
+            case APPLIED -> String.format(
+                "Routing increased edge crossings from %d to %d. The new paths were still "
+                + "applied. Crossings alone do not determine layout quality — a routed view "
+                + "can score worse here and still read better overall; review the view before "
+                + "deciding, and if you do want the previous geometry back, undo reverts the "
+                + "whole routing pass, not just the crossings.",
+                crossingsBefore, crossingsAfter);
+            case QUEUED -> String.format(
+                "Routing increased edge crossings from %d to %d against the geometry it would "
+                + "replace — applying this re-route would leave the view worse than it is now. "
+                + "Nothing has been applied: the re-route is queued in the open batch, so undo is "
+                + "not the remedy here and would revert whichever command is actually on top of "
+                + "the stack. Discard the queued re-route with end-batch rollback:true, or commit "
+                + "it with end-batch and re-run assess-layout to see what landed.",
+                crossingsBefore, crossingsAfter);
+            case AWAITING_APPROVAL -> String.format(
+                "Routing increased edge crossings from %d to %d against the geometry it would "
+                + "replace — applying this re-route would leave the view worse than it is now. "
+                + "Nothing has been applied: the re-route is waiting on the human's decision, so "
+                + "undo is not the remedy here and would revert whichever command is actually on "
+                + "top of the stack. Rejecting the change in Archi leaves the previous paths "
+                + "exactly as they are.",
+                crossingsBefore, crossingsAfter);
+        } + CROSSINGS_REGRESSED_ALTERNATIVE;
+    }
+
+    /**
+     * The second attempt, kept identical on every arm.
+     *
+     * <p>A queued or awaiting-approval re-route still ran the router and still counted the
+     * crossings, so the measurement is established whatever happens to the model next — and
+     * {@code terminals-only} is the right second attempt regardless of which arm the first one is
+     * sitting on. Held as one constant rather than repeated per arm so the alternative cannot
+     * acquire three slightly different meanings.</p>
+     */
+    private static final String CROSSINGS_REGRESSED_ALTERNATIVE =
+            " To straighten diagonal terminals without re-routing connection interiors (the usual "
+            + "reason a tidy layout regresses here), re-run auto-route-connections with mode "
+            + "'terminals-only', which declines any rectification that would add crossings.";
+
+    /**
+     * Tool that undoes a regressed re-route. Deliberately NOT
+     * {@code auto-route-connections}: a caller reading only the structured field and
+     * re-invoking the emitting tool would default back to full mode and reproduce the
+     * same regression. The remedy is to restore the previous geometry; the message body
+     * additionally describes the {@code mode: 'terminals-only'} re-run, which cannot be
+     * expressed here because this field carries a bare tool name with no arguments.
+     */
+    private static final String CROSSINGS_REGRESSED_REMEDY_TOOL = "undo";
+
+    /**
+     * The tool that discards a re-route still sitting in an open batch. {@code undo} is wrong here
+     * and actively harmful: the queued command is not on the command stack at all, so undoing pops
+     * whatever the human or an earlier call left on top of it.
+     */
+    private static final String CROSSINGS_REGRESSED_QUEUED_REMEDY_TOOL = "end-batch";
+
+    /**
+     * Named for a re-route awaiting a human's decision: nothing. No MCP tool performs that
+     * recovery — the agent cannot approve or reject its own proposal — and an empty value is
+     * dropped from the wire by {@code @JsonInclude(NON_EMPTY)}, so the caller sees no key rather
+     * than a tool it cannot usefully run. Naming a tool that does not recover the call is the
+     * failure this family exists to stop.
+     */
+    private static final String CROSSINGS_REGRESSED_NO_REMEDY_TOOL = "";
+
+    /** The tool that recovers a regressed re-route on {@code arm}, or {@code ""} when none does. */
+    private static String crossingsRegressedRemedyTool(DispatchArm arm) {
+        return switch (arm) {
+            case APPLIED -> CROSSINGS_REGRESSED_REMEDY_TOOL;
+            case QUEUED -> CROSSINGS_REGRESSED_QUEUED_REMEDY_TOOL;
+            case AWAITING_APPROVAL -> CROSSINGS_REGRESSED_NO_REMEDY_TOOL;
+        };
+    }
+
+    /**
+     * Appends both crossing-quality warnings for a full-mode orthogonal route: the
+     * straight-line density inflation signal and the non-monotonic re-route signal.
+     * Each is independent — a route can trip either, both, or neither.
+     *
+     * <p>Only the regression carries a structured code. The inflation message stays
+     * free-text-only, exactly as it shipped, so existing consumers see no contract
+     * change.</p>
+     *
+     * <p><strong>The regression signal requires {@code inputWasRouted}.</strong> When no
+     * targeted connection carried bendpoints, the view was unrouted: every connection
+     * rendered as a straight centre-to-centre line. Straight lines are close to
+     * crossing-minimal — an orthogonal route has to detour around obstacles — so a
+     * first-time route of an unrouted view very often raises the crossing count while
+     * plainly improving the diagram. Warning there would be false, and its "undo" advice
+     * actively harmful: it would restore the unrouted diagonals, which are a far more
+     * jarring defect than any number of crossings. The comparison is only meaningful when
+     * the geometry being replaced was itself a route the caller might legitimately want
+     * back.</p>
+     *
+     * @param crossingsBefore       crossing count before routing
+     * @param crossingsAfter        crossing count after routing
+     * @param straightLineCrossings straight-line crossing estimate
+     * @param inputWasRouted        whether the replaced geometry carried any bendpoints
+     * @param warnings              free-text sink; both messages land here
+     * @param structuredWarnings    structured sink; the regression lands here
+     */
+    public static void appendCrossingWarnings(int crossingsBefore, int crossingsAfter,
+            int straightLineCrossings, boolean inputWasRouted, DispatchArm arm,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        String inflation = buildCrossingInflationWarning(crossingsAfter, straightLineCrossings);
+        if (inflation != null) {
+            warnings.add(inflation);
+        }
+        String regressed = inputWasRouted
+                ? buildCrossingsRegressedWarning(crossingsBefore, crossingsAfter, arm) : null;
+        if (regressed != null) {
+            warnings.add(regressed);
+            structuredWarnings.add(new StructuredWarningDto(
+                    StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED,
+                    regressed, crossingsRegressedRemedyTool(arm), List.of()));
+        }
+    }
+
+    /**
      * Enforces minimum clearance between intermediate bendpoints and obstacle boundaries.
      * Skips terminal BPs (first and last). For each connection, the source and target elements
      * are excluded from obstacle checking (only third-party obstacles are checked).
@@ -4163,9 +4671,10 @@ public class RoutingPipeline {
      *
      * @param path       mutable list of bendpoints for one connection
      * @param obstacles  obstacle rectangles to clear from. Production passes the
-     *                   connection's ancestor-excluded set ({@code conn.obstacles()}),
-     *                   so an endpoint's own container is not treated as a clearance
-     *                   obstacle; source/target are additionally skipped by id.
+     *                   connection's ancestor- and descendant-excluded set
+     *                   ({@code conn.obstacles()}), so neither an endpoint's own container nor
+     *                   anything nested inside it is treated as a clearance obstacle;
+     *                   source/target are additionally skipped by id.
      * @param source     source element rectangle (excluded from checks for this connection)
      * @param target     target element rectangle (excluded from checks for this connection)
      * @return number of bendpoints that were nudged
@@ -4315,9 +4824,10 @@ public class RoutingPipeline {
      *
      * @param path       mutable list of bendpoints for one connection
      * @param obstacles  obstacle rectangles to clear from. Production passes the
-     *                   connection's ancestor-excluded set ({@code conn.obstacles()}),
-     *                   so an endpoint's own container is not treated as a clearance
-     *                   obstacle; source/target are additionally skipped by id.
+     *                   connection's ancestor- and descendant-excluded set
+     *                   ({@code conn.obstacles()}), so neither an endpoint's own container nor
+     *                   anything nested inside it is treated as a clearance obstacle;
+     *                   source/target are additionally skipped by id.
      * @param source     source element rectangle (excluded from checks for this connection)
      * @param target     target element rectangle (excluded from checks for this connection)
      * @return number of segments that were shifted
@@ -4502,7 +5012,8 @@ public class RoutingPipeline {
      *
      * @param path      mutable bendpoint list (2 or 3 BPs)
      * @param obstacles obstacle rectangles to clear from (production passes the
-     *                  connection's ancestor-excluded {@code conn.obstacles()} set)
+     *                  connection's ancestor- and descendant-excluded
+     *                  {@code conn.obstacles()} set)
      * @param source    source element rect (excluded from obstacle checks)
      * @param target    target element rect (excluded from obstacle checks)
      * @return number of paths modified (0 or 1)

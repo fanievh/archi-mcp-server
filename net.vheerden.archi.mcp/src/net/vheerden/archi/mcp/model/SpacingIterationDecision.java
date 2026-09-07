@@ -22,7 +22,7 @@ package net.vheerden.archi.mcp.model;
  * ladders (constant / geometric / halving-toward-target) were considered and
  * rejected.</p>
  *
- * <p><strong>Per-iteration step cap</strong> (composer-only via Option α):
+ * <p><strong>Per-iteration step cap</strong> (composer-only):
  * when called from the composer path, the cap is
  * {@link ApplySpacingDecision#ELEMENT_KNEE_LIMIT_PX} (80) or
  * {@link ApplySpacingDecision#GROUP_KNEE_LIMIT_PX} (100); the constants

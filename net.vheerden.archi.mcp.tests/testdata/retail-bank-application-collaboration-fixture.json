@@ -1,0 +1,477 @@
+{
+  "viewName": "Retail bank \u2014 application collaboration (ELK, terminals-only baseline)",
+  "elements": [
+    {
+      "id": "id-b2c1897a8ac040eda90b4e07fb7013c6",
+      "name": "Customer Identity & Onboarding",
+      "x": 487,
+      "y": 12,
+      "w": 240,
+      "h": 182,
+      "isChild": false
+    },
+    {
+      "id": "id-5880ce8a01bc4cf79bdd137c23405494",
+      "name": "Identity & Access Management (IAM)",
+      "x": 500,
+      "y": 51,
+      "w": 200,
+      "h": 40,
+      "isChild": true,
+      "parentId": "id-b2c1897a8ac040eda90b4e07fb7013c6"
+    },
+    {
+      "id": "id-d16255c0579b40ea95a8f5bcb23f91cb",
+      "name": "KYC & Identity Verification",
+      "x": 500,
+      "y": 141,
+      "w": 200,
+      "h": 40,
+      "isChild": true,
+      "parentId": "id-b2c1897a8ac040eda90b4e07fb7013c6"
+    },
+    {
+      "id": "id-0e472ea40b86450799fd60aff4544dfd",
+      "name": "Payments Processing",
+      "x": 487,
+      "y": 259,
+      "w": 240,
+      "h": 182,
+      "isChild": false
+    },
+    {
+      "id": "id-3859686addc54c32acd37cbe19a48731",
+      "name": "Payments Hub",
+      "x": 500,
+      "y": 298,
+      "w": 200,
+      "h": 40,
+      "isChild": true,
+      "parentId": "id-0e472ea40b86450799fd60aff4544dfd"
+    },
+    {
+      "id": "id-9007a0ecd3994d3ca25ccd237b185241",
+      "name": "Fraud Detection & Prevention Engine",
+      "x": 500,
+      "y": 388,
+      "w": 200,
+      "h": 40,
+      "isChild": true,
+      "parentId": "id-0e472ea40b86450799fd60aff4544dfd"
+    },
+    {
+      "id": "id-6db7db323de340999313929201bd9408",
+      "name": "Core Banking System",
+      "x": 777,
+      "y": 426,
+      "w": 205,
+      "h": 306,
+      "isChild": false
+    },
+    {
+      "id": "id-5842e95968f14ac8a86ba2f41b02e31e",
+      "name": "Account Management",
+      "x": 790,
+      "y": 465,
+      "w": 180,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-6db7db323de340999313929201bd9408"
+    },
+    {
+      "id": "id-134a6001fbfc4cc58e08c73e7bb17265",
+      "name": "Ledger Posting",
+      "x": 790,
+      "y": 541,
+      "w": 180,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-6db7db323de340999313929201bd9408"
+    },
+    {
+      "id": "id-5a35ec06b9224f19a7089bc5596e4340",
+      "name": "Interest & Fee Calculation",
+      "x": 790,
+      "y": 617,
+      "w": 180,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-6db7db323de340999313929201bd9408"
+    },
+    {
+      "id": "id-24720e0af23c46698072b05570d4aeae",
+      "name": "Statement Generation",
+      "x": 790,
+      "y": 693,
+      "w": 180,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-6db7db323de340999313929201bd9408"
+    },
+    {
+      "id": "id-e13e301a0a8f484d9c9a14a6e5911b7c",
+      "name": "Open Banking API Platform",
+      "x": 12,
+      "y": 21,
+      "w": 195,
+      "h": 154,
+      "isChild": false
+    },
+    {
+      "id": "id-96e634a8206845ea978cd498e3540237",
+      "name": "Account Information Access",
+      "x": 25,
+      "y": 60,
+      "w": 170,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-e13e301a0a8f484d9c9a14a6e5911b7c"
+    },
+    {
+      "id": "id-2eec9018b7ce4900ba942ea50b2812c2",
+      "name": "Payment Initiation",
+      "x": 25,
+      "y": 136,
+      "w": 170,
+      "h": 26,
+      "isChild": true,
+      "parentId": "id-e13e301a0a8f484d9c9a14a6e5911b7c"
+    },
+    {
+      "id": "id-def5fcc981b44ab39f659bf98f97bbbf",
+      "name": "Mobile Banking App",
+      "x": 1241,
+      "y": 75,
+      "w": 170,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-6d57323722874c659c780e723544f3a0",
+      "name": "Digital Experience API (BFF)",
+      "x": 1872,
+      "y": 89,
+      "w": 170,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-8de54d71db964ab79922461b3086ab49",
+      "name": "Enterprise API Gateway",
+      "x": 257,
+      "y": 197,
+      "w": 180,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-850bf29b58694fcb928488d161b81b84",
+      "name": "Event Streaming Platform",
+      "x": 1236,
+      "y": 258,
+      "w": 180,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-4fe4b828aa6d41c08c107d88dd7f1b5c",
+      "name": "Customer 360 / MDM",
+      "x": 1632,
+      "y": 249,
+      "w": 180,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-1e52a0c4f0fe4ade9e18a3684dc239d9",
+      "name": "Loan Origination & Servicing",
+      "x": 537,
+      "y": 551,
+      "w": 190,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-51a82b0feebc4685a2aa6fd4d5721530",
+      "name": "Cards Management Platform",
+      "x": 780,
+      "y": 245,
+      "w": 200,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-920e719624a248cba059f4e41559c8a8",
+      "name": "Notification & Messaging Service",
+      "x": 1622,
+      "y": 354,
+      "w": 200,
+      "h": 55,
+      "isChild": false
+    }
+  ],
+  "connections": [
+    {
+      "id": "id-fbc2bf24d8f34b1ca5d7605cadf67fe4",
+      "sourceId": "id-b2c1897a8ac040eda90b4e07fb7013c6",
+      "targetId": "id-def5fcc981b44ab39f659bf98f97bbbf",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-acc20b9a564e4a7ab4e48629708beed9",
+      "sourceId": "id-0e472ea40b86450799fd60aff4544dfd",
+      "targetId": "id-6db7db323de340999313929201bd9408",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 130,
+          "startY": 45,
+          "endX": -142,
+          "endY": -184
+        },
+        {
+          "startX": 130,
+          "startY": 152,
+          "endX": -142,
+          "endY": -77
+        }
+      ]
+    },
+    {
+      "id": "id-4900fbeb3867490e953d1145ef2e43af",
+      "sourceId": "id-0e472ea40b86450799fd60aff4544dfd",
+      "targetId": "id-51a82b0feebc4685a2aa6fd4d5721530",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 130,
+          "startY": 0,
+          "endX": -143,
+          "endY": 78
+        },
+        {
+          "startX": 130,
+          "startY": -78,
+          "endX": -143,
+          "endY": 0
+        }
+      ]
+    },
+    {
+      "id": "id-081548aa30e74580a9100d5910c6a73b",
+      "sourceId": "id-6db7db323de340999313929201bd9408",
+      "targetId": "id-850bf29b58694fcb928488d161b81b84",
+      "label": "Transaction events",
+      "bendpoints": [
+        {
+          "startX": 327,
+          "startY": -1,
+          "endX": -120,
+          "endY": 293
+        },
+        {
+          "startX": 327,
+          "startY": -279,
+          "endX": -120,
+          "endY": 15
+        }
+      ]
+    },
+    {
+      "id": "id-014490e4c26b49c68b010e2bef8c5427",
+      "sourceId": "id-e13e301a0a8f484d9c9a14a6e5911b7c",
+      "targetId": "id-b2c1897a8ac040eda90b4e07fb7013c6",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-22f663f824ea45a58ddda5412fc65e02",
+      "sourceId": "id-e13e301a0a8f484d9c9a14a6e5911b7c",
+      "targetId": "id-8de54d71db964ab79922461b3086ab49",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 108,
+          "startY": 26,
+          "endX": -130,
+          "endY": -100
+        },
+        {
+          "startX": 108,
+          "startY": 126,
+          "endX": -130,
+          "endY": 0
+        }
+      ]
+    },
+    {
+      "id": "id-7c9c536e5b61401fb5453a35ed27fdc6",
+      "sourceId": "id-def5fcc981b44ab39f659bf98f97bbbf",
+      "targetId": "id-6d57323722874c659c780e723544f3a0",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-3f0f566b3e1248b780e754dc60ac5301",
+      "sourceId": "id-6d57323722874c659c780e723544f3a0",
+      "targetId": "id-8de54d71db964ab79922461b3086ab49",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": -125,
+          "startY": 1,
+          "endX": 1485,
+          "endY": -107
+        },
+        {
+          "startX": -125,
+          "startY": 103,
+          "endX": 1485,
+          "endY": -5
+        }
+      ]
+    },
+    {
+      "id": "id-473af69f3f0147e097f52ce5d931110f",
+      "sourceId": "id-8de54d71db964ab79922461b3086ab49",
+      "targetId": "id-b2c1897a8ac040eda90b4e07fb7013c6",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 100,
+          "startY": 0,
+          "endX": -160,
+          "endY": 121
+        },
+        {
+          "startX": 100,
+          "startY": -121,
+          "endX": -160,
+          "endY": 0
+        }
+      ]
+    },
+    {
+      "id": "id-ef2934ee104c43b79f3c936b322a4c21",
+      "sourceId": "id-8de54d71db964ab79922461b3086ab49",
+      "targetId": "id-0e472ea40b86450799fd60aff4544dfd",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 110,
+          "startY": 6,
+          "endX": -150,
+          "endY": -120
+        },
+        {
+          "startX": 110,
+          "startY": 126,
+          "endX": -150,
+          "endY": 0
+        }
+      ]
+    },
+    {
+      "id": "id-57d108125cf845abb1082c48ce2a24bf",
+      "sourceId": "id-8de54d71db964ab79922461b3086ab49",
+      "targetId": "id-6db7db323de340999313929201bd9408",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 100,
+          "startY": 17,
+          "endX": -432,
+          "endY": -338
+        },
+        {
+          "startX": 100,
+          "startY": 431,
+          "endX": -432,
+          "endY": 76
+        }
+      ]
+    },
+    {
+      "id": "id-2c449e6676984070a2eb4d9c0af4dfa1",
+      "sourceId": "id-850bf29b58694fcb928488d161b81b84",
+      "targetId": "id-0e472ea40b86450799fd60aff4544dfd",
+      "label": "Event stream",
+      "bendpoints": [
+        {
+          "startX": -130,
+          "startY": 1,
+          "endX": 589,
+          "endY": -64
+        },
+        {
+          "startX": -130,
+          "startY": 65,
+          "endX": 589,
+          "endY": 0
+        }
+      ]
+    },
+    {
+      "id": "id-c40f6398e52a4cfd90b098bbc2c01102",
+      "sourceId": "id-850bf29b58694fcb928488d161b81b84",
+      "targetId": "id-4fe4b828aa6d41c08c107d88dd7f1b5c",
+      "label": "Event stream",
+      "bendpoints": []
+    },
+    {
+      "id": "id-92d02236cff24af981f1d6ab07b02307",
+      "sourceId": "id-850bf29b58694fcb928488d161b81b84",
+      "targetId": "id-920e719624a248cba059f4e41559c8a8",
+      "label": "Event stream",
+      "bendpoints": [
+        {
+          "startX": 100,
+          "startY": 10,
+          "endX": -296,
+          "endY": -86
+        },
+        {
+          "startX": 100,
+          "startY": 97,
+          "endX": -296,
+          "endY": 1
+        }
+      ]
+    },
+    {
+      "id": "id-0ddae8e19e314a1bbf4967c47cb64f1d",
+      "sourceId": "id-4fe4b828aa6d41c08c107d88dd7f1b5c",
+      "targetId": "id-6d57323722874c659c780e723544f3a0",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 120,
+          "startY": 1,
+          "endX": -115,
+          "endY": 161
+        },
+        {
+          "startX": 120,
+          "startY": -146,
+          "endX": -115,
+          "endY": 14
+        }
+      ]
+    },
+    {
+      "id": "id-f64a5c4719e843cd8491f8b5ceed1f26",
+      "sourceId": "id-1e52a0c4f0fe4ade9e18a3684dc239d9",
+      "targetId": "id-6db7db323de340999313929201bd9408",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-584c4c99b6414505a367b769efe1a586",
+      "sourceId": "id-51a82b0feebc4685a2aa6fd4d5721530",
+      "targetId": "id-850bf29b58694fcb928488d161b81b84",
+      "label": "Card events",
+      "bendpoints": []
+    }
+  ]
+}

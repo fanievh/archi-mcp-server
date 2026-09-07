@@ -751,7 +751,7 @@ public class EdgeAttachmentCalculator {
                 continue;
             }
 
-            String logPrefix = strongAlignment ? "B32" : "B46";
+            String logPrefix = strongAlignment ? "strong-alignment" : "diagonal-gap";
 
             // Correct target face if it contradicts natural alignment
             // Hubs skipped for weak alignments (1.2:1-2:1); corrected for strong (2:1+)
@@ -792,7 +792,7 @@ public class EdgeAttachmentCalculator {
         }
 
         if (corrections > 0) {
-            logger.info("B32/B46: Corrected {} approach direction(s) to natural alignment{}", corrections,
+            logger.info("Corrected {} approach direction(s) to natural alignment{}", corrections,
                     strongHubOnly ? " (hub-only re-pass)" : "");
         }
     }
@@ -876,7 +876,7 @@ public class EdgeAttachmentCalculator {
                 Face newFace = findCleanAlternativeFace(bendpoints, source, target,
                         sourceFaces[i], targetFaces[i], true);
                 if (newFace != null) {
-                    logger.debug("B35 Phase A: conn {} source face {} → {} (self-PT eliminated)",
+                    logger.debug("Self-pass-through elimination (phase A): conn {} source face {} → {}",
                             connectionIds.get(i), sourceFaces[i], newFace);
                     sourceFaces[i] = newFace;
                     corrections++;
@@ -888,7 +888,7 @@ public class EdgeAttachmentCalculator {
                 Face newFace = findCleanAlternativeFace(bendpoints, source, target,
                         sourceFaces[i], targetFaces[i], false);
                 if (newFace != null) {
-                    logger.debug("B35 Phase A: conn {} target face {} → {} (self-PT eliminated)",
+                    logger.debug("Self-pass-through elimination (phase A): conn {} target face {} → {}",
                             connectionIds.get(i), targetFaces[i], newFace);
                     targetFaces[i] = newFace;
                     corrections++;
@@ -897,7 +897,7 @@ public class EdgeAttachmentCalculator {
         }
 
         if (corrections > 0) {
-            logger.info("B35 Phase A: Corrected {} face(s) to avoid self-element pass-throughs", corrections);
+            logger.info("Self-pass-through elimination (phase A): corrected {} face(s) to avoid self-element pass-throughs", corrections);
         }
     }
 

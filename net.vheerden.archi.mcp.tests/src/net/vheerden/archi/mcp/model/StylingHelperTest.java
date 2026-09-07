@@ -1,7 +1,9 @@
 package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 
@@ -38,7 +40,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void validateStylingParams_acceptsRectangularAndTabbedFigureType_AC11() {
+    public void validateStylingParams_acceptsRectangularAndTabbedFigureType() {
         StylingHelper.validateStylingParams(new StylingParams(
                 null, null, null, null, null, "rectangular", null, null));
         StylingHelper.validateStylingParams(new StylingParams(
@@ -51,7 +53,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void validateStylingParams_acceptsNullOrEmptyFigureType_AC11() {
+    public void validateStylingParams_acceptsNullOrEmptyFigureType() {
         StylingHelper.validateStylingParams(new StylingParams(
                 null, null, null, null, null, null, null, null));
         StylingHelper.validateStylingParams(new StylingParams(
@@ -60,7 +62,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void validateStylingParams_rejectsInvalidFigureType_AC11() {
+    public void validateStylingParams_rejectsInvalidFigureType() {
         try {
             StylingHelper.validateStylingParams(new StylingParams(
                     null, null, null, null, null, "folder", null, null));
@@ -75,7 +77,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void validateStylingParams_acceptsAllTextAlignmentValues_AC11() {
+    public void validateStylingParams_acceptsAllTextAlignmentValues() {
         for (String v : new String[] {"left", "centre", "center", "right", "LEFT", "Right"}) {
             StylingHelper.validateStylingParams(new StylingParams(
                     null, null, null, null, null, null, v, null));
@@ -83,7 +85,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void validateStylingParams_rejectsInvalidTextAlignment_AC11() {
+    public void validateStylingParams_rejectsInvalidTextAlignment() {
         try {
             StylingHelper.validateStylingParams(new StylingParams(
                     null, null, null, null, null, null, "justified", null));
@@ -98,7 +100,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void validateStylingParams_acceptsAllVerticalTextAlignmentValues_AC17() {
+    public void validateStylingParams_acceptsAllVerticalTextAlignmentValues() {
         for (String v : new String[] {"top", "centre", "center", "bottom", "TOP", "Bottom"}) {
             StylingHelper.validateStylingParams(new StylingParams(
                     null, null, null, null, null, null, null, v));
@@ -106,7 +108,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void validateStylingParams_rejectsInvalidVerticalTextAlignment_AC17() {
+    public void validateStylingParams_rejectsInvalidVerticalTextAlignment() {
         try {
             StylingHelper.validateStylingParams(new StylingParams(
                     null, null, null, null, null, null, null, "middle"));
@@ -121,7 +123,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void mapFigureTypeToInt_returnsExpectedConstants_AC7() {
+    public void mapFigureTypeToInt_returnsExpectedConstants() {
         // BORDER_TABBED = 0 / BORDER_RECTANGLE = 1 per IDiagramModelGroup; same convention
         // as IDiagramModelArchimateObject.setType(int) for elements with alternate figures.
         assertEquals(IDiagramModelGroup.BORDER_TABBED, StylingHelper.mapFigureTypeToInt("tabbed"));
@@ -131,7 +133,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void mapTextAlignmentToInt_returnsExpectedSwtConstants_AC7() {
+    public void mapTextAlignmentToInt_returnsExpectedSwtConstants() {
         assertEquals(ITextAlignment.TEXT_ALIGNMENT_LEFT, StylingHelper.mapTextAlignmentToInt("left"));
         assertEquals(ITextAlignment.TEXT_ALIGNMENT_CENTER, StylingHelper.mapTextAlignmentToInt("centre"));
         assertEquals(ITextAlignment.TEXT_ALIGNMENT_CENTER, StylingHelper.mapTextAlignmentToInt("center"));
@@ -139,7 +141,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void mapVerticalTextAlignmentToInt_returnsExpectedConstants_AC17() {
+    public void mapVerticalTextAlignmentToInt_returnsExpectedConstants() {
         assertEquals(ITextPosition.TEXT_POSITION_TOP, StylingHelper.mapVerticalTextAlignmentToInt("top"));
         assertEquals(ITextPosition.TEXT_POSITION_CENTRE, StylingHelper.mapVerticalTextAlignmentToInt("centre"));
         assertEquals(ITextPosition.TEXT_POSITION_CENTRE, StylingHelper.mapVerticalTextAlignmentToInt("center"));
@@ -151,7 +153,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void readFigureType_returnsNullForGroupAtDefault_AC12() {
+    public void readFigureType_returnsNullForGroupAtDefault() {
         IDiagramModelGroup group = freshGroup();
         // EMF default for BorderType is 0 (BORDER_TABBED) for groups.
         assertEquals(IDiagramModelGroup.BORDER_TABBED, group.getBorderType());
@@ -159,28 +161,28 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void readFigureType_returnsRectangularForFlippedGroup_AC1() {
+    public void readFigureType_returnsRectangularForFlippedGroup() {
         IDiagramModelGroup group = freshGroup();
         group.setBorderType(IDiagramModelGroup.BORDER_RECTANGLE);
         assertEquals("rectangular", StylingHelper.readFigureType(group));
     }
 
     @Test
-    public void readFigureType_returnsNullForGroupingElementAtDefault_AC12() {
+    public void readFigureType_returnsNullForGroupingElementAtDefault() {
         IDiagramModelArchimateObject obj = freshGroupingElement();
         assertEquals(0, obj.getType());
         assertNull(StylingHelper.readFigureType(obj));
     }
 
     @Test
-    public void readFigureType_returnsRectangularForGroupingElementAtType1_AC2() {
+    public void readFigureType_returnsRectangularForGroupingElementAtType1() {
         IDiagramModelArchimateObject obj = freshGroupingElement();
         obj.setType(1);
         assertEquals("rectangular", StylingHelper.readFigureType(obj));
     }
 
     @Test
-    public void readFigureType_returnsNullForNonGroupingArchimateElement_AC16() {
+    public void readFigureType_returnsNullForNonGroupingArchimateElement() {
         // ApplicationComponent has setType(int) too, but its alternate figure is
         // not "tabbed/rectangular" — the read helper deliberately returns null so
         // the DTO field is omitted for non-Grouping element classes.
@@ -190,13 +192,13 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void readFigureType_returnsNullForNote_AC12() {
+    public void readFigureType_returnsNullForNote() {
         IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
         assertNull(StylingHelper.readFigureType(note));
     }
 
     @Test
-    public void readTextAlignment_returnsNullForCenterDefault_AC12() {
+    public void readTextAlignment_returnsNullForCenterDefault() {
         IDiagramModelGroup group = freshGroup();
         // Archi EMF default for textAlignment is TEXT_ALIGNMENT_CENTER (2) on all objects.
         assertEquals(ITextAlignment.TEXT_ALIGNMENT_CENTER, group.getTextAlignment());
@@ -204,21 +206,21 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void readTextAlignment_returnsLeftForExplicitLeft_AC3() {
+    public void readTextAlignment_returnsLeftForExplicitLeft() {
         IDiagramModelGroup group = freshGroup();
         group.setTextAlignment(ITextAlignment.TEXT_ALIGNMENT_LEFT);
         assertEquals("left", StylingHelper.readTextAlignment(group));
     }
 
     @Test
-    public void readTextAlignment_returnsRightForExplicitRight_AC3() {
+    public void readTextAlignment_returnsRightForExplicitRight() {
         IDiagramModelGroup group = freshGroup();
         group.setTextAlignment(ITextAlignment.TEXT_ALIGNMENT_RIGHT);
         assertEquals("right", StylingHelper.readTextAlignment(group));
     }
 
     @Test
-    public void readVerticalTextAlignment_returnsNullForTopDefault_AC17() {
+    public void readVerticalTextAlignment_returnsNullForTopDefault() {
         // Archi EMF default for textPosition on a freshly-created IDiagramModelGroup is
         // TEXT_POSITION_TOP = 0 (label renders in a top header band of the group).
         IDiagramModelGroup group = freshGroup();
@@ -227,14 +229,14 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void readVerticalTextAlignment_returnsCentreForExplicitCentre_AC17() {
+    public void readVerticalTextAlignment_returnsCentreForExplicitCentre() {
         IDiagramModelGroup group = freshGroup();
         group.setTextPosition(ITextPosition.TEXT_POSITION_CENTRE);
         assertEquals("centre", StylingHelper.readVerticalTextAlignment(group));
     }
 
     @Test
-    public void readVerticalTextAlignment_returnsBottomForExplicitBottom_AC17() {
+    public void readVerticalTextAlignment_returnsBottomForExplicitBottom() {
         IDiagramModelGroup group = freshGroup();
         group.setTextPosition(ITextPosition.TEXT_POSITION_BOTTOM);
         assertEquals("bottom", StylingHelper.readVerticalTextAlignment(group));
@@ -245,7 +247,7 @@ public class StylingHelperTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void applyStylingToNewObject_setsBorderTypeOnGroup_AC1() {
+    public void applyStylingToNewObject_setsBorderTypeOnGroup() {
         IDiagramModelGroup group = freshGroup();
         StylingHelper.applyStylingToNewObject(group, new StylingParams(
                 null, null, null, null, null, "rectangular", null, null));
@@ -253,7 +255,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void applyStylingToNewObject_setsSetTypeOnGroupingElement_AC2() {
+    public void applyStylingToNewObject_setsSetTypeOnGroupingElement() {
         IDiagramModelArchimateObject obj = freshGroupingElement();
         StylingHelper.applyStylingToNewObject(obj, new StylingParams(
                 null, null, null, null, null, "rectangular", null, null));
@@ -261,7 +263,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void applyStylingToNewObject_silentlyIgnoresFigureTypeOnNonGroupingElement_AC16() {
+    public void applyStylingToNewObject_silentlyIgnoresFigureTypeOnNonGroupingElement() {
         IDiagramModelArchimateObject obj = freshArchimateObject();
         int before = obj.getType();
         StylingHelper.applyStylingToNewObject(obj, new StylingParams(
@@ -280,7 +282,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void applyStylingToNewObject_setsTextAlignmentOnGroup_AC3() {
+    public void applyStylingToNewObject_setsTextAlignmentOnGroup() {
         IDiagramModelGroup group = freshGroup();
         StylingHelper.applyStylingToNewObject(group, new StylingParams(
                 null, null, null, null, null, null, "left", null));
@@ -288,7 +290,7 @@ public class StylingHelperTest {
     }
 
     @Test
-    public void applyStylingToNewObject_setsVerticalTextAlignmentOnGroup_AC17() {
+    public void applyStylingToNewObject_setsVerticalTextAlignmentOnGroup() {
         IDiagramModelGroup group = freshGroup();
         // TOP is the default — apply CENTRE which is a non-default value to verify the apply path.
         StylingHelper.applyStylingToNewObject(group, new StylingParams(
@@ -296,11 +298,17 @@ public class StylingHelperTest {
         assertEquals(ITextPosition.TEXT_POSITION_CENTRE, group.getTextPosition());
     }
 
+    /**
+     * With no styling to apply, nothing the caller could have asked for may change. The type's own
+     * Archi default is not something the caller asked for: it is written on every new object of a
+     * defaulting type precisely so that an unstyled one matches what Archi's palette produces, so a
+     * group's alignment is expected to become LEFT here. Both halves are asserted together, because
+     * the guard is only meaningful if it distinguishes the two.
+     */
     @Test
-    public void applyStylingToNewObject_doesNothingForNullStyling() {
+    public void applyStylingToNewObject_appliesOnlyTheTypeDefaultForNullStyling() {
         IDiagramModelGroup group = freshGroup();
         int beforeBorder = group.getBorderType();
-        int beforeAlign = group.getTextAlignment();
         int beforePos = group.getTextPosition();
 
         StylingHelper.applyStylingToNewObject(group, null);
@@ -308,9 +316,32 @@ public class StylingHelperTest {
         StylingHelper.applyStylingToNewObject(group, new StylingParams(
                 null, null, null, null, null, null, null, null));
 
-        assertEquals(beforeBorder, group.getBorderType());
-        assertEquals(beforeAlign, group.getTextAlignment());
-        assertEquals(beforePos, group.getTextPosition());
+        assertEquals("no caller styling means no border change", beforeBorder,
+                group.getBorderType());
+        assertEquals("nor any vertical placement change — every provider here defaults TOP",
+                beforePos, group.getTextPosition());
+        assertEquals("but a group's own Archi default IS written, so an unstyled group matches "
+                + "one drawn from the palette",
+                ITextAlignment.TEXT_ALIGNMENT_LEFT, group.getTextAlignment());
+    }
+
+    /**
+     * The complementary half: a type with no LEFT default must come through an unstyled call
+     * completely untouched. Without this, the test above would pass just as well if the stamp had
+     * leaked to every object.
+     */
+    @Test
+    public void applyStylingToNewObject_leavesANonDefaultingTypeUntouchedForNullStyling() {
+        IDiagramModelArchimateObject element = freshArchimateObject();
+        int beforeAlign = element.getTextAlignment();
+        int beforePos = element.getTextPosition();
+
+        StylingHelper.applyStylingToNewObject(element, null);
+        StylingHelper.applyStylingToNewObject(element, StylingParams.NONE);
+
+        assertEquals("a plain element's provider default is CENTRE, which it already holds",
+                beforeAlign, element.getTextAlignment());
+        assertEquals(beforePos, element.getTextPosition());
     }
 
     // ------------------------------------------------------------------
@@ -423,6 +454,146 @@ public class StylingHelperTest {
         model.setDefaults();
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         return group;
+    }
+
+    // ------------------------------------------------------------------
+    // validateConnectionStylingParams — lineStyle is rejected, not dropped
+    //
+    // An ArchiMate connection's line style is fixed by its relationship type: the platform's
+    // connection figures hardcode their dash pattern per type and never consult the model, and
+    // the metamodel carries no connection line-style attribute at all. A lineStyle passed to a
+    // connection tool therefore cannot change anything. Before this seam existed it was parsed,
+    // accepted, counted as a requested change, and then dropped — and the tool answered
+    // "success". The caller is an agent that cannot see the canvas, so that success WAS its
+    // ground truth. Rejecting is the only honest answer available.
+    // ------------------------------------------------------------------
+
+    /** Rejection carries the code, names the parameter, and gives the reason. */
+    @Test
+    public void shouldRejectLineStyle_whenAppliedToAConnection() {
+        try {
+            StylingHelper.validateConnectionStylingParams(connectionStyling("dashed"));
+            fail("expected lineStyle on a connection to be rejected");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+            assertTrue("message must name the parameter, got: " + e.getMessage(),
+                    e.getMessage().contains("lineStyle"));
+            assertTrue("message must give the reason (relationship type), got: " + e.getMessage(),
+                    e.getMessage().toLowerCase().contains("relationship type"));
+        }
+    }
+
+    /**
+     * The supported idiom has to be in the response, not merely the prohibition — an agent that
+     * is only told "no" substitutes something arbitrary. lineColor + lineWidth is the pair a real
+     * agent run reached for unaided after reading the old description.
+     */
+    @Test
+    public void shouldNameTheSupportedIdiom_whenRejectingLineStyleOnAConnection() {
+        try {
+            StylingHelper.validateConnectionStylingParams(connectionStyling("dashed"));
+            fail("expected lineStyle on a connection to be rejected");
+        } catch (ModelAccessException e) {
+            String correction = e.getSuggestedCorrection();
+            assertNotNull("a rejection must carry a suggestedCorrection", correction);
+            assertTrue("suggestedCorrection must name lineColor, got: " + correction,
+                    correction.contains("lineColor"));
+            assertTrue("suggestedCorrection must name lineWidth, got: " + correction,
+                    correction.contains("lineWidth"));
+        }
+    }
+
+    /**
+     * Parity: a value that is a legal view-object enum and a value that is nonsense must produce
+     * the SAME rejection. If "dashed" succeeded and "banana" produced an enum error, the caller
+     * would reasonably conclude "dashed" had been applied.
+     */
+    @Test
+    public void shouldRejectLineStyleIdentically_whenTheValueIsNonsenseAndWhenItIsAValidEnum() {
+        ModelAccessException valid = captureRejection(connectionStyling("dashed"));
+        ModelAccessException nonsense = captureRejection(connectionStyling("banana"));
+
+        assertEquals(valid.getErrorCode(), nonsense.getErrorCode());
+        assertEquals("the rejection must not depend on the value — otherwise one of the two "
+                + "reads as though it were applied",
+                valid.getMessage(), nonsense.getMessage());
+        assertEquals(valid.getSuggestedCorrection(), nonsense.getSuggestedCorrection());
+    }
+
+    /**
+     * The empty string is the boundary value, and it is refused like any other.
+     *
+     * <p>{@code ""} means "clear to default" everywhere else on the styling rail, and the handler
+     * deliberately preserves it rather than folding it to null. On a connection there is no line
+     * style to clear, so treating {@code ""} as a quiet success would re-open the hole this seam
+     * closed — for exactly one value, which is the hardest kind to notice. Value-independence has
+     * to hold at the boundary or it does not hold.</p>
+     */
+    @Test
+    public void shouldRejectLineStyle_whenTheValueIsTheEmptyStringClearRequest() {
+        ModelAccessException empty = captureRejection(connectionStyling(""));
+        assertEquals(ErrorCode.INVALID_PARAMETER, empty.getErrorCode());
+        assertEquals("the empty string must be refused exactly as a real value is",
+                captureRejection(connectionStyling("dashed")).getMessage(), empty.getMessage());
+    }
+
+    /** No partial apply: a call carrying lineStyle beside supported fields is rejected whole. */
+    @Test
+    public void shouldRejectTheWholeCall_whenLineStyleRidesAlongsideValidLineColorAndLineWidth() {
+        StylingParams mixed = new StylingParams(
+                null, "#D35400", null, null, 2, null, null, null,
+                null, null, null, "dashed", null, null, null, null);
+        assertEquals(ErrorCode.INVALID_PARAMETER, captureRejection(mixed).getErrorCode());
+    }
+
+    /**
+     * Ordering (both directions): the lineStyle rejection must fire before every other
+     * connection-styling check, so the caller is never handed a different error that implies
+     * lineStyle itself was acceptable.
+     */
+    @Test
+    public void shouldReportTheLineStyleRejection_whenAnotherConnectionParamIsAlsoInvalid() {
+        StylingParams alsoBadColor = new StylingParams(
+                null, "not-a-hex", null, null, null, null, null, null,
+                null, null, null, "dashed", null, null, null, null);
+        assertTrue("lineStyle must win over the lineColor error",
+                captureRejection(alsoBadColor).getMessage().contains("lineStyle"));
+
+        StylingParams alsoBadWidth = new StylingParams(
+                null, null, null, null, 99, null, null, null,
+                null, null, null, "dashed", null, null, null, null);
+        assertTrue("lineStyle must win over the lineWidth error",
+                captureRejection(alsoBadWidth).getMessage().contains("lineStyle"));
+    }
+
+    /**
+     * Negative control — this one runs the real path. A guard that rejects everything would pass
+     * every test above; this proves the supported connection-styling rail still works, and that
+     * the other validators downstream of the new check are still reached.
+     */
+    @Test
+    public void shouldStillValidateSupportedConnectionStyling_whenNoLineStyleIsPresent() {
+        StylingHelper.validateConnectionStylingParams(new StylingParams(
+                null, "#D35400", "#000000", null, 2, null, null, null,
+                "Arial", 10, "bold", null, null, null, null, null));
+
+        // ...and the checks that follow the new one still fire on their own bad input.
+        StylingParams badWidth = new StylingParams(null, null, null, null, 99);
+        assertEquals(ErrorCode.INVALID_PARAMETER, captureRejection(badWidth).getErrorCode());
+    }
+
+    private static StylingParams connectionStyling(String lineStyle) {
+        return new StylingParams(null, null, null, null, null, null, null, null,
+                null, null, null, lineStyle, null, null, null, null);
+    }
+
+    private static ModelAccessException captureRejection(StylingParams styling) {
+        try {
+            StylingHelper.validateConnectionStylingParams(styling);
+            throw new AssertionError("expected connection styling to be rejected: " + styling);
+        } catch (ModelAccessException e) {
+            return e;
+        }
     }
 
     private IDiagramModelArchimateObject freshArchimateObject() {

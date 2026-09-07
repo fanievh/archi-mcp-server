@@ -2,6 +2,8 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.eclipse.swt.SWTError;
+import org.eclipse.swt.SWTException;
 import org.eclipse.swt.graphics.GC;
 import org.eclipse.swt.graphics.Point;
 import org.eclipse.swt.widgets.Display;
@@ -134,6 +136,29 @@ public final class ElementSizer {
     }
 
     /**
+     * As {@link #fitTextBoxHeightToContent}, but answers {@code fallback} instead of failing when
+     * the runtime has no SWT display to measure with.
+     *
+     * <p>The create-time callers want the loud failure: a note being created with no height and no
+     * measurement has no sensible size to fall back to. An UPDATE does have one — the height the
+     * object already holds — and failing an otherwise-valid text change because a font could not be
+     * measured would be a worse regression than the clipping this fit exists to prevent. A missing
+     * display is unreachable from a running Archi, where the server always has one.</p>
+     *
+     * <p>{@code SWTError} and {@code SWTException} are both caught deliberately: the platforms
+     * disagree about which of the two a display-less {@code Display.getDefault()} raises, and an
+     * {@code Error} on one of them escapes a catch written only for the other.</p>
+     */
+    static int fitTextBoxHeightToContentOrElse(String text, int width, int padding,
+                                               int minHeight, int maxHeight, int fallback) {
+        try {
+            return fitTextBoxHeightToContent(text, width, padding, minHeight, maxHeight);
+        } catch (SWTError | SWTException | ModelAccessException e) {
+            return fallback;
+        }
+    }
+
+    /**
      * Pure-geometry overload — testable without SWT. Headless callers construct a fixed
      * {@link FontMetrics} record and call this directly; mirrors
      * {@link #computeLabelHeightFromMetrics(String, FontMetrics, int)}.
@@ -144,7 +169,7 @@ public final class ElementSizer {
      * calling, otherwise an un-interpreted {@code "\\n"} (literal backslash-n) will not
      * be counted as a break.</p>
      *
-     * <p><strong>Precondition (review M2):</strong> {@code metrics.wordWidths} should be
+     * <p><strong>Precondition:</strong> {@code metrics.wordWidths} should be
      * sized to {@code text.split("\\s+").length}. {@link #measureText(String)} produces a
      * conforming record; ad-hoc callers (tests) MUST match this contract or
      * {@code simulateWordWrap} will silently truncate at the shorter length and the
@@ -166,7 +191,7 @@ public final class ElementSizer {
         return Math.max(minHeight, Math.min(maxHeight, height));
     }
 
-    /** Counts explicit {@code '\n'} characters in the given text (review M1). */
+    /** Counts explicit {@code '\n'} characters in the given text. */
     private static int countNewlines(String text) {
         int n = 0;
         for (int i = 0; i < text.length(); i++) {

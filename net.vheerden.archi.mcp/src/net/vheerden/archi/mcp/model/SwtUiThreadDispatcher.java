@@ -7,7 +7,7 @@ import org.eclipse.swt.widgets.Display;
  * for environments where no SWT {@link Display} is available (e.g., pure-unit
  * test substrate without OSGi/Eclipse startup).
  *
- * <p><strong>Why this exists (Decision-A.1.2 = α'' targeted fix, Session 9
+ * <p><strong>Why this exists (targeted fix,
  * 2026-05-15):</strong> the {@link SpacingControlLoop#iterate} body calls
  * caller-supplied {@link SpacingMutationCommand#execute()} /
  * {@link SpacingMutationCommand#undo()} directly from the reactor scheduler
@@ -26,13 +26,13 @@ import org.eclipse.swt.widgets.Display;
  * <p><strong>Exception propagation:</strong> any {@link Throwable} thrown
  * inside the Runnable is captured and re-thrown from the calling thread.
  * The {@link RuntimeException} path is byte-preserved (the SAME instance is
- * re-thrown), keeping the existing Session-8 partial-throw catch semantics
+ * re-thrown), keeping the existing partial-throw catch semantics
  * in {@link SpacingControlLoop} unchanged. A later change
  * widened the capture from {@code RuntimeException} to
  * {@code Throwable} so an off-UI-thread {@link Error} (e.g.
  * {@link AssertionError}/{@link LinkageError}) raised inside the marshalled
  * action is NOT silently swallowed by {@code Display.syncExec} — it is
- * re-thrown from the calling thread, preserving the row-774 Fix-1
+ * re-thrown from the calling thread, preserving the
  * captured-root-cause discipline (a swallowed boundary {@code Error} is
  * exactly the failure class that arc was created to surface). This matches
  * SWT's own {@code Display.syncExec} re-throw contract but is implemented
@@ -60,7 +60,7 @@ final class SwtUiThreadDispatcher {
      * {@link Throwable} thrown inside {@code action} is re-thrown from the
      * calling thread (the {@link RuntimeException} path re-throws the SAME
      * instance — byte-preserved; {@link Error} is likewise propagated per
-     * row-775).
+     * boundary contract).
      *
      * @param action work to run; non-null
      */
@@ -73,7 +73,7 @@ final class SwtUiThreadDispatcher {
             action.run();
             return;
         }
-        // (row 775): capture Throwable (not just RuntimeException)
+        // capture Throwable (not just RuntimeException)
         // across the SWT-thread boundary so an off-UI-thread Error is not
         // silently swallowed by syncExec. RuntimeException re-throw is
         // byte-preserved (same instance); Error is re-thrown; a checked

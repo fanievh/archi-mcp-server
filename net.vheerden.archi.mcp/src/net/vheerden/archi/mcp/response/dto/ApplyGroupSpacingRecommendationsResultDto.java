@@ -15,8 +15,9 @@ import java.util.List;
  *
  * <p>Under {@code dryRun=true} OR {@code interGroupDelta == 0} short-circuit
  * (current spacing already meets/exceeds the heuristic, OR view has fewer
- * than 2 top-level groups), {@code after} and {@code adjustResult} are null
- * and {@code noChangeReason} is populated.</p>
+ * than 2 top-level groups, OR the corridor lies between containers drawn
+ * inside a host that this tool positions none of), {@code after} and
+ * {@code adjustResult} are null and {@code noChangeReason} is populated.</p>
  *
  * @param viewId                    echoed input
  * @param dryRun                    echoed input — under true, the tool
@@ -27,10 +28,13 @@ import java.util.List;
  *                                  connectionCount field (single source of
  *                                  truth)
  * @param interGroupConnectionCount count of connections that cross a
- *                                  top-level group boundary; computed by
- *                                  walking the same connection enumeration
+ *                                  top-level container boundary — a native
+ *                                  view group and an ArchiMate
+ *                                  {@code Grouping} element alike; computed
+ *                                  by walking the same connection enumeration
  *                                  as {@code connectionCount} and resolving
- *                                  each endpoint's parent top-level group
+ *                                  each endpoint's parent top-level
+ *                                  container
  * @param isConnected               true when {@code interGroupConnectionCount
  *                                  > 0}; selects the connected column on the
  *                                  heuristic table
@@ -52,8 +56,10 @@ import java.util.List;
  *                                  inter-group corridors, never shrinks
  *                                  generous corridors)
  * @param noChangeReason            populated when delta=0 OR fewer-than-2-
- *                                  top-level-groups; describes which short-
- *                                  circuit fired; null otherwise
+ *                                  top-level-groups OR the corridor lies
+ *                                  between containers this tool does not
+ *                                  position; describes which short-circuit
+ *                                  fired; null otherwise
  * @param heuristicRecommendation   when {@code targetSpacingOverride} was
  *                                  provided, this reports what the heuristic
  *                                  alone would have picked (informational);
@@ -94,7 +100,56 @@ public record ApplyGroupSpacingRecommendationsResultDto(
         List<Integer> appliedDeltas,
         // Density-aware-termination field.
         // Actionable PASS-honest reflow-required diagnosis; null otherwise.
-        String densityFloorDiagnosis) {
+        String densityFloorDiagnosis,
+        /**
+         * The rating-regression disclosure: one entry when this call committed a view whose
+         * overall quality is worse than the view it was handed, empty otherwise.
+         *
+         * <p>Empty is the ordinary case and is omitted from the wire entirely, so a clean run
+         * serializes exactly as it did before this field existed.</p>
+         *
+         * <p><strong>Empty does not certify a clean result on a queued call.</strong> When a batch
+         * is open the accepted commands are queued rather than executed and the loop has already
+         * reset the model, so {@code after} re-reads the unmutated view and the comparison is
+         * structurally blind. {@code nextSteps} says so in words on that path rather than leaving
+         * the silence to be read as "nothing regressed".</p>
+         */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<StructuredWarningDto> structuredWarnings) {
+
+    /**
+     * Backwards-compatible constructor for every call site that predates the rating-regression
+     * disclosure — the pre-loop short-circuit, dry-run and no-change paths, which take no
+     * comparison and therefore have nothing to disclose.
+     *
+     * <p>Delegates with an empty warning list, which {@code NON_EMPTY} omits, so these paths
+     * serialize byte-identically to before.</p>
+     */
+    public ApplyGroupSpacingRecommendationsResultDto(
+            String viewId,
+            boolean dryRun,
+            int totalConnectionCount,
+            int interGroupConnectionCount,
+            boolean isConnected,
+            int currentSpacingPx,
+            int targetSpacingPx,
+            int interGroupDelta,
+            String noChangeReason,
+            Integer heuristicRecommendation,
+            AssessLayoutResultDto before,
+            AssessLayoutResultDto after,
+            AdjustViewSpacingResultDto adjustResult,
+            String terminationReason,
+            int iterationCount,
+            List<Integer> appliedDeltas,
+            String densityFloorDiagnosis) {
+        this(viewId, dryRun, totalConnectionCount, interGroupConnectionCount,
+                isConnected, currentSpacingPx, targetSpacingPx,
+                interGroupDelta, noChangeReason, heuristicRecommendation,
+                before, after, adjustResult, terminationReason,
+                iterationCount, appliedDeltas, densityFloorDiagnosis,
+                /*structuredWarnings=*/ List.of());
+    }
 
     /**
      * Backwards-compatible 16-arg constructor — preserves every

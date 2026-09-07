@@ -1,4 +1,4 @@
-# tools/ — headless build + test harness (M0-1)
+# tools/ — headless build + test harness
 
 ## One command
 
@@ -20,12 +20,22 @@ On a machine with a local Archi 5.7 install this:
 `[ok]/[FAIL]/[KNOWN]` list plus a `SUMMARY` / `RESULT` line print to stdout; JUnit XML lands in
 `build/test-results/` for CI to publish.
 
+**The results dir describes one invocation.** Prior `TEST-*.xml` is cleared at the start of every
+run, so a "parse every XML and confirm 0 failures" census cannot read a leftover file from an
+earlier run as current coverage. Both `--release` passes accumulate into the same dir, because the
+clear happens once before pass 1. Copy the XML elsewhere if you need to compare two runs.
+
 ### Variants
 
 ```bash
-tools/run-tests.sh ClassA ClassB        # compile, then run ONLY these fully-qualified classes
+tools/run-tests.sh ClassA ClassB        # compile, then run ONLY these classes
 tools/run-tests.sh --swt <Class>        # add -XstartOnFirstThread (macOS) for SWT/display classes
 ```
+
+Named classes may be fully qualified (`net.vheerden.archi.mcp.server.CertificateGeneratorTest`) or
+a bare class name (`CertificateGeneratorTest`), which is resolved against the test source tree and
+echoed as `-- resolved '<name>' -> <fqcn>`. A name that matches nothing, or that is ambiguous
+across packages, is rejected **before** the compile with a message naming the argument.
 
 ## Environment variables (macOS dev-box defaults)
 
@@ -39,7 +49,7 @@ tools/run-tests.sh --swt <Class>        # add -XstartOnFirstThread (macOS) for S
 
 Because every location is an env var with no macOS-only assumption in the default path, the same
 script runs on Linux CI (set the vars; no `-XstartOnFirstThread` unless `--swt`). This is what
-`m0-2-github-actions-ci` will call.
+`.github/workflows/ci.yml` calls — unmodified, in both its headless and its `xvfb` display lane.
 
 ## The two manifests (data, not code)
 

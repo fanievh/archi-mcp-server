@@ -638,10 +638,11 @@ public class McpPreferencePage extends FieldEditorPreferencePage
 
             logger.info("Self-signed certificate generated at {}", result.keystorePath());
         } catch (Exception ex) {
-            // Do NOT echo ex.getMessage() into the dialog: CertificateGenerator runs keytool
-            // with `-storepass <password>` on the command line, and a keytool failure folds its process
-            // output into the IOException message — which could embed the generated password. Keep the
-            // dialog a fixed, value-free string and route detail to the log.
+            // Do NOT echo ex.getMessage() into the dialog: the message can carry values this code
+            // does not control. A keytool failure folds the child process's own output into the
+            // IOException, and process-launch failures can quote the offending argument or
+            // environment value back at us. Neither is text this code shapes or bounds, so the
+            // dialog stays a fixed, value-free string and the detail goes to the log.
             logger.error("Failed to generate self-signed certificate", ex);
             org.eclipse.jface.dialogs.MessageDialog.openError(
                     display.getActiveShell(),

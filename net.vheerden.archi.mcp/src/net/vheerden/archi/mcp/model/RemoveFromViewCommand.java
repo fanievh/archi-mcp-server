@@ -83,7 +83,7 @@ public class RemoveFromViewCommand extends Command {
 
     @Override
     public void execute() {
-        // SOUND postcondition certificate (Story B, v1.6) runs FIRST so that a
+        // The SOUND postcondition certificate runs FIRST so that a
         // certificate failure leaves the model fully intact — no connections
         // get disconnected if the remove can't take effect. If List.remove
         // returns false the prepared parent no longer holds the diagram object

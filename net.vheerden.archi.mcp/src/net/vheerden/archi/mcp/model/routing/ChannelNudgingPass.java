@@ -187,7 +187,7 @@ public class ChannelNudgingPass {
      * {@link #introducesNewCoincidentPair} to detect cross-channel collisions — two
      * runs in <em>different</em> obstacle-bounded channels can still coincident-pair
      * if their post-nudge (axis, sharedCoord) match and their parallel ranges overlap
-     * (H1 fix; pre-fix the check only scanned same-channel occupants
+     * (widened; pre-fix the check only scanned same-channel occupants
      * and missed this case entirely).
      */
     private final List<NudgedRun> nudgedRunsLog = new ArrayList<>();
@@ -222,7 +222,8 @@ public class ChannelNudgingPass {
      *
      * @param connections  per-route endpoint records (source, target, id)
      * @param paths        per-route bendpoint lists (mutated in place)
-     * @param allObstacles all element rectangles on the view (for obstacle-bounded channel computation)
+     * @param allObstacles every non-container view object — elements, notes and images alike
+     *                     (for obstacle-bounded channel computation)
      * @return total number of nudges successfully applied across all routes
      */
     public int run(List<RoutingPipeline.ConnectionEndpoints> connections,
@@ -243,7 +244,7 @@ public class ChannelNudgingPass {
      *
      * @param connections          per-route endpoint records (source, target, id)
      * @param paths                per-route bendpoint lists (mutated in place)
-     * @param allObstacles         all element rectangles on the view
+     * @param allObstacles         every non-container view object — elements, notes and images alike
      * @param topLevelGroupBounds  top-level group rectangles (no nested groups)
      * @return total number of nudges successfully applied across all routes
      */
@@ -271,7 +272,7 @@ public class ChannelNudgingPass {
                 topLevelGroupBounds);
 
         if (diagnosticEnabled()) {
-            logger.info("B69B Phase 1 complete: {} channels across {} routes",
+            logger.info("Phase 1 complete: {} channels across {} routes",
                     channels.size(), paths.size());
         }
 
@@ -279,7 +280,7 @@ public class ChannelNudgingPass {
         // per-route rollback; apply nudges in place.
         allocateTracks(connections, paths, channels, allObstacles);
 
-        logger.info("B69B channel nudging complete: {} nudges applied, {} rollbacks",
+        logger.info("Channel nudging complete: {} nudges applied, {} rollbacks",
                 nudgeCount, rollbackCount);
 
         return nudgeCount;
@@ -511,7 +512,7 @@ public class ChannelNudgingPass {
             int available = channel.gapHigh() - channel.gapLow() - 2 * MIN_CLEARANCE_PX;
 
             if (diagnosticEnabled()) {
-                logger.info("B69B considering corridor={}:[{},{}] axis={} runs={}",
+                logger.info("Considering corridor={}:[{},{}] axis={} runs={}",
                         channel.key.axis(), channel.gapLow(), channel.gapHigh(),
                         channel.key.axis(), channel.occupants.size());
             }
@@ -529,7 +530,7 @@ public class ChannelNudgingPass {
             int n = channel.occupants.size();
             if (available < (n - 1) * MIN_TRACK_SPACING_PX) {
                 if (diagnosticEnabled()) {
-                    logger.info("B69B oversubscribed corridor={}:[{},{}] occupants={} available={} — skip",
+                    logger.info("Oversubscribed corridor={}:[{},{}] occupants={} available={} — skip",
                             channel.key.axis(), channel.gapLow(), channel.gapHigh(), n, available);
                 }
                 continue; // oversubscribed — leave A* output alone for this group
@@ -584,7 +585,7 @@ public class ChannelNudgingPass {
         int parallelLength = run.parEnd - run.parStart;
         if (parallelLength < MIN_INTERIOR_SEGMENT_LENGTH_PX) {
             if (diagnosticEnabled()) {
-                logger.info("B69B skip short segment route={} axis={} "
+                logger.info("Skip short segment route={} axis={} "
                         + "segLength={} < MIN_INTERIOR_SEGMENT_LENGTH_PX={}",
                         run.connectionId, run.axis, parallelLength,
                         MIN_INTERIOR_SEGMENT_LENGTH_PX);
@@ -610,7 +611,7 @@ public class ChannelNudgingPass {
         if (crossesCenterLine(preCoordCheck, idealCoord, srcPerp)
                 || crossesCenterLine(preCoordCheck, idealCoord, tgtPerp)) {
             if (diagnosticEnabled()) {
-                logger.info("B69B skip terminal-crossing nudge route={} axis={} "
+                logger.info("Skip terminal-crossing nudge route={} axis={} "
                         + "pre={} post={} srcPerp={} tgtPerp={}",
                         run.connectionId, run.axis, preCoordCheck, idealCoord,
                         srcPerp, tgtPerp);
@@ -665,7 +666,7 @@ public class ChannelNudgingPass {
         nudgeCount++;
 
         if (diagnosticEnabled()) {
-            logger.info("B69B allocate corridor={}:[{},{}] route={} track={} (was {})",
+            logger.info("Allocate corridor={}:[{},{}] route={} track={} (was {})",
                     channel.key.axis(), channel.gapLow(), channel.gapHigh(),
                     run.connectionId, idealCoord, preCoord);
         }
@@ -680,7 +681,7 @@ public class ChannelNudgingPass {
         rollbackCount++;
         // Per-rollback diagnostic at DEBUG to avoid noise on rollback-heavy views.
         // The run-summary INFO line emitted from run() reports the total rollback count.
-        logger.debug("B69B rollback route={} reason={}", run.connectionId, reason);
+        logger.debug("Rollback route={} reason={}", run.connectionId, reason);
     }
 
     // =====================================================================
@@ -773,7 +774,7 @@ public class ChannelNudgingPass {
      * coincident pair iff they share the same axis + sharedCoord and their parallel
      * ranges overlap.
      *
-     * <p>H1 fix: the check was originally scoped to
+     * <p>Widened: the check was originally scoped to
      * {@code channel.occupants}, which missed the case where two runs from different
      * obstacle-bounded channels ended up at the same post-nudge coordinate because
      * their channel midpoints collided. The check is now against the global

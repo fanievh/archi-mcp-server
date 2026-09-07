@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <?eclipse version="3.4"?>
 <plugin>
-   <!-- Story 1.2: Preferences page -->
+   <!-- Preferences page -->
    <extension point="org.eclipse.ui.preferencePages">
       <page
             id="net.vheerden.archi.mcp.preferences"
@@ -13,7 +13,7 @@
       <initializer class="net.vheerden.archi.mcp.ui.McpPreferenceInitializer"/>
    </extension>
 
-   <!-- Story 1.4: Server lifecycle commands -->
+   <!-- Server lifecycle commands -->
    <extension point="org.eclipse.ui.commands">
       <command
             id="net.vheerden.archi.mcp.toggleServer"
@@ -76,7 +76,7 @@
       </menuContribution>
    </extension>
 
-   <!-- Story 1.4: Auto-start on launch -->
+   <!-- Auto-start on launch -->
    <extension point="org.eclipse.ui.startup">
       <startup class="net.vheerden.archi.mcp.ui.McpStartupHandler"/>
    </extension>

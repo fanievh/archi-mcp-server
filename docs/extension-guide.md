@@ -56,6 +56,7 @@ private McpServerFeatures.SyncToolSpecification buildYourToolSpec() {
 - Tool names are kebab-case: `your-tool-name`
 - Description starts with `[Category]` tag: `[Query]`, `[Mutation]`, `[Layout]`, etc.
 - Description includes parameter documentation and related tools
+- Parameter names for the same identifier are **not** uniform across the existing surface — an element's model id is `id` on `update-element`, `elementId` on `add-to-view` and `delete-element`, and `objectId` on `move-to-folder`. Prefer the typed `<kind>Id` spelling for a new tool. If you do introduce a new spelling for an existing concept, add it to `ParamNameDiagnostics.ALTERNATIVE_SPELLINGS`, so a caller who guesses a sibling tool's spelling is told which one your tool accepts instead of only that something is missing. No JSON-schema validator is wired into the transport, so an unrecognised key is otherwise dropped in silence.
 
 ### Step 2: Implement the Handler Method
 
@@ -260,6 +261,25 @@ bin.includes = META-INF/,\
 
 The resource is loaded from the classpath at server startup, cached in memory, and served at `archimate://reference/your-topic`.
 
+### Three delivery routes, one declaration
+
+`RESOURCE_DEFINITIONS` is the single source for **three** client-facing surfaces, so a correct registration reaches all of them with no further work:
+
+1. **Static resource registrations** — what a client sees in `resources/list` and reads with `resources/read`.
+2. **Resource templates** — `archimate://prompts/{name}`, `archimate://reference/{name}`, `archimate://recipes/{name}`. A template variable matches exactly one path segment and every resource URI is exactly two segments, so these expand to the shipped URIs verbatim. Do **not** introduce a placeholder parameter: it would mint URIs that no shipped pointer names, manufacturing the unreachability the templates exist to fix.
+3. **The `get-guidance` tool** — the one MCP surface every client implements. Called with no arguments it returns the catalogue of every URI with its description (a client without resource reads cannot *list* them either, so discovery had to be solved alongside reading); called with a `uri` it returns the body. An unknown URI returns a structured error naming it and listing the valid ones, never an empty success.
+
+Because all three derive from the one map, they cannot drift apart — which is why the registration step is the only place you add a resource.
+
+### The pointer-reachability contract
+
+**Any `archimate://` URI you cite in production source must resolve, or the build fails.** `GuidancePointerReachabilityTest` scans shipped source for every such URI and asserts each one is in the catalogue, with the found count pinned so a scanner that silently stops matching cannot pass as clean. Two consequences when you write one:
+
+- Renaming or removing a resource breaks every pointer to it at build time rather than at an agent's runtime.
+- The scan concatenates adjacent string literals before matching, because pointers are routinely split across a `+` to satisfy line length. Do not "fix" a reported dead URI by weakening the assertion — check whether you split the literal.
+
+When you cite a URI in a tool description or a response string, name **both** routes, so the instruction is actionable on a client that does not expose resource reads to the model — the shipped phrasing is: *Any `archimate://` URI named here can also be read by calling `get-guidance` with that uri, for clients that do not expose MCP resources.*
+
 ## Checklist
 
 Use this checklist when extending the plugin:
@@ -271,6 +291,7 @@ Use this checklist when extending the plugin:
 - [ ] Error handling for NoModelLoadedException and unexpected exceptions
 - [ ] Registration in handler's `registerTools()` method
 - [ ] Tool description includes `[Category]` tag, parameter docs, and related tools
+- [ ] Any **ordering hazard** the tool carries — a caveat whose remedy is a change in sequence, "call this before X" or "call this only after X" — is stated in **this tool's own description**, in the imperative, naming the operation it must follow or precede. A reference page, recipe or checklist MAY repeat it; it MAY NOT be its only home, because an agent reads one description at the moment of the call and fetches anything else only on a guess. Add the row to [`docs/ordering-hazards.md`](ordering-hazards.md) and raise the guard's row floor in the same commit
 
 **Adding a handler:**
 
@@ -282,9 +303,11 @@ Use this checklist when extending the plugin:
 **Adding an MCP resource:**
 
 - [ ] Markdown file created in `resources/` directory
-- [ ] Resource definition added to `RESOURCE_DEFINITIONS` map
+- [ ] Resource definition added to `RESOURCE_DEFINITIONS` map (this one entry feeds the static registration, the resource template, and `get-guidance` — no separate registration for each)
 - [ ] `build.properties` includes `resources/` directory
-- [ ] URI follows `archimate://category/name` pattern
+- [ ] URI follows `archimate://category/name` pattern — exactly two segments, or the resource templates will not expand to it
+- [ ] `GuidancePointerReachabilityTest` green: every `archimate://` URI cited in production source resolves, and the pinned count updated if you added or removed a pointer
+- [ ] Any pointer you added names **both** delivery routes (resource read *and* `get-guidance`), so it is actionable on a client without resource reads
 
 **General:**
 
@@ -297,4 +320,4 @@ Use this checklist when extending the plugin:
 
 ---
 
-**See also:** [Architecture Overview](architecture.md) | [MCP Integration](mcp-integration.md) | [Mutation Model](mutation-model.md)
+**See also:** [Architecture Overview](architecture.md) | [MCP Integration](mcp-integration.md) | [Mutation Model](mutation-model.md) | [Ordering Hazards](ordering-hazards.md)

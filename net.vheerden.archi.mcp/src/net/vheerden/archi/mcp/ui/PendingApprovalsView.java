@@ -618,12 +618,20 @@ public class PendingApprovalsView extends ViewPart
         }
         int approved = 0;
         String stalledAt = null;
+        String stalledReason = null;
         for (ApprovalCardModel card : order) {
             try {
                 service.approve(card.sessionId(), card.proposalId());
                 approved++;
             } catch (MutationException stale) {
                 stalledAt = card.proposalId();
+                // Carry the REAL reason. Single-card approve already renders this message in its stale
+                // strip; this path used to invent a generic "because the model changed" line instead, so
+                // the human who clicked Approve-all was the only one told nothing. The reason may be a
+                // named target, a domain refusal with its own remedy, or a changed blast radius.
+                stalledReason = (stale.getMessage() != null && !stale.getMessage().isBlank())
+                        ? stale.getMessage()
+                        : "the model changed since the agent proposed it.";
                 logger.info("Bulk approve halted at stale proposal {}: {}",
                         card.proposalId(), stale.getMessage());
                 break;
@@ -631,8 +639,10 @@ public class PendingApprovalsView extends ViewPart
         }
         int remaining = order.size() - approved;
         if (stalledAt != null) {
-            setStatus("Approved " + approved + " — stopped at " + stalledAt
-                    + " because the model changed; " + remaining + " remain. Review the rest.");
+            // Counts first, reason last: the status line is one row and the reason is the part that can
+            // safely truncate, having already been read in full on the card that stayed on screen.
+            setStatus("Approved " + approved + " — " + remaining + " remain. Stopped at " + stalledAt
+                    + ": " + stalledReason);
         } else {
             setStatus("Approved " + approved + (includesDestructive ? " (including deletions)." : " safe change"
                     + (approved == 1 ? "." : "s.")));

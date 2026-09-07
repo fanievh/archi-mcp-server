@@ -854,8 +854,7 @@ public class CoincidentSegmentDetectorTest {
         // unchanged); the other was reconciled (path grew by 1 via BP
         // insertion). Which conn wins the anchor slot is determined by
         // detect()'s pair iteration order — assert the SHAPE rather than
-        // identity to stay robust against future detection-ordering changes
-        // (code-review L3 follow-up 2026-04-28).
+        // identity to stay robust against future detection-ordering changes.
         int sizeA = f.paths.get(0).size();
         int sizeB = f.paths.get(1).size();
         assertTrue("Exactly one path grew by 1 (insertion); the other unchanged. "
@@ -1013,12 +1012,13 @@ public class CoincidentSegmentDetectorTest {
         // Hub target on RIGHT side of the canvas; LEFT face line at x=199.
         RoutingRect target = new RoutingRect(200, 0, 100, 100, "target-hub");
         int[] targetCenter = {target.centerX(), target.centerY()};
-        // Source A: RIGHT face line at x=49 (50-1 tolerance), y∈[25, 75].
+        // Source A: RIGHT face line at x=50, y∈[25, 75].
+        // TerminalAnchoring.lineCoordinate = rect.x + width + 1 = 0 + 49 + 1.
         RoutingRect sourceA = new RoutingRect(0, 25, 49, 50, "source-A");
         int[] sourceACenter = {sourceA.centerX(), sourceA.centerY()};
         // Source B: visually disjoint from sourceA, placed below at y∈[100, 120].
-        // (Both rects have RIGHT face line at x=49; pathA/pathB bp[0].x=50
-        // tracks the same +1 tolerance the V4 oracle exhibits.)
+        // (Both rects have RIGHT face line at x=50, which is exactly where
+        // pathA/pathB put bp[0] — both terminals arrive ON their faceline.)
         RoutingRect sourceB = new RoutingRect(0, 100, 49, 20, "source-B");
         int[] sourceBCenter = {sourceB.centerX(), sourceB.centerY()};
 
@@ -1068,7 +1068,7 @@ public class CoincidentSegmentDetectorTest {
      * (conn B) staggered to x=191 (MIN_SEPARATION=8), i=2 (conn C) staggered
      * to x=183 (16px); all in the same direction (preferredSign=-1 since hub
      * center x=250 > terminal x=199, drop returns toward target). Sonnet 4.6
-     * code-review H1 fix 2026-04-29 — original fixture had non-overlapping
+     * Original fixture had non-overlapping
      * y ranges (20px gaps) so {@code detect()} returned 0 pairs and the test
      * was effectively a no-op.
      */
@@ -1217,5 +1217,357 @@ public class CoincidentSegmentDetectorTest {
             list.add(item);
         }
         return list;
+    }
+
+    // ---- Per-end rollback policy at the applyOffsets wrap site.
+    //
+    // Every test below drives applyOffsets. None calls preservesEndpoints
+    // directly: handing a hand-written path to the predicate proves only that
+    // the predicate agrees with itself, never that the mutator consults it.
+    //
+    // The two pre-existing pins above cannot discriminate this policy. Their
+    // fixture arrives with BOTH terminals on their facelines, so the old
+    // post-state verdict and the per-end flip verdict agree on it by
+    // construction, and both remain green unedited.
+
+    /**
+     * A source-touching offset commits even though the TARGET terminal arrived
+     * off its faceline.
+     *
+     * <p>The offset runs along the source face's parallel axis — a vertical
+     * shift of a horizontal corridor leaves {@code bp[0].x} on the RIGHT
+     * faceline — so the touched end neither flips nor was off-face to begin
+     * with. The target end is at the far end of the path, this offset cannot
+     * reach it, and it is therefore not consulted.
+     */
+    @Test
+    public void applyOffsets_sourceTouchingOffset_targetArrivedOffFace_commits() {
+        Fixture f = buildSourceTouchingCorridorFixture(false);
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+        assertTrue("fixture must produce a coincident pair", pairs.size() >= 1);
+
+        detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+        assertEquals("the touched source terminal stays on its RIGHT faceline",
+                50, f.paths.get(0).get(0).x());
+        assertEquals("the source-touching offset committed at its proportional "
+                + "target — an untouched off-face target must not veto it",
+                16, f.paths.get(0).get(0).y());
+        assertEquals("the whole segment moved with it, not just the terminal",
+                16, f.paths.get(0).get(1).y());
+    }
+
+    /**
+     * The mirror: a target-touching offset commits even though the SOURCE
+     * terminal arrived off its faceline.
+     */
+    @Test
+    public void applyOffsets_targetTouchingOffset_sourceArrivedOffFace_commits() {
+        Fixture f = buildTargetTouchingCorridorFixture();
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+        assertTrue("fixture must produce a coincident pair", pairs.size() >= 1);
+
+        detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+        List<AbsoluteBendpointDto> pathC = f.paths.get(1);
+        assertEquals("the touched target terminal stays on its LEFT faceline",
+                499, pathC.get(pathC.size() - 1).x());
+        assertEquals("the target-touching offset committed at its proportional "
+                + "target — an untouched off-face source must not veto it",
+                626, pathC.get(pathC.size() - 1).y());
+        assertEquals("the whole segment moved with it, not just the terminal",
+                626, pathC.get(pathC.size() - 2).y());
+    }
+
+    /**
+     * The flip rule, source end: a touched terminal that arrived ON its
+     * faceline and would be moved OFF it rolls the offset back.
+     *
+     * <p>Same corridor as
+     * {@link #applyOffsets_sourceTouchingOffset_targetArrivedOffFace_commits},
+     * with the source anchored on its BOTTOM face instead of its RIGHT one.
+     * The face's orthogonal axis is now the one the offset moves, so the
+     * identical mutation flips the terminal off the faceline.
+     */
+    @Test
+    public void applyOffsets_touchedSourceFlipsOffFaceline_rollsBack() {
+        Fixture f = buildSourceTouchingCorridorFixture(true);
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+        assertTrue("fixture must produce a coincident pair", pairs.size() >= 1);
+
+        detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+        assertEquals("a touched terminal flipped off its BOTTOM faceline rolls back",
+                50, f.paths.get(0).get(0).y());
+        assertEquals("the rollback restores the whole segment, not just the terminal",
+                50, f.paths.get(0).get(1).y());
+    }
+
+    /**
+     * The pin, source end: a touched terminal that arrived OFF its faceline is
+     * not relocated.
+     *
+     * <p>The flip rule alone cannot decide this case — the terminal was never
+     * on its faceline, so nothing flips. A perpendicular shift of an off-face
+     * terminal still moves the point the ChopboxAnchor ray terminates at, so
+     * the render changes; separating this corridor without moving a terminal is
+     * stage 4.7q's job.
+     */
+    @Test
+    public void applyOffsets_touchedSourceArrivedOffFaceline_isNotMoved() {
+        Fixture f = buildOffFaceSourceCorridorFixture();
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+        assertTrue("fixture must produce a coincident pair", pairs.size() >= 1);
+
+        detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+        assertEquals("an off-face source terminal is pinned, not relocated",
+                50, f.paths.get(0).get(0).y());
+        assertEquals("the pinned terminal keeps its off-face orthogonal coordinate",
+                60, f.paths.get(0).get(0).x());
+    }
+
+    /**
+     * The pin, target end.
+     */
+    @Test
+    public void applyOffsets_touchedTargetArrivedOffFaceline_isNotMoved() {
+        Fixture f = buildOffFaceTargetCorridorFixture();
+
+        List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+        assertTrue("fixture must produce a coincident pair", pairs.size() >= 1);
+
+        detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+        List<AbsoluteBendpointDto> pathC = f.paths.get(1);
+        assertEquals("an off-face target terminal is pinned, not relocated",
+                600, pathC.get(pathC.size() - 1).y());
+        assertEquals("the pinned terminal keeps its off-face orthogonal coordinate",
+                490, pathC.get(pathC.size() - 1).x());
+    }
+
+    /**
+     * The precondition {@code preMutationPath} rests on, pinned where it is
+     * actually established.
+     *
+     * <p>The wrap reconstructs the pre-mutation path by restoring two slots from
+     * their snapshots. That is exact only while the offset writes those two slots
+     * and nothing else, and leaves the path length alone — otherwise the "before"
+     * view it hands the policy is a mix of pre- and post-mutation state at some
+     * third index, and the flip and pin arms would both be decided against a
+     * corrupted baseline. Nothing in the wrap can detect that; the property lives
+     * in the offset, so it is pinned here rather than assumed in a comment.
+     *
+     * <p>Drives {@code applyOffsets} over every fixture in this file that reaches
+     * the wrap, and asserts each path's length is unchanged and that at most two
+     * of its points differ from the pre-call copy.
+     */
+    @Test
+    public void applyOffsets_writesAtMostTwoPointsPerPathAndNeverResizes() {
+        List<Fixture> fixtures = List.of(
+                buildPerimeterAnchoredCoincidenceFixture(),
+                buildSourceTouchingCorridorFixture(false),
+                buildSourceTouchingCorridorFixture(true),
+                buildTargetTouchingCorridorFixture(),
+                buildOffFaceSourceCorridorFixture(),
+                buildOffFaceTargetCorridorFixture());
+
+        for (int fx = 0; fx < fixtures.size(); fx++) {
+            Fixture f = fixtures.get(fx);
+            List<List<AbsoluteBendpointDto>> before = new ArrayList<>();
+            for (List<AbsoluteBendpointDto> path : f.paths) {
+                before.add(new ArrayList<>(path));
+            }
+
+            List<CoincidentSegmentDetector.CoincidentPair> pairs =
+                    detector.detect(f.connectionIds, f.paths, f.sourceCenters, f.targetCenters);
+            detector.applyOffsets(pairs, f.paths, f.obstacles, f.anchoringContexts);
+
+            for (int ci = 0; ci < f.paths.size(); ci++) {
+                List<AbsoluteBendpointDto> was = before.get(ci);
+                List<AbsoluteBendpointDto> now = f.paths.get(ci);
+                assertEquals("fixture " + fx + " conn " + ci
+                        + ": applyOffsets must not resize a path — preMutationPath's "
+                        + "index-for-index reconstruction depends on it",
+                        was.size(), now.size());
+                int changed = 0;
+                for (int i = 0; i < was.size(); i++) {
+                    if (!was.get(i).equals(now.get(i))) {
+                        changed++;
+                    }
+                }
+                assertTrue("fixture " + fx + " conn " + ci
+                        + ": applyOffsets changed " + changed + " points; the wrap can only "
+                        + "restore the two it snapshots, so a third write would leave "
+                        + "preMutationPath reconstructing a state that never existed",
+                        changed <= 2);
+            }
+        }
+    }
+
+    /**
+     * Corridor whose first member is a connection's SEGMENT 0 — the segment
+     * that owns {@code bp[0]}, the source terminal — and whose second member is
+     * another connection's interior segment. The interior segment is never
+     * terminal-touching, so it commits under every policy and only the
+     * terminal-touching one is under test.
+     *
+     * @param sourceOnBottomFace anchor the source on its BOTTOM face (the
+     *                           offset axis) rather than its RIGHT face (the
+     *                           face's parallel axis), turning the same
+     *                           mutation from a no-op on the faceline into a
+     *                           flip off it
+     */
+    private static Fixture buildSourceTouchingCorridorFixture(boolean sourceOnBottomFace) {
+        Fixture f = new Fixture();
+        // RIGHT face line = 0 + 49 + 1 = 50; BOTTOM face line = 0 + 49 + 1 = 50.
+        // One rect serves both readings, so the two arms differ only in the
+        // anchoring handed to the wrap.
+        RoutingRect sourceA = new RoutingRect(0, 0, 49, 49, "source-A");
+        RoutingRect targetA = new RoutingRect(280, 400, 100, 60, "target-A");
+        RoutingRect sourceB = new RoutingRect(100, 150, 49, 60, "source-B");
+        RoutingRect targetB = new RoutingRect(451, 120, 80, 60, "target-B");
+
+        // Conn A: exits its source into the y=50 corridor. Segment 0 is
+        // bp[0]->bp[1], so bpIdx1 == 0 and the wrap's terminal gate opens.
+        List<AbsoluteBendpointDto> pathA = mutableList(
+                new AbsoluteBendpointDto(50, 50),
+                new AbsoluteBendpointDto(300, 50),
+                new AbsoluteBendpointDto(300, 400));
+        // Conn B: crosses the same corridor mid-path. Segment 1 is interior.
+        List<AbsoluteBendpointDto> pathB = mutableList(
+                new AbsoluteBendpointDto(150, 150),
+                new AbsoluteBendpointDto(150, 50),
+                new AbsoluteBendpointDto(450, 50),
+                new AbsoluteBendpointDto(450, 150));
+
+        f.paths = new ArrayList<>();
+        f.paths.add(pathA);
+        f.paths.add(pathB);
+        f.connectionIds = List.of("conn-A", "conn-B");
+        int[] centerA = {sourceA.centerX(), sourceA.centerY()};
+        int[] centerTA = {targetA.centerX(), targetA.centerY()};
+        int[] centerB = {sourceB.centerX(), sourceB.centerY()};
+        int[] centerTB = {targetB.centerX(), targetB.centerY()};
+        f.sourceCenters = List.of(centerA, centerB);
+        f.targetCenters = List.of(centerTA, centerTB);
+        f.obstacles = List.of(sourceA, targetA, sourceB, targetB);
+
+        // Conn A's target arrives OFF its TOP face line (400 - 1 = 399, bp is
+        // at y=400) — the untouched end whose veto this policy removes.
+        TerminalAnchoring sourceFaceA = new TerminalAnchoring(sourceOnBottomFace
+                ? EdgeAttachmentCalculator.Face.BOTTOM
+                : EdgeAttachmentCalculator.Face.RIGHT);
+        f.anchoringContexts = new HashMap<>();
+        f.anchoringContexts.put(0, new CoincidentSegmentDetector.AnchoringContext(
+                new RoutingPipeline.ConnectionEndpoints("conn-A", sourceA, targetA, List.of(), null, 0),
+                centerA, centerTA,
+                sourceFaceA,
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.TOP)));
+        f.anchoringContexts.put(1, new CoincidentSegmentDetector.AnchoringContext(
+                new RoutingPipeline.ConnectionEndpoints("conn-B", sourceB, targetB, List.of(), null, 0),
+                centerB, centerTB,
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT),
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT)));
+        return f;
+    }
+
+    /**
+     * The mirror of {@link #buildSourceTouchingCorridorFixture}: the corridor's
+     * terminal-touching member is a connection's LAST segment, so
+     * {@code bpIdx2 == path.size() - 1} and the touched end is the target.
+     *
+     * <p><strong>The corridor must be wide enough for proportional spacing.</strong>
+     * That is the property this fixture depends on, and it is a property of the
+     * geometry, not of the member order. {@code applyOffsets} distributes a
+     * corridor's members proportionally when the gap allows it and every member
+     * — including the first — is moved to its own target; it falls back to
+     * fixed-delta stacking when {@code computeProportionalOffsets} declines the
+     * gap, and only that fallback treats the group's first member as an unmoved
+     * anchor. An earlier draft of this fixture placed {@code target-C} inside the
+     * corridor band, which narrowed the gap enough to force the fallback, and the
+     * terminal-touching segment then went unoffset and the wrap under test never
+     * ran. The rects are placed clear of the corridor for that reason. Member
+     * order is <em>not</em> load-bearing here: with the two connections swapped
+     * the terminal still moves, which was verified by measurement rather than
+     * assumed.
+     */
+    private static Fixture buildTargetTouchingCorridorFixture() {
+        Fixture f = new Fixture();
+        RoutingRect sourceD = new RoutingRect(400, 700, 49, 60, "source-D");
+        RoutingRect targetD = new RoutingRect(160, 420, 80, 59, "target-D");
+        // RIGHT face line = 100 + 54 + 1 = 155, but conn C's bp[0].x is 150 —
+        // the source arrives OFF its faceline, and is the untouched end here.
+        RoutingRect sourceC = new RoutingRect(100, 700, 54, 60, "source-C");
+        RoutingRect targetC = new RoutingRect(500, 570, 80, 60, "target-C");
+
+        // Conn D: crosses the y=600 corridor mid-path. Segment 1 is interior.
+        List<AbsoluteBendpointDto> pathD = mutableList(
+                new AbsoluteBendpointDto(450, 700),
+                new AbsoluteBendpointDto(450, 600),
+                new AbsoluteBendpointDto(200, 600),
+                new AbsoluteBendpointDto(200, 480));
+        // Conn C: enters its target from the y=600 corridor. Segment 1 is
+        // bp[1]->bp[2], so bpIdx2 == path.size() - 1 and the terminal gate opens.
+        List<AbsoluteBendpointDto> pathC = mutableList(
+                new AbsoluteBendpointDto(150, 700),
+                new AbsoluteBendpointDto(150, 600),
+                new AbsoluteBendpointDto(499, 600));
+
+        f.paths = new ArrayList<>();
+        f.paths.add(pathD);
+        f.paths.add(pathC);
+        f.connectionIds = List.of("conn-D", "conn-C");
+        int[] centerD = {sourceD.centerX(), sourceD.centerY()};
+        int[] centerTD = {targetD.centerX(), targetD.centerY()};
+        int[] centerC = {sourceC.centerX(), sourceC.centerY()};
+        int[] centerTC = {targetC.centerX(), targetC.centerY()};
+        f.sourceCenters = List.of(centerD, centerC);
+        f.targetCenters = List.of(centerTD, centerTC);
+        f.obstacles = List.of(sourceD, targetD, sourceC, targetC);
+
+        f.anchoringContexts = new HashMap<>();
+        f.anchoringContexts.put(0, new CoincidentSegmentDetector.AnchoringContext(
+                new RoutingPipeline.ConnectionEndpoints("conn-D", sourceD, targetD, List.of(), null, 0),
+                centerD, centerTD,
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT),
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.BOTTOM)));
+        f.anchoringContexts.put(1, new CoincidentSegmentDetector.AnchoringContext(
+                new RoutingPipeline.ConnectionEndpoints("conn-C", sourceC, targetC, List.of(), null, 0),
+                centerC, centerTC,
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT),
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT)));
+        return f;
+    }
+
+    /**
+     * As {@link #buildSourceTouchingCorridorFixture}, but conn A's source
+     * terminal arrives OFF its RIGHT face line (50) at x=60. Nothing can flip;
+     * only the pin decides.
+     */
+    private static Fixture buildOffFaceSourceCorridorFixture() {
+        Fixture f = buildSourceTouchingCorridorFixture(false);
+        f.paths.get(0).set(0, new AbsoluteBendpointDto(60, 50));
+        return f;
+    }
+
+    /**
+     * As {@link #buildTargetTouchingCorridorFixture}, but conn C's target
+     * terminal arrives OFF its LEFT face line (499) at x=490.
+     */
+    private static Fixture buildOffFaceTargetCorridorFixture() {
+        Fixture f = buildTargetTouchingCorridorFixture();
+        List<AbsoluteBendpointDto> pathC = f.paths.get(1);
+        pathC.set(pathC.size() - 1, new AbsoluteBendpointDto(490, 600));
+        return f;
     }
 }

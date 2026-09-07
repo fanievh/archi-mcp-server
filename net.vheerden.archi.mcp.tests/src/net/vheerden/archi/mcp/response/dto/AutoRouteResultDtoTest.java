@@ -379,7 +379,8 @@ public class AutoRouteResultDtoTest {
                 List.of(), List.of(), List.of(),
                 List.of(),                                   // structuredWarnings — covered separately
                 List.of(rec),                                // blockedRecommendations — populated
-                AutoRouteBlockedReasons.SIBLING_OVERLAP);    // nudgeBlockedReason
+                AutoRouteBlockedReasons.SIBLING_OVERLAP,     // nudgeBlockedReason
+                List.of());                                  // hiddenLabels — none
 
         assertEquals(1, dto.blockedRecommendations().size());
         assertEquals("el-1", dto.blockedRecommendations().get(0).elementId());
@@ -395,4 +396,58 @@ public class AutoRouteResultDtoTest {
         assertFalse("recommendations should be omitted (empty advisory path)",
                 json.contains("\"recommendations\""));
     }
+
+    // --- hiddenLabels reaches the WIRE (not merely the record) ---
+
+    @Test
+    public void hiddenLabels_shouldSerializeWithConnectionIdAndReason() throws Exception {
+        // The point of the field is identity: a caller that cannot see the canvas must be able to
+        // name, audit and reverse each hidden label. Computing it in the record is not enough — a
+        // response can compute a field and never send it, so this asserts the JSON itself.
+        AutoRouteResultDto dto = new AutoRouteResultDto("v-1", 4, "orthogonal", false)
+                .withHiddenLabels(List.of(
+                        HiddenLabelDto.noValidPosition("conn-a"),
+                        HiddenLabelDto.noValidPosition("conn-b")));
+
+        String json = objectMapper.writeValueAsString(dto);
+
+        assertTrue("hiddenLabels must reach the wire", json.contains("\"hiddenLabels\""));
+        assertTrue("each hide must be named by connection id", json.contains("\"conn-a\""));
+        assertTrue(json.contains("\"conn-b\""));
+        assertTrue("each hide must carry a machine-readable reason",
+                json.contains("\"reason\":\"no_valid_position\""));
+        assertFalse("identity, not a tally — no count field may stand in for the list",
+                json.contains("\"labelsHidden\""));
+    }
+
+    @Test
+    public void hiddenLabels_shouldBeOmittedFromJson_whenNothingWasHidden() throws Exception {
+        // Default-off must be invisible on the wire: a caller that never asked for the policy sees
+        // a response byte-identical to one from before the field existed.
+        AutoRouteResultDto dto = new AutoRouteResultDto("v-1", 4, "orthogonal", false);
+
+        String json = objectMapper.writeValueAsString(dto);
+
+        assertFalse("an empty hiddenLabels must not be emitted", json.contains("hiddenLabels"));
+    }
+
+    @Test
+    public void withHiddenLabels_shouldPreserveEveryOtherField() throws Exception {
+        // The wither runs AFTER the write, so it must not quietly drop anything the pass measured.
+        AutoRouteResultDto before = new AutoRouteResultDto(
+                "v-9", 7, 2, "orthogonal", true,
+                List.of("w"), List.of(), List.of(), List.of());
+        AutoRouteResultDto after = before.withHiddenLabels(
+                List.of(HiddenLabelDto.noValidPosition("c1")));
+
+        assertEquals(before.viewId(), after.viewId());
+        assertEquals(before.connectionsRouted(), after.connectionsRouted());
+        assertEquals(before.connectionsFailed(), after.connectionsFailed());
+        assertEquals(before.strategy(), after.strategy());
+        assertEquals(before.routerTypeSwitched(), after.routerTypeSwitched());
+        assertEquals(before.labelsOptimized(), after.labelsOptimized());
+        assertEquals(before.warnings(), after.warnings());
+        assertEquals(1, after.hiddenLabels().size());
+    }
+
 }

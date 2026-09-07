@@ -1,30 +1,31 @@
-# M0-1 headless test harness — KNOWN-FAILING QUARANTINE
+# Headless test harness — KNOWN-FAILING QUARANTINE
 #
 # Classes here ARE compiled, run, and emitted to JUnit XML by `tools/run-tests.sh` (visible &
 # tracked), but their failures do NOT gate the build (no red exit). They are pre-existing,
-# backlog-tracked defects surfaced by the harness's first fresh-compile headless run — NOT new
+# Pre-existing defects surfaced by the harness's first fresh-compile headless run — NOT new
 # regressions. A NEW failure in any class NOT listed here still turns the build red.
 #
 # This list must shrink to empty: each entry needs a backlog row to fix-and-readmit. When a class
 # is fixed, delete its line here and it rejoins the gating set automatically.
 #
-# Discovered 2026-06-13 (M0-1). All three are routing-quality "pin" tests OUTSIDE the legacy
+# Discovered 2026-06-13. All three are routing-quality "pin" tests OUTSIDE the legacy
 # 49-class AllPluginTestsRunner gate, so they were never auto-run and silently drifted. They fail
 # DETERMINISTICALLY headless (NOT a font/display artifact — confirmed no AWT/GC font APIs; --swt
 # does not fix them), so they are either stale pins or a real routing regression. Triage requires
-# routing expertise → handed to a backlog row, not fixed in the M0-1 tooling story.
+# routing expertise → tracked separately, not fixed when this harness was built.
 
-# Populated 2026-06-15 (story s1-origin-host-validation-default-on): the M0-1 comment above
+# Populated 2026-06-15 (origin/host validation default-on): the comment above
 # documented these pins as non-gating but no entry was ever added, so the harness still gated on
 # them (RESULT: FAIL on an otherwise-green tree). Below is the one V4-oracle routing pin that fails
 # in the current headless `ci-junit` lane (2 of 6 methods); proven pre-existing — fails identically
-# on baseline 5132800 with the S1 change stashed, and S1 touches only server/, not routing. Triage
-# remains a routing-expertise backlog row (v1.7 "labelTruncations / routing-pin re-anchor" track).
+# on baseline 5132800 with the origin/host-validation change stashed, and that change touches only
+# server/, not routing. Triage remains a routing-expertise track (v1.7 "labelTruncations /
+# routing-pin re-anchor").
 #
 # RESOLVED 2026-06-18 (v1.7 routing-pin re-anchor): V4OracleSTSourceCloneLiveMcpPinTest re-anchored
 # and re-admitted to the gating set. The 2 failing methods were both HPQ-driven — hubPortQuality
 # dropped 0.4565→0.1428 (post-terminal-egress routing evolution on ST's tiny 214x68 hub). All
 # structural + Tier-1 pins held (M4=10, V_p10=3.0, M5=8, M1=4, Tier-1=0), so the floor was
 # re-anchored 0.40→0.08 (actual − 0.06 parity buffer); see the test's ST_HPQ_FLOOR Javadoc. The
-# deeper flat-dense hub-port-quality lever stays a backlog track (Lever B). This list is now EMPTY.
+# deeper flat-dense hub-port-quality work stays a separate track. This list is now EMPTY.
 

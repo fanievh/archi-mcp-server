@@ -108,7 +108,7 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
 
         // M1 corrected nonOrth must report 0 — BP1 (641,259) on source LEFT
         // perimeter (x=641), visible post-clip segment is zero-length and trivially orthogonal.
-        assertEquals("AC-1: M1 nonOrth must be 0 — BP1 on LEFT perimeter, visible segment zero",
+        assertEquals("M1 nonOrth must be 0 — BP1 on LEFT perimeter, visible segment zero",
                 0, result.nonOrthogonalTerminalCount());
 
         // M3: zigzag triple (403,259) → (403,219) → (403,261) at x=403 — Δy=-40 then +42.
@@ -293,7 +293,7 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
     // Geometry from live get-view-contents: parent group at (592, 20, 400, 1589), API Mgmt child
     // at relative (50, 74, 300, 415), ESB child at relative (50, 474, 280, 75).
     @Test
-    public void fixture7_overlapBinary_h2_2026_05_06_clone_shouldRatePoor() {
+    public void fixture7_overlapBinary_siblingOverlap_2026_05_06_clone_shouldRatePoor() {
         AssessmentNode integrationGroup = new AssessmentNode(
                 "integration", 592, 20, 400, 1589, null, true, false, null, 0.0, null, null, 0.0, 0.0, 0.0);
         AssessmentNode apiMgmt = new AssessmentNode(
@@ -308,7 +308,7 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
                 1, result.overlapCount());
         assertEquals("Post-re-anchor: overlap=1 → ratingBreakdown.overlaps=poor (was fair)",
                 "poor", result.ratingBreakdown().get("overlaps"));
-        assertEquals("L1 binary >0 → layoutRating=poor",
+        assertEquals("Tier 1L binary >0 → layoutRating=poor",
                 "poor", result.layoutRating());
         assertEquals("max(layoutRating=poor, routingRating=excellent) = overallRating=poor",
                 "poor", result.overallRating());
@@ -340,7 +340,7 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
                 1, result.overlapCount());
         assertEquals("Post-re-anchor: overlap=1 → ratingBreakdown.overlaps=poor (was fair)",
                 "poor", result.ratingBreakdown().get("overlaps"));
-        assertEquals("L1 binary >0 → layoutRating=poor",
+        assertEquals("Tier 1L binary >0 → layoutRating=poor",
                 "poor", result.layoutRating());
         assertEquals("max(layoutRating=poor, routingRating=excellent) = overallRating=poor",
                 "poor", result.overallRating());

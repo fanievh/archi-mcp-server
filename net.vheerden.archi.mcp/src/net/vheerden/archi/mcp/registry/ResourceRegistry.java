@@ -31,6 +31,9 @@ public class ResourceRegistry {
 
 	private final List<McpServerFeatures.SyncResourceSpecification> resourceSpecs = new CopyOnWriteArrayList<>();
 
+	private final List<McpServerFeatures.SyncResourceTemplateSpecification> resourceTemplateSpecs =
+			new CopyOnWriteArrayList<>();
+
 	private volatile McpSyncServer streamableMcpServer;
 	private volatile McpSyncServer sseMcpServer;
 
@@ -55,6 +58,31 @@ public class ResourceRegistry {
 	}
 
 	/**
+	 * Registers a resource-template specification for MCP resource discovery and reading.
+	 *
+	 * <p>A template advertises a parameterised URI (e.g. {@code archimate://prompts/{name}}) on
+	 * {@code resources/templates/list}. Clients that implement only the template half of the
+	 * resource capability can then resolve a concrete URI, which the MCP SDK matches back to this
+	 * specification's read handler when the static-resource lookup misses.</p>
+	 *
+	 * <p>Templates are registered <em>alongside</em> the static resources, never instead of them:
+	 * the two live in separate SDK maps and clients that read static resources are unaffected.</p>
+	 *
+	 * @param templateSpec the resource-template specification to register
+	 * @throws NullPointerException if templateSpec is null
+	 */
+	public void registerResourceTemplate(McpServerFeatures.SyncResourceTemplateSpecification templateSpec) {
+		Objects.requireNonNull(templateSpec, "templateSpec must not be null");
+		resourceTemplateSpecs.add(templateSpec);
+
+		String uriTemplate = templateSpec.resourceTemplate() != null
+				? templateSpec.resourceTemplate().uriTemplate() : "unknown";
+		logger.info("Registered MCP resource template: {}", uriTemplate);
+
+		addResourceTemplateToRunningServers(templateSpec);
+	}
+
+	/**
 	 * Returns an unmodifiable view of all registered resource specifications.
 	 *
 	 * <p>Used by {@link net.vheerden.archi.mcp.server.TransportConfig} at build time
@@ -64,6 +92,24 @@ public class ResourceRegistry {
 	 */
 	public List<McpServerFeatures.SyncResourceSpecification> getResourceSpecifications() {
 		return Collections.unmodifiableList(resourceSpecs);
+	}
+
+	/**
+	 * Returns an unmodifiable view of all registered resource-template specifications.
+	 *
+	 * @return unmodifiable list of resource-template specifications
+	 */
+	public List<McpServerFeatures.SyncResourceTemplateSpecification> getResourceTemplateSpecifications() {
+		return Collections.unmodifiableList(resourceTemplateSpecs);
+	}
+
+	/**
+	 * Returns the number of registered resource templates.
+	 *
+	 * @return resource template count
+	 */
+	public int getResourceTemplateCount() {
+		return resourceTemplateSpecs.size();
 	}
 
 	/**
@@ -105,6 +151,7 @@ public class ResourceRegistry {
 	 */
 	public void clearResources() {
 		resourceSpecs.clear();
+		resourceTemplateSpecs.clear();
 	}
 
 	private void addResourceToRunningServers(McpServerFeatures.SyncResourceSpecification resourceSpec) {
@@ -126,6 +173,30 @@ public class ResourceRegistry {
 				sse.notifyResourcesListChanged();
 			} catch (Exception e) {
 				logger.warn("Failed to add resource to SSE MCP server at runtime", e);
+			}
+		}
+	}
+
+	private void addResourceTemplateToRunningServers(
+			McpServerFeatures.SyncResourceTemplateSpecification templateSpec) {
+		McpSyncServer streamable = this.streamableMcpServer;
+		McpSyncServer sse = this.sseMcpServer;
+
+		if (streamable != null) {
+			try {
+				streamable.addResourceTemplate(templateSpec);
+				streamable.notifyResourcesListChanged();
+			} catch (Exception e) {
+				logger.warn("Failed to add resource template to streamable MCP server at runtime", e);
+			}
+		}
+
+		if (sse != null) {
+			try {
+				sse.addResourceTemplate(templateSpec);
+				sse.notifyResourcesListChanged();
+			} catch (Exception e) {
+				logger.warn("Failed to add resource template to SSE MCP server at runtime", e);
 			}
 		}
 	}

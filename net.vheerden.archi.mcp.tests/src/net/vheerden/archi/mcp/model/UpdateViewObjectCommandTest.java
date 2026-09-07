@@ -273,7 +273,7 @@ public class UpdateViewObjectCommandTest {
     // ---- figureType + text alignment pins ----
 
     @Test
-    public void shouldApplyTextAlignmentAndUndoRestores_AC4() {
+    public void shouldApplyTextAlignmentAndUndoRestores() {
         // Capture initial state (centre = Archi default)
         assertEquals(ITextAlignment.TEXT_ALIGNMENT_CENTER, diagramObject.getTextAlignment());
 
@@ -290,7 +290,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldApplyVerticalTextAlignmentAndUndoRestores_AC4_AC17() {
+    public void shouldApplyVerticalTextAlignmentAndUndoRestores() {
         // TEXT_POSITION_TOP (0) is the EMF default for a freshly-created view object
         // (label renders in a top "header band"). Apply CENTRE — a non-default — and round-trip.
         assertEquals(ITextPosition.TEXT_POSITION_TOP, diagramObject.getTextPosition());
@@ -308,7 +308,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldApplyFigureTypeOnGroupingElementAndUndoRestores_AC2_AC4() {
+    public void shouldApplyFigureTypeOnGroupingElementAndUndoRestores() {
         // Build a fresh Grouping element + diagramObject (the default setUp's diagramObject
         // wraps an ApplicationComponent which is non-Grouping — figureType is silently ignored).
         IArchimateModel m = IArchimateFactory.eINSTANCE.createArchimateModel();
@@ -334,7 +334,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldSilentlyIgnoreFigureTypeOnNonGroupingElement_AC16() {
+    public void shouldSilentlyIgnoreFigureTypeOnNonGroupingElement() {
         // diagramObject wraps an ApplicationComponent — not Grouping.
         int beforeType = diagramObject.getType();
 
@@ -351,7 +351,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldApplyFigureTypeOnNativeGroup_AC1() {
+    public void shouldApplyFigureTypeOnNativeGroup() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         group.setBounds(0, 0, 200, 200);
         // BORDER_TABBED = 0 is the EMF default
@@ -370,7 +370,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldApplyAllThreeNewFieldsInOneCommand_AC4() {
+    public void shouldApplyAllThreeNewFieldsInOneCommand() {
         // Single-undo-unit pin: one command captures and applies all three new fields together.
         // Use CENTRE (non-default) for verticalTextAlignment since TOP is the EMF default.
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
@@ -393,7 +393,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldBeIdempotentUnderRepeatedApply_AC15() {
+    public void shouldBeIdempotentUnderRepeatedApply() {
         // Run execute twice — captured "new" values are static at construction, so applyStyling
         // is structurally idempotent (second execute is a no-op effect on the EMF state).
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
@@ -416,7 +416,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldFigureTypeAtConstruction_AC4() {
+    public void shouldCaptureOldFigureTypeAtConstruction() {
         // Capture-at-construction pin: pre-populate the group to a non-default border type,
         // construct the command (capturing oldFigureType), then mutate the group directly,
         // then undo and verify undo restored the captured-at-construction value (NOT the
@@ -451,7 +451,7 @@ public class UpdateViewObjectCommandTest {
     // See the Task 0 EMF finding.
 
     @Test
-    public void shouldApplyLabelExpression_whenSetOnElementViewObject_AC2() {
+    public void shouldApplyLabelExpression_whenSetOnElementViewObject() {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, null, null, "${name}");
 
@@ -464,7 +464,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldReplaceLabelExpression_whenExistingValuePresent_AC3() {
+    public void shouldReplaceLabelExpression_whenExistingValuePresent() {
         diagramObject.getFeatures().putString("labelExpression", "${property:Owner}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -476,7 +476,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldClearLabelExpression_whenEmptyString_AC3() {
+    public void shouldClearLabelExpression_whenEmptyString() {
         diagramObject.getFeatures().putString("labelExpression", "${name}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -490,7 +490,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldLeaveLabelExpressionUnchanged_whenParamIsNull_AC3_AC5() {
+    public void shouldLeaveLabelExpressionUnchanged_whenParamIsNull() {
         diagramObject.getFeatures().putString("labelExpression", "${name}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -505,7 +505,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldRestoreLabelExpression_whenUndoneAfterSet_AC4() {
+    public void shouldRestoreLabelExpression_whenUndoneAfterSet() {
         // Pre-state: no labelExpression feature.
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, null, null, "${name}");
@@ -520,7 +520,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldRestoreLabelExpression_whenUndoneAfterReplace_AC4() {
+    public void shouldRestoreLabelExpression_whenUndoneAfterReplace() {
         diagramObject.getFeatures().putString("labelExpression", "${property:Owner}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -534,7 +534,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldRestoreLabelExpression_whenUndoneAfterClear_AC4() {
+    public void shouldRestoreLabelExpression_whenUndoneAfterClear() {
         diagramObject.getFeatures().putString("labelExpression", "${name}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -548,7 +548,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldLabelExpressionAtConstruction_AC4() {
+    public void shouldCaptureOldLabelExpressionAtConstruction() {
         diagramObject.getFeatures().putString("labelExpression", "${property:Owner}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
@@ -572,7 +572,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldNormalizeEmptyStringToNull_inNewLabelExpression_AC3() {
+    public void shouldNormalizeEmptyStringToNull_inNewLabelExpression() {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, null, null, "");
 
@@ -584,7 +584,7 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldBeIdempotentUnderRepeatedApply_labelExpression_AC15() {
+    public void shouldBeIdempotentUnderRepeatedApply_labelExpression() {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, null, null, "${name}");
 

@@ -35,7 +35,7 @@ import org.junit.Test;
  * <p><strong>Why this exists.</strong> This work
  * was queued because Retail Bank test 2026-05-19 surfaced a doc-surface gap:
  * the 9th termination reason ({@code reroute_degraded_input_baseline}, shipped
- * in row-703 Decision-A.1.3 = α''' Fix-1 RC-1 / Session 11 Task 10.5) was
+ * as the pre-loop route-normalized-baseline safety net) was
  * absent from the checklist's "eight branches" table, and the LLM following
  * the prescribed workflow misdiagnosed the cause + over-claimed the remedy in
  * the run report. During the empirical-probe phase (Task 4) a SECOND
@@ -51,13 +51,28 @@ import org.junit.Test;
  * <p><strong>What this test does NOT check.</strong> The three spacing-tool
  * descriptions in {@code ViewPlacementHandler.java} (apply-element-spacing-
  * recommendations / apply-group-spacing-recommendations / apply-spacing-
- * recommendations) MUST also enumerate every termination reason. That sync is
- * a code-review checklist item rather than a build-fired guard in this story
- * (per the story's Task-3.4 dev-judgment note) because reflectively reading
- * the live MCP tool catalog requires standing up the McpPlugin which is heavy
- * for a doc-sync test. A follow-on row may promote the tool-description sync
- * to a build-fired check; for now the markdown surface (which LLMs fetch via
- * the prompt resource URI) is the load-bearing one.</p>
+ * recommendations) MUST also enumerate every termination reason. Sync of the
+ * FULL taxonomy across those three descriptions remains a code-review
+ * checklist item rather than a build-fired guard: this test's authoritative
+ * surface is the markdown, and it makes no claim about the Java descriptions.
+ * The markdown surface (which LLMs fetch via the prompt resource URI) is the
+ * load-bearing one here.</p>
+ *
+ * <p><strong>Correction — one sentence IS now build-fired, and the stated
+ * obstacle was wrong.</strong> This javadoc previously deferred the
+ * tool-description sync on the grounds that "reflectively reading the live MCP
+ * tool catalog requires standing up the McpPlugin". It does not: a
+ * {@code CommandRegistry} populated by
+ * {@code new ViewPlacementHandler(stubAccessor, formatter, registry, null)
+ * .registerTools()} serves the real descriptions with no SWT, no EMF and no
+ * OSGi, and that route is used by the parity tests in this tree. Acting on
+ * that, {@code ViewPlacementHandlerTest
+ * .spacingTools_descriptionShouldNameTheThirdPreLoopGuardContiguously} now
+ * reads the SERVED description off the registry and fails the build if the
+ * third pre-loop guard is split across an interposed paragraph, or if that
+ * paragraph is placed ahead of the enumeration it explains. That guard covers
+ * ONE sentence, not the whole taxonomy — the caveat above still stands for
+ * everything else.</p>
  *
  * <p>Pure JUnit 4 — no SWT, no EMF, no OSGi runtime. Relies on the
  * {@code Fragment-Host} relationship between this tests bundle and
@@ -108,7 +123,7 @@ public class SpacingTerminationReasonDocSyncTest {
             "iteration_apply_failed_at_iteration_",
             // (h) complete name — in-loop PASS-HONEST (row 703)
             "density_floor_reflow_required",
-            // (i) complete name — pre-loop safety net (row 703 Fix-1 RC-1)
+            // (i) complete name — pre-loop safety net
             "reroute_degraded_input_baseline",
             // (j) complete name — pre-loop SOUND certificate (row 777),
             // owned by SpacingPreconditionInfeasibilityCertificate (NOT
@@ -165,7 +180,7 @@ public class SpacingTerminationReasonDocSyncTest {
             fail("routing-preconditions-checklist.md is missing documentation "
                     + "for " + missing.size()
                     + " SpacingControlLoop termination reason(s): " + missing
-                    + ". Per [[feedback_mcp_plugin_contract]] every "
+                    + ". Per the MCP plugin contract, every "
                     + "spacing-tool termination reason MUST be documented in "
                     + "the MCP-protocol surface the LLM fetches "
                     + "(archimate://prompts/routing-preconditions-checklist). "
@@ -440,7 +455,7 @@ public class SpacingTerminationReasonDocSyncTest {
         assertTrue("Reflective enumeration must find "
                 + "'reroute_degraded_input_baseline' (the complete-name "
                 + "constant SpacingControlLoop.REASON_REROUTE_DEGRADED_INPUT_"
-                + "BASELINE shipped 2026-05-16 / Session 11 Task 10.5 under "
+                + "BASELINE shipped 2026-05-16 under "
                 + "sprint-status row 703). Found constants: "
                 + completeConstants,
                 completeConstants.contains("reroute_degraded_input_baseline"));

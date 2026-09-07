@@ -125,7 +125,10 @@ public class ElementCreationHandler {
         sourceProp.put("description",
                 "Optional source traceability map. Keys are auto-prefixed with 'mcp.source.' "
                 + "in element properties (e.g., {\"tool\": \"import-script\"} becomes property "
-                + "'mcp.source.tool' = 'import-script').");
+                + "'mcp.source.tool' = 'import-script'). A source key that already carries the "
+                + "prefix, or whose prefixed form collides with a properties entry of the same "
+                + "name, is rejected rather than silently double-prefixed or overwriting the "
+                + "caller's value.");
         sourceProp.put("additionalProperties", sourceStringValues);
 
         Map<String, Object> specializationProp = new LinkedHashMap<>();
@@ -168,7 +171,14 @@ public class ElementCreationHandler {
                         + "Required: type, name. Optional: documentation, properties, folderId, "
                         + "force, source, specialization. "
                         + "Source traceability: provide source map to tag the element with "
-                        + "provenance metadata (keys auto-prefixed with 'mcp.source.'). "
+                        + "provenance metadata (keys auto-prefixed with 'mcp.source.'). A source "
+                        + "key that already carries the prefix, or whose prefixed form collides "
+                        + "with a properties entry of the same name, is rejected rather than "
+                        + "silently double-prefixed or overwriting the caller's value. It is a "
+                        + "create-time parameter on every path this tool has, bulk-mutate included. "
+                        + "To add or correct provenance afterwards, write the same keys through "
+                        + "update-element's properties map with the 'mcp.source.' prefix spelled "
+                        + "out; no update tool takes a source map. "
                         + "Specialization: provide a profile name to create the element as a "
                         + "domain-specific subtype (e.g., 'Cloud Server' Node). The profile is "
                         + "auto-created on first use and reused (case-insensitive) thereafter. "
@@ -177,9 +187,13 @@ public class ElementCreationHandler {
                         + "NOTE: visual styling (figureType, textAlignment, verticalTextAlignment, "
                         + "colours) is placement-time, not creation-time — set it on the subsequent "
                         + "add-to-view call. "
+                        + "An element reports documentation and properties only when it has "
+                        + "them, so an absent field means the element carries nothing there "
+                        + "rather than that it was left out. "
                         + "Related: get-or-create-element (idempotent creation), "
                         + "search-elements (find existing), get-folders (discover folder IDs), "
-                        + "create-relationship (connect elements), list-specializations.")
+                        + "create-relationship (connect elements), list-specializations."
+                        + " Any archimate:// URI named here can also be read by calling get-guidance with that uri, for clients that do not expose MCP resources.")
                 .inputSchema(inputSchema)
                 .build();
 
@@ -303,6 +317,33 @@ public class ElementCreationHandler {
                 + "values: '+', '-', '+/-', '+1', '-2'. Empty string clears the value. Max 255 "
                 + "characters. REJECTED if the relationship type is not InfluenceRelationship.");
 
+        Map<String, Object> documentationProp = new LinkedHashMap<>();
+        documentationProp.put("type", "string");
+        documentationProp.put("description",
+                "Optional documentation text describing the relationship. A blank string is "
+                + "not stored.");
+
+        Map<String, Object> propertiesStringValues = new LinkedHashMap<>();
+        propertiesStringValues.put("type", "string");
+        Map<String, Object> propertiesProp = new LinkedHashMap<>();
+        propertiesProp.put("type", "object");
+        propertiesProp.put("description",
+                "Optional key-value properties map stored on the relationship.");
+        propertiesProp.put("additionalProperties", propertiesStringValues);
+
+        Map<String, Object> relSourceStringValues = new LinkedHashMap<>();
+        relSourceStringValues.put("type", "string");
+        Map<String, Object> relSourceProp = new LinkedHashMap<>();
+        relSourceProp.put("type", "object");
+        relSourceProp.put("description",
+                "Optional source traceability map. Keys are auto-prefixed with 'mcp.source.' "
+                + "in relationship properties (e.g., {\"tool\": \"import-script\"} becomes "
+                + "property 'mcp.source.tool' = 'import-script'). A source key that already "
+                + "carries the prefix, or whose prefixed form collides with a properties entry of "
+                + "the same name, is rejected rather than silently double-prefixed or overwriting "
+                + "the caller's value.");
+        relSourceProp.put("additionalProperties", relSourceStringValues);
+
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("type", typeProp);
         properties.put("sourceId", sourceIdProp);
@@ -312,6 +353,9 @@ public class ElementCreationHandler {
         properties.put("accessType", accessTypeProp);
         properties.put("associationDirected", associationDirectedProp);
         properties.put("influenceStrength", influenceStrengthProp);
+        properties.put("documentation", documentationProp);
+        properties.put("properties", propertiesProp);
+        properties.put("source", relSourceProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("type", "sourceId", "targetId"), null, null, null);
@@ -322,7 +366,17 @@ public class ElementCreationHandler {
                         + "Requires type (e.g., 'ServingRelationship', 'CompositionRelationship'), "
                         + "sourceId, and targetId. ArchiMate specification rules are enforced "
                         + "— invalid source/target/type combinations return detailed errors with "
-                        + "valid alternatives. Optional: name, specialization. "
+                        + "valid alternatives. Optional: name, specialization, documentation, "
+                        + "properties, source. "
+                        + "Provenance can be recorded at create time: documentation takes free "
+                        + "text, properties takes a key-value map, and source takes a "
+                        + "traceability map whose keys are auto-prefixed with 'mcp.source.' and "
+                        + "merged into properties — the same convention create-element uses. A "
+                        + "source key that already carries the prefix, or whose prefixed form "
+                        + "collides with a properties entry of the same name, is rejected rather "
+                        + "than silently double-prefixed or overwriting the caller's value. No "
+                        + "follow-up update-relationship call is needed to mark where a "
+                        + "relationship came from. "
                         + "Specialization: provide a profile name to create the relationship as a "
                         + "domain-specific subtype (e.g., 'Data Flow' FlowRelationship). The "
                         + "profile is auto-created on first use and reused (case-insensitive) "
@@ -332,6 +386,18 @@ public class ElementCreationHandler {
                         + "(AccessRelationship — enum: 'access' (unspecified) / 'read' / 'write' / "
                         + "'readwrite'), associationDirected (AssociationRelationship — boolean), "
                         + "influenceStrength (InfluenceRelationship — free text, max 255 chars). "
+                        + "Returns id, name, type, sourceId, targetId, and the documentation and "
+                        + "properties the relationship actually holds after the write — "
+                        + "documentation always, as an empty string when the relationship holds "
+                        + "none, and properties only when the relationship has any, so an absent "
+                        + "properties field means the relationship carries nothing there rather "
+                        + "than that the write was not applied; sourceName "
+                        + "and targetName only on a fresh create. A duplicate returns the existing "
+                        + "relationship with alreadyExisted: true — absent, not false, "
+                        + "otherwise — and omits the two name fields. A duplicate is NOT "
+                        + "modified: documentation, properties and source supplied on a create "
+                        + "that matches an existing relationship are ignored, and the response "
+                        + "reports the existing values. Use update-relationship to change them. "
                         + "Related: get-relationships (verify), get-element (check endpoints), "
                         + "create-element (create endpoints first), list-specializations.")
                 .inputSchema(inputSchema)
@@ -358,9 +424,15 @@ public class ElementCreationHandler {
             String specialization = HandlerUtils.optionalStringParam(args, "specialization");
             // semantic attributes (type-conditional)
             RelationshipSemanticAttributes semanticAttributes = readSemanticAttributes(args);
+            // Provenance, read with the same readers create-element uses. The AllowEmpty variants
+            // are deliberately NOT used: there is nothing to clear on a create.
+            String documentation = HandlerUtils.optionalStringParam(args, "documentation");
+            Map<String, String> properties = HandlerUtils.optionalMapParam(args, "properties");
+            Map<String, String> source = HandlerUtils.optionalMapParam(args, "source");
 
             MutationResult<RelationshipDto> result = accessor.createRelationship(
-                    sessionId, type, sourceId, targetId, name, specialization, semanticAttributes);
+                    sessionId, type, sourceId, targetId, name, specialization, semanticAttributes,
+                    documentation, properties, source);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildCreateRelationshipNextSteps(result), accessor, formatter);
@@ -436,6 +508,9 @@ public class ElementCreationHandler {
                         + "cross through elements. For any view with connections, leave the "
                         + "default ('manual') and use auto-route-connections for clean "
                         + "obstacle-aware orthogonal routing. "
+                        + "Returns the new view's id, name and folderPath. viewpointType is "
+                        + "present only when a viewpoint was set, and connectionRouterType "
+                        + "only for 'manhattan' — the default 'manual' is omitted. "
                         + "Related: get-views (list existing), get-view-contents "
                         + "(inspect created view), auto-route-connections (route connections "
                         + "after placement).")

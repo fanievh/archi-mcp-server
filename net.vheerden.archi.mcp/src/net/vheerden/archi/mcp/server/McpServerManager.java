@@ -114,6 +114,8 @@ public class McpServerManager implements ModelChangeListener {
             initializeResources();
             transportConfig.setToolSpecifications(commandRegistry.getToolSpecifications());
             transportConfig.setResourceSpecifications(resourceRegistry.getResourceSpecifications());
+            transportConfig.setResourceTemplateSpecifications(
+                    resourceRegistry.getResourceTemplateSpecifications());
             transportConfig.startServer();
             wireCommandRegistryServers();
             wireResourceRegistryServers();
@@ -171,6 +173,8 @@ public class McpServerManager implements ModelChangeListener {
             initializeResources();
             transportConfig.setToolSpecifications(commandRegistry.getToolSpecifications());
             transportConfig.setResourceSpecifications(resourceRegistry.getResourceSpecifications());
+            transportConfig.setResourceTemplateSpecifications(
+                    resourceRegistry.getResourceTemplateSpecifications());
             transportConfig.startServer(port, bindAddress);
             wireCommandRegistryServers();
             wireResourceRegistryServers();

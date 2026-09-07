@@ -11,7 +11,7 @@ import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * H5 story — foundational primitive: partition routed connections into per-(hub, face)
+ * Hub-perimeter routing — foundational primitive: partition routed connections into per-(hub, face)
  * cells for the {@link HubPerimeterRoutingStage}.
  *
  * <p><b>Architectural commitment (load-bearing):</b> routing quality is a global
@@ -122,7 +122,8 @@ public class HubFaceConnectionPartitioner {
      * {@link #HUB_DETECTION_THRESHOLD}.
      *
      * @param connections  per-route endpoint records
-     * @param allObstacles all element rectangles on the view (hubs must be in this set
+     * @param allObstacles every non-container view object — elements, notes and images alike
+     *                     (hubs must be in this set
      *                     and have a non-null id matched against connection source/target ids)
      * @return distinct hub rectangles in {@code allObstacles} iteration order
      */
@@ -159,7 +160,7 @@ public class HubFaceConnectionPartitioner {
      *
      * @param connections  index-parallel per-route endpoint records
      * @param paths        index-parallel per-route bendpoint lists (NOT mutated)
-     * @param allObstacles all element rectangles on the view
+     * @param allObstacles every non-container view object — elements, notes and images alike
      * @return distinct {@code HubFaceCell} records, one per (hub, face) with at least
      *         one member; empty if no hubs are detected
      */
@@ -189,7 +190,7 @@ public class HubFaceConnectionPartitioner {
 
             // TerminalAnchoring exemption: terminal-incident segments (those whose start bp
             // is the source terminal at idx=0, or whose end bp is the target terminal at idx=lastIdx)
-            // are NOT eligible cell members. H5's perpendicular-shift primitives would mutate the
+            // are NOT eligible cell members. The perpendicular-shift primitives would mutate the
             // terminal bp's coordinate, violating preservesEndpoints. Terminal-segment positioning
             // is owned by EdgeAttachmentCalculator + TerminalAnchoring, not this stage. The loop
             // bound s < lastIdx - 1 ensures the segment's end-bp (idx=s+1) stays ≤ lastIdx - 1,

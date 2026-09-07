@@ -7,10 +7,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.eclipse.swt.SWTError;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.archimatetool.model.IArchimateDiagramModel;
+import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IConnectable;
@@ -23,6 +26,7 @@ import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IJunction;
+import com.archimatetool.model.ITextPosition;
 
 /**
  * Collects assessment nodes and connections from diagram models for
@@ -61,6 +65,11 @@ final class AssessmentCollector {
             double absY = bounds.getY() + parentOffsetY;
             boolean isGroup = child instanceof IDiagramModelGroup;
             boolean isNote = child instanceof IDiagramModelNote;
+            // Both kinds of transparent labelled box, resolved by the same predicate the
+            // arrangement family uses, so "what counts as a container" has one definition in this
+            // package rather than two that can drift. isTarget admits a native group as well, so
+            // this is a superset of isGroup — see AssessmentNode.
+            boolean isContainer = TopLevelGroupTargets.isTarget(child);
 
             // Extract name and pre-compute label text width
             String name = child.getName();
@@ -68,7 +77,14 @@ final class AssessmentCollector {
             if (name != null && !name.isEmpty() && !isGroup && !isNote) {
                 try {
                     labelTextWidth = ElementSizer.measureText(name).textWidth();
-                } catch (Exception e) {
+                } catch (Exception | SWTError e) {
+                    // SWTError as well as Exception: a display-less Display.getDefault() raises
+                    // one or the other depending on the platform, and an Error escapes a catch
+                    // written only for Exception — which is what took the headless lane down once
+                    // a placement path reached this walk. Same pairing, and the same reasoning, as
+                    // ElementSizer.fitTextBoxHeightToContentOrElse. The fallback is honest: the
+                    // one field that could not be measured stays at its zero sentinel and every
+                    // geometric field on the node is unaffected.
                     logger.warn("Failed to measure text for '{}': {}", name, e.getMessage());
                 }
             }
@@ -101,16 +117,32 @@ final class AssessmentCollector {
             double imageNaturalHeight = 0.0;
             if (imgPath != null) {
                 try {
-                    // getDiagramModel() can be null for a detached child; treat that as
-                    // "dimensions unavailable" rather than letting it NPE into the catch.
-                    int[] dims = (child.getDiagramModel() == null) ? null
-                            : ImageHelper.readNaturalImageDimensions(
-                                    child.getDiagramModel().getArchimateModel(), imgPath);
+                    // Resolve the owning model for archive access. On a DETACHED
+                    // copy (the route-normalized baseline probe measures one) the
+                    // diagram has no container, so getArchimateModel() is null;
+                    // fall back to the archimate concept's model — the copy still
+                    // references the live concept, so its model resolves the same
+                    // archive the live assessment uses. Equivalent for the live
+                    // path; keeps the copy's image sizing byte-equal to the bare
+                    // baseline instead of silently falling back to a fixed icon.
+                    IArchimateModel imageModel =
+                            (child.getDiagramModel() == null) ? null
+                                    : child.getDiagramModel().getArchimateModel();
+                    if (imageModel == null
+                            && child instanceof IDiagramModelArchimateObject archiChild
+                            && archiChild.getArchimateConcept() != null) {
+                        imageModel = archiChild.getArchimateConcept().getArchimateModel();
+                    }
+                    int[] dims = (imageModel == null) ? null
+                            : ImageHelper.readNaturalImageDimensions(imageModel, imgPath);
                     if (dims != null) {
                         imageNaturalWidth = dims[0];
                         imageNaturalHeight = dims[1];
                     }
-                } catch (Exception e) {
+                } catch (Exception | SWTError e) {
+                    // Decodes through SWT too, so it is guarded identically — no reader should
+                    // have to work out which of these three walks is the one that can kill the
+                    // process on a host without a display.
                     logger.warn("Failed to read image dimensions for id={}: {}",
                             child.getId(), e.getMessage());
                 }
@@ -134,7 +166,9 @@ final class AssessmentCollector {
                         noteRequiredHeight = ElementSizer.fitTextBoxHeightToContent(
                                 content, noteContentWidth, ElementSizer.LABEL_VERTICAL_PADDING,
                                 1, ElementSizer.MAX_NOTE_HEIGHT);
-                    } catch (Exception e) {
+                    } catch (Exception | SWTError e) {
+                        // Measures through the same SWT path as the label above, so it carries the
+                        // same Error-vs-Exception hazard and takes the same guard.
                         logger.warn("Failed to measure note content for id={}: {}",
                                 child.getId(), e.getMessage());
                     }
@@ -147,10 +181,37 @@ final class AssessmentCollector {
             boolean isJunction = child instanceof IDiagramModelArchimateObject archiObj
                     && archiObj.getArchimateConcept() instanceof IJunction;
 
+            // Horizontal label alignment, read PER OBJECT. Archi places the glyph run inside the
+            // figure from this feature, so it decides where the title actually renders. Three
+            // populations reach here: types whose default is LEFT (Grouping, group, note), which
+            // both Archi's palette and this server stamp at creation; plain elements, which this
+            // server leaves at CENTRE while Archi derives theirs from a user preference, so those
+            // two can disagree on a host where the preference was changed; objects this server
+            // created before it stamped anything, which keep CENTRE; and any object whose
+            // alignment a caller set explicitly. Reading the object (rather than assuming a
+            // per-type value) is the only way the assessor sees the title where it really is.
+            int textAlignment = child.getTextAlignment();
+
+            // Vertical label position, read PER OBJECT for the same reason and through the same
+            // mechanism: Archi builds ONE GridData for the title control and reads its horizontal
+            // alignment from getTextAlignment() and its vertical from getTextPosition(). Assuming a
+            // constant here is the same class of error as assuming a constant alignment was — and
+            // this server publishes a verticalTextAlignment parameter that writes it, so a
+            // non-TOP title is reachable through this server on any object.
+            //
+            // The interface is optional, so this is an instanceof rather than a plain call. Note
+            // the receiver: IDiagramModelConnection ALSO has a getTextPosition(), meaning the
+            // label's position along the connection — a different feature with the same name.
+            // This one is the OBJECT's, via ITextPosition.
+            int textPosition = child instanceof ITextPosition tp
+                    ? tp.getTextPosition()
+                    : AssessmentNode.TEXT_POSITION_TOP;
+
             nodes.add(new AssessmentNode(child.getId(),
                     absX, absY, w, h, parentId, isGroup, isNote,
                     name, labelTextWidth, imgPath, imgPosition, noteRequiredHeight,
-                    imageNaturalWidth, imageNaturalHeight, isJunction, child.getFillColor()));
+                    imageNaturalWidth, imageNaturalHeight, isJunction, child.getFillColor(),
+                    isContainer, textAlignment, textPosition));
 
             if (child instanceof IDiagramModelContainer nested) {
                 collectAssessmentNodesRecursive(nested, child.getId(),
@@ -192,12 +253,37 @@ final class AssessmentCollector {
             List<double[]> pathPoints = new ArrayList<>();
             pathPoints.add(new double[]{srcCenterX, srcCenterY});
 
+            // The largest disagreement between a bendpoint's two stored reconstructions, per axis.
+            // Measured BEFORE the blend below discards it: the midpoint hands every detector a
+            // plausible-looking polyline whichever way the anchors disagree, so this is the only
+            // point at which the disagreement is observable.
+            double anchorDriftX = 0.0;
+            double anchorDriftY = 0.0;
+
+            // Archi draws bendpoint i of n at weight (i + 1) / (n + 1) along the bendpoint list,
+            // interpolating from the source-anchored reconstruction toward the target-anchored one.
+            // Measuring over a flat one-half blend would hand every detector a polyline the
+            // renderer draws only at the exact centre of an odd-length list: while the two
+            // reconstructions disagree the drawn path is sheared, most at its terminal bendpoints,
+            // and the terminal segments are precisely what the terminal-geometry dimensions judge.
+            // Centres stay untruncated here — the drift measured just above is read off them before
+            // the blend, and rounding them would quantise away the sub-pixel disagreement that is
+            // the whole of what it reports.
+            int bendpointCount = conn.getBendpoints().size();
+            int bendpointIndex = 0;
             for (IDiagramModelBendpoint bp : conn.getBendpoints()) {
-                double absX = (bp.getStartX() + srcCenterX
-                        + bp.getEndX() + tgtCenterX) / 2;
-                double absY = (bp.getStartY() + srcCenterY
-                        + bp.getEndY() + tgtCenterY) / 2;
+                double srcDerivedX = bp.getStartX() + srcCenterX;
+                double tgtDerivedX = bp.getEndX() + tgtCenterX;
+                double srcDerivedY = bp.getStartY() + srcCenterY;
+                double tgtDerivedY = bp.getEndY() + tgtCenterY;
+                anchorDriftX = Math.max(anchorDriftX, Math.abs(srcDerivedX - tgtDerivedX));
+                anchorDriftY = Math.max(anchorDriftY, Math.abs(srcDerivedY - tgtDerivedY));
+
+                double weight = (bendpointIndex + 1.0) / (bendpointCount + 1.0);
+                double absX = srcDerivedX * (1.0 - weight) + tgtDerivedX * weight;
+                double absY = srcDerivedY * (1.0 - weight) + tgtDerivedY * weight;
                 pathPoints.add(new double[]{absX, absY});
+                bendpointIndex++;
             }
 
             pathPoints.add(new double[]{tgtCenterX, tgtCenterY});
@@ -218,7 +304,7 @@ final class AssessmentCollector {
 
             connections.add(new AssessmentConnection(
                     conn.getId(), source.getId(), target.getId(), pathPoints,
-                    labelText, textPosition, relativePosition));
+                    labelText, textPosition, relativePosition, anchorDriftX, anchorDriftY));
         }
 
         return connections;

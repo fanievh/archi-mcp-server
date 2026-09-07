@@ -20,7 +20,7 @@ public class DiagramImageDtoTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    public void shouldDefaultAllNullableFieldsToNull_AC5() {
+    public void shouldDefaultAllNullableFieldsToNull() {
         DiagramImageDto dto = new DiagramImageDto(
                 "vo-1", "images/abc.png", 10, 20, 64, 64,
                 null, null, null);
@@ -36,7 +36,7 @@ public class DiagramImageDtoTest {
     }
 
     @Test
-    public void shouldSerialiseRequiredFields_omittingNullableNulls_AC5() throws Exception {
+    public void shouldSerialiseRequiredFields_omittingNullableNulls() throws Exception {
         DiagramImageDto dto = new DiagramImageDto(
                 "vo-1", "images/abc.png", 10, 20, 64, 64,
                 null, null, null);
@@ -55,7 +55,7 @@ public class DiagramImageDtoTest {
     }
 
     @Test
-    public void shouldRoundTripJson_AC5() throws Exception {
+    public void shouldRoundTripJson() throws Exception {
         DiagramImageDto original = new DiagramImageDto(
                 "vo-7", "images/diagram.svg", 100, 200, 320, 240,
                 "parent-group-1", "#FF0000", "Architecture sketch");
@@ -65,7 +65,7 @@ public class DiagramImageDtoTest {
     }
 
     @Test
-    public void shouldSerialiseBorderColorWhenSet_AC5() throws Exception {
+    public void shouldSerialiseBorderColorWhenSet() throws Exception {
         DiagramImageDto dto = new DiagramImageDto(
                 "vo-2", "images/x.png", 0, 0, 50, 50,
                 null, "#00FF00", null);
@@ -77,7 +77,7 @@ public class DiagramImageDtoTest {
     }
 
     @Test
-    public void shouldOmitDocumentationWhenNull_AC5() throws Exception {
+    public void shouldOmitDocumentationWhenNull() throws Exception {
         DiagramImageDto dto = new DiagramImageDto(
                 "vo-3", "images/y.png", 5, 5, 16, 16,
                 "grp-1", null, null);

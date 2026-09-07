@@ -11,8 +11,9 @@ package net.vheerden.archi.mcp.model;
  * <em>unconnected</em> (hub-agnostic). The connected columns fire when the
  * view has at least one connection crossing a top-level group boundary.
  * The hub-aware column fires when the view has at least one element with
- * more than 6 connections (the canonical hub-candidate threshold per
- * archimate-view-patterns.md §1). Pinned by JUnit
+ * more than 6 connections — the large-hub threshold, which is a higher cut
+ * than the {@code >= 5} hub-candidate threshold archimate-view-patterns.md
+ * §1 defines. {@link HubSpacingSignal} owns the predicate. Pinned by JUnit
  * {@code GroupSpacingHeuristicTest} (pure-unit, all branches + boundary
  * tests) and {@code ApplyGroupSpacingRecommendationsToolTest}
  * (connected, unconnected, boundary).</p>
@@ -26,11 +27,16 @@ package net.vheerden.archi.mcp.model;
  * heuristic table requires a coordinated edit across FOUR artefacts —
  * (1) the markdown resource, (2) this class's
  * {@link #targetSpacingForConnectionCount(int, boolean, boolean)} method,
- * (3) the JUnit test, (4) the four production callsites that derive
- * {@code hasLargeHubs} upstream and forward it ({@code ArchiModelAccessorImpl
- * .applyGroupSpacingRecommendations}, {@code ArrangeGroupsDefaultResolution
- * Decision.decide}, plus their element-side siblings via
- * {@link ElementSpacingHeuristic}). Edit one without the others and the test
+ * (3) the JUnit test, (4) the five production callsites that derive
+ * {@code hasLargeHubs} upstream and forward it. All five live in
+ * {@code ArchiModelAccessorImpl} — {@code computeAdjustViewSpacing},
+ * {@code applyElementSpacingRecommendations},
+ * {@code applyGroupSpacingRecommendations},
+ * {@code applySpacingRecommendations} and {@code arrangeGroups} — and all
+ * five derive the flag through {@link HubSpacingSignal}, which is where a
+ * change to its meaning belongs. The two
+ * {@code ...DefaultResolutionDecision.decide} methods take the boolean as a
+ * parameter and do not derive it. Edit one without the others and the test
  * fails until they all agree. Sibling-symmetric with
  * {@link ElementSpacingHeuristic}.</p>
  */
@@ -64,7 +70,7 @@ public final class GroupSpacingHeuristic {
      * for the corridor space that formula-resized hubs consume. Without it,
      * inter-group corridors stay too narrow post-hub-resize and coincSeg
      * residuals persist on inter-group connections (Row C of the 2026-05-06
-     * rating-signal investigation, F4 closure). The unconnected column is
+     * rating-signal investigation). The unconnected column is
      * hub-agnostic — there are no inter-group corridors to widen.</p>
      *
      * @param connectionCount total visible connections on the view (sourced

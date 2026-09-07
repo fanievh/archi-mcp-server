@@ -163,12 +163,35 @@ Used for: routing pipeline output, layout engine output, absolute bendpoint API 
 **Relative to Absolute** (`convertRelativeToAbsolute`):
 
 ```text
-For each bendpoint bp:
-  absX = (bp.startX + srcCenterX + bp.endX + tgtCenterX) / 2
-  absY = (bp.startY + srcCenterY + bp.endY + tgtCenterY) / 2
+For bendpoint i of n (i counted from 0):
+  srcWeight = n - i
+  tgtWeight = i + 1
+  absX = ((bp.startX + srcCenterX) * srcWeight + (bp.endX + tgtCenterX) * tgtWeight) / (n + 1)
+  absY = ((bp.startY + srcCenterY) * srcWeight + (bp.endY + tgtCenterY) * tgtWeight) / (n + 1)
 ```
 
-This average formula reflects Archi's semantic: the bendpoint is at the midpoint between the source-referenced and target-referenced positions.
+This interpolates between the source-referenced and target-referenced positions at the weight Archi
+draws with: bendpoint `i` of `n` carries weight `(i + 1) / (n + 1)` toward the target. Archi's
+renderer sets that weight in `DiagramConnectionEditPart.refreshBendpoints` and applies it in draw2d's
+`RelativeBendpoint.getLocation`, blending the two `ChopboxAnchor` reference points — which are
+`x + width / 2` on integer division, the same whole-pixel centres used here.
+
+The midpoint is the special case `n = 1`, and only that case. For a single bendpoint the formula
+above reduces to `(startX + srcCenterX + endX + tgtCenterX) / 2` exactly, so a single-bendpoint
+connection reports the same coordinate under either form.
+
+While both reconstructions of a bendpoint agree — which is true of every path the router writes,
+because it derives both offsets from one absolute point — every weight yields the same coordinate and
+the conversion is exact. They disagree once an endpoint is moved or resized after the route was
+written; `assess-layout` reports that disagreement as `anchorDriftCount`. While it is non-zero the
+drawn polyline is sheared, each point displaced from the halfway position by
+`(weight − 0.5) × drift`, most at the first and last bendpoints and least in the middle.
+
+The interpolation is carried in integer arithmetic with a single division, which keeps a bendpoint
+whose reconstructions agree exact at every weight. Evaluating the same weight in floating point — as
+`DiagramModelUtils.getAbsoluteBendpointPositions` does — loses the last bits on a weight that is not
+a binary fraction, and the truncation can then land a whole pixel low on a point that should be
+exact.
 
 **Absolute to Relative** (`convertAbsoluteToRelative`):
 
@@ -191,10 +214,13 @@ Relative (stored in EMF):
   endX   = 180 - 300 = -120
   endY   = 180 - 300 = -120
 
-Reconstructing absolute:
-  absX = (80 + 100 + (-120) + 300) / 2 = 180
-  absY = (80 + 100 + (-120) + 300) / 2 = 180
+Reconstructing absolute (n = 1, so srcWeight = tgtWeight = 1 and the divisor is 2):
+  absX = ((80 + 100) * 1 + ((-120) + 300) * 1) / 2 = 180
+  absY = ((80 + 100) * 1 + ((-120) + 300) * 1) / 2 = 180
 ```
+
+Both reconstructions give 180 here, so the weight cannot matter: this bendpoint was written from an
+absolute position and its two offsets agree by construction.
 
 ### Mutual Exclusion
 
@@ -233,9 +259,54 @@ The `collectViewContents()` method recursively collects all view objects:
 - **Elements:** viewObjectId, elementId, x, y, width, height, parentViewObjectId, styling
 - **Groups:** id, name, x, y, width, height, parentViewObjectId, childIds, styling
 - **Notes:** id, content, x, y, width, height, parentViewObjectId, styling
-- **Connections:** viewConnectionId, relationshipId, sourceViewObjectId, targetViewObjectId, bendpoints, absoluteBendpoints, sourceAnchor, targetAnchor, textPosition, styling, nameVisible (false when label hidden, omitted when visible)
+- **Connections:** viewConnectionId, relationshipId, sourceViewObjectId, targetViewObjectId, bendpoints, absoluteBendpoints, sourceAnchor, targetAnchor, sourceRenderFace, targetRenderFace, textPosition, styling, nameVisible (false when label hidden, omitted when visible)
 
-The **styling** block on `ViewNodeDto`, `ViewGroupDto`, `ViewNoteDto`, and `ViewConnectionDto` surfaces the full set of fields that the corresponding add-/update-tools accept: `labelExpression`, `figureType`, `textAlignment` / `verticalTextAlignment`, `fontName` / `fontSize` / `fontStyle`, `gradient`, `borderType` (notes only), `deriveLineColor`, `outlineOpacity`, and `lineStyle` (connections carry the typography fields and `labelExpression`). Every styling field is serialized under `@JsonInclude(NON_NULL)`, so it appears only when set — a default-styled view-object reads back with the same shape it always had. This makes a styling mutation written via `update-view-object` or `update-view-connection` directly verifiable on the next read.
+The **styling** block on `ViewNodeDto`, `ViewGroupDto`, `ViewNoteDto`, and `ViewConnectionDto` surfaces the full set of fields that the corresponding add-/update-tools accept: `labelExpression`, `figureType`, `textAlignment` / `verticalTextAlignment`, `fontName` / `fontSize` / `fontStyle`, `gradient`, `borderType` (notes only), `deriveLineColor`, `outlineOpacity`, and `lineStyle`. Connections are the exception: `ViewConnectionDto` carries the typography fields and `labelExpression` but deliberately has no `lineStyle` — a connection's line style is determined by its ArchiMate relationship type, so the connection tools reject the parameter rather than accepting one they cannot honour (use `lineColor` + `lineWidth` for view-level emphasis instead). Every styling field is serialized under `@JsonInclude(NON_NULL)`, so it appears only when set. One field is set without being asked for: a `Grouping`, group or note is created carrying its type's Archi default `textAlignment` of `left`, so those three read back with that field present even when the caller supplied no styling at all. This makes a styling mutation written via `update-view-object` or `update-view-connection` directly verifiable on the next read.
+
+#### `sourceRenderFace` / `targetRenderFace`
+
+The element **face** the connection is drawn leaving and entering — one of `top`, `bottom`, `left`,
+`right` — or absent when it cannot be established.
+
+This is not derivable from anything else in the payload. `sourceAnchor` and `targetAnchor` are the
+element centres the renderer aims *from*, and a stored bendpoint is a waypoint it aims *at*; the
+point where the line actually meets the box is computed at paint time by a connection anchor, from
+the element's untruncated bounds. A caller holding only the published centre can rebuild the near
+edge exactly, because the same truncating halving is added back, but lands a pixel short on the far
+edge of any odd dimension — and over half the elements in the routing fixture corpus carry one.
+
+**How it is derived.** Archi installs an orthogonal anchor on every element figure but the Junction.
+It bands the reference point against the element's own bounds on each axis and the pair of bands
+selects the attachment directly: past one edge and within the other axis's extent gives that edge's
+face. The reference is the outermost stored bendpoint when the connection has any, and the other
+element's centre when it does not — and always the other element's centre on a view routed
+`manhattan`, which ignores stored bendpoints entirely. Before banding, a reference sitting at the
+other figure's centre is replaced by the midpoint of the two boxes' overlap, which is what makes
+Archi draw a straight horizontal line between two boxes that overlap on one axis.
+
+**One pixel, on negative coordinates.** The reference the derivation uses on a connection with
+bendpoints is the published `absoluteBendpoints` value, whose single division truncates toward zero.
+The renderer blends the same two reconstructions in `double` and converts with `floor`. The two
+agree everywhere the blend is non-negative and can differ by one pixel where it is not — and at a
+band boundary one pixel changes the face. The field takes the published value, so on such a
+coordinate it declines where the renderer attaches: it under-claims rather than guessing.
+
+**When it is absent, and why.** Absence never means "no face" — it means no single face is the
+truthful answer:
+
+| reason | what is happening |
+|---|---|
+| the attachment is a **corner** | the reference is outside the box on both axes, so the anchor returns the box corner, which lies on two face lines at once and nothing in the point's own position chooses between them |
+| the reference lands **inside the box** | the anchor answers with the box centre, a point on no part of the boundary |
+| a **rounded corner's arc** | twenty ArchiMate types draw through a rounded delegate on their default figure; near a corner the attachment sits on the curve, which belongs to neither face that meets there |
+| a **zero-size element** | a degenerate box has no interior, so no band can select a face over a corner |
+| a **Junction** | anchors on an ellipse, which has no faces — and it is the one element in the product that refuses the orthogonal anchor whatever the preference says |
+| a **Grouping on its alternate figure** | its preference-off anchor is shifted down by a tab height, which is figure state rather than model state, so the two configurations cannot be compared |
+| the two **anchor configurations disagree** | the attachment depends on Archi's `orthogonalAnchor` preference, which the model file does not carry, so the face is published only where both algorithms name the same one — over both census denominators that gate removed no value that would otherwise have been published |
+
+**Interaction with anchor drift.** While `assess-layout` reports a non-zero `anchorDriftCount`, an
+endpoint has moved since the route was written, so the reference the renderer now uses is not the
+one the stored geometry describes, and the face can differ from what those bendpoints suggest.
 
 ### Containment Tree (`format: "tree"`)
 
@@ -246,13 +317,23 @@ The **styling** block on `ViewNodeDto`, `ViewGroupDto`, `ViewNoteDto`, and `View
 
 The aggregate `stats.totalElements` counts nested elements regardless of parent type. Pairing the tree view with `layout-within-group` (which accepts both container kinds) lets an agent discover a layoutable element container and arrange its children in two calls.
 
+**What the group stats count.** `stats.totalGroups` / `topLevelGroups` / `nestedGroups` count the containers the *group-arrangement* family acts on, which is a narrower set than "nodes with children": a visual group, **and** an ArchiMate `Grouping` element — the same predicate `TopLevelGroupTargets.isTarget` applies in the model layer. Every such node emits `isGroup: true`, at any depth, so an agent never needs to know which type names arrange. The scopes line up exactly: marked nodes at the **root** of `tree` equal `topLevelGroups`, and marked nodes **anywhere in the tree** equal `totalGroups`. Emptiness is not the discriminator — an empty top-level container is still counted, because it is still positioned, and a marked container always emits `childCount`/`children` even when empty so that both container kinds present the same node shape.
+
+**One definition, three formats.** The type test lives in exactly one place above the model layer, `ViewContainers` in `response/` — `handlers/` and `response/` may not import EMF, so a string test copied to each report would be three chances to drift from `TopLevelGroupTargets` and from each other. `format=summary` sizes its `Containers: N groups` clause from `ViewContainers.countContainers` (notes are reported under their own label, since a `Grouping` is a model concept rather than a visual annotation), and `format=graph` marks every container node `isGroup: true`, including the `Grouping` element nodes that arrive outside the `_nodeType: "group"` bucket. Changing `format` never changes how many containers a view is said to have. `GroupingContainerTypeNameTest` pins the shared literal against `IArchimateFactory` output *and* asserts no consumer has re-inlined it.
+
+`topLevelGroups` is the stat that equals `arrange-groups`' `groupsPositioned` **on a call that omits `groupIds` and on a view with no container drawn inside a host**, because `TopLevelGroupTargets.collect` reads `view.getChildren()` — the view's **direct** children only, which is the population `arrange-groups` lays out in *canvas* coordinates. A `Grouping` nested inside a host element is `nestedGroups`, not `topLevelGroups`, and that split is deliberate: this surface reports where a container is drawn. `arrange-groups` arranges such a container anyway — inside its host, in that host's own coordinate space, reported in `nestedContainersArranged` rather than in `groupsPositioned` — so where a view holds one, this stat is the lower of the two numbers and the difference is exactly those nested containers. A call that *does* name containers in `groupIds` reports a `groupsPositioned` of its own choosing: the parameter can exclude a counted target, and it can include a top-level element acting as a container, which this stat never counts. When a view has containers but none at top level, `layout-within-group` still applies, and `optimize-group-order` / `adjust-view-spacing` position nothing **by default**. `arrange-groups` is the exception: it arranges those nested containers where they sit, in their host's own coordinate space. The host element is itself a top-level container and `arrange-groups` will position *it* when the caller names its `viewObjectId` in `groupIds`; the tree's `nextSteps` say both things instead of recommending or dismissing the tools outright.
+
+The counters split deliberately at that line. `totalElements` stays one-for-one with `visualMetadata` and therefore keeps counting a `Grouping` as the ArchiMate element it is. `ungroupedElements` answers a different question — what is still sitting loose on the canvas — so a top-level container is excluded from it, being the thing loose elements get placed *into*. A non-`Grouping` element container such as an `ApplicationComponent` holding functions is a host rather than a zone: it nests in the tree and accepts `layout-within-group`, but carries no `isGroup` marker and does not move the group counts, because `arrange-groups` will not reposition **the host itself** by default — it does arrange the zones drawn inside it. Naming its `viewObjectId` in `groupIds` does arrange it — a per-call opt-in that deliberately leaves these counts alone, so they keep describing the default and stay comparable across calls.
+
 ### Parent Container Resolution
 
 When placing elements, `resolveParentContainer()` handles three cases:
 
-1. **Batch back-reference** (`batchParentContainer != null`) — use pre-resolved container from bulk-mutate `$N.id` syntax
+1. **Batch back-reference** (`batchParentContainer != null`) — use pre-resolved container from a bulk-mutate back-reference (`$N.id` or `$name.id`)
 2. **Explicit parent** (`parentViewObjectId != null`) — look up in view objects, validate it is a group or element (not a note or connection)
 3. **No parent** (both null) — use the view itself as the container (top-level placement)
+
+Case 2's lookup is no longer restricted to objects that already exist in the view. It also consults what the current unit of work has **queued but not yet written** — a container created earlier in the same `bulk-mutate` call, or queued earlier in an open `begin-batch`. This is the same finder that answers the update-target question (`viewObjectId` on a later `update-view-object`), so an id cannot resolve on one path and report "not found" on the other. Whether a resolved hit may legally serve as a *parent* is still decided here, in case 2 — notes and connections are rejected as containers exactly as before.
 
 ## Auto-Placement Logic
 

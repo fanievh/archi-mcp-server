@@ -215,8 +215,7 @@ public class SessionHandler {
             } else if (message != null && message.contains("fields preset")) {
                 suggestion = "Valid presets: minimal, standard, full";
             } else if (message != null && message.contains("exclude field")) {
-                suggestion = "Valid exclude fields: documentation, properties, layer, type, "
-                        + "viewpointType, folderPath, visualMetadata";
+                suggestion = "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse();
             } else {
                 suggestion = "Valid layers: Business, Application, Technology, Physical, "
                         + "Strategy, Motivation, Implementation & Migration";

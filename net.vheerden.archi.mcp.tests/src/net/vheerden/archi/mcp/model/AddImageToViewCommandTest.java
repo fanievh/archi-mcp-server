@@ -49,7 +49,7 @@ public class AddImageToViewCommandTest {
     }
 
     @Test
-    public void shouldAddImageVisualToView_topLevel_AC2() {
+    public void shouldAddImageVisualToView_topLevel() {
         AddImageToViewCommand cmd =
                 new AddImageToViewCommand(imageVisual, targetView);
 
@@ -66,7 +66,7 @@ public class AddImageToViewCommandTest {
     }
 
     @Test
-    public void shouldUndoAddImageVisual_AC2() {
+    public void shouldUndoAddImageVisual() {
         AddImageToViewCommand cmd =
                 new AddImageToViewCommand(imageVisual, targetView);
         cmd.execute();
@@ -80,7 +80,7 @@ public class AddImageToViewCommandTest {
     }
 
     @Test
-    public void shouldNestImageVisualInGroup_AC2() {
+    public void shouldNestImageVisualInGroup() {
         IDiagramModelGroup group = factory.createDiagramModelGroup();
         group.setName("Container group");
         group.setBounds(0, 0, 300, 200);

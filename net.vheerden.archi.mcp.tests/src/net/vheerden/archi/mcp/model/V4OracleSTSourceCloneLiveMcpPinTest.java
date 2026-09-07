@@ -39,7 +39,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *
  * <p><b>Calibration provenance.</b> Per the pin-calibration
  * substrate-parity discipline the floor/ceiling values are
- * anchored at the PURE-JUNIT (Option α) substrate's pre-H5 empirical actuals,
+ * anchored at the PURE-JUNIT substrate's pre-H5 empirical actuals,
  * NOT the live-MCP Task 8 measurements. The live-MCP ST actuals (HPQ=0.60,
  * M4=7, V_p10=1.0, M5=9) are a DIFFERENT substrate and DO NOT transfer to
  * pure-JUnit anchoring — the Task 7 precedent surfaced exactly this
@@ -85,7 +85,7 @@ public class V4OracleSTSourceCloneLiveMcpPinTest {
      * buffer per V4 oracle pin precedent. The pin encodes the no-regression contract
      * on ST, NOT a release-gate quality target (those live on V4 oracle and HH); the
      * router half of fixing one-sided egress (vs the #5 detection half that shipped)
-     * is the deferred Lever-A/B backlog track.
+     * is the deferred egress-lift backlog track.
      */
     private static final double ST_HPQ_FLOOR = 0.08;
 

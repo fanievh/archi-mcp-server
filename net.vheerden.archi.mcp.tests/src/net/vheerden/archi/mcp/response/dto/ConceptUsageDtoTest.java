@@ -22,7 +22,7 @@ public class ConceptUsageDtoTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    public void shouldSerialiseElementUsage_withMultipleViews_AC4() throws Exception {
+    public void shouldSerialiseElementUsage_withMultipleViews() throws Exception {
         VisualObjectReferenceDto v1 = new VisualObjectReferenceDto("vo-1", "object");
         VisualObjectReferenceDto v2 = new VisualObjectReferenceDto("vo-2", "object");
         ViewReferenceDto vr1 = new ViewReferenceDto(
@@ -45,7 +45,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldSerialiseRelationshipUsage_withSingleView_AC4() throws Exception {
+    public void shouldSerialiseRelationshipUsage_withSingleView() throws Exception {
         VisualObjectReferenceDto v1 = new VisualObjectReferenceDto("conn-1", "connection");
         ViewReferenceDto vr1 = new ViewReferenceDto(
                 "view-X", "View X", "Application Cooperation", "archimate",
@@ -60,7 +60,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldOrderViewReferencesByName_thenId_AC4() {
+    public void shouldOrderViewReferencesByName_thenId() {
         // The DTO doesn't sort itself — ordering is the producer's responsibility
         // (ArchiModelAccessorImpl.buildConceptUsageDto). This test pins the contract
         // by constructing a pre-sorted list and asserting record-level fidelity.
@@ -78,7 +78,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldOrderVisualObjectsByViewObjectId_AC4() {
+    public void shouldOrderVisualObjectsByViewObjectId() {
         VisualObjectReferenceDto a = new VisualObjectReferenceDto("a-1", "object");
         VisualObjectReferenceDto b = new VisualObjectReferenceDto("b-2", "object");
         ViewReferenceDto vr = new ViewReferenceDto(
@@ -88,7 +88,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldSerialiseEmptyResult_zeroViewReferences_AC4() throws Exception {
+    public void shouldSerialiseEmptyResult_zeroViewReferences() throws Exception {
         ConceptUsageDto dto = new ConceptUsageDto(
                 "orphan-id", "Orphan", "BusinessActor", "element",
                 0, 0, List.of(), null);
@@ -99,7 +99,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldOmitNullViewpointType_fromJson_AC4() throws Exception {
+    public void shouldOmitNullViewpointType_fromJson() throws Exception {
         ViewReferenceDto vr = new ViewReferenceDto(
                 "v1", "Sketch View", null, "sketch", List.of());
         String json = MAPPER.writeValueAsString(vr);
@@ -107,7 +107,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldOmitEmbeddingViewReferences_whenNull_AC4() throws Exception {
+    public void shouldOmitEmbeddingViewReferences_whenNull() throws Exception {
         ConceptUsageDto dto = new ConceptUsageDto(
                 "c", "n", "ApplicationComponent", "element",
                 0, 0, List.of(), null);
@@ -117,7 +117,7 @@ public class ConceptUsageDtoTest {
     }
 
     @Test
-    public void shouldCountVisualReferences_acrossMultiplePlacementsInSameView_AC4() {
+    public void shouldCountVisualReferences_acrossMultiplePlacementsInSameView() {
         VisualObjectReferenceDto v1 = new VisualObjectReferenceDto("vo-a", "object");
         VisualObjectReferenceDto v2 = new VisualObjectReferenceDto("vo-b", "object");
         ViewReferenceDto vr = new ViewReferenceDto(

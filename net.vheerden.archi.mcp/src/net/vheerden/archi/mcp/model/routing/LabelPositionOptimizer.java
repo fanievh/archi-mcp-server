@@ -3,6 +3,7 @@ package net.vheerden.archi.mcp.model.routing;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -35,6 +36,9 @@ public class LabelPositionOptimizer {
 
     /** textPosition for a Middle label (source=0, middle=1, target=2). */
     static final int TEXT_POSITION_MIDDLE = 1;
+
+    /** Number of candidate text positions the greedy pass evaluates per label (source, middle, target). */
+    static final int TEXT_POSITION_COUNT = 3;
 
     /**
      * Own-endpoint overlap fraction at/above which a Middle label is treated as rendered ON its own
@@ -93,11 +97,30 @@ public class LabelPositionOptimizer {
      *                         (own-endpoint bleed via {@link #onOwnEndpointBox} or a third
      *                         party). Metric-neutral: offsets never affect {@code totalScore}.
      * @param totalScore       sum of overlap scores for all labeled connections at their chosen positions
+     * @param unresolvableLabels connectionIds whose label collides at <strong>every</strong> candidate
+     *                         position in the WINNING trial — the per-connection residual the pass used to
+     *                         discard. Trial-local by construction: a different processing order locks
+     *                         labels in a different sequence, so this reports the trial actually chosen.
      */
     public record MultiTrialResult(Map<String, Integer> allPositions,
                             Map<String, Integer> changedPositions,
                             Map<String, Integer> offsets,
-                            double totalScore) {}
+                            double totalScore,
+                            Set<String> unresolvableLabels) {
+
+        /** Compact constructor: null-guard the residual so existing callers cannot see a null set. */
+        public MultiTrialResult {
+            unresolvableLabels = unresolvableLabels != null ? unresolvableLabels : Set.of();
+        }
+
+        /** Backward-compatible constructor without the residual (defaults it to empty). */
+        public MultiTrialResult(Map<String, Integer> allPositions,
+                                Map<String, Integer> changedPositions,
+                                Map<String, Integer> offsets,
+                                double totalScore) {
+            this(allPositions, changedPositions, offsets, totalScore, Set.of());
+        }
+    }
 
     /**
      * Optimizes label positions for all connections with non-empty labels.
@@ -110,9 +133,14 @@ public class LabelPositionOptimizer {
      *
      * @param connections  batch routing input (includes labelText, textPosition)
      * @param paths        corresponding routed paths (same index as connections)
-     * @param allObstacles all element rectangles on the view (for overlap scoring)
+     * @param allObstacles every non-container view object — elements, notes and images alike
+     *                     (for overlap scoring)
      * @param connectionExcludeSets per-connection exclude sets (connectionId → set of IDs to skip)
-     *                              — source, target, ancestors, descendants
+     *                              — source, target, ancestors, descendants; both ancestry
+     *                              families are transitive, so a node nested at any depth inside
+     *                              an endpoint is skipped, not just its direct children, and both
+     *                              are filtered by geometry: a node whose rectangle is fully
+     *                              disjoint from the endpoint is not skipped at all
      * @return map of connectionId → new textPosition (only includes changed positions)
      */
     Map<String, Integer> optimize(
@@ -120,10 +148,47 @@ public class LabelPositionOptimizer {
             List<List<AbsoluteBendpointDto>> paths,
             List<RoutingRect> allObstacles,
             Map<String, Set<String>> connectionExcludeSets) {
+        return optimizeWithResidual(connections, paths, allObstacles, connectionExcludeSets)
+                .changedPositions();
+    }
+
+    /**
+     * Outcome of a single-pass optimization: the position changes, plus the per-connection residual
+     * the greedy pass computes and previously discarded.
+     *
+     * @param changedPositions   connectionId → new textPosition (only connections whose position changed)
+     * @param unresolvableLabels connectionIds whose label collides at <strong>every</strong> candidate
+     *                           position — the labels the engine has proven it cannot place anywhere.
+     *                           Always a subset of the labeled connections; never truncated.
+     */
+    public record LabelOptimizationResult(Map<String, Integer> changedPositions,
+                                          Set<String> unresolvableLabels) {
+
+        /** Compact constructor: null-guard both fields. */
+        public LabelOptimizationResult {
+            changedPositions = changedPositions != null ? changedPositions : Map.of();
+            unresolvableLabels = unresolvableLabels != null ? unresolvableLabels : Set.of();
+        }
+    }
+
+    /**
+     * Optimizes label positions and additionally reports which labels have <strong>no</strong>
+     * collision-free position at all — the residual {@link #optimize} drops.
+     *
+     * <p>Position-picking behaviour is byte-identical to {@link #optimize}; this entry point only
+     * retains more of what the same pass already computed.</p>
+     *
+     * @see #runGreedyPass for the definition of "collides at every candidate position"
+     */
+    LabelOptimizationResult optimizeWithResidual(
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths,
+            List<RoutingRect> allObstacles,
+            Map<String, Set<String>> connectionExcludeSets) {
 
         List<int[]> labeledIndices = buildLongestFirstOrder(connections, paths);
         if (labeledIndices.isEmpty()) {
-            return Map.of();
+            return new LabelOptimizationResult(Map.of(), Set.of());
         }
 
         GreedyPassResult result = runGreedyPass(
@@ -133,8 +198,13 @@ public class LabelPositionOptimizer {
             logger.info("Label position optimization: {} labels repositioned out of {} labeled connections",
                     result.changedPositions.size(), labeledIndices.size());
         }
+        if (!result.unresolvableLabels.isEmpty()) {
+            logger.info("Label position optimization: {} of {} labeled connections have no collision-free "
+                    + "position at any of the 3 candidate positions",
+                    result.unresolvableLabels.size(), labeledIndices.size());
+        }
 
-        return result.changedPositions;
+        return new LabelOptimizationResult(result.changedPositions, result.unresolvableLabels);
     }
 
     /**
@@ -147,7 +217,8 @@ public class LabelPositionOptimizer {
      *
      * @param connections  batch routing input (includes labelText, textPosition)
      * @param paths        corresponding routed paths (same index as connections)
-     * @param allObstacles all element rectangles on the view (for overlap scoring)
+     * @param allObstacles every non-container view object — elements, notes and images alike
+     *                     (for overlap scoring)
      * @param connectionExcludeSets per-connection exclude sets (connectionId → set of IDs to skip)
      * @param trials       number of trials to run (must be >= 1)
      * @param rng          random number generator for shuffling (trials 1+)
@@ -193,7 +264,7 @@ public class LabelPositionOptimizer {
                         && passResult.changedPositions.size() < bestChangeCount)) {
                 bestResult = new MultiTrialResult(
                         passResult.allPositions, passResult.changedPositions,
-                        passResult.offsets, totalScore);
+                        passResult.offsets, totalScore, passResult.unresolvableLabels);
                 bestTotalScore = totalScore;
                 bestChangeCount = passResult.changedPositions.size();
             }
@@ -233,7 +304,8 @@ public class LabelPositionOptimizer {
      */
     private record GreedyPassResult(Map<String, Integer> allPositions,
                                      Map<String, Integer> changedPositions,
-                                     Map<String, Integer> offsets) {}
+                                     Map<String, Integer> offsets,
+                                     Set<String> unresolvableLabels) {}
 
     /**
      * Runs a single greedy optimization pass in the given index order.
@@ -249,6 +321,7 @@ public class LabelPositionOptimizer {
         Map<String, Integer> changedPositions = new LinkedHashMap<>();
         Map<String, Integer> allPositions = new LinkedHashMap<>();
         Map<String, Integer> offsets = new LinkedHashMap<>();
+        Set<String> unresolvableLabels = new LinkedHashSet<>();
         List<RoutingRect> lockedLabels = new ArrayList<>();
 
         for (int[] entry : labeledIndices) {
@@ -263,12 +336,21 @@ public class LabelPositionOptimizer {
             int bestPosition = conn.textPosition();
             double bestScore = Double.MAX_VALUE;
             boolean horizontalHost = hostingSegmentHorizontal(path, sourceCenter, targetCenter);
+            int evaluatedPositions = 0;
+            int blockedPositions = 0;
 
             for (int pos = 0; pos <= 2; pos++) {
                 RoutingRect labelRect = LabelClearance.computeLabelRect(
                         path, sourceCenter, targetCenter, conn.labelText(), pos);
                 if (labelRect == null) {
                     continue;
+                }
+
+                evaluatedPositions++;
+                if (positionHasUnrescuableCollision(labelRect, conn.source(), conn.target(),
+                        pos == TEXT_POSITION_MIDDLE, allObstacles, excludeIds, lockedLabels,
+                        horizontalHost)) {
+                    blockedPositions++;
                 }
 
                 double score = scorePosition(labelRect, allObstacles, excludeIds, lockedLabels)
@@ -280,6 +362,14 @@ public class LabelPositionOptimizer {
                     bestScore = score;
                     bestPosition = pos;
                 }
+            }
+
+            // The residual this pass used to discard. Reported only when EVERY candidate position was
+            // actually evaluated and every one of them carries an unrescuable collision — see
+            // positionHasUnrescuableCollision for why this is not "bestScore > 0". A position whose rect
+            // could not be computed proves nothing, so it never contributes to a hide decision.
+            if (evaluatedPositions == TEXT_POSITION_COUNT && blockedPositions == evaluatedPositions) {
+                unresolvableLabels.add(conn.connectionId());
             }
 
             // Lock the chosen label rect
@@ -312,7 +402,53 @@ public class LabelPositionOptimizer {
             }
         }
 
-        return new GreedyPassResult(allPositions, changedPositions, offsets);
+        return new GreedyPassResult(allPositions, changedPositions, offsets, unresolvableLabels);
+    }
+
+    /**
+     * True when a candidate label position carries a collision the engine cannot get rid of — the
+     * per-position predicate behind the unresolvable-label residual.
+     *
+     * <p><strong>Why this is not {@code score > 0}.</strong> {@link #scorePosition} deliberately mixes two
+     * different weights: a genuine inset overlap contributes {@code 1.0}, but a mere <em>proximity
+     * near-miss</em> contributes {@code 0.5}. Two harmless near-misses therefore total {@code 1.0} and are
+     * numerically indistinguishable from one real overlap. A residual keyed on the score would hide a label
+     * for passing within {@link #LABEL_PROXIMITY_THRESHOLD} of two boxes — precisely the over-suppression
+     * the label family forbids. This predicate counts <em>hard</em> collisions only: a proximity near-miss
+     * is not a collision.</p>
+     *
+     * <p><strong>Why an offset-rescuable Middle label is not blocked.</strong> A Middle label that lands on
+     * a box can still be lifted clear by the perpendicular "Label Offset" finisher ({@link #chooseOffset}).
+     * If a direction clears it, the engine <em>can</em> place the label, so claiming otherwise would be
+     * false. This mirrors the waiver {@link #effectiveOwnEndpointPenalty} already applies, so the residual
+     * and the scoring agree about what counts as escapable. A locked-label clash is excluded from the
+     * waiver because {@link #chooseOffset} only tests element boxes and would not see it.</p>
+     *
+     * <p>Source and Target positions get no waiver: the offset feature applies at Middle only.</p>
+     */
+    private boolean positionHasUnrescuableCollision(
+            RoutingRect labelRect, RoutingRect source, RoutingRect target,
+            boolean isMiddle, List<RoutingRect> allObstacles, Set<String> excludeIds,
+            List<RoutingRect> lockedLabels, boolean horizontalHost) {
+
+        boolean onThirdParty = overlapsNonExcluded(labelRect, allObstacles, excludeIds);
+        boolean onOwnEndpoint = onOwnEndpointBox(labelRect, source) || onOwnEndpointBox(labelRect, target);
+        boolean onLockedLabel = false;
+        for (RoutingRect locked : lockedLabels) {
+            if (insetRectOverlap(labelRect, locked)) {
+                onLockedLabel = true;
+                break;
+            }
+        }
+
+        if (!onThirdParty && !onOwnEndpoint && !onLockedLabel) {
+            return false; // a genuinely clear position — the label is placeable here
+        }
+        if (isMiddle && !onLockedLabel
+                && chooseOffset(labelRect, source, target, allObstacles, excludeIds, horizontalHost) != null) {
+            return false; // the Middle-only offset finisher lifts it clear
+        }
+        return true;
     }
 
     /**
@@ -348,8 +484,11 @@ public class LabelPositionOptimizer {
      *
      * @param connections          batch routing inputs (includes labelText, source/target rects)
      * @param pathsByConnectionId  routed absolute paths keyed by connection ID (e.g. {@code routesToApply})
-     * @param allObstacles         all element rectangles on the view (for overlap scoring)
-     * @param connectionExcludeSets per-connection exclude sets (source, target, ancestors, descendants)
+     * @param allObstacles         every non-container view object — elements, notes and images alike
+     *                             (for overlap scoring)
+     * @param connectionExcludeSets per-connection exclude sets (source, target, ancestors,
+     *                              descendants — both ancestry families transitive, and both
+     *                              filtered to those that still overlap the endpoint)
      * @param chosenPositions      connectionId → chosen textPosition from the routing pass
      * @return connectionId → offset bitmask, only for Middle labels still on a box that a direction clears
      */

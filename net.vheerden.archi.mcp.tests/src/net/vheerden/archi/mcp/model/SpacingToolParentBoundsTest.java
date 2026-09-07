@@ -24,7 +24,7 @@ import org.junit.Test;
  * with stale dimensions, leaving inner-group children outside inner-group
  * bounds.</p>
  *
- * <p>Fix (per HALT 0.1 Q3 owner sign-off, option-1): added a post-spacing/
+ * <p>Fix (per owner sign-off, option-1): added a post-spacing/
  * routing overflow detection pass inside {@code adjustViewSpacing} at the
  * step 9b insertion point (just after {@code assessLayout} and before
  * {@code undo}), gated by EMF state reflecting the dispatched spacing +
@@ -40,12 +40,12 @@ import org.junit.Test;
  *
  * <p>Test coverage:</p>
  * <ul>
- *   <li><b>Q5 option C (2-element minimal synthetic):</b> 4 tests targeting
+ *   <li><b>Fixture C (2-element minimal synthetic):</b> 4 tests targeting
  *       SPACING-TOOL-specific overflow scenarios. The 9 boundary predicate
  *       tests already live in {@link AutoNudgeGroupBoundsFollowupTest} (single
  *       source of truth — predicate is shared); this class focuses on the
  *       spacing-tool-path geometry instead of duplicating boundary cases.</li>
- *   <li><b>Q5 option B (V4 H2 hub-heavy synthetic):</b> 4 tests covering
+ *   <li><b>Fixture B (V4 H2 hub-heavy synthetic):</b> 4 tests covering
  *       right-flank / bottom-flank / both-flank / corner overflow on the
  *       17-fan-out API Mgmt topology after Row B inflation.</li>
  *   <li><b>Mechanism #5a regression pin:</b> 3 tests exercising the recursive
@@ -65,7 +65,7 @@ public class SpacingToolParentBoundsTest {
 
 	private static final int PADDING = 10;
 
-	// --- Q5 option C: 2-element minimal synthetic, spacing-tool-path-specific ---
+	// --- Fixture C: 2-element minimal synthetic, spacing-tool-path-specific ---
 
 	@Test
 	public void shouldNotDetectOverflow_whenSpacingInflationKeepsChildInsideParent() {
@@ -107,7 +107,7 @@ public class SpacingToolParentBoundsTest {
 				190, 5, 100, 100, 200, 200, PADDING));
 	}
 
-	// --- Q5 option B: V4 H2 hub-heavy synthetic fixture (1 hub + 17 fan-out spokes) ---
+	// --- Fixture B: V4 H2 hub-heavy synthetic (1 hub + 17 fan-out spokes) ---
 	//
 	// Mimics view `id-ddb84fbd57d24caaa15b0da62b75f531` (17-fan-out API Mgmt) —
 	// row 730 candidate + Successor D V_p10 calibration anchor.

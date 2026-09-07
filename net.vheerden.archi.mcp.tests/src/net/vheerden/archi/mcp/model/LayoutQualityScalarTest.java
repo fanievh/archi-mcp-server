@@ -3,10 +3,16 @@ package net.vheerden.archi.mcp.model;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.util.List;
+import java.util.Map;
+
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.handlers.ViewPlacementHandlerTest;
+import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+
 /**
- * JUnit pin for {@link LayoutQualityScalar} — Fix-2 (2026-05-16).
+ * JUnit pin for {@link LayoutQualityScalar} — graded scalar (2026-05-16).
  *
  * <p>Pure-unit (no OSGi, no EMF). The single source of truth for the band
  * arithmetic is {@code LayoutQualityScalar}.</p>
@@ -260,5 +266,82 @@ public class LayoutQualityScalarTest {
                 sMid > sBad);
         assertTrue("monotone mid->good (" + sMid + "->" + sGood + ")",
                 sGood > sMid);
+    }
+
+    // ------------------------------------------------------------------
+    // The quantity the correctness bit is taken over.
+    //
+    // The bit stays binary-at-zero — only the number it is taken over moves.
+    // connectionPassThroughs is a capped, cross-plus-self DESCRIPTION list;
+    // crossElementPassThroughCount is the uncapped cross-element tally the
+    // rating charges. The ten-entry cap is inert against a binary-at-zero
+    // read (truncating fifteen to ten never turns a non-zero into a zero),
+    // but the self-element half is not: a view whose pass-throughs are all
+    // self-element has a non-empty list and a charged count of zero, and the
+    // step scalar it feeds is compared FIRST by the spacing loop's back-off
+    // predicate, so that one bit decides the step outright.
+    //
+    // There is deliberately NO past-the-cap case here, unlike the counting
+    // readers. A cap truncates, it never empties, so a fixture holding a
+    // capped list beside a charged tally above ten reads non-zero under both
+    // quantities and the bit is the same either way. Such a pin would be green
+    // under the very mutation it would exist to catch — the defect class these
+    // pins were written to close — so the under-count direction is covered at
+    // the three counting sites and asserted here only where it can discriminate.
+    // ------------------------------------------------------------------
+
+    @Test
+    public void toLayoutMetrics_shouldKeepTheCorrectnessBit_whenEveryPassThroughIsSelfElement() {
+        AssessLayoutResultDto clean = passThroughFixture(List.of(), 0);
+        AssessLayoutResultDto selfOnly = passThroughFixture(
+                List.of("Connection 'c-0' routes through its own target element 'e-0'",
+                        "Connection 'c-1' routes through its own source element 'e-1'",
+                        "Connection 'c-2' routes through its own target element 'e-2'"),
+                0);
+
+        assertEquals("a view carrying only unrated pass-throughs must not forfeit the bit — no "
+                        + "spacing lever can remove one, so the step is rejected for a defect the "
+                        + "loop could never have avoided",
+                LayoutQualityScalar.toLayoutMetrics(clean).thresholdsMet(),
+                LayoutQualityScalar.toLayoutMetrics(selfOnly).thresholdsMet());
+    }
+
+    @Test
+    public void toLayoutMetrics_shouldDropTheCorrectnessBit_whenTheChargedCountIsNonZero() {
+        // The other direction, and the shape that proves which of the two the read is sourced
+        // from: no description list at all beside a charged tally that is not zero.
+        AssessLayoutResultDto clean = passThroughFixture(List.of(), 0);
+        AssessLayoutResultDto charged = passThroughFixture(null, 4);
+
+        assertEquals("a charged crossing costs the bit however the description list was built",
+                LayoutQualityScalar.toLayoutMetrics(clean).thresholdsMet() - 1,
+                LayoutQualityScalar.toLayoutMetrics(charged).thresholdsMet());
+    }
+
+    /**
+     * A defect-free assessment carrying exactly the two pass-through components, set apart from
+     * each other. Rebuilt through the widest constructor: every back-compat form defaults the
+     * charged tally to zero, so a fixture that does not go through the widest form is green
+     * without ever reaching the value it claims to test.
+     */
+    private static AssessLayoutResultDto passThroughFixture(
+            List<String> descriptions, int charged) {
+        AssessLayoutResultDto base = new AssessLayoutResultDto(
+                "v-1", 5, 3,
+                0, 0, 0, 0.0,
+                50.0, 80, "good", Map.of(),
+                List.of(), List.of(), List.of(), List.of(),
+                0, List.of(), 0, List.of(),
+                0, List.of(), false, 0, 0, null,
+                0, List.of(), 0, List.of(),
+                0, List.of(), null, List.of(),
+                0, List.of(), 0, List.of(),
+                0, List.of(), 1.0, List.of(),
+                "good", "good",
+                1.0, List.of());
+        return ViewPlacementHandlerTest.withComponent(
+                ViewPlacementHandlerTest.withComponent(
+                        base, "connectionPassThroughs", descriptions),
+                "crossElementPassThroughCount", charged);
     }
 }

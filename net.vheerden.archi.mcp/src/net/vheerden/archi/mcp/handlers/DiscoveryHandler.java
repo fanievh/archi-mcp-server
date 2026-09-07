@@ -121,6 +121,15 @@ public class DiscoveryHandler {
                         + "(case-insensitive), otherwise creates and returns a new element. "
                         + "Ideal for idempotent model building. Required: type, name. "
                         + "Optional: documentation, properties, folderId, source. "
+                        + "This tool splits its result differently from other mutations: in batch "
+                        + "mode the element is at result.element and result.preview holds only the "
+                        + "action marker, whereas under the approval gate the element is nested at "
+                        + "result.preview.element — and a newly created element's id there is "
+                        + "provisional, because the object is rebuilt on approval and gets a "
+                        + "different id. "
+                        + "An element reports documentation and properties only when it has "
+                        + "them, so an absent field means the element carries nothing there "
+                        + "rather than that it was left out. "
                         + "Related: create-element (explicit creation with duplicate warnings), "
                         + "search-elements (broader search).")
                 .inputSchema(inputSchema)
@@ -314,8 +323,18 @@ public class DiscoveryHandler {
                         + "If unsure which createType to use, consult the concept-to-element-type "
                         + "decision aid in archimate://reference/archimate-layers. "
                         + "Required: query, createType, createName. Optional: type (search filter), "
-                        + "createDocumentation, createProperties, createFolderId. "
-                        + "Related: search-elements (search only), create-element (create only).")
+                        + "createDocumentation, createProperties, createFolderId, createSource. "
+                        + "This tool splits its result differently from other mutations: in batch "
+                        + "mode the element is at result.element and result.preview holds only the "
+                        + "action marker, whereas under the approval gate the element is nested at "
+                        + "result.preview.element — and a newly created element's id there is "
+                        + "provisional, because the object is rebuilt on approval and gets a "
+                        + "different id. "
+                        + "An element reports documentation and properties only when it has "
+                        + "them, so an absent field means the element carries nothing there "
+                        + "rather than that it was left out. "
+                        + "Related: search-elements (search only), create-element (create only)."
+                        + " Any archimate:// URI named here can also be read by calling get-guidance with that uri, for clients that do not expose MCP resources.")
                 .inputSchema(inputSchema)
                 .build();
 

@@ -16,6 +16,15 @@ import com.archimatetool.model.IDiagramModelBendpoint;
  * construction time. On execute, clears existing bendpoints and adds
  * the new set. On undo, restores the original bendpoints and styling.</p>
  *
+ * <p><strong>Bendpoints are gated like every other field.</strong> A null
+ * {@code newBendpoints} means the caller asked for no bendpoint change and the
+ * command leaves them alone; an empty list means clear, and still does. The two
+ * were indistinguishable while the write was unconditional, so a styling-only
+ * update built from a prepare-time snapshot wrote that snapshot back over
+ * whatever had run in between — inside one batch or one bulk call, a second
+ * update silently discarded the first's bendpoints. The prepare has always known
+ * which of the two the caller meant; only this command could not be told.</p>
+ *
  * <p><strong>Styling support:</strong> Added optional styling support
  * (lineColor, lineWidth, fontColor) for connections.</p>
  *
@@ -35,6 +44,7 @@ public class UpdateViewConnectionCommand extends Command {
     private final IDiagramModelArchimateConnection connection;
     private final List<IDiagramModelBendpoint> oldBendpoints;
     private final List<IDiagramModelBendpoint> newBendpoints;
+    private final boolean hasBendpointChange;
 
     // Styling update support
     private final String oldLineColor;
@@ -65,7 +75,7 @@ public class UpdateViewConnectionCommand extends Command {
      * Creates a command to replace a connection's bendpoints (no styling change).
      *
      * @param connection    the connection to update
-     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param newBendpoints the new set of bendpoints, empty to clear, null for no change
      */
     public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
                                         List<IDiagramModelBendpoint> newBendpoints) {
@@ -76,7 +86,7 @@ public class UpdateViewConnectionCommand extends Command {
      * Creates a command to replace a connection's bendpoints and optionally update styling.
      *
      * @param connection    the connection to update
-     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param newBendpoints the new set of bendpoints, empty to clear, null for no change
      * @param styling       styling parameters to apply, null for no styling change
      */
     public UpdateViewConnectionCommand(IDiagramModelArchimateConnection connection,
@@ -90,7 +100,7 @@ public class UpdateViewConnectionCommand extends Command {
      * toggle label visibility.
      *
      * @param connection    the connection to update
-     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param newBendpoints the new set of bendpoints, empty to clear, null for no change
      * @param styling       styling parameters to apply, null for no styling change
      * @param showLabel     label visibility override, null for no change
      */
@@ -105,7 +115,7 @@ public class UpdateViewConnectionCommand extends Command {
      * visibility, and/or set label position (Stories 13-1, 13-11).
      *
      * @param connection    the connection to update
-     * @param newBendpoints the new set of bendpoints (may be empty to clear)
+     * @param newBendpoints the new set of bendpoints, empty to clear, null for no change
      * @param styling       styling parameters to apply, null for no styling change
      * @param showLabel     label visibility override, null for no change
      * @param textPosition  label position (0=source, 1=middle, 2=target), null for no change
@@ -116,7 +126,10 @@ public class UpdateViewConnectionCommand extends Command {
                                         Integer textPosition) {
         this.connection = connection;
         this.oldBendpoints = new ArrayList<>(connection.getBendpoints());
-        this.newBendpoints = new ArrayList<>(newBendpoints);
+        // Null means the caller asked for no bendpoint change; an empty list means clear.
+        this.hasBendpointChange = (newBendpoints != null);
+        this.newBendpoints = hasBendpointChange
+                ? new ArrayList<>(newBendpoints) : new ArrayList<>();
 
         // Styling support — connections support lineColor, lineWidth,
         // fontColor, and typography (fontName/Size/Style). lineStyle is view-object-only.
@@ -177,8 +190,10 @@ public class UpdateViewConnectionCommand extends Command {
 
     @Override
     public void execute() {
-        connection.getBendpoints().clear();
-        connection.getBendpoints().addAll(newBendpoints);
+        if (hasBendpointChange) {
+            connection.getBendpoints().clear();
+            connection.getBendpoints().addAll(newBendpoints);
+        }
         if (hasStylingChange) {
             applyStyling(newLineColor, newFontColor, newLineWidth, newFont);
         }
@@ -192,8 +207,10 @@ public class UpdateViewConnectionCommand extends Command {
 
     @Override
     public void undo() {
-        connection.getBendpoints().clear();
-        connection.getBendpoints().addAll(oldBendpoints);
+        if (hasBendpointChange) {
+            connection.getBendpoints().clear();
+            connection.getBendpoints().addAll(oldBendpoints);
+        }
         if (hasStylingChange) {
             applyStyling(oldLineColor, oldFontColor, oldLineWidth, oldFont);
         }

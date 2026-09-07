@@ -50,7 +50,9 @@ import java.util.List;
  *                           ACCEPTED iterations).
  * @param noChangeReason     populated when delta=0; describes which short-
  *                           circuit fired ("already meets heuristic" /
- *                           "view has no connections" / etc.); null otherwise
+ *                           "view has no connections" / "every container is
+ *                           drawn inside a host, so this tool positions none
+ *                           of them" / etc.); null otherwise
  * @param heuristicRecommendation when {@code targetSpacingOverride} was
  *                           provided, this reports what the heuristic alone
  *                           would have picked (informational); null when no
@@ -65,8 +67,13 @@ import java.util.List;
  *                           interElementDelta=0 (no mutation occurred)
  * @param terminationReason  taxonomy string surfaced when the control
  *                           loop fires; null on pre-loop short-circuit /
- *                           dryRun paths. See {@code SpacingControlLoop}
- *                           constants for the 5-branch taxonomy.
+ *                           dryRun paths. See the {@code SpacingControlLoop}
+ *                           {@code REASON_*} constants for the taxonomy, and
+ *                           the shipped routing-preconditions checklist for
+ *                           what each one means. No count is given here: a
+ *                           hand-maintained tally on this surface was wrong,
+ *                           and only the checklist has a test keeping one
+ *                           honest.
  * @param iterationCount     number of ACCEPTED control-loop iterations (0 on
  *                           any short-circuit; equals {@code appliedDeltas.size()}
  *                           when the loop fires).
@@ -94,7 +101,54 @@ public record ApplyElementSpacingRecommendationsResultDto(
         // Density-aware-termination field.
         // The actionable PASS-honest reflow-required diagnosis; null on
         // every non-PASS-honest path. Appended; backwards-compat preserved.
-        String densityFloorDiagnosis) {
+        String densityFloorDiagnosis,
+        /**
+         * The rating-regression disclosure: one entry when this call committed a view whose
+         * overall quality is worse than the view it was handed, empty otherwise.
+         *
+         * <p>Empty is the ordinary case and is omitted from the wire entirely, so a clean run
+         * serializes exactly as it did before this field existed.</p>
+         *
+         * <p><strong>Empty does not certify a clean result on a queued call.</strong> When a batch
+         * is open the accepted commands are queued rather than executed and the loop has already
+         * reset the model, so {@code after} re-reads the unmutated view and the comparison is
+         * structurally blind. {@code nextSteps} says so in words on that path rather than leaving
+         * the silence to be read as "nothing regressed".</p>
+         */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<StructuredWarningDto> structuredWarnings) {
+
+    /**
+     * Backwards-compatible constructor for every call site that predates the rating-regression
+     * disclosure — the pre-loop short-circuit, dry-run and no-change paths, which take no
+     * comparison and therefore have nothing to disclose.
+     *
+     * <p>Delegates with an empty warning list, which {@code NON_EMPTY} omits, so these paths
+     * serialize byte-identically to before.</p>
+     */
+    public ApplyElementSpacingRecommendationsResultDto(
+            String viewId,
+            boolean dryRun,
+            int connectionCount,
+            int currentSpacingPx,
+            int targetSpacingPx,
+            int interElementDelta,
+            String noChangeReason,
+            Integer heuristicRecommendation,
+            AssessLayoutResultDto before,
+            AssessLayoutResultDto after,
+            AdjustViewSpacingResultDto adjustResult,
+            String terminationReason,
+            int iterationCount,
+            List<Integer> appliedDeltas,
+            String densityFloorDiagnosis) {
+        this(viewId, dryRun, connectionCount, currentSpacingPx,
+                targetSpacingPx, interElementDelta, noChangeReason,
+                heuristicRecommendation, before, after, adjustResult,
+                terminationReason, iterationCount, appliedDeltas,
+                densityFloorDiagnosis,
+                /*structuredWarnings=*/ List.of());
+    }
 
     /**
      * Backwards-compatible 14-arg constructor — preserves every

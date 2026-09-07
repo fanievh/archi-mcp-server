@@ -40,6 +40,26 @@ public class FolderMutationHandlerMoveTest {
     }
 
     @Test
+    public void moveToFolder_descriptionShouldDocumentResponseFields() {
+        CommandRegistry reg = new CommandRegistry();
+        FolderMutationHandler h = new FolderMutationHandler(accessor, formatter, reg, null);
+        h.registerTools();
+        String desc = reg.getToolSpecifications().stream()
+                .filter(spec -> "move-to-folder".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must name sourceFolderPath", desc.contains("sourceFolderPath"));
+        assertTrue("must name targetFolderPath", desc.contains("targetFolderPath"));
+        // elementType is now read off eClass() for every kind moved, so the description must no
+        // longer scope it to elements — that sentence became an UNDER-claim the moment a moved
+        // sketch view started reporting SketchModel through this field.
+        assertTrue("must name elementType", desc.contains("elementType"));
+        assertFalse("the elements-only scoping is false and must not survive",
+                desc.contains("elementType only for"));
+        assertTrue("must say elementType is the exact type, since objectType is the coarse one",
+                desc.contains("the exact "));
+    }
+
+    @Test
     public void shouldRegisterMoveToFolderTool() {
         CommandRegistry registry = new CommandRegistry();
         FolderMutationHandler h = new FolderMutationHandler(
@@ -73,11 +93,23 @@ public class FolderMutationHandlerMoveTest {
         assertEquals("Business/Archived", entity.get("targetFolderPath"));
     }
 
+    /**
+     * A moved folder carries BOTH type fields. This is wire plumbing over a stub, so the stub is
+     * held to what {@code prepareMoveToFolder} actually produces for a folder — the coarse
+     * {@code objectType} and the eClass {@code elementType}, which for a folder happen to read the
+     * same. That production really populates both is proven against the real accessor in
+     * {@code BulkEntityNameEffectiveStateTest}, not here.
+     *
+     * <p>This assertion used to read {@code assertNull("elementType should be null for folders")}
+     * and kept passing after the field was widened to every moved kind, because the stub supplied
+     * the null itself — a test can outlive the behaviour it names when it hand-feeds the value it
+     * then asserts.</p>
+     */
     @Test
     public void shouldMoveFolderToNewParent() throws Exception {
         accessor.setMoveToFolderBehavior((sessionId, objectId, targetFolderId) -> {
             MoveResultDto dto = new MoveResultDto(
-                    objectId, "Subfolder", "Folder", null,
+                    objectId, "Subfolder", "Folder", "Folder",
                     "Business/Old", "Application");
             return new MutationResult<>(dto, null);
         });
@@ -89,7 +121,8 @@ public class FolderMutationHandlerMoveTest {
 
         Map<String, Object> entity = getResult(result);
         assertEquals("Folder", entity.get("objectType"));
-        assertNull("elementType should be null for folders", entity.get("elementType"));
+        assertEquals("the handler must carry elementType through for a folder, not drop it",
+                "Folder", entity.get("elementType"));
     }
 
     @Test

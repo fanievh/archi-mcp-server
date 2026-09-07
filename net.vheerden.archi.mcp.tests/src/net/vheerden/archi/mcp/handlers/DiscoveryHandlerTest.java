@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.handlers;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -53,6 +54,165 @@ public class DiscoveryHandlerTest {
         accessor = new StubDiscoveryAccessor();
         handler = new DiscoveryHandler(accessor, formatter, registry, null);
         handler.registerTools();
+    }
+
+    // ---- Response-envelope documentation pins ----
+
+    private String descriptionOf(String toolName) {
+        return registry.getToolSpecifications().stream()
+                .filter(spec -> toolName.equals(spec.tool().name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Tool not found: " + toolName))
+                .tool().description();
+    }
+
+    /**
+     * An {@code Optional:} enumeration claims by omission: a parameter it does not name reads as a
+     * parameter the tool does not take, however plainly the schema declares it. {@code
+     * search-and-create} shipped exactly that way — its schema declared {@code createSource} and
+     * its own sentence listed four names, not five — so an agent reading the description had no
+     * way to know provenance could be supplied at all.
+     *
+     * <p>Derived from the schema's own keys rather than a hand-written expected list, so the two
+     * cannot drift apart again: adding a parameter without naming it fails here, and so does
+     * naming one the schema does not declare.</p>
+     */
+    @Test
+    public void shouldEnumerateEveryOptionalSchemaParameter_inBothDiscoveryToolDescriptions() {
+        for (String toolName : List.of("get-or-create-element", "search-and-create")) {
+            McpSchema.Tool tool = registry.getToolSpecifications().stream()
+                    .filter(spec -> toolName.equals(spec.tool().name()))
+                    .findFirst()
+                    .orElseThrow(() -> new AssertionError("Tool not found: " + toolName))
+                    .tool();
+
+            java.util.Set<String> declared = new java.util.LinkedHashSet<>(
+                    tool.inputSchema().properties().keySet());
+            declared.removeAll(tool.inputSchema().required());
+
+            assertEquals(toolName + " must enumerate exactly the optional parameters it declares",
+                    declared, enumeratedOptionalParameters(tool.description()));
+        }
+    }
+
+    /**
+     * The enumeration parser's own pin. Its dangerous failure mode is not an error but a SILENT
+     * truncation — a gloss containing a period-space used to end the scan early, yielding a
+     * plausible smaller set and therefore a wrong assertion rather than a broken one. These are the
+     * shapes that used to break it, fed in directly because no current description exercises them
+     * and a parser only latently correct is a parser nobody has tested.
+     */
+    @Test
+    public void shouldParseTheOptionalEnumeration_acrossGlossesThatUsedToBreakIt() {
+        assertEquals("a period-space inside a gloss must not end the enumeration",
+                java.util.Set.of("type", "createDocumentation", "createSource"),
+                enumeratedOptionalParameters(
+                        "Optional: type (e.g. a search filter), createDocumentation, "
+                        + "createSource. Trailing prose."));
+
+        assertEquals("a comma inside a gloss must not split into a spurious name",
+                java.util.Set.of("type", "createFolderId"),
+                enumeratedOptionalParameters(
+                        "Optional: type (search filter, case-insensitive), createFolderId. More."));
+
+        assertEquals("an enumeration ending the description must terminate cleanly",
+                java.util.Set.of("documentation", "source"),
+                enumeratedOptionalParameters("Required: type. Optional: documentation, source."));
+
+        assertEquals("a nested parenthetical must not confuse the depth count",
+                java.util.Set.of("a", "b"),
+                enumeratedOptionalParameters("Optional: a (x (y. z), w), b. Tail."));
+    }
+
+    /**
+     * Reads the names out of a description's {@code Optional: … .} sentence. Each name is matched
+     * whole — a parenthetical gloss such as {@code type (search filter)} is stripped — so a
+     * {@code type} is never satisfied by a {@code createType} that merely contains it.
+     *
+     * <p>Scanned character by character with parenthesis depth tracked, rather than split on the
+     * first {@code ". "}. A sentence-ending period is only honoured at depth zero, so a gloss
+     * containing {@code e.g. } cannot end the scan early and drop every name after it — that
+     * failure mode would surface as a plausible-looking smaller set, i.e. a WRONG assertion rather
+     * than a broken one. Commas are separators only at depth zero for the same reason, and a
+     * sentence that runs to the end of the description terminates cleanly instead of erroring.</p>
+     */
+    private java.util.Set<String> enumeratedOptionalParameters(String description) {
+        int start = description.indexOf("Optional: ");
+        assertTrue("description must carry an Optional: enumeration", start >= 0);
+        start += "Optional: ".length();
+
+        java.util.Set<String> named = new java.util.LinkedHashSet<>();
+        StringBuilder token = new StringBuilder();
+        int depth = 0;
+        for (int i = start; i < description.length(); i++) {
+            char c = description.charAt(i);
+            if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+            }
+            boolean sentenceEnd = c == '.' && depth == 0
+                    && (i + 1 == description.length() || description.charAt(i + 1) == ' ');
+            if (sentenceEnd || (c == ',' && depth == 0)) {
+                addEnumeratedName(named, token);
+                if (sentenceEnd) {
+                    return named;
+                }
+                continue;
+            }
+            token.append(c);
+        }
+        fail("the Optional: enumeration must terminate with a sentence-ending period");
+        return named;
+    }
+
+    /**
+     * Adds one trimmed, gloss-stripped name from the enumeration and resets the buffer. A blank
+     * token is dropped rather than added, so trailing separators cannot inject an empty name.
+     */
+    private void addEnumeratedName(java.util.Set<String> named, StringBuilder token) {
+        String name = token.toString().trim();
+        token.setLength(0);
+        int gloss = name.indexOf(" (");
+        if (gloss >= 0) {
+            name = name.substring(0, gloss).trim();
+        }
+        if (!name.isEmpty()) {
+            named.add(name);
+        }
+    }
+
+    /**
+     * Both discovery tools split their result differently from the shared
+     * formatMutationResponse shape: under batch the element is a sibling of preview, under the
+     * approval gate it is nested inside preview. Documenting only the shared shape would be
+     * wrong for both branches, so each branch is pinned separately.
+     */
+    private void assertDocumentsSplitEnvelope(String toolName) {
+        String desc = descriptionOf(toolName);
+        assertTrue(toolName + " must flag that it differs from other mutations",
+                desc.contains("splits its result differently"));
+        assertTrue(toolName + " must place the element at result.element under batch",
+                desc.contains("batch mode the element is at result.element"));
+        assertTrue(toolName + " must say preview holds only the action marker under batch",
+                desc.contains("only the action marker"));
+        assertTrue(toolName + " must nest the element under preview for the approval gate",
+                desc.contains("result.preview.element"));
+        // Both tools route through accessor.createElement, whose approval branch stores a
+        // deferred rebuild handle — so a created id previewed here never resolves. The general
+        // homes refer readers to these descriptions, so the caveat has to be present here too.
+        assertTrue(toolName + " must mark a previewed created id provisional",
+                desc.contains("provisional, because the object is rebuilt on approval"));
+    }
+
+    @Test
+    public void getOrCreateElement_descriptionShouldDocumentSplitEnvelope() {
+        assertDocumentsSplitEnvelope("get-or-create-element");
+    }
+
+    @Test
+    public void searchAndCreate_descriptionShouldDocumentSplitEnvelope() {
+        assertDocumentsSplitEnvelope("search-and-create");
     }
 
     // ---- Tool registration tests ----

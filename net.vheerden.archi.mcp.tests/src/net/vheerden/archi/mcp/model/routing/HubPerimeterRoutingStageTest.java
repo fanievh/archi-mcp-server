@@ -925,7 +925,7 @@ public class HubPerimeterRoutingStageTest {
     }
 
     // =====================================================================
-    // HPRPS Task 3 — Axis-3 (TerminalSegmentCorridorMigrator) verifier +
+    // Axis-3 (TerminalSegmentCorridorMigrator) verifier +
     // Tier-1 / terminal-anchoring by-construction proofs. Verifier/rollback/
     // anchoring-focused; distinct from Task-1 unit tests and Task-4 V4-fixture integration.
     // =====================================================================
@@ -1022,8 +1022,7 @@ public class HubPerimeterRoutingStageTest {
                 HubPerimeterRoutingStage.computeM4Count(paths, obstacles));
         assertTrue("B71 preserved through the composed stage",
                 TerminalAnchoring.preservesTerminalAnchoring(
-                        new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), h,
-                        new int[] {h.centerX(), h.centerY()}, paths.get(0)));
+                        new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), h, paths.get(0)));
     }
 
     /**
@@ -1060,14 +1059,11 @@ public class HubPerimeterRoutingStageTest {
         assertEquals(181, paths.get(1).get(0).x()); // HB RIGHT line preserved
         assertEquals(681, paths.get(2).get(0).x()); // HC RIGHT line preserved
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), ha,
-                new int[] {ha.centerX(), ha.centerY()}, paths.get(0)));
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), ha, paths.get(0)));
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), hb,
-                new int[] {hb.centerX(), hb.centerY()}, paths.get(1)));
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), hb, paths.get(1)));
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), hc,
-                new int[] {hc.centerX(), hc.centerY()}, paths.get(2)));
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), hc, paths.get(2)));
     }
 
     /**
@@ -1096,7 +1092,7 @@ public class HubPerimeterRoutingStageTest {
     }
 
     // =====================================================================
-    // HPRPS Task 4 — composed-stage integration. End-to-end;
+    // Composed-stage integration. End-to-end;
     // distinct from the Task-3 verifier tests and the existing V4 "doesn't
     // throw" smoke tests (those assert no exception / non-negative stats only;
     // these assert the monotonicity INVARIANT numerically on the real V4
@@ -1107,7 +1103,7 @@ public class HubPerimeterRoutingStageTest {
      * The composed stage (including Axis-3) must be byte-neutral or
      * improving on the V4-oracle pure-JUnit substrate where H5 is a documented
      * no-op — it must never regress the monotonicity guarantee. Routes V4 via the
-     * pipeline (which already ran the stage at 4.7m), then re-invokes the stage on
+     * pipeline (which already ran the stage at 4.7o+1), then re-invokes the stage on
      * those paths and asserts M4 non-increasing, V_p10 non-decreasing (null rule),
      * HPQ non-decreasing across the second application — the monotonicity guarantee
      * proven end-to-end on the real 30-connection fixture, not a synthetic case.
@@ -1194,8 +1190,7 @@ public class HubPerimeterRoutingStageTest {
         assertEquals("c-5 terminal x stays on S6 RIGHT face line 681",
                 681, paths.get(5).get(0).x());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), s6,
-                new int[] {s6.centerX(), s6.centerY()}, paths.get(5)));
+                new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), s6, paths.get(5)));
         // c-5 stays a clean orthogonal L (no zigzag/diagonal introduced).
         List<AbsoluteBendpointDto> c5 = paths.get(5);
         for (int i = 0; i < c5.size() - 1; i++) {

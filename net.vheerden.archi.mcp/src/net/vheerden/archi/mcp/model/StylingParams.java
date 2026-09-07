@@ -31,8 +31,11 @@ package net.vheerden.archi.mcp.model;
  * @param fontStyle             font style — "normal" / "bold" / "italic" / "bold-italic", null = unchanged.
  *                              Maps to SWT FontData style bitmask (NORMAL=0, BOLD=1, ITALIC=2, BOLD|ITALIC=3)
  * @param lineStyle             view-object outline line style — "solid" / "dashed" / "dotted" / "none",
- *                              null = unchanged. Applies to view objects only (per Archi 5.8 typed setter
- *                              {@code IDiagramModelObject.setLineStyle(int)}); silently ignored on connections.
+ *                              null = unchanged. Applies to view objects only (typed setter
+ *                              {@code IDiagramModelObject.setLineStyle(int)}). On a connection it is
+ *                              REJECTED by {@code StylingHelper.validateConnectionStylingParams}, not
+ *                              dropped: a connection's line style comes from its relationship type and
+ *                              the metamodel carries no connection line-style attribute to write
  * @param gradient              gradient direction — "none" / "top-bottom" / "bottom-top" /
  *                              "left-right" / "right-left", null = unchanged. Maps to
  *                              {@code IDiagramModelObject.setGradient(int)} (-1=none, 0=Top, 1=Left, 2=Right, 3=Bottom)

@@ -145,7 +145,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
             String name, String conceptType, String newName,
             String imagePath, boolean clearImagePath) {
         if (!modelLoaded) throw new NoModelLoadedException();
-        // STUB LIMITATION (cross-LLM-review FA6 MEDIUM): does NOT enforce the
+        // STUB LIMITATION: does NOT enforce the
         // production "at least one of newName/imagePath/clearImagePath" guard
         // that lives in ArchiModelAccessorImpl.prepareUpdateSpecialization.
         // Any handler test that relies on this stub MUST exercise the field
@@ -276,7 +276,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
             String sourceId, String targetId, String name, String specialization,
-            RelationshipSemanticAttributes semanticAttributes) {
+            RelationshipSemanticAttributes semanticAttributes,
+            String documentation, Map<String, String> properties, Map<String, String> source) {
         throw new UnsupportedOperationException("createRelationship not implemented in test accessor");
     }
 
@@ -457,7 +458,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
             String sessionId, String viewId,
             List<String> connectionIds, String strategy, boolean force,
             boolean autoNudge, int snapThreshold, int perimeterMargin, String mode,
-            boolean enableChannelNudging) {
+            boolean enableChannelNudging, String labelPolicy) {
         throw new UnsupportedOperationException(
                 "autoRouteConnections not implemented in test accessor");
     }
@@ -465,7 +466,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
             String sessionId, String viewId, String mode,
-            String direction, int spacing, String targetRating) {
+            String direction, int spacing, String targetRating, String labelPolicy) {
         throw new UnsupportedOperationException(
                 "autoLayoutAndRoute not implemented in test accessor");
     }
@@ -512,6 +513,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     public MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
             List<String> elementIds, List<String> relationshipTypes,
+            List<String> relationshipIds,
             Boolean showLabel, StylingParams styling) {
         throw new UnsupportedOperationException(
                 "autoConnectView not implemented in test accessor");
@@ -522,7 +524,8 @@ public class BaseTestAccessor implements ArchiModelAccessor {
             String sessionId, String viewId, String groupViewObjectId,
             String arrangement, Integer spacing, Integer padding,
             Integer elementWidth, Integer elementHeight, boolean autoResize,
-            boolean autoWidth, Integer columns, boolean recursive) {
+            boolean autoWidth, Integer columns, boolean recursive,
+            boolean recursiveChildren) {
         throw new UnsupportedOperationException(
                 "layoutWithinGroup not implemented in test accessor");
     }

@@ -144,16 +144,18 @@ public class ViewConnectionDtoTest {
 
     @Test
     public void shouldIncludeRelativePosition_inCanonicalConstructor() {
-        // 19-field canonical: relativePosition is the trailing field. SOUTH = 4.
+        // Canonical shape: relativePosition sits before the two render faces. SOUTH = 4.
         final int south = 4;
         ViewConnectionDto dto = new ViewConnectionDto(
                 "vc-1", "rel-1", "ServingRelationship", "vo-1", "vo-2",
                 null, null, null, null, 2,
                 null, null, null, null,
-                "Verdana", 11, "italic", "${name}", south);
+                "Verdana", 11, "italic", "${name}", south, "left", "bottom");
 
         assertEquals(Integer.valueOf(south), dto.relativePosition());
         assertEquals("${name}", dto.labelExpression());
+        assertEquals("left", dto.sourceRenderFace());
+        assertEquals("bottom", dto.targetRenderFace());
     }
 
     @Test

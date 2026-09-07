@@ -9,7 +9,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 import org.eclipse.emf.common.util.BasicEList;
@@ -38,6 +40,8 @@ import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IDiagramModel;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
@@ -53,7 +57,9 @@ import com.archimatetool.model.IProperty;
 import com.archimatetool.model.util.IModelContentListener;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
+import net.vheerden.archi.mcp.handlers.ViewPlacementHandlerTest;
 import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipSemanticAttributes;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ApplyViewLayoutResultDto;
@@ -558,7 +564,7 @@ public class ArchiModelAccessorImplTest {
     // ---- getModelInfo read-side parity tests ----
 
     @Test
-    public void shouldReturnModelInfoDtoWithPurpose_whenGetModelInfo_AC11() {
+    public void shouldReturnModelInfoDtoWithPurpose_whenGetModelInfo() {
         IArchimateModel model = createEmptyModel();
         model.setPurpose("Strategic enterprise architecture");
         stubModelManager.setModels(List.of(model));
@@ -569,7 +575,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void shouldReturnModelInfoDtoWithProperties_whenGetModelInfo_AC11() {
+    public void shouldReturnModelInfoDtoWithProperties_whenGetModelInfo() {
         IArchimateModel model = createEmptyModel();
         IProperty p1 = IArchimateFactory.eINSTANCE.createProperty();
         p1.setKey("Author");
@@ -589,7 +595,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void shouldExtendModelInfoDto_byteIdenticalWhenLegacy_AC7() {
+    public void shouldExtendModelInfoDto_byteIdenticalWhenLegacy() {
         // Empty-Archi-default model has null purpose and empty properties EList —
         // the build path normalises empty/empty-list → null so legacy callers
         // (and Jackson with @JsonInclude(NON_NULL)) see the same 8-field shape
@@ -1676,7 +1682,7 @@ public class ArchiModelAccessorImplTest {
             assertEquals("set-view-label-expression", op.tool());
             assertEquals("updated", op.action());
             assertEquals("view-001", op.entityId());
-            assertEquals("DiagramModel", op.entityType());
+            assertEquals("ArchimateDiagramModel", op.entityType());
             assertEquals("Main View", op.entityName());
             assertEquals(Integer.valueOf(2), op.appliedCount());
             assertEquals(Integer.valueOf(0), op.skippedCount());
@@ -2224,6 +2230,677 @@ public class ArchiModelAccessorImplTest {
             assertEquals("Strong", third.entity().specialization());
         } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * Locates a relationship in the model by name, so provenance assertions read the EMF object the
+     * write actually produced rather than the response the write reported.
+     */
+    private IArchimateRelationship findRelationshipByName(IArchimateModel model, String name) {
+        for (EObject each : model.getFolder(FolderType.RELATIONS).getElements()) {
+            if (each instanceof IArchimateRelationship rel && name.equals(rel.getName())) {
+                return rel;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Locates an element in the model by name. Walks the whole containment tree rather than one
+     * folder, because a created element is filed by its type and nothing here should depend on
+     * which folder that turns out to be.
+     *
+     * <p>Fails on a duplicate rather than returning the first hit: containment order is not
+     * creation order, so a silent first-match would let a fixture where the WRONG same-named
+     * element received the property pass as though the right one had.</p>
+     */
+    private IArchimateElement findElementByName(IArchimateModel model, String name) {
+        Objects.requireNonNull(name, "name");
+        IArchimateElement found = null;
+        for (java.util.Iterator<EObject> it = model.eAllContents(); it.hasNext();) {
+            if (it.next() instanceof IArchimateElement element && name.equals(element.getName())) {
+                assertNull("the model holds more than one element named " + name
+                        + ", so this lookup cannot identify the one under test", found);
+                found = element;
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Reads an element's properties off the EMF object into a map, so a provenance assertion names
+     * the key it is interested in instead of indexing into list order.
+     */
+    private Map<String, String> propertiesOf(IArchimateElement element) {
+        Map<String, String> stored = new LinkedHashMap<>();
+        element.getProperties().forEach(p -> stored.put(p.getKey(), p.getValue()));
+        return stored;
+    }
+
+
+    /**
+     * Provenance supplied at create time must reach the model on the immediate path. The endpoints
+     * are read back from the relationship itself, not from the response DTO, because a response can
+     * echo a value the model never stored.
+     */
+    @Test
+    public void shouldApplyDocumentationAndProperties_whenCreatingRelationship() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createRelationship("default", "AssociationRelationship",
+                    "ac-001", "ba-001", "traced", null, RelationshipSemanticAttributes.NONE,
+                    "Derived from diagram edge 42", Map.of("evidence", "high"),
+                    Map.of("file", "architecture.drawio"));
+
+            IArchimateRelationship rel = findRelationshipByName(model, "traced");
+            assertNotNull("relationship must exist in the model", rel);
+            assertEquals("documentation must reach the model",
+                    "Derived from diagram edge 42", rel.getDocumentation());
+
+            Map<String, String> stored = new LinkedHashMap<>();
+            rel.getProperties().forEach(p -> stored.put(p.getKey(), p.getValue()));
+            assertEquals("caller property must reach the model", "high", stored.get("evidence"));
+            assertEquals("source key must be prefixed and merged into properties",
+                    "architecture.drawio", stored.get("mcp.source.file"));
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * The bulk arm that resolves BOTH endpoints from back-references runs a different prepare
+     * ({@code prepareCreateRelationshipDirect}) than the arm where both ids are already in the
+     * model, so threading the metadata through one proves nothing about the other.
+     */
+    @Test
+    public void shouldApplyProvenance_whenBulkCreatingRelationshipFromBackReferencedEndpoints() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> ops = List.of(
+                    new BulkOperation("create-element",
+                            Map.of("type", "ApplicationComponent", "name", "Backref Source")),
+                    new BulkOperation("create-element",
+                            Map.of("type", "ApplicationComponent", "name", "Backref Target")),
+                    new BulkOperation("create-relationship",
+                            Map.of("type", "AssociationRelationship",
+                                    "sourceId", "$0.id",
+                                    "targetId", "$1.id",
+                                    "name", "backref-traced",
+                                    "documentation", "Derived from diagram edge 45",
+                                    "properties", Map.of("evidence", "low"),
+                                    "source", Map.of("file", "architecture.drawio"))));
+
+            BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+            assertTrue("the back-referenced bulk create must succeed", result.allSucceeded());
+
+            IArchimateRelationship rel = findRelationshipByName(model, "backref-traced");
+            assertNotNull("relationship must exist in the model", rel);
+            assertEquals("documentation must reach the model on the back-reference arm",
+                    "Derived from diagram edge 45", rel.getDocumentation());
+
+            Map<String, String> stored = new LinkedHashMap<>();
+            rel.getProperties().forEach(p -> stored.put(p.getKey(), p.getValue()));
+            assertEquals("low", stored.get("evidence"));
+            assertEquals("architecture.drawio", stored.get("mcp.source.file"));
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * The batch path queues the prepared command and commits it later. The metadata is written in
+     * the prepare, so it must survive the queue-then-commit round trip rather than being resolved
+     * against a model state that has moved on.
+     */
+    @Test
+    public void shouldApplyProvenance_whenCreateRelationshipIsQueuedInABatch() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.getMutationDispatcher().beginBatch("default", "provenance batch");
+            accessor.createRelationship("default", "AssociationRelationship",
+                    "ac-001", "ba-001", "batched", null, RelationshipSemanticAttributes.NONE,
+                    "Derived from diagram edge 47", Map.of("evidence", "medium"),
+                    Map.of("file", "architecture.drawio"));
+            accessor.getMutationDispatcher().endBatch("default", true);
+
+            IArchimateRelationship rel = findRelationshipByName(model, "batched");
+            assertNotNull("the committed relationship must exist in the model", rel);
+            assertEquals("documentation must survive the queue-then-commit round trip",
+                    "Derived from diagram edge 47", rel.getDocumentation());
+
+            Map<String, String> applied = new LinkedHashMap<>();
+            rel.getProperties().forEach(p -> applied.put(p.getKey(), p.getValue()));
+            assertEquals("medium", applied.get("evidence"));
+            assertEquals("architecture.drawio", applied.get("mcp.source.file"));
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * The approval path re-runs the prepare at approve time through a deferred rebuild handle. A
+     * parameter the lambda fails to capture is lost on approval ONLY — invisible to every
+     * non-approval test — so the rebuild is invoked here and the model read after it executes.
+     * The card itself must also disclose what it is about to write.
+     */
+    @Test
+    public void shouldCarryProvenanceThroughTheApprovalRebuild_whenCreateRelationshipIsGated() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+
+        List<PendingProposal> stored = new ArrayList<>();
+        MutationDispatcher capturing = new MutationDispatcher(() -> model) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                command.execute();
+            }
+            @Override
+            public String storeProposal(String sessionId, PendingProposal proposal) {
+                stored.add(proposal);
+                return "proposal-1";
+            }
+        };
+        capturing.setApprovalModeProvider(() -> true);
+        ArchiModelAccessorImpl gated = new ArchiModelAccessorImpl(stubModelManager, capturing);
+
+        try {
+            MutationResult<RelationshipDto> result = gated.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "ba-001", "gated", null,
+                    RelationshipSemanticAttributes.NONE,
+                    "Derived from diagram edge 46", Map.of("evidence", "high"),
+                    Map.of("file", "architecture.drawio"));
+
+            assertTrue("a non-duplicate gated create must be held as a proposal",
+                    result.isProposal());
+            assertEquals("exactly one proposal must have been stored", 1, stored.size());
+
+            // The card must disclose every value the approval will write — a proposal that
+            // under-reports asks the human to approve something they were not shown.
+            Map<String, Object> proposed = stored.get(0).proposedChanges();
+            assertEquals("the card must disclose the documentation",
+                    "Derived from diagram edge 46", proposed.get("documentation"));
+            assertNotNull("the card must disclose the properties", proposed.get("properties"));
+            assertNotNull("the card must disclose the source", proposed.get("source"));
+
+            // The hazard: this re-runs the prepare, exactly as approving would.
+            PreparedMutation<?> rebuilt = stored.get(0).rebuild().get();
+            rebuilt.command().execute();
+
+            IArchimateRelationship rel = findRelationshipByName(model, "gated");
+            assertNotNull("the approved relationship must exist in the model", rel);
+            assertEquals("documentation must survive the approve-time re-prepare",
+                    "Derived from diagram edge 46", rel.getDocumentation());
+
+            Map<String, String> applied = new LinkedHashMap<>();
+            rel.getProperties().forEach(p -> applied.put(p.getKey(), p.getValue()));
+            assertEquals("properties must survive the approve-time re-prepare",
+                    "high", applied.get("evidence"));
+            assertEquals("and the merged source key must too",
+                    "architecture.drawio", applied.get("mcp.source.file"));
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * A create that dedupes must leave the existing relationship untouched. This path returns a
+     * no-op command, so applying the caller's metadata here would be a direct EMF write outside the
+     * command stack — invisible to undo. The response reports what the model holds, not what was
+     * asked for.
+     */
+    @Test
+    public void shouldNotApplyProvenanceToExistingRelationship_whenCreateDedupes() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createRelationship("default", "AssociationRelationship",
+                    "ac-001", "ba-001", "first", null, RelationshipSemanticAttributes.NONE,
+                    "original documentation", Map.of("evidence", "high"), null);
+
+            MutationResult<RelationshipDto> duplicate = accessor.createRelationship(
+                    "default", "AssociationRelationship",
+                    "ac-001", "ba-001", "second", null, RelationshipSemanticAttributes.NONE,
+                    "overwriting documentation", Map.of("evidence", "low"), null);
+
+            assertTrue("second create must dedupe", duplicate.entity().alreadyExisted());
+            assertEquals("the response reports the EXISTING documentation, not the requested one",
+                    "original documentation", duplicate.entity().documentation());
+
+            IArchimateRelationship rel = findRelationshipByName(model, "first");
+            assertNotNull("the original relationship must survive under its own name", rel);
+            assertEquals("the existing relationship must not be rewritten",
+                    "original documentation", rel.getDocumentation());
+            assertEquals("no property may be appended to the existing relationship",
+                    1, rel.getProperties().size());
+            assertEquals("high", rel.getProperties().get(0).getValue());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * The same guarantee on the bulk arm. {@code BulkOperation} validates only the tool name and
+     * rejects no unknown key, so an unread parameter is dropped in silence rather than refused.
+     */
+    @Test
+    public void shouldApplyDocumentationAndProperties_whenBulkCreatingRelationship() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            List<BulkOperation> ops = List.of(
+                    new BulkOperation("create-relationship",
+                            Map.of("type", "AssociationRelationship",
+                                    "sourceId", "ac-001", "targetId", "ba-001",
+                                    "name", "bulk-traced",
+                                    "documentation", "Derived from diagram edge 43",
+                                    "properties", Map.of("evidence", "medium"),
+                                    "source", Map.of("file", "architecture.drawio"))));
+
+            BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+            assertTrue("bulk create-relationship should succeed", result.allSucceeded());
+
+            IArchimateRelationship rel = findRelationshipByName(model, "bulk-traced");
+            assertNotNull("relationship must exist in the model", rel);
+            assertEquals("documentation must reach the model on the bulk arm",
+                    "Derived from diagram edge 43", rel.getDocumentation());
+
+            Map<String, String> stored = new LinkedHashMap<>();
+            rel.getProperties().forEach(p -> stored.put(p.getKey(), p.getValue()));
+            assertEquals("caller property must reach the model on the bulk arm",
+                    "medium", stored.get("evidence"));
+            assertEquals("source key must be prefixed and merged on the bulk arm",
+                    "architecture.drawio", stored.get("mcp.source.file"));
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            // RelationshipsMatrix requires OSGi bundle — validated via E2E / Plug-in tests
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+
+    /**
+     * The bulk arm accepted a {@code source} map, reported the create as succeeded, and never
+     * wrote it: {@code BulkOperation} validates only the tool name and rejects no unknown key, so
+     * an unread parameter is dropped in silence rather than refused. The sibling
+     * {@code create-relationship} arm merged it all along, seventeen lines away.
+     *
+     * <p>Written bare — no runtime-availability guard. Element creation touches no relationship
+     * matrix, so this executes wherever the class does, and a pin that skips is a pin that proves
+     * nothing.</p>
+     *
+     * <p>The collision is the sharp half, and this pin previously asserted the wrong answer to it:
+     * that a literally-prefixed {@code properties} key must LOSE to the {@code source} entry of the
+     * same name. That is what the merge did, but it is not a precedence — it was an unconditional
+     * overwrite with nothing documenting it, so the caller's explicit value vanished behind a
+     * success response. The merge now refuses the collision instead, and the assertion is rewritten
+     * to match rather than removed, so a future reader cannot restore the overwrite by "fixing" a
+     * test that appeared to want it. See {@code ConceptMetadataTest} for the direct, headless
+     * coverage of both refusals.</p>
+     */
+    @Test
+    public void shouldApplyProvenance_whenBulkCreatingElement() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("evidence", "medium");
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "ApplicationComponent", "name", "bulk-traced-element",
+                                "documentation", "Derived from diagram cell 107",
+                                "properties", properties,
+                                "source", Map.of("file", "architecture.drawio",
+                                        "cell", "RZJTJ-gL5ujSjHKwNp_x-107"))));
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue("bulk create-element should succeed", result.allSucceeded());
+
+        IArchimateElement element = findElementByName(model, "bulk-traced-element");
+        assertNotNull("element must exist in the model", element);
+        assertEquals("documentation must reach the model on the bulk arm",
+                "Derived from diagram cell 107", element.getDocumentation());
+
+        Map<String, String> stored = propertiesOf(element);
+        assertEquals("the caller's own property must survive the merge",
+                "medium", stored.get("evidence"));
+        assertEquals("a source key must be prefixed and merged on the bulk arm",
+                "RZJTJ-gL5ujSjHKwNp_x-107", stored.get("mcp.source.cell"));
+        assertEquals("and every source entry lands, not just the first",
+                "architecture.drawio", stored.get("mcp.source.file"));
+
+        // Corroborating oracle only: the bulk response re-reads the entity after dispatch, so it
+        // agrees with the model above rather than standing in for it.
+        ElementDto effective = result.operations().get(0).effectiveElement();
+        assertNotNull("the bulk result must carry the re-read element", effective);
+        assertTrue("the response must report the same provenance the model holds",
+                effective.properties().contains(Map.of("key", "mcp.source.cell",
+                        "value", "RZJTJ-gL5ujSjHKwNp_x-107")));
+    }
+
+    /**
+     * The rewritten half of the pin above. A {@code properties} key spelled with the prefix and a
+     * {@code source} entry that produces the same key are a caller-side contradiction the server
+     * cannot resolve on the caller's behalf, so the bulk arm refuses it by the same route the
+     * standalone tool does — through the one shared merge helper, which is why a single fix reaches
+     * all four call sites.
+     */
+    @Test
+    public void shouldRefuseTheBulkCreate_whenASourceKeyCollidesWithACallerProperty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        Map<String, String> properties = new LinkedHashMap<>();
+        properties.put("mcp.source.file", "written-by-hand");
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "ApplicationComponent", "name", "bulk-collision-element",
+                                "properties", properties,
+                                "source", Map.of("file", "architecture.drawio"))));
+
+        try {
+            accessor.executeBulk("default", ops, null, false);
+            fail("expected the collision to be refused; instead the element was created with one "
+                    + "of the two values silently discarded");
+        } catch (ModelAccessException e) {
+            // continueOnError=false wraps a prepare-phase refusal as BULK_VALIDATION_FAILED and
+            // prefixes the operation index — the established bulk contract. What matters for this
+            // pin is that the wrap keeps the two things the caller needs to act: the key that
+            // collided, and the correction to make.
+            assertEquals(ErrorCode.BULK_VALIDATION_FAILED, e.getErrorCode());
+            assertTrue("the refusal must still name the key that collides: " + e.getMessage(),
+                    e.getMessage().contains("mcp.source.file"));
+            assertNotNull("and the wrap must not swallow the correction the refusal supplied",
+                    e.getSuggestedCorrection());
+            assertTrue("which names the properties entry to remove: " + e.getSuggestedCorrection(),
+                    e.getSuggestedCorrection().contains("mcp.source.file"));
+        }
+        assertNull("and nothing may reach the model",
+                findElementByName(model, "bulk-collision-element"));
+
+        // continueOnError=true takes the other arm, where the per-operation failure carries the
+        // refusal's own code rather than the bulk wrapper's. An agent iterating a partial bulk
+        // reads that code, so it has to be the specific one.
+        BulkMutationResult tolerant = accessor.executeBulk("default", ops, null, true);
+        assertFalse("the colliding operation must not be reported as succeeded",
+                tolerant.allSucceeded());
+        assertEquals(1, tolerant.failedOperations().size());
+        assertEquals("the per-operation failure carries the refusal's own code",
+                ErrorCode.INVALID_PARAMETER.name(), tolerant.failedOperations().get(0).errorCode());
+    }
+
+
+    /**
+     * The path almost every caller takes: a bulk {@code create-element} with no {@code source} at
+     * all. The fix folds two map reads through a merge helper, and a merge helper that is not
+     * null-tolerant would turn the ordinary provenance-less create into a failure — a strictly
+     * worse regression than the silent drop it replaced. Nothing else here covers it, because every
+     * other provenance pin necessarily supplies the map it is testing.
+     *
+     * <p>Both shapes are exercised: no {@code source} beside a real {@code properties} map, and
+     * neither key present at all.</p>
+     */
+    @Test
+    public void shouldCreateElementWithoutProvenance_whenBulkCreateOmitsSource() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "ApplicationComponent", "name", "no-source",
+                                "properties", Map.of("evidence", "high"))),
+                new BulkOperation("create-element",
+                        Map.of("type", "ApplicationComponent", "name", "no-maps-at-all")));
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue("a bulk create carrying no source must still succeed", result.allSucceeded());
+
+        IArchimateElement withProperties = findElementByName(model, "no-source");
+        assertNotNull("the element must exist in the model", withProperties);
+        Map<String, String> stored = propertiesOf(withProperties);
+        assertEquals("the caller's own property must survive an absent source map",
+                "high", stored.get("evidence"));
+        assertEquals("and no provenance key may be invented", 1, stored.size());
+
+        IArchimateElement bare = findElementByName(model, "no-maps-at-all");
+        assertNotNull("an element with neither map must exist too", bare);
+        assertTrue("and carry no properties at all", propertiesOf(bare).isEmpty());
+    }
+
+
+    /**
+     * Regression pin, not a mutation pin: the immediate path already merged provenance before this
+     * was written. It exists because the capability was pinned on the sibling tool across five
+     * paths and on this one nowhere, so the direct arm could regress unobserved.
+     */
+    @Test
+    public void shouldApplyProvenance_whenCreatingElement() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.createElement("default", "ApplicationComponent", "direct-traced", null,
+                Map.of("evidence", "high"), null, Map.of("file", "architecture.drawio"), null);
+
+        IArchimateElement element = findElementByName(model, "direct-traced");
+        assertNotNull("element must exist in the model", element);
+        Map<String, String> stored = propertiesOf(element);
+        assertEquals("high", stored.get("evidence"));
+        assertEquals("architecture.drawio", stored.get("mcp.source.file"));
+    }
+
+    /**
+     * Regression pin. The batch path queues the prepared command and commits it later, so the
+     * merged map has to survive the queue-then-commit round trip rather than being resolved
+     * against a model state that has moved on.
+     */
+    @Test
+    public void shouldApplyProvenance_whenCreateElementIsQueuedInABatch() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.getMutationDispatcher().beginBatch("default", "provenance batch");
+        accessor.createElement("default", "ApplicationComponent", "batched-element", null,
+                Map.of("evidence", "medium"), null, Map.of("file", "architecture.drawio"), null);
+        accessor.getMutationDispatcher().endBatch("default", true);
+
+        IArchimateElement element = findElementByName(model, "batched-element");
+        assertNotNull("the committed element must exist in the model", element);
+        Map<String, String> applied = propertiesOf(element);
+        assertEquals("medium", applied.get("evidence"));
+        assertEquals("the merged source key must survive the queue-then-commit round trip",
+                "architecture.drawio", applied.get("mcp.source.file"));
+    }
+
+    /**
+     * Regression pin over the copy {@code resolveBackReferences} makes of every operation's
+     * parameter map before dispatch. It rewrites back-reference STRINGS in place on a copy of the
+     * whole map, so every other key rides along — but only an operation whose id is actually
+     * consumed downstream exercises the path end to end.
+     */
+    @Test
+    public void shouldApplyProvenance_whenBulkCreatingElementFromBackReferencedOps() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("create-element",
+                        Map.of("type", "ApplicationComponent", "name", "back-referenced",
+                                "properties", Map.of("evidence", "low"),
+                                "source", Map.of("file", "architecture.drawio"))),
+                new BulkOperation("add-to-view",
+                        Map.of("viewId", "view-001", "elementId", "$0.id", "x", 50, "y", 50)));
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue("both operations should succeed", result.allSucceeded());
+
+        IArchimateElement element = findElementByName(model, "back-referenced");
+        assertNotNull("element must exist in the model", element);
+        Map<String, String> stored = propertiesOf(element);
+        assertEquals("low", stored.get("evidence"));
+        assertEquals("the source map must survive the back-reference rewrite",
+                "architecture.drawio", stored.get("mcp.source.file"));
+    }
+
+    /**
+     * Regression pin on the sharpest path. The approval route re-runs the prepare at approve time
+     * through a deferred rebuild handle, so a parameter the lambda fails to capture is lost on
+     * approval ONLY and is invisible to every other test here. The rebuild is therefore invoked and
+     * the model read after it executes, exactly as approving would.
+     */
+    @Test
+    public void shouldCarryProvenanceThroughTheApprovalRebuild_whenCreateElementIsGated() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+
+        List<PendingProposal> stored = new ArrayList<>();
+        MutationDispatcher capturing = new MutationDispatcher(() -> model) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                command.execute();
+            }
+            @Override
+            public String storeProposal(String sessionId, PendingProposal proposal) {
+                stored.add(proposal);
+                return "proposal-1";
+            }
+        };
+        capturing.setApprovalModeProvider(() -> true);
+        ArchiModelAccessorImpl gated = new ArchiModelAccessorImpl(stubModelManager, capturing);
+
+        MutationResult<ElementDto> result = gated.createElement("default",
+                "ApplicationComponent", "gated-element", "Derived from diagram cell 108",
+                Map.of("evidence", "high"), null, Map.of("file", "architecture.drawio"), null);
+
+        assertTrue("a gated create must be held as a proposal", result.isProposal());
+        assertEquals("exactly one proposal must have been stored", 1, stored.size());
+        assertNotNull("the card must disclose the source it is about to write",
+                stored.get(0).proposedChanges().get("source"));
+
+        // The hazard: this re-runs the prepare, exactly as approving would.
+        PreparedMutation<?> rebuilt = stored.get(0).rebuild().get();
+        rebuilt.command().execute();
+
+        IArchimateElement element = findElementByName(model, "gated-element");
+        assertNotNull("the approved element must exist in the model", element);
+        Map<String, String> applied = propertiesOf(element);
+        assertEquals("properties must survive the approve-time re-prepare",
+                "high", applied.get("evidence"));
+        assertEquals("and the merged source key must too",
+                "architecture.drawio", applied.get("mcp.source.file"));
+    }
+
+
+    /**
+     * {@code create-relationship} resolves the endpoint names on its create arm and consumes them
+     * to name the endpoints on the approval card. Its duplicate-detection arm rebuilds the DTO
+     * field by field and used to hardcode the four optional fields to null, so the same tool
+     * answered the same question two different ways depending on whether the relationship happened
+     * to exist already — and, under an approval gate, the card silently degraded to raw ids.
+     *
+     * <p>The rebuild takes only the fields it names, so making the mapper populate them does
+     * nothing here: this arm has to carry them explicitly, and that is what is asserted.</p>
+     */
+    @Test
+    public void shouldCarryEndpointNamesOnTheDuplicateArm_whenCreateRelationshipFindsAnExistingOne() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            MutationResult<RelationshipDto> first = accessor.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "ba-001", "first", null);
+            assertFalse("the first create is not a duplicate", first.entity().alreadyExisted());
+            assertNotNull("the create arm already names its source", first.entity().sourceName());
+
+            MutationResult<RelationshipDto> duplicate = accessor.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "ba-001", "second", null);
+
+            assertTrue("the second create must be detected as a duplicate",
+                    duplicate.entity().alreadyExisted());
+            assertEquals("the duplicate arm must name the source exactly as the create arm does",
+                    first.entity().sourceName(), duplicate.entity().sourceName());
+            assertEquals("and the target",
+                    first.entity().targetName(), duplicate.entity().targetName());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
+            Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
+        }
+    }
+
+    /**
+     * The approval card's effect text is built from the prepared entity's endpoint NAMES, falling
+     * back to raw ids when they are absent. The fallback arm is silent when it fires — the card
+     * still renders, just with two opaque ids — so the string itself is asserted rather than the
+     * fields behind it.
+     */
+    @Test
+    public void shouldNameTheEndpointsInTheApprovalEffect_whenCreateRelationshipIsADuplicate() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "ba-001", "first", null);
+
+            List<PendingProposal> stored = new ArrayList<>();
+            MutationDispatcher capturing = new MutationDispatcher(() -> model) {
+                @Override
+                public void dispatchImmediate(Command command) {
+                    command.execute();
+                }
+                @Override
+                public String storeProposal(String sessionId, PendingProposal proposal) {
+                    stored.add(proposal);
+                    return "proposal-1";
+                }
+            };
+            capturing.setApprovalModeProvider(() -> true);
+            ArchiModelAccessorImpl gated = new ArchiModelAccessorImpl(stubModelManager, capturing);
+
+            MutationResult<RelationshipDto> result = gated.createRelationship(
+                    "default", "AssociationRelationship", "ac-001", "ba-001", "second", null);
+
+            // A duplicate mutates nothing, so it short-circuits BEFORE the approval gate: there is
+            // no change for a human to approve, and a proposal here would re-run the prepare on
+            // approval and dedupe again. The sibling shouldBypassApprovalGate_* test states the
+            // same rule from the other side.
+            assertFalse("a duplicate must NOT be held as a proposal — it mutates nothing",
+                    result.isProposal());
+            assertTrue("no proposal may be stored for a duplicate", stored.isEmpty());
+
+            // The endpoints must still be named on the returned entity rather than degrading to
+            // raw ids — the guarantee this test exists for, asserted where it is observable.
+            assertTrue("the duplicate arm must report the existing relationship",
+                    result.entity().alreadyExisted());
+            assertEquals("Order System", result.entity().sourceName());
+            assertEquals("Customer", result.entity().targetName());
+        } catch (ExceptionInInitializerError | NoClassDefFoundError e) {
             Assume.assumeTrue("Requires OSGi runtime for RelationshipsMatrix", false);
         }
     }
@@ -3465,6 +4142,12 @@ public class ArchiModelAccessorImplTest {
         }
     }
 
+    /**
+     * Operation 0 refers forward to an operation that has not run yet, which is refused whatever
+     * else the call contains. Operation 1 is now prepared rather than skipped, and succeeds — the
+     * refusal still leads with operation 0, because the first failure is what the scalar fields
+     * describe.
+     */
     @Test
     public void shouldFailBulk_whenForwardBackReference() {
         IArchimateModel model = createTestModel();
@@ -3629,6 +4312,11 @@ public class ArchiModelAccessorImplTest {
         assertEquals("updated", result.operations().get(1).action());
     }
 
+    /**
+     * Every operation is now prepared before the call is refused, including the ones after the
+     * failure — the loop stops building nothing, not building. What is asserted here is unchanged
+     * and is the point: preparing an operation writes nothing, so no element reaches the model.
+     */
     @Test
     public void shouldFailBulk_midwayWithNoMutationsApplied() {
         IArchimateModel model = createTestModel();
@@ -3644,8 +4332,9 @@ public class ArchiModelAccessorImplTest {
                         Map.of("type", "BusinessActor", "name", "Will Not Persist")),
                 new BulkOperation("create-element",
                         Map.of("type", "FakeType", "name", "Fails Here")),
+                // Prepared, and then discarded with the rest: nothing this call built is applied.
                 new BulkOperation("create-element",
-                        Map.of("type", "BusinessProcess", "name", "Never Reached"))
+                        Map.of("type", "BusinessProcess", "name", "Prepared Then Discarded"))
         );
 
         try {
@@ -4019,7 +4708,99 @@ public class ArchiModelAccessorImplTest {
         BulkOperationResult opResult = result.operations().get(0);
         assertEquals("remove-from-view", opResult.tool());
         assertEquals("removed", opResult.action());
-        assertEquals("viewObject", opResult.entityType());
+        assertEquals("DiagramModelArchimateObject", opResult.entityType());
+    }
+
+    /**
+     * The three {@code remove-from-view} shapes nothing pinned before. Each is asserted against the
+     * same name the ADJACENT projection branch gives the same object when it is added rather than
+     * removed — {@code add-group-to-view} reports {@code DiagramModelGroup}, {@code add-note-to-view}
+     * reports {@code DiagramModelNote} — which is the collision this vocabulary exists to close: a
+     * row that said {@code group} sat directly beneath a row that said {@code DiagramModelGroup} for
+     * one and the same object.
+     */
+    @Test
+    public void shouldReportTheGroupsEClass_whenBulkRemovesAGroupFromAView() {
+        IArchimateModel model = createTestModelWithViewContents();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
+        group.setId("grp-100");
+        group.setName("Layer");
+        view.getChildren().add(group);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default",
+                List.of(new BulkOperation("remove-from-view",
+                        Map.of("viewId", "view-001", "viewObjectId", "grp-100"))),
+                null, false);
+
+        assertTrue(result.allSucceeded());
+        assertEquals("DiagramModelGroup", result.operations().get(0).entityType());
+    }
+
+    @Test
+    public void shouldReportTheNotesEClass_whenBulkRemovesANoteFromAView() {
+        IArchimateModel model = createTestModelWithViewContents();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
+        note.setId("note-100");
+        view.getChildren().add(note);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default",
+                List.of(new BulkOperation("remove-from-view",
+                        Map.of("viewId", "view-001", "viewObjectId", "note-100"))),
+                null, false);
+
+        assertTrue(result.allSucceeded());
+        assertEquals("DiagramModelNote", result.operations().get(0).entityType());
+    }
+
+    @Test
+    public void shouldReportTheConnectionsEClass_whenBulkRemovesAConnectionFromAView() {
+        IArchimateModel model = createTestModelWithViewContents();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelArchimateObject actorVisual =
+                (IDiagramModelArchimateObject) view.getChildren().get(0);
+        IDiagramModelArchimateConnection connection =
+                (IDiagramModelArchimateConnection) actorVisual.getTargetConnections().get(0);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default",
+                List.of(new BulkOperation("remove-from-view",
+                        Map.of("viewId", "view-001", "viewObjectId", connection.getId()))),
+                null, false);
+
+        assertTrue(result.allSucceeded());
+        assertEquals("DiagramModelArchimateConnection", result.operations().get(0).entityType());
+    }
+
+    /**
+     * {@code delete-view} through the bulk projection. Its {@code entityType} is carried by the
+     * prepare's own {@code DeleteResultDto.type}, so this pins the projection and the DTO together —
+     * the coarse noun used to reach the wire through both at once.
+     */
+    @Test
+    public void shouldReportTheViewsEClass_whenBulkDeletesAView() {
+        IArchimateModel model = createTestModelWithViewContents();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default",
+                List.of(new BulkOperation("delete-view", Map.of("viewId", "view-001"))),
+                null, false);
+
+        assertTrue(result.allSucceeded());
+        BulkOperationResult op = result.operations().get(0);
+        assertEquals("ArchimateDiagramModel", op.entityType());
+        assertEquals("the projection reads the prepare's own type field, so the two cannot drift",
+                "ArchimateDiagramModel", op.deletion().type());
     }
 
     @Test
@@ -4888,6 +5669,30 @@ public class ArchiModelAccessorImplTest {
         }
     }
 
+    /**
+     * The host-view failure for add-connection-to-view, pinned whole — message, code and
+     * suggestion. It shares the resolver every other placement prepare uses, so the whole point is
+     * that routing through the shared one changes nothing a caller can observe.
+     */
+    @Test
+    public void shouldThrowViewNotFound_forAddConnection() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.addConnectionToView("default", "no-such-view", "rel-001",
+                    "whatever-source", "whatever-target", null, null, null, null, null);
+            fail("Expected ModelAccessException");
+        } catch (ModelAccessException e) {
+            assertEquals("View not found: no-such-view", e.getMessage());
+            assertEquals(ErrorCode.VIEW_NOT_FOUND, e.getErrorCode());
+            assertNull(e.getDetails());
+            assertEquals("Use get-views to find valid view IDs", e.getSuggestedCorrection());
+            assertNull(e.getArchiMateReference());
+        }
+    }
+
     @Test
     public void shouldThrowViewObjectNotFound_forAddConnection() {
         IArchimateModel model = createTestModel();
@@ -5289,7 +6094,7 @@ public class ArchiModelAccessorImplTest {
         assertTrue(result.allSucceeded());
         assertEquals(1, result.totalOperations());
         assertEquals("cleared", result.operations().get(0).action());
-        assertEquals("view", result.operations().get(0).entityType());
+        assertEquals("ArchimateDiagramModel", result.operations().get(0).entityType());
         assertEquals("Main View", result.operations().get(0).entityName());
     }
 
@@ -5343,7 +6148,7 @@ public class ArchiModelAccessorImplTest {
         // absY = (-27 + 77 + (-27) + 77) / 2 = 50
         List<BendpointDto> relative = List.of(new BendpointDto(90, -27, -110, -27));
 
-        List<AbsoluteBendpointDto> absolute = ArchiModelAccessorImpl.convertRelativeToAbsolute(
+        List<AbsoluteBendpointDto> absolute = ConnectionResponseBuilder.convertRelativeToAbsolute(
                 relative, 110, 77, 310, 77);
 
         assertEquals(1, absolute.size());
@@ -5361,7 +6166,7 @@ public class ArchiModelAccessorImplTest {
         // Convert absolute -> relative -> absolute
         List<BendpointDto> relative = ArchiModelAccessorImpl.convertAbsoluteToRelative(
                 originalAbsolute, 100, 200, 400, 300);
-        List<AbsoluteBendpointDto> roundTripped = ArchiModelAccessorImpl.convertRelativeToAbsolute(
+        List<AbsoluteBendpointDto> roundTripped = ConnectionResponseBuilder.convertRelativeToAbsolute(
                 relative, 100, 200, 400, 300);
 
         assertEquals(originalAbsolute.size(), roundTripped.size());
@@ -5395,7 +6200,7 @@ public class ArchiModelAccessorImplTest {
                 List.of(), 100, 200, 300, 400);
         assertTrue(relative.isEmpty());
 
-        List<AbsoluteBendpointDto> absolute = ArchiModelAccessorImpl.convertRelativeToAbsolute(
+        List<AbsoluteBendpointDto> absolute = ConnectionResponseBuilder.convertRelativeToAbsolute(
                 List.of(), 100, 200, 300, 400);
         assertTrue(absolute.isEmpty());
     }
@@ -5412,7 +6217,7 @@ public class ArchiModelAccessorImplTest {
         vo.setBounds(100, 200, 120, 55);
         view.getChildren().add(vo);
 
-        int[] center = ArchiModelAccessorImpl.computeAbsoluteCenter(vo);
+        int[] center = ConnectionResponseBuilder.computeAbsoluteCenter(vo);
 
         // center = (100 + 120/2, 200 + 55/2) = (160, 227)
         assertEquals(160, center[0]);
@@ -5434,7 +6239,7 @@ public class ArchiModelAccessorImplTest {
         vo.setBounds(30, 30, 140, 55);
         group.getChildren().add(vo);
 
-        int[] center = ArchiModelAccessorImpl.computeAbsoluteCenter(vo);
+        int[] center = ConnectionResponseBuilder.computeAbsoluteCenter(vo);
 
         // absolute center: x = 30 + 20 + 70 = 120, y = 30 + 360 + 27 = 417
         assertEquals(120, center[0]);
@@ -5459,7 +6264,7 @@ public class ArchiModelAccessorImplTest {
         vo.setBounds(10, 10, 100, 50);
         innerGroup.getChildren().add(vo);
 
-        int[] center = ArchiModelAccessorImpl.computeAbsoluteCenter(vo);
+        int[] center = ConnectionResponseBuilder.computeAbsoluteCenter(vo);
 
         // absolute center: x = 10 + 50 + 100 + 50 = 210, y = 10 + 50 + 200 + 25 = 285
         assertEquals(210, center[0]);
@@ -5487,7 +6292,7 @@ public class ArchiModelAccessorImplTest {
         vo.setBounds(30, 30, 140, 55);
         group.getChildren().add(vo);
 
-        int[] center = ArchiModelAccessorImpl.computeAbsoluteCenter(vo);
+        int[] center = ConnectionResponseBuilder.computeAbsoluteCenter(vo);
 
         assertEquals(120, center[0]); // 30 + 20 + 70
         assertEquals(417, center[1]); // 30 + 360 + 27 (int division: 55/2 = 27)
@@ -5882,7 +6687,7 @@ public class ArchiModelAccessorImplTest {
     // these tests pin the wiring at the accessor boundary (DTO-observable height).
 
     @Test
-    public void addNoteToView_shouldRespectExplicitHeight_whenProvided_AC2() {
+    public void addNoteToView_shouldRespectExplicitHeight_whenProvided() {
         // explicit height passed by caller → bounds exactly as passed (unchanged behaviour).
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
@@ -5898,7 +6703,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void addNoteToView_shouldKeepDefaultHeight_whenContentShort_AC3() {
+    public void addNoteToView_shouldKeepDefaultHeight_whenContentShort() {
         // empty/one-line content → height clamps to DEFAULT_NOTE_HEIGHT (80) floor.
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
@@ -5913,7 +6718,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void addNoteToView_shouldFitHeightToLongContent_whenHeightNull_AC1() {
+    public void addNoteToView_shouldFitHeightToLongContent_whenHeightNull() {
         // 6–8 line title + no explicit height → height grows past DEFAULT_NOTE_HEIGHT.
         // Use the Retail Bank prompt's exact title style — long descriptive content at the
         // default 185px width wraps to ~6 lines.
@@ -5975,8 +6780,481 @@ public class ArchiModelAccessorImplTest {
         assertTrue("Multi-line note must not reach MAX_NOTE_HEIGHT clamp (600): got " + h, h < 600);
     }
 
+    // ---- update-view-object note height re-fit ----
+    //
+    // The auto-fit was create-time only: `add-note-to-view` fitted a note's height to its wrapped
+    // content when `height` was omitted, and `update-view-object` then kept the stored height no
+    // matter how the text changed. A note whose body was replaced with a longer one silently
+    // clipped, and `assess-layout` prescribed "omit the note height so the server auto-fits" — the
+    // very thing the caller had already done. These pins run in the PDE/real-EMF lane because the
+    // fit measures real glyphs through an SWT Display; a headless green here proves nothing.
+    //
+    // The re-fit fires for a note when `height` is omitted AND the request changes the wrap, i.e.
+    // it supplies `text` or `width`. A pure move never resizes.
+
+    /** Long descriptive body — wraps to several lines at any ordinary note width. */
+    private static final String LONG_NOTE_BODY =
+            "A — Business Architecture: customer journeys, services, products, "
+          + "and the banking products offered by the retail bank organization "
+          + "across digital and branch channels, including the servicing model.";
+
+    /**
+     * The measured defect. A note created with `height` omitted auto-fits; replacing its text
+     * through `update-view-object` with `height` omitted again must re-fit to the same figure
+     * `add-note-to-view` would have produced for that content at that width — the same helper,
+     * not a second implementation.
+     *
+     * <p>The reference note is the oracle: it is created through the create path with exactly the
+     * same content and width, so the assertion is an equality against a measured number rather
+     * than "it got bigger".</p>
+     *
+     * <p>Also discharges the effective-state invariant: the reported height must equal a fresh
+     * read of the model, not the value the caller passed (which was nothing at all).</p>
+     */
     @Test
-    public void addGroupToView_shouldKeepDefaultHeight_whenShortLabel_AC15() {
+    public void updateViewObject_shouldRefitNoteHeight_whenTextGrowsAndHeightOmitted() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Short", null, null, 10, 10, 220, null,
+                null, null, null).entity().viewObjectId();
+
+        // Oracle: the create path's own answer for the same content at the same width.
+        int expected = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 400, 220, null,
+                null, null, null).entity().height();
+        assertTrue("the oracle note must itself have auto-fitted past the floor: got " + expected,
+                expected > 80);
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, LONG_NOTE_BODY, null, null, null);
+
+        assertEquals("update must re-fit the note to the same height the create path fits it to",
+                expected, updated.entity().height());
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        assertEquals("the reported height must equal a fresh read of the model",
+                updated.entity().height(),
+                findChildById(view, noteId).getBounds().getHeight());
+    }
+
+    /**
+     * The same re-fit, reached through the OTHER prepare. A note an earlier operation in the same
+     * {@code bulk-mutate} call created is still detached, so it is handed to
+     * {@code prepareUpdateViewObjectDirect} rather than looked up by id — and until that route
+     * existed, the re-fit sitting on that prepare was a declared forward guard no caller could
+     * reach, pinned by nothing. Neutralising it turned no test red.
+     *
+     * <p>Same oracle as the live-path pin above, so the two paths are asserted to mean the same
+     * thing rather than merely each to do something.</p>
+     *
+     * <p>Lives in this lane deliberately, and the headless lane cannot substitute: the fit ends in
+     * {@code ElementSizer.fitTextBoxHeightToContentOrElse}, which catches its own display failure
+     * and returns the unchanged height — so headless this assertion fails, and its inverse passes,
+     * both for reasons that have nothing to do with the code under test.</p>
+     */
+    @Test
+    public void bulkMutate_shouldRefitABackReferencedNote_whenTextGrowsAndHeightOmitted() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Oracle: the create path's own answer for the same content at the same width.
+        int expected = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 400, 220, null,
+                null, null, null).entity().height();
+        assertTrue("the oracle note must itself have auto-fitted past the floor: got " + expected,
+                expected > 80);
+
+        BulkMutationResult bulk = accessor.executeBulk("default", List.of(
+                new BulkOperation("add-note-to-view", Map.of(
+                        "viewId", "view-001", "content", "Short",
+                        "x", 10, "y", 10, "width", 220)),
+                new BulkOperation("update-view-object", Map.of(
+                        "viewObjectId", "$0.id", "text", LONG_NOTE_BODY))),
+                "create a note then grow its text by back-reference", false);
+
+        assertTrue("both operations must succeed", bulk.allSucceeded());
+        IArchimateDiagramModel bulkView = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject note = findChildById(bulkView, bulk.operations().get(0).entityId());
+        assertNotNull("the note must exist in the model", note);
+        assertEquals("the back-referenced update must re-fit the note to the same height the create "
+                + "path fits it to", expected, note.getBounds().getHeight());
+    }
+
+    /**
+     * The ruling this test's name states: the re-fit is symmetric, not grow-only. The server keeps
+     * no provenance, so it cannot tell a height an author deliberately pinned from one a previous
+     * auto-fit produced — and making the two paths mean the same thing is the point of the fix.
+     * A caller who wants a fixed size says so by supplying `height`, which is pinned separately.
+     */
+    @Test
+    public void updateViewObject_shouldShrinkTheNote_whenTheNewTextIsShorter() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewNoteDto> created = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 10, 220, null,
+                null, null, null);
+        String noteId = created.entity().viewObjectId();
+        int tall = created.entity().height();
+        assertTrue("the note must start taller than the floor: got " + tall, tall > 80);
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, "Short", null, null, null);
+
+        assertTrue("shorter text must shrink the note: " + updated.entity().height()
+                + " must be < " + tall, updated.entity().height() < tall);
+        assertEquals("and it must land on the DEFAULT_NOTE_HEIGHT floor, never below it",
+                80, updated.entity().height());
+    }
+
+    /**
+     * The one piece of provenance the server does hold, and the only asymmetry against the create
+     * path. A height BELOW the note default cannot have been produced by the fit, which clamps to
+     * that floor — so it can only have been pinned deliberately, and raising it to the floor would
+     * destroy that pin for nothing: such a note is not clipping, or the fit would return more than
+     * the floor anyway. The floor on update is therefore the lesser of the default and the height
+     * the note already holds.
+     *
+     * <p>Every note at or above the floor is unaffected, which is why the shrink pin above still
+     * lands exactly on 80.</p>
+     */
+    @Test
+    public void updateViewObject_shouldNotRaiseTheHeight_whenTheNoteWasPinnedBelowTheDefaultFloor() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // 30 is below the 80 floor, so no fit could have produced it — it is unambiguously a pin.
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Hi", null, null, 10, 10, 180, 30,
+                null, null, null).entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, 250, null, null, null, null, null);
+
+        assertEquals("a deliberately sub-floor note must keep its height when its content still fits",
+                30, updated.entity().height());
+
+        // ... but the same note still grows when its content genuinely needs the room, so the
+        // sub-floor rule protects a pin without reintroducing the clip.
+        MutationResult<ViewObjectDto> grown = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, LONG_NOTE_BODY, null, null, null);
+        assertTrue("a sub-floor note whose text no longer fits must still grow: got "
+                + grown.entity().height(), grown.entity().height() > 30);
+    }
+
+    /**
+     * The mirror of the sub-floor rule, at the other end of the clamp. A height ABOVE the cap cannot
+     * have been produced by the fit either — the fit clamps down to the cap — so it is the same
+     * unambiguous pin, and clawing it back down to 600 would make a note that was fully visible
+     * start clipping as a side effect of an edit that never mentioned height.
+     *
+     * <p>The rule both ends share: a clamp must never move the height in a direction the CONTENT
+     * does not justify.</p>
+     */
+    @Test
+    public void updateViewObject_shouldNotClawBackToTheCap_whenTheNoteWasPinnedAboveIt() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Content that genuinely needs far more than the 600px cap at this width, in a box pinned
+        // to match. Only an explicit pin can put a note above the cap.
+        StringBuilder wall = new StringBuilder();
+        for (int i = 1; i <= 120; i++) {
+            wall.append("Wall of text line ").append(i).append(". ");
+        }
+        String longBody = wall.toString();
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", longBody, null, null, 10, 10, 220, 900,
+                null, null, null).entity().viewObjectId();
+
+        // A width change re-wraps and re-fits, but must not drag the box back under the cap.
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, 200, null, null, null, null, null);
+
+        assertTrue("a note pinned above the cap must not be clawed back down to it: got "
+                + updated.entity().height(), updated.entity().height() > 600);
+    }
+
+    /**
+     * A legend is a note by EClass but not by nature: Archi sizes one from its
+     * {@code ILegendOptions} item/column layout, not from its text. Fitting it to
+     * {@code getContent()} therefore measures the wrong quantity — exactly the reason groups are
+     * out — and a legend whose content is empty would collapse to the floor.
+     */
+    @Test
+    public void updateViewObject_shouldNotRefitALegend_evenThoughALegendIsANote() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "", null, null, 10, 10, 220, 300,
+                null, null, null).entity().viewObjectId();
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        // The server has no path that creates a legend, so mark it through the model directly —
+        // an imported or hand-authored view can carry one.
+        ((IDiagramModelNote) findChildById(view, noteId)).setIsLegend(true);
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, 260, null, null, null, null, null);
+
+        assertEquals("a legend's height must survive a width change untouched",
+                300, updated.entity().height());
+    }
+
+    /**
+     * The ordering of the text re-fit against the icon-band grow is defensive, not load-bearing:
+     * the two are disjoint by type, because {@code IDiagramModelNote} is not an
+     * {@code IDiagramModelContainer} and {@code ImageHelper.iconBandGrownHeight} no-ops for
+     * anything that is not one. This pins the disjointness rather than the order — the order has
+     * no observable consequence, and a test asserting one would pass under either arrangement.
+     *
+     * <p>It goes RED if a future change ever makes a note a container, which is precisely when the
+     * ordering would start to matter and the comment beside it would stop being true.</p>
+     */
+    @Test
+    public void updateViewObject_shouldNotAddAnIconBand_whenARefittingNoteAlsoSetsABottomCornerImage() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Short", null, null, 10, 10, 220, null,
+                null, null, null).entity().viewObjectId();
+
+        // The oracle: the same content at the same width through the create path, with no image.
+        int textOnlyFit = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 400, 220, null,
+                null, null, null).entity().height();
+
+        // Same re-fit, but the request also asks for a bottom-corner icon — the position that
+        // reserves a band on a container. A note is not one, so no band may be added.
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, LONG_NOTE_BODY, null,
+                new ImageParams(null, "bottom-left", null), null);
+
+        assertEquals("a note's re-fit must not gain an icon-band reserve on top of the text fit",
+                textOnlyFit, updated.entity().height());
+    }
+
+    /**
+     * The trigger boundary, positive half: a width change re-wraps the text, so it re-fits too. Without
+     * this the narrow gate would leave a width-shrink clipping and leave the clip diagnostic's
+     * remedy a lie for that case.
+     *
+     * <p>Again pinned against the create path's answer for the same content at the narrower
+     * width, so the number is measured rather than asserted to have moved.</p>
+     */
+    @Test
+    public void updateViewObject_shouldRefitNoteHeight_whenOnlyWidthChanges() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewNoteDto> created = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 10, 420, null,
+                null, null, null);
+        String noteId = created.entity().viewObjectId();
+        int wide = created.entity().height();
+
+        int expectedNarrow = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 400, 200, null,
+                null, null, null).entity().height();
+        assertTrue("the narrower oracle must need more height than the wider one: "
+                + expectedNarrow + " vs " + wide, expectedNarrow > wide);
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, 200, null, null, null, null, null);
+
+        assertEquals("a width-only change must re-wrap and re-fit the height",
+                expectedNarrow, updated.entity().height());
+    }
+
+    /**
+     * The trigger boundary, negative half — the adjacent request that must NOT re-fit. Only text, width
+     * and font change the required height; a move changes none of them, so a note dragged across
+     * the canvas keeps the height it had. Without this the gate could widen to "height omitted"
+     * and silently resize a note on every reposition.
+     */
+    @Test
+    public void updateViewObject_shouldNotRefitNoteHeight_whenOnlyThePositionChanges() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Height pinned well above what this content needs, so a re-fit would visibly shrink it.
+        MutationResult<ViewNoteDto> created = accessor.addNoteToView(
+                "default", "view-001", "Short", null, null, 10, 10, 220, 300,
+                null, null, null);
+        String noteId = created.entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, 500, 500, null, null, null, null, null, null);
+
+        assertEquals("a pure move must leave the note's height exactly as it was",
+                300, updated.entity().height());
+    }
+
+    /**
+     * The explicit-height opt-out survives on the update path too: supplying `height` takes the
+     * fixed-size branch even when the same request changes the text and would otherwise re-fit.
+     * This is the only way a caller can pin a note's size, so it must not be reachable by the fit.
+     */
+    @Test
+    public void updateViewObject_shouldKeepExplicitHeight_whenHeightSuppliedWithNewText() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Short", null, null, 10, 10, 220, null,
+                null, null, null).entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, 150, LONG_NOTE_BODY, null, null, null);
+
+        assertEquals("an explicit height must pass through unchanged, re-fit or not",
+                150, updated.entity().height());
+    }
+
+    /**
+     * The ruling this test's name states: groups are OUT. A group's create-time fit sizes a LABEL
+     * BAND, a different quantity from a note body — a group's height must also contain its
+     * children, so fitting it to its label could shrink the group away from what it holds.
+     *
+     * <p>Declined case, recorded here so it is not mistaken for an oversight: a group renamed to a
+     * longer label still clips its label band. Closing that needs a fit that takes the children's
+     * extent as a floor, which is a different computation from this one.</p>
+     */
+    @Test
+    public void updateViewObject_shouldNotRefitAGroupsHeight_whenItsLabelGrows() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> created = accessor.addGroupToView(
+                "default", "view-001", "Group", 10, 10, 300, null, null, null, null);
+        String groupId = created.entity().viewObjectId();
+        int before = created.entity().height();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", groupId, null, null, null, null, LONG_NOTE_BODY, null, null, null);
+
+        assertEquals("a group's height must not be re-fitted to its label", before,
+                updated.entity().height());
+    }
+
+    /**
+     * The re-fit changes a height without the caller passing any bounds field, which is exactly
+     * the condition the icon-band grow already had to handle: unless it counts as a bounds change,
+     * the parent-fit cascade never runs and a note that grows inside a group hangs outside it with
+     * the group reporting nothing.
+     */
+    @Test
+    public void updateViewObject_shouldGrowTheParentGroup_whenANoteRefitsTaller() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // The group is only just deep enough for the note at its create-time floor height (80 at
+        // y=10), so the re-fit is what pushes the note past the bottom edge and provokes the fit.
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Holder", 10, 10, 300, 100, null, null, null)
+                .entity().viewObjectId();
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Short", null, null, 10, 10, 250, null,
+                groupId, null, null).entity().viewObjectId();
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        int groupHeightBefore = findChildById(view, groupId).getBounds().getHeight();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, LONG_NOTE_BODY, null, null, null);
+        assertTrue("the nested note must have re-fitted taller: got " + updated.entity().height(),
+                updated.entity().height() > 80);
+
+        int groupHeightAfter = findChildById(view, groupId).getBounds().getHeight();
+        assertTrue("a note that re-fits taller inside a group must grow the group: "
+                + groupHeightBefore + " -> " + groupHeightAfter,
+                groupHeightAfter > groupHeightBefore);
+    }
+
+    /**
+     * End-to-end proof that the clip diagnostic now tells the truth, rather than an assertion
+     * about a string. `assess-layout` measures the required note height with the same helper and
+     * the same inset the fit uses, so it is a render-accurate oracle: pin a height too small for
+     * the content, confirm the assessor flags it, apply the remedy the diagnostic itself
+     * prescribes, re-assess, and the flag must be gone.
+     *
+     * <p>The remedy is "re-send the text (or width) with `height` omitted" — omitting `height`
+     * alone is not a request the tool accepts, since at least one field must be supplied. That is
+     * the precision the diagnostic's wording gains alongside this fix.</p>
+     */
+    @Test
+    public void assessLayout_shouldReportNoNoteClip_afterApplyingTheDiagnosticsOwnRemedy() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 10, 220, 100,
+                null, null, null).entity().viewObjectId();
+
+        AssessLayoutResultDto before = accessor.assessLayout("view-001");
+        assertEquals("a note pinned smaller than its content must be flagged as clipping",
+                1, before.noteClipCount());
+
+        accessor.updateViewObject(
+                "default", noteId, null, null, null, null, LONG_NOTE_BODY, null, null, null);
+
+        AssessLayoutResultDto after = accessor.assessLayout("view-001");
+        assertEquals("applying the diagnostic's own remedy must clear the clip",
+                0, after.noteClipCount());
+    }
+
+    /**
+     * `apply-positions` reaches the same prepare, and its width/height are independently optional,
+     * so a caller can resize a note's width there without pinning a height. That changes the wrap
+     * exactly as the equivalent `update-view-object` does, and the same rule applies — a request
+     * that re-wraps a note and leaves the height unpinned re-fits it, whichever tool delivers it.
+     */
+    @Test
+    public void applyViewLayout_shouldRefitNoteHeight_whenWidthChangesAndHeightOmitted() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewNoteDto> created = accessor.addNoteToView(
+                "default", "view-001", LONG_NOTE_BODY, null, null, 10, 10, 420, null,
+                null, null, null);
+        String noteId = created.entity().viewObjectId();
+        int wide = created.entity().height();
+
+        accessor.applyViewLayout("default", "view-001",
+                List.of(new ViewPositionSpec(noteId, null, null, 200, null)), null, null);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        int refitted = findChildById(view, noteId).getBounds().getHeight();
+        assertTrue("narrowing a note through apply-positions must re-fit its height: "
+                + wide + " -> " + refitted, refitted > wide);
+    }
+
+    @Test
+    public void addGroupToView_shouldKeepDefaultHeight_whenShortLabel() {
         // Pin: short label + height==null + width==null (default 300×200) MUST
         // produce setBounds(x, y, w, 200) with 200 literally — byte-identical to today.
         // This guards against the helper silently bumping every default-height group
@@ -5990,14 +7268,14 @@ public class ArchiModelAccessorImplTest {
                 50, 50, null, null, null, null, null);
 
         assertNotNull(result);
-        assertEquals("AC-15: short-label default-height group must stay at 200 literally",
+        assertEquals("short-label default-height group must stay at 200 literally",
                 200, result.entity().height());
-        assertEquals("AC-15: short-label default-width group must stay at 300 literally",
+        assertEquals("short-label default-width group must stay at 300 literally",
                 300, result.entity().width());
     }
 
     @Test
-    public void addGroupToView_shouldGrowHeight_whenLongLabel_AC7() {
+    public void addGroupToView_shouldGrowHeight_whenLongLabel() {
         // long label + height==null → label band reserves room → resolvedHeight > 200.
         // At default group width (300 px), each individually-wide word forces its own wrapped
         // line. With ~14+ wrapped lines the raw band exceeds the 200-px minHeight floor and
@@ -6019,14 +7297,14 @@ public class ArchiModelAccessorImplTest {
                 50, 50, null, null, null, null, null);
 
         assertNotNull(result);
-        assertTrue("AC-7: long-label group must grow past DEFAULT_GROUP_HEIGHT (200): got "
+        assertTrue("long-label group must grow past DEFAULT_GROUP_HEIGHT (200): got "
                 + result.entity().height(), result.entity().height() > 200);
-        assertTrue("AC-7: long-label group must not exceed MAX_GROUP_LABEL_BAND (800): got "
+        assertTrue("long-label group must not exceed MAX_GROUP_LABEL_BAND (800): got "
                 + result.entity().height(), result.entity().height() <= 800);
     }
 
     @Test
-    public void addGroupToView_shouldRespectExplicitHeight_whenProvided_AC7BackCompat() {
+    public void addGroupToView_shouldRespectExplicitHeight_whenProvided_backCompat() {
         // back-compat: caller-pinned height wins even when label would otherwise grow it.
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
@@ -6045,6 +7323,655 @@ public class ArchiModelAccessorImplTest {
                 250, result.entity().height());
         assertEquals("Explicit group width must pass through unchanged",
                 400, result.entity().width());
+    }
+
+    // ---- Untitled groups, and clearing a group label or note content ----
+    //
+    // Archi holds and renders a group carrying no title: AbstractTextControlContainerFigure.setText
+    // passes getName() through StringUtils.safeString, and nothing on IDiagramModelGroup requires a
+    // non-empty name. GroupUIProvider's "Group" is the GUI's default for a shape a user drew, not a
+    // model constraint. The tool surface used to be stricter than the model it wraps, which does not
+    // prevent the work — it relocates "what do I call a container the source never named" from the
+    // server to every caller, and each caller answers it differently. The canonical stored value for
+    // untitled is the EMPTY STRING; null is never stored.
+    //
+    // An omitted key and an explicitly-empty value stay different requests: omitted still fails.
+
+    @Test
+    public void addGroupToView_shouldCreateUntitledGroup_whenLabelIsEmpty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "", 50, 50, null, null, null, null, null);
+
+        assertNotNull(result);
+        // Re-read the model rather than trusting the response: the response echoing "" would pass
+        // even if the command attached a group named "Group" or null.
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject created = findChildById(view, result.entity().viewObjectId());
+        assertNotNull("the untitled group must be attached to the view", created);
+        assertTrue("the created object must be a group", created instanceof IDiagramModelGroup);
+        assertEquals("an untitled group's stored name must be the empty string, never null "
+                + "and never a substituted placeholder", "", created.getName());
+    }
+
+    @Test
+    public void addGroupToView_shouldReportEmptyLabelInResponse_whenLabelIsEmpty() throws Exception {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "", 50, 50, null, null, null, null, null);
+
+        assertEquals("the DTO must carry the empty label the model holds", "",
+                result.entity().label());
+        // ViewGroupDto is @JsonInclude(NON_NULL), so "" survives serialisation while null would be
+        // dropped. An agent that cannot see the canvas must be told the group IS untitled, not left
+        // to infer it from a missing key.
+        String json = new ObjectMapper().writeValueAsString(result.entity());
+        assertTrue("the serialised response must carry label as present-and-empty, not omit it. "
+                + "Was: " + json, json.contains("\"label\":\"\""));
+    }
+
+    @Test
+    public void addGroupToView_shouldKeepDefaultBounds_whenLabelIsEmpty() {
+        // The empty-label sizing path is currently safe only by accident of a guard nobody wrote
+        // for this case: ElementSizer.fitTextBoxHeightToContent returns minHeight on empty text
+        // BEFORE reaching SWT measureText, and prepareAddGroupToView passes DEFAULT_GROUP_HEIGHT as
+        // that minHeight. Pin it, so a future change to the helper cannot silently reintroduce a
+        // measureText call on an empty string.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "", 50, 50, null, null, null, null, null);
+
+        assertEquals("empty-label group must resolve to DEFAULT_GROUP_HEIGHT literally",
+                200, result.entity().height());
+        assertEquals("empty-label group must resolve to DEFAULT_GROUP_WIDTH literally",
+                300, result.entity().width());
+    }
+
+    @Test
+    public void addGroupToView_shouldStillReject_whenLabelIsNull() {
+        // Omitted and explicitly-empty are different requests. The accessor's own guard is the last
+        // of the three that used to reject "" — it must keep rejecting null.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.addGroupToView("default", "view-001", null, 50, 50, null, null, null, null, null);
+            fail("a null label must still be rejected");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void addGroupToView_shouldDescribeAnUntitledGroup_whenApprovalModeAndLabelIsEmpty() {
+        // "Add group '' to view 'Main View'" is not a sentence a human approver can act on.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "", 10, 10, 200, 100, null, null, null);
+
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertNotNull(pending);
+        assertEquals("add-group-to-view", pending.tool());
+        assertEquals("Add an untitled group to view 'Main View'", pending.description());
+    }
+
+    @Test
+    public void addGroupToView_shouldDescribeAnUntitledGroup_whenBatchedAndLabelIsEmpty() {
+        // Same obligation on the queued description an agent reads back from get-batch-status:
+        // "Add group to view: " with nothing after the colon reads as a truncated string.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.getMutationDispatcher().beginBatch("default", "untitled group batch");
+        accessor.addGroupToView("default", "view-001", "", 10, 10, 200, 100, null, null, null);
+
+        List<String> queued = accessor.getMutationDispatcher()
+                .getBatchStatus("default").queuedDescriptions();
+        assertEquals(1, queued.size());
+        assertEquals("Add an untitled group to view", queued.get(0));
+    }
+
+    @Test
+    public void addGroupToView_shouldCommitAnUntitledGroup_whenBatched() {
+        // The queued path has its own prepare and its own gate; a create side proven only on the
+        // immediate path proves nothing about this one.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.getMutationDispatcher().beginBatch("default", "untitled group batch");
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "", 10, 10, 200, 100, null, null, null);
+        assertTrue("a batched add must report itself as batched", result.isBatched());
+        assertEquals("the projection must carry the empty label", "", result.entity().label());
+        accessor.getMutationDispatcher().endBatch("default", true);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject committed = findChildById(view, result.entity().viewObjectId());
+        assertNotNull("the group the batch queued must be attached after commit", committed);
+        assertEquals("the committed group must hold the empty label the preview promised",
+                "", committed.getName());
+    }
+
+    @Test
+    public void bulkAddGroupToView_shouldCreateUntitledGroup_whenLabelIsEmpty() {
+        // The bulk arm reads its own params and had its own blank rejection. The operation name is
+        // kebab-case, which is how a grep for the snake_case spelling reads as "no bulk path".
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default", List.of(
+                new BulkOperation("add-group-to-view", Map.of(
+                        "viewId", "view-001", "label", "",
+                        "x", 10, "y", 10, "width", 200, "height", 100))), null, false);
+
+        assertTrue("the bulk call must succeed", result.allSucceeded());
+        assertEquals(1, result.operations().size());
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelGroup created = view.getChildren().stream()
+                .filter(IDiagramModelGroup.class::isInstance)
+                .map(IDiagramModelGroup.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no group was attached by the bulk call"));
+        assertEquals("the bulk-created group must be untitled, not placeholder-named",
+                "", created.getName());
+    }
+
+    @Test
+    public void bulkAddGroupToView_shouldStillFail_whenLabelIsOmitted() {
+        // Letting the accessor's null guard absorb this would keep the check and lose the bulk
+        // near-miss diagnostics, which is a regression in diagnostic quality even though the call
+        // still fails. The message below is the measured pre-change baseline.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.executeBulk("default", List.of(
+                    new BulkOperation("add-group-to-view", Map.of(
+                            "viewId", "view-001", "x", 10, "y", 10))), null, false);
+            fail("an omitted label must still be rejected on the bulk path");
+        } catch (ModelAccessException e) {
+            // Measured baseline: a per-operation read failure is re-wrapped as a whole-call
+            // validation failure, so the code is BULK_VALIDATION_FAILED and the operation's own
+            // diagnostic is carried inside the message.
+            assertEquals(ErrorCode.BULK_VALIDATION_FAILED, e.getErrorCode());
+            assertTrue("the bulk missing-parameter diagnostic must be preserved verbatim. Was: "
+                    + e.getMessage(), e.getMessage().contains("Missing required parameter 'label'"));
+        }
+    }
+
+    @Test
+    public void updateViewObject_shouldClearGroupLabel_whenTextIsEmpty() {
+        // A group that can be BORN untitled but never MADE untitled is the same asymmetry seen from
+        // the other side.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+
+        accessor.updateViewObject("default", groupId, null, null, null, null, "",
+                null, null, null);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        assertEquals("an empty text must clear the group's label", "",
+                findChildById(view, groupId).getName());
+    }
+
+    @Test
+    public void updateViewObject_shouldReportThePostUpdateName_whenGroupLabelIsCleared() {
+        // The DTO is built inside the prepare, before the command runs, so elementName reported the
+        // PRE-update name. Shipping the clear without this would answer "cleared the label" beside
+        // the old label — a confident wrong value, which this repo rates worse than an error.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", groupId, null, null, null, null, "", null, null, null);
+
+        assertEquals("the response must report the label the model holds after the write, "
+                + "not the one it held before", "", updated.entity().elementName());
+    }
+
+    @Test
+    public void updateViewObject_shouldReportThePostUpdateName_whenGroupIsRenamed() {
+        // The prepare-time read is a pre-existing defect on the WHOLE text axis, not only on
+        // clearing: a plain rename through update-view-object misreports today too.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Before", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", groupId, null, null, null, null, "After", null, null, null);
+
+        assertEquals("a rename must report the new name, not the old one",
+                "After", updated.entity().elementName());
+    }
+
+    @Test
+    public void updateViewObject_shouldRestoreThePreviousLabel_whenTheClearIsUndone() {
+        // A cleared label that cannot be undone is a defect in its own right.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject group = findChildById(view, groupId);
+
+        IBounds b = group.getBounds();
+        UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
+                group, b.getX(), b.getY(), b.getWidth(), b.getHeight(), "");
+        cmd.execute();
+        assertEquals("", group.getName());
+        cmd.undo();
+        assertEquals("undo must restore the label the group carried before the clear",
+                "Named", group.getName());
+    }
+
+    @Test
+    public void updateViewObject_shouldClearNoteContent_whenTextIsEmpty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Some content", null, null, 10, 10, 150, 60,
+                null, null, null).entity().viewObjectId();
+
+        accessor.updateViewObject("default", noteId, null, null, null, null, "",
+                null, null, null);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject note = findChildById(view, noteId);
+        assertTrue(note instanceof IDiagramModelNote);
+        assertEquals("an empty text must clear the note's content", "",
+                ((IDiagramModelNote) note).getContent());
+    }
+
+    @Test
+    public void updateViewObject_shouldStillRejectText_whenTargetIsAnElementViewObject() {
+        // TextUtils.acceptTextFor's element rejection must not be weakened. Before this story an
+        // empty text on an element read as "no text supplied" and fell through to the
+        // at-least-one-field guard; now it is a supplied value and must hit the real rejection.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String elementVoId = accessor.addToView(
+                "default", "view-001", "ba-001", 10, 10, 120, 55, false, null, null, null)
+                .entity().viewObject().viewObjectId();
+
+        try {
+            accessor.updateViewObject("default", elementVoId, null, null, null, null, "",
+                    null, null, null);
+            fail("text on an ArchiMate element view object must still be rejected");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+            assertTrue("the element rejection must be the one that fires, not the "
+                    + "at-least-one-field guard. Was: " + e.getMessage(),
+                    e.getMessage().contains("Cannot set text on an ArchiMate element view object"));
+        }
+    }
+
+    @Test
+    public void updateViewObject_shouldAcceptALoneEmptyText_asASingleFieldUpdate() {
+        // The at-least-one-field guards test `text == null`, so a lone text:"" is a real update
+        // rather than an empty request. Load-bearing and easy to break.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", groupId, null, null, null, null, "", null, null, null);
+
+        assertNotNull("a lone empty text must not trip the at-least-one-field guard", updated);
+    }
+
+    @Test
+    public void bulkUpdateViewObject_shouldClearGroupLabel_whenTextIsEmpty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+
+        BulkMutationResult result = accessor.executeBulk("default", List.of(
+                new BulkOperation("update-view-object", Map.of(
+                        "viewObjectId", groupId, "text", ""))), null, false);
+
+        assertTrue("the bulk call must succeed", result.allSucceeded());
+        assertEquals(1, result.operations().size());
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        assertEquals("the bulk path must clear the label too", "",
+                findChildById(view, groupId).getName());
+    }
+
+    // ---- Empty note content ----
+    //
+    // add-note-to-view refused content:"" while its own published schema said "Empty string is
+    // allowed for placeholder notes", and prepareAddNoteToView's guard was already null-only and
+    // said the same in its suggestedCorrection. Three artefacts described an allow-empty contract
+    // and one seam overrode all three. The seam was wrong, not the description.
+
+    @Test
+    public void addNoteToView_shouldCreateEmptyNote_whenContentIsEmpty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", "", null, null, 10, 10, null, null, null, null, null);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject created = findChildById(view, result.entity().viewObjectId());
+        assertNotNull("the empty note must be attached to the view", created);
+        assertTrue(created instanceof IDiagramModelNote);
+        assertEquals("an empty note's stored content must be the empty string",
+                "", ((IDiagramModelNote) created).getContent());
+    }
+
+    @Test
+    public void addNoteToView_shouldKeepDefaultBounds_whenContentIsEmpty() {
+        // The note path passes DEFAULT_NOTE_HEIGHT (80) as fitTextBoxHeightToContent's minHeight,
+        // NOT the group constant — measured, because assuming the two share a default is exactly
+        // the kind of guess that ships wrong.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", "", null, null, 10, 10, null, null, null, null, null);
+
+        assertEquals("empty-content note must resolve to DEFAULT_NOTE_HEIGHT literally",
+                80, result.entity().height());
+        assertEquals("empty-content note must resolve to DEFAULT_NOTE_WIDTH literally",
+                185, result.entity().width());
+    }
+
+    @Test
+    public void addNoteToView_shouldStillReject_whenContentIsNull() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.addNoteToView("default", "view-001", null, null, null, 10, 10,
+                    null, null, null, null, null);
+            fail("a null content must still be rejected");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
+    @Test
+    public void addNoteToView_shouldDescribeAnEmptyNote_whenApprovalModeAndContentIsEmpty() {
+        // "Add note to view 'Main View': " — a trailing colon with nothing after it — is not a
+        // sentence a human approver can act on.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", "", null, null, 10, 10, 150, 60, null, null, null);
+
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertNotNull(pending);
+        assertEquals("add-note-to-view", pending.tool());
+        assertEquals("Add an empty note to view 'Main View'", pending.description());
+    }
+
+    @Test
+    public void addNoteToView_shouldCommitAnEmptyNote_whenBatched() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.getMutationDispatcher().beginBatch("default", "empty note batch");
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", "", null, null, 10, 10, 150, 60, null, null, null);
+        assertTrue("a batched add must report itself as batched", result.isBatched());
+        accessor.getMutationDispatcher().endBatch("default", true);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelObject committed = findChildById(view, result.entity().viewObjectId());
+        assertNotNull("the note the batch queued must be attached after commit", committed);
+        assertEquals("", ((IDiagramModelNote) committed).getContent());
+    }
+
+    @Test
+    public void bulkAddNoteToView_shouldCreateEmptyNote_whenContentIsEmpty() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        BulkMutationResult result = accessor.executeBulk("default", List.of(
+                new BulkOperation("add-note-to-view", Map.of(
+                        "viewId", "view-001", "content", "",
+                        "x", 10, "y", 10, "width", 150, "height", 60))), null, false);
+
+        assertTrue("the bulk call must succeed", result.allSucceeded());
+        assertEquals(1, result.operations().size());
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        IDiagramModelNote created = view.getChildren().stream()
+                .filter(IDiagramModelNote.class::isInstance)
+                .map(IDiagramModelNote.class::cast)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("no note was attached by the bulk call"));
+        assertEquals("the bulk-created note must be empty", "", created.getContent());
+    }
+
+    @Test
+    public void bulkAddNoteToView_shouldStillFail_whenContentIsOmitted() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        try {
+            accessor.executeBulk("default", List.of(
+                    new BulkOperation("add-note-to-view", Map.of(
+                            "viewId", "view-001", "x", 10, "y", 10))), null, false);
+            fail("an omitted content must still be rejected on the bulk path");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.BULK_VALIDATION_FAILED, e.getErrorCode());
+            assertTrue("the bulk near-miss diagnostic must be preserved. Was: " + e.getMessage(),
+                    e.getMessage().contains("Missing required parameter 'content'"));
+        }
+    }
+
+    // ---- Whitespace-only is NOT the same request as empty ----
+    //
+    // Dropping the blank rejection widened these gates from "reject anything blank" to "accept any
+    // string", so a whitespace-only label became legal as a side effect rather than by decision.
+    // The decision, made deliberately here: KEEP accepting it — Archi accepts a whitespace name and
+    // the validation-sync principle says this surface must be neither stricter nor more forgiving
+    // than the model it wraps, and the update path (which reads text through the pre-existing
+    // allow-empty helper) already accepted it, so rejecting on create would recreate the exact
+    // born/made asymmetry this work exists to remove. What must NOT happen is a human-facing
+    // description quoting it as if it were a title: a whitespace label renders as no visible title,
+    // so it is described as untitled. The stored value stays verbatim — the caller's input is
+    // never rewritten.
+
+    @Test
+    public void addGroupToView_shouldStoreWhitespaceVerbatim_whenLabelIsWhitespaceOnly() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "   ", 50, 50, 200, 100, null, null, null);
+
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        assertEquals("the caller's input must be stored verbatim, never normalised to \"\"",
+                "   ", findChildById(view, result.entity().viewObjectId()).getName());
+    }
+
+    @Test
+    public void addGroupToView_shouldDescribeAnUntitledGroup_whenLabelIsWhitespaceOnly() {
+        // The bug this pins: an isEmpty() test lets a whitespace label through to the quoting
+        // branch, producing "Add group '   ' to view 'Main View'" — the same unreadable shape the
+        // empty-label wording exists to prevent, one space away from it.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        MutationResult<ViewGroupDto> result = accessor.addGroupToView(
+                "default", "view-001", "   ", 10, 10, 200, 100, null, null, null);
+
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertEquals("Add an untitled group to view 'Main View'", pending.description());
+    }
+
+    @Test
+    public void addGroupToView_shouldDescribeAnUntitledGroup_whenBatchedAndLabelIsWhitespaceOnly() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.getMutationDispatcher().beginBatch("default", "whitespace label batch");
+        accessor.addGroupToView("default", "view-001", "  ", 10, 10, 200, 100, null, null, null);
+
+        assertEquals("Add an untitled group to view", accessor.getMutationDispatcher()
+                .getBatchStatus("default").queuedDescriptions().get(0));
+    }
+
+    @Test
+    public void addNoteToView_shouldDescribeAnEmptyNote_whenContentIsWhitespaceOnly() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        MutationResult<ViewNoteDto> result = accessor.addNoteToView(
+                "default", "view-001", " ", null, null, 10, 10, 150, 60, null, null, null);
+
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        assertEquals("Add an empty note to view 'Main View'", pending.description());
+    }
+
+    @Test
+    public void updateViewObject_shouldDescribeAnUntitledTarget_whenApprovalModeAndLabelWasCleared() {
+        // Clearing a group's label is only reachable at all because of this work, so this
+        // description could not previously render an empty name. It can now.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String groupId = accessor.addGroupToView(
+                "default", "view-001", "Named", 10, 10, 200, 100, null, null, null)
+                .entity().viewObjectId();
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        MutationResult<ViewObjectDto> result = accessor.updateViewObject(
+                "default", groupId, null, null, null, null, "", null, null, null);
+
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", result.proposalContext().proposalId());
+        // The aspect reads "text", not "bounds": this call clears a label and moves nothing, and
+        // the sentence is the one field a human who does not expand the card actually reads. The
+        // "(untitled)" degradation this test exists for is unchanged.
+        assertEquals("Update text for DiagramModelGroup (untitled) in view 'Main View'",
+                pending.description());
+    }
+
+    @Test
+    public void bulkUpdateViewObject_shouldClearNoteContent_whenTextIsEmpty() {
+        // The clearing acceptance criterion covers a group AND a note; the bulk arm was only
+        // proven for the group. Same helper serves both, but "almost certainly correct" is not
+        // the standard this repo holds.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Some content", null, null, 10, 10, 150, 60,
+                null, null, null).entity().viewObjectId();
+
+        BulkMutationResult result = accessor.executeBulk("default", List.of(
+                new BulkOperation("update-view-object", Map.of(
+                        "viewObjectId", noteId, "text", ""))), null, false);
+
+        assertTrue("the bulk call must succeed", result.allSucceeded());
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+        assertEquals("the bulk path must clear a note's content too", "",
+                ((IDiagramModelNote) findChildById(view, noteId)).getContent());
+    }
+
+    @Test
+    public void updateViewObject_shouldReportTheNotesOwnName_whenANotesContentChanges() {
+        // Pins a PRE-EXISTING limit rather than a fix, so it cannot be mistaken for one later.
+        // `text` writes a note's CONTENT, never its name, so elementName is the note's own name —
+        // which nothing ever sets, so it is the EMF default "". Present on the wire (not null, so
+        // NON_NULL keeps it) but carrying nothing about the content just written. Scoping the
+        // post-write resolution to groups is therefore correct, not an oversight: substituting
+        // `text` here would report a note's content in a field that means "name".
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String noteId = accessor.addNoteToView(
+                "default", "view-001", "Before", null, null, 10, 10, 150, 60,
+                null, null, null).entity().viewObjectId();
+
+        MutationResult<ViewObjectDto> updated = accessor.updateViewObject(
+                "default", noteId, null, null, null, null, "After", null, null, null);
+
+        assertEquals("a note's elementName is its own (never-set) name, not its content",
+                "", updated.entity().elementName());
     }
 
     @Test
@@ -6399,7 +8326,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, null, null, false, false, null, false);
+                        "row", null, null, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals("view-001", result.entity().viewId());
@@ -6426,7 +8353,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "column", null, null, null, null, false, false, null, false);
+                        "column", null, null, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals("column", result.entity().arrangement());
@@ -6449,7 +8376,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "grid", null, null, null, null, false, false, null, false);
+                        "grid", null, null, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals("grid", result.entity().arrangement());
@@ -6471,7 +8398,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, null, null, true, false, null, false);
+                        "row", null, null, null, null, true, false, null, false, false);
 
         assertNotNull(result);
         assertTrue(result.entity().groupResized());
@@ -6488,7 +8415,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         accessor.layoutWithinGroup("default", "nonexistent-view", "some-group",
-                "row", null, null, null, null, false, false, null, false);
+                "row", null, null, null, null, false, false, null, false, false);
     }
 
     @Test(expected = ModelAccessException.class)
@@ -6498,7 +8425,7 @@ public class ArchiModelAccessorImplTest {
         accessor = createAccessorWithTestDispatcher(model);
 
         accessor.layoutWithinGroup("default", "view-001", "nonexistent-group",
-                "row", null, null, null, null, false, false, null, false);
+                "row", null, null, null, null, false, false, null, false, false);
     }
 
     @Test(expected = ModelAccessException.class)
@@ -6514,7 +8441,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "circular", null, null, null, null, false, false, null, false);
+                "circular", null, null, null, null, false, false, null, false, false);
     }
 
     @Test(expected = ModelAccessException.class)
@@ -6528,7 +8455,7 @@ public class ArchiModelAccessorImplTest {
         String groupVoId = groupResult.entity().viewObjectId();
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "row", null, null, null, null, false, false, null, false);
+                "row", null, null, null, null, false, false, null, false, false);
     }
 
     @Test
@@ -6546,7 +8473,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", 30, 20, null, null, false, false, null, false);
+                        "row", 30, 20, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals(2, result.entity().elementsRepositioned());
@@ -6567,7 +8494,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, 150, 70, true, false, null, false);
+                        "row", null, null, 150, 70, true, false, null, false, false);
 
         assertNotNull(result);
         assertEquals(2, result.entity().elementsRepositioned());
@@ -6587,7 +8514,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "row", null, null, -10, null, false, false, null, false);
+                "row", null, null, -10, null, false, false, null, false, false);
     }
 
     @Test(expected = ModelAccessException.class)
@@ -6603,7 +8530,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "row", null, null, null, -10, false, false, null, false);
+                "row", null, null, null, -10, false, false, null, false, false);
     }
 
     @Test
@@ -6621,7 +8548,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", 0, 0, null, null, false, false, null, false);
+                        "row", 0, 0, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals(2, result.entity().elementsRepositioned());
@@ -6640,7 +8567,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "row", -5, null, null, null, false, false, null, false);
+                "row", -5, null, null, null, false, false, null, false, false);
     }
 
     @Test(expected = ModelAccessException.class)
@@ -6656,7 +8583,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "row", null, -5, null, null, false, false, null, false);
+                "row", null, -5, null, null, false, false, null, false, false);
     }
 
     // ---- autoWidth tests ----
@@ -6679,7 +8606,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, null, null, false, true, null, false);
+                        "row", null, null, null, null, false, true, null, false, false);
 
         assertNotNull(result);
         assertTrue("Should report autoWidth used", result.entity().autoWidth());
@@ -6702,7 +8629,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "column", null, null, null, null, false, true, null, false);
+                        "column", null, null, null, null, false, true, null, false, false);
 
         assertNotNull(result);
         assertTrue(result.entity().autoWidth());
@@ -6725,7 +8652,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, 150, null, false, true, null, false);
+                        "row", null, null, 150, null, false, true, null, false, false);
 
         assertNotNull(result);
         // autoWidth should be false in DTO because elementWidth overrides it
@@ -6750,7 +8677,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "grid", null, null, null, null, false, true, null, false);
+                        "grid", null, null, null, null, false, true, null, false, false);
 
         assertNotNull(result);
         assertTrue(result.entity().autoWidth());
@@ -6773,7 +8700,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, null, null, true, true, null, false);
+                        "row", null, null, null, null, true, true, null, false, false);
 
         assertNotNull(result);
         assertTrue(result.entity().autoWidth());
@@ -6932,7 +8859,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "grid", null, null, null, null, false, false, 2, false);
+                        "grid", null, null, null, null, false, false, 2, false, false);
 
         assertNotNull(result);
         assertEquals(3, result.entity().elementsRepositioned());
@@ -6956,7 +8883,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "grid", null, null, null, null, false, false, 20, false);
+                        "grid", null, null, null, null, false, false, 20, false, false);
 
         assertNotNull(result);
         assertEquals(3, result.entity().elementsRepositioned());
@@ -6980,7 +8907,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "grid", null, null, null, null, false, false, null, false);
+                        "grid", null, null, null, null, false, false, null, false, false);
 
         assertNotNull(result);
         assertNotNull("columnsUsed should be reported for grid", result.entity().columnsUsed());
@@ -7000,7 +8927,7 @@ public class ArchiModelAccessorImplTest {
         accessor.addToView("default", "view-001", "ba-001", 0, 0, 120, 55, false, groupVoId, null, null);
 
         accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                "grid", null, null, null, null, false, false, 0, false);
+                "grid", null, null, null, null, false, false, 0, false, false);
     }
 
     // ---- Recursive resize tests ----
@@ -7028,7 +8955,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", innerVoId,
-                        "row", null, null, null, null, true, false, null, true);
+                        "row", null, null, null, null, true, false, null, true, false);
 
         assertNotNull(result);
         assertTrue("Group should be resized", result.entity().groupResized());
@@ -7055,7 +8982,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", innerVoId,
-                        "row", null, null, null, null, true, false, null, false);
+                        "row", null, null, null, null, true, false, null, false, false);
 
         assertNotNull(result);
         assertTrue("Group should be resized", result.entity().groupResized());
@@ -7078,7 +9005,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", groupVoId,
-                        "row", null, null, null, null, true, false, null, true);
+                        "row", null, null, null, null, true, false, null, true, false);
 
         assertNotNull(result);
         assertTrue("Group should be resized", result.entity().groupResized());
@@ -7147,7 +9074,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", "comp-vo-1",
-                        "row", 40, 10, 120, 50, false, false, null, false);
+                        "row", 40, 10, 120, 50, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals("view-001", result.entity().viewId());
@@ -7216,7 +9143,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", "comp-vo-grid",
-                        "grid", 40, 10, 120, 50, false, false, 2, false);
+                        "grid", 40, 10, 120, 50, false, false, 2, false, false);
 
         assertNotNull(result);
         assertEquals("grid", result.entity().arrangement());
@@ -7277,7 +9204,7 @@ public class ArchiModelAccessorImplTest {
 
         MutationResult<LayoutWithinGroupResultDto> result =
                 accessor.layoutWithinGroup("default", "view-001", "node-vo-1",
-                        "grid", 40, 10, 120, 50, false, false, null, false);
+                        "grid", 40, 10, 120, 50, false, false, null, false, false);
 
         assertNotNull(result);
         assertEquals("grid", result.entity().arrangement());
@@ -7307,7 +9234,7 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.layoutWithinGroup("default", "view-001", "note-1",
-                    "row", null, null, null, null, false, false, null, false);
+                    "row", null, null, null, null, false, false, null, false, false);
             fail("Expected ModelAccessException for note-as-container rejection");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.VIEW_OBJECT_NOT_FOUND, e.getErrorCode());
@@ -7344,12 +9271,538 @@ public class ArchiModelAccessorImplTest {
 
         try {
             accessor.layoutWithinGroup("default", "view-001", "comp-empty",
-                    "row", null, null, null, null, false, false, null, false);
+                    "row", null, null, null, null, false, false, null, false, false);
             fail("Expected ModelAccessException for empty-container rejection");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
             assertEquals("Container has no children to layout", e.getMessage());
         }
+    }
+
+    // ---- layoutWithinGroup recursive descendant layout (recursiveChildren) ----
+
+    /**
+     * Builds a native group child of the given view with the given bounds.
+     */
+    private IDiagramModelGroup addNativeGroup(IArchimateDiagramModel view, String id,
+            String name, int x, int y, int w, int h, IDiagramModelContainer parent) {
+        IDiagramModelGroup g = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
+        g.setId(id);
+        g.setName(name);
+        g.setBounds(x, y, w, h);
+        parent.getChildren().add(g);
+        return g;
+    }
+
+    /**
+     * Creates an ArchiMate element + its view object nested in the given container.
+     */
+    private IDiagramModelArchimateObject addElementContainer(IArchimateModel model,
+            IArchimateDiagramModel view, IDiagramModelContainer parent, IArchimateElement element,
+            String voId, int x, int y, int w, int h) {
+        model.getFolder(FolderType.APPLICATION).getElements().add(element);
+        IDiagramModelArchimateObject vo = IArchimateFactory.eINSTANCE.createDiagramModelArchimateObject();
+        vo.setId(voId);
+        vo.setArchimateElement(element);
+        vo.setBounds(x, y, w, h);
+        parent.getChildren().add(vo);
+        return vo;
+    }
+
+    /**
+     * 3-level nesting (band group → application components → application functions),
+     * mirroring the flat application-landscape view. recursiveChildren=true arranges
+     * the whole hierarchy bottom-up in one call: functions inside each component,
+     * each component sized to fit, then components inside the band.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_shouldArrangeThreeLevelHierarchyBottomUp() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup band = addNativeGroup(view, "band-1", "Domain Band", 0, 0, 600, 500, view);
+
+        IArchimateElement comp1El = factory.createApplicationComponent();
+        comp1El.setId("rc-comp1");
+        comp1El.setName("Order Service");
+        IDiagramModelArchimateObject comp1 = addElementContainer(model, view, band, comp1El,
+                "rc-comp1-vo", 30, 40, 300, 150);
+        IArchimateElement comp2El = factory.createApplicationComponent();
+        comp2El.setId("rc-comp2");
+        comp2El.setName("Payment Service");
+        IDiagramModelArchimateObject comp2 = addElementContainer(model, view, band, comp2El,
+                "rc-comp2-vo", 30, 220, 300, 150);
+
+        IArchimateElement f1El = factory.createApplicationFunction();
+        f1El.setId("rc-f1");
+        f1El.setName("Capture");
+        IDiagramModelArchimateObject f1 = addElementContainer(model, view, comp1, f1El,
+                "rc-f1-vo", 5, 50, 120, 50);
+        IArchimateElement f2El = factory.createApplicationFunction();
+        f2El.setId("rc-f2");
+        f2El.setName("Validate");
+        IDiagramModelArchimateObject f2 = addElementContainer(model, view, comp1, f2El,
+                "rc-f2-vo", 5, 110, 120, 50);
+        IArchimateElement f3El = factory.createApplicationFunction();
+        f3El.setId("rc-f3");
+        f3El.setName("Authorize");
+        IDiagramModelArchimateObject f3 = addElementContainer(model, view, comp2, f3El,
+                "rc-f3-vo", 5, 50, 120, 50);
+        IArchimateElement f4El = factory.createApplicationFunction();
+        f4El.setId("rc-f4");
+        f4El.setName("Settle");
+        IDiagramModelArchimateObject f4 = addElementContainer(model, view, comp2, f4El,
+                "rc-f4-vo", 5, 110, 120, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "band-1",
+                        "column", 10, 10, null, null, true, false, null, false, true);
+
+        assertNotNull(result);
+        // Reporting counters: 4 functions + 2 components repositioned; 2 nested
+        // containers arranged; deepest arranged level is 1 (band=0, components=1).
+        assertEquals("Total elements repositioned across all levels",
+                6, result.entity().elementsRepositioned());
+        assertEquals("Two components recursed into",
+                2, result.entity().nestedContainersArranged());
+        assertEquals("Deepest arranged level", 1, result.entity().maxDepthReached());
+        assertTrue("Root band resized", result.entity().groupResized());
+
+        // The count above says HOW MANY containers below the named one changed shape; this says
+        // WHAT each became. Both components were resized and moved without ever being named in the
+        // request, so a caller that cannot see the canvas has no other way to learn their
+        // rectangles — the same reason resizedAncestors exists for the opposite direction.
+        assertEquals("every arranged descendant container is reported with its geometry",
+                result.entity().nestedContainersArranged(),
+                result.entity().nestedContainersFitted().size());
+        Map<String, net.vheerden.archi.mcp.response.dto.MovedViewObjectDto> fitted =
+                new LinkedHashMap<>();
+        result.entity().nestedContainersFitted().forEach(m -> fitted.put(m.viewObjectId(), m));
+        assertEquals("comp1 reported at its fitted width", 140, fitted.get("rc-comp1-vo").newWidth());
+        assertEquals("comp1 reported at its fitted height", 176, fitted.get("rc-comp1-vo").newHeight());
+        assertEquals("comp1 reported at its arranged y", 34, fitted.get("rc-comp1-vo").newY());
+        assertEquals("comp2 reported at its arranged y (34 + 176 + spacing 10)",
+                220, fitted.get("rc-comp2-vo").newY());
+        assertEquals("the reported rectangle is the one the model holds",
+                comp2.getBounds().getWidth(), fitted.get("rc-comp2-vo").newWidth());
+
+        // Functions inside comp1 — element container inset = 46, so startY = padding+46 = 56.
+        assertEquals("f1 x (relative to comp1)", 10, f1.getBounds().getX());
+        assertEquals("f1 y (padding 10 + element inset 46)", 56, f1.getBounds().getY());
+        assertEquals("f2 x", 10, f2.getBounds().getX());
+        assertEquals("f2 y (56 + 50 + spacing 10)", 116, f2.getBounds().getY());
+        // Functions inside comp2 use the same relative frame.
+        assertEquals("f3 y", 56, f3.getBounds().getY());
+        assertEquals("f4 y", 116, f4.getBounds().getY());
+
+        // Components fitted to their functions: width = padding + 120 + padding = 140,
+        // height = 116 + 50 + padding = 176.
+        assertEquals("comp1 fitted width", 140, comp1.getBounds().getWidth());
+        assertEquals("comp1 fitted height", 176, comp1.getBounds().getHeight());
+        assertEquals("comp2 fitted width", 140, comp2.getBounds().getWidth());
+        assertEquals("comp2 fitted height", 176, comp2.getBounds().getHeight());
+
+        // Components arranged inside the band — group inset = 24, so startY = padding+24 = 34.
+        assertEquals("comp1 x (relative to band)", 10, comp1.getBounds().getX());
+        assertEquals("comp1 y (padding 10 + group inset 24)", 34, comp1.getBounds().getY());
+        assertEquals("comp2 x", 10, comp2.getBounds().getX());
+        assertEquals("comp2 y (34 + 176 + spacing 10)", 220, comp2.getBounds().getY());
+
+        // Band fitted around the two components.
+        assertEquals("band fitted width", Integer.valueOf(160), result.entity().newGroupWidth());
+        assertEquals("band fitted height", Integer.valueOf(406), result.entity().newGroupHeight());
+    }
+
+    /**
+     * With recursiveChildren=false (the default), a container with nested sub-containers
+     * arranges ONLY its direct children — the nested functions are never touched.
+     * Backward-compatibility guard for the recursion opt-in.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildrenFalse_shouldNotTouchDescendants() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup band = addNativeGroup(view, "band-2", "Domain Band", 0, 0, 600, 500, view);
+        IArchimateElement compEl = factory.createApplicationComponent();
+        compEl.setId("nr-comp1");
+        compEl.setName("Order Service");
+        IDiagramModelArchimateObject comp = addElementContainer(model, view, band, compEl,
+                "nr-comp1-vo", 30, 40, 300, 150);
+        IArchimateElement fEl = factory.createApplicationFunction();
+        fEl.setId("nr-f1");
+        fEl.setName("Capture");
+        IDiagramModelArchimateObject f = addElementContainer(model, view, comp, fEl,
+                "nr-f1-vo", 5, 50, 120, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "band-2",
+                        "column", 10, 10, null, null, true, false, null, false, false);
+
+        assertNotNull(result);
+        assertEquals("Only the direct child repositioned", 1, result.entity().elementsRepositioned());
+        assertEquals("No nested containers arranged", 0, result.entity().nestedContainersArranged());
+        assertEquals("No deeper level arranged", 0, result.entity().maxDepthReached());
+        // The nested function keeps its ORIGINAL relative bounds — untouched.
+        assertEquals("nested function x untouched", 5, f.getBounds().getX());
+        assertEquals("nested function y untouched", 50, f.getBounds().getY());
+        assertEquals("nested function w untouched", 120, f.getBounds().getWidth());
+        assertEquals("nested function h untouched", 50, f.getBounds().getHeight());
+    }
+
+    /**
+     * Inner containers are always resized to fit their children even when the top-level
+     * autoResize is false; the requested root container is NOT resized, and children
+     * overflowing the (unchanged) root bounds are reported.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_shouldResizeInnerContainersEvenWhenRootAutoResizeFalse() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        // Deliberately-small band so the fitted components overflow it.
+        IDiagramModelGroup band = addNativeGroup(view, "band-3", "Tight Band", 0, 0, 100, 100, view);
+        IArchimateElement comp1El = factory.createApplicationComponent();
+        comp1El.setId("ir-comp1");
+        comp1El.setName("Order Service");
+        IDiagramModelArchimateObject comp1 = addElementContainer(model, view, band, comp1El,
+                "ir-comp1-vo", 30, 40, 300, 150);
+        IArchimateElement comp2El = factory.createApplicationComponent();
+        comp2El.setId("ir-comp2");
+        comp2El.setName("Payment Service");
+        IDiagramModelArchimateObject comp2 = addElementContainer(model, view, band, comp2El,
+                "ir-comp2-vo", 30, 220, 300, 150);
+        IArchimateElement f1El = factory.createApplicationFunction();
+        f1El.setId("ir-f1");
+        f1El.setName("Capture");
+        addElementContainer(model, view, comp1, f1El, "ir-f1-vo", 5, 50, 120, 50);
+        IArchimateElement f2El = factory.createApplicationFunction();
+        f2El.setId("ir-f2");
+        f2El.setName("Authorize");
+        addElementContainer(model, view, comp2, f2El, "ir-f2-vo", 5, 50, 120, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "band-3",
+                        "column", 10, 10, null, null, false, false, null, false, true);
+
+        assertNotNull(result);
+        // Inner components resized to fit their single function: 140 x (56+50+10)=116.
+        assertEquals("comp1 resized despite autoResize=false", 140, comp1.getBounds().getWidth());
+        assertEquals("comp1 fitted height", 116, comp1.getBounds().getHeight());
+        assertEquals("comp2 resized despite autoResize=false", 140, comp2.getBounds().getWidth());
+        // Root band NOT resized.
+        assertFalse("Root not resized when autoResize=false", result.entity().groupResized());
+        assertEquals("Band width unchanged", 100, band.getBounds().getWidth());
+        assertEquals("Band height unchanged", 100, band.getBounds().getHeight());
+        // Fitted content exceeds the tight band → overflow reported.
+        assertTrue("Overflow reported", result.entity().overflow());
+        assertEquals("Two components still arranged", 2, result.entity().nestedContainersArranged());
+    }
+
+    /**
+     * 4-level nesting (region group → availability-zone group → node element → artifacts),
+     * mirroring the cloud-deployment view. All four levels arrange in one call.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_shouldArrangeFourLevelDeploymentHierarchy() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup region = addNativeGroup(view, "region-1", "eu-west-1", 0, 0, 800, 600, view);
+        IDiagramModelGroup az = addNativeGroup(view, "az-1", "AZ-A", 10, 34, 700, 500, region);
+
+        IArchimateElement nodeEl = factory.createNode();
+        nodeEl.setId("dep-node");
+        nodeEl.setName("EKS Cluster");
+        IDiagramModelArchimateObject node = addElementContainer(model, view, az, nodeEl,
+                "dep-node-vo", 10, 34, 400, 300);
+        IArchimateElement a1El = factory.createArtifact();
+        a1El.setId("dep-art1");
+        a1El.setName("core.war");
+        IDiagramModelArchimateObject a1 = addElementContainer(model, view, node, a1El,
+                "dep-art1-vo", 5, 50, 120, 50);
+        IArchimateElement a2El = factory.createArtifact();
+        a2El.setId("dep-art2");
+        a2El.setName("config.yaml");
+        IDiagramModelArchimateObject a2 = addElementContainer(model, view, node, a2El,
+                "dep-art2-vo", 5, 110, 120, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "region-1",
+                        "column", 10, 10, null, null, true, false, null, false, true);
+
+        assertNotNull(result);
+        assertEquals("4 view-objects repositioned (2 artifacts + node + az)",
+                4, result.entity().elementsRepositioned());
+        assertEquals("Two containers recursed into (az + node)",
+                2, result.entity().nestedContainersArranged());
+        assertEquals("Deepest arranged level is 2 (region=0, az=1, node=2)",
+                2, result.entity().maxDepthReached());
+
+        // Artifacts inside node (element inset 46).
+        assertEquals("a1 y", 56, a1.getBounds().getY());
+        assertEquals("a2 y", 116, a2.getBounds().getY());
+        // Node fitted around its artifacts.
+        assertEquals("node fitted width", 140, node.getBounds().getWidth());
+        assertEquals("node fitted height", 176, node.getBounds().getHeight());
+        // Node placed inside AZ (group inset 24).
+        assertEquals("node y in az", 34, node.getBounds().getY());
+        // AZ fitted around node, placed inside region.
+        assertEquals("az fitted width", 160, az.getBounds().getWidth());
+        assertEquals("az fitted height", 220, az.getBounds().getHeight());
+        assertEquals("az y in region", 34, az.getBounds().getY());
+        // Region fitted around the AZ.
+        assertEquals("region fitted width", Integer.valueOf(180), result.entity().newGroupWidth());
+        assertEquals("region fitted height", Integer.valueOf(264), result.entity().newGroupHeight());
+    }
+
+    /**
+     * Nesting deeper than the recursion depth cap is handled gracefully: the top levels
+     * are arranged, and the container below the cap keeps its coordinates (its contents
+     * are not corrupted). Backstop for pathological input — real ArchiMate nests ~5 deep.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_shouldStopAtDepthCapWithoutCorruptingDeeperContainers() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        // Build a chain of 13 nested groups: g0 ⊃ g1 ⊃ ... ⊃ g12 (deeper than the cap of 10).
+        IDiagramModelContainer parent = view;
+        IDiagramModelGroup deepest = null;
+        for (int i = 0; i <= 12; i++) {
+            IDiagramModelGroup g = addNativeGroup(view, "cap-g" + i, "G" + i,
+                    5, 30, 400, 300, parent);
+            parent = g;
+            deepest = g;
+        }
+        // A leaf element at the bottom of the deepest group, with known bounds.
+        IArchimateElement leafEl = factory.createApplicationComponent();
+        leafEl.setId("cap-leaf");
+        leafEl.setName("Leaf");
+        IDiagramModelArchimateObject leaf = addElementContainer(model, view, deepest, leafEl,
+                "cap-leaf-vo", 7, 70, 111, 44);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // Must not throw despite exceeding the depth cap.
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "cap-g0",
+                        "column", 10, 10, null, null, true, false, null, false, true);
+
+        assertNotNull(result);
+        // Recursion caps at depth 10.
+        assertEquals("Deepest arranged level capped", 10, result.entity().maxDepthReached());
+        // The leaf below the cap is NOT touched — its bounds are preserved (not corrupted).
+        assertEquals("Leaf x preserved", 7, leaf.getBounds().getX());
+        assertEquals("Leaf y preserved", 70, leaf.getBounds().getY());
+        assertEquals("Leaf w preserved", 111, leaf.getBounds().getWidth());
+        assertEquals("Leaf h preserved", 44, leaf.getBounds().getHeight());
+    }
+
+    /**
+     * recursiveChildren (descendant, DOWN) and recursive (ancestor-resize, UP) compose:
+     * arranging a band nested inside an outer group with both flags resizes the band's
+     * descendants AND grows the outer ancestor to fit the resized band.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_composesWithAncestorResize() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup outer = addNativeGroup(view, "co-outer", "Outer", 0, 0, 800, 700, view);
+        IDiagramModelGroup band = addNativeGroup(view, "co-band", "Band", 10, 34, 600, 500, outer);
+        IArchimateElement compEl = factory.createApplicationComponent();
+        compEl.setId("co-comp");
+        compEl.setName("Order Service");
+        IDiagramModelArchimateObject comp = addElementContainer(model, view, band, compEl,
+                "co-comp-vo", 10, 34, 400, 300);
+        IArchimateElement f1El = factory.createApplicationFunction();
+        f1El.setId("co-f1");
+        f1El.setName("Capture");
+        addElementContainer(model, view, comp, f1El, "co-f1-vo", 5, 50, 120, 50);
+        IArchimateElement f2El = factory.createApplicationFunction();
+        f2El.setId("co-f2");
+        f2El.setName("Validate");
+        addElementContainer(model, view, comp, f2El, "co-f2-vo", 5, 110, 120, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "co-band",
+                        "column", 10, 10, null, null, true, false, null, true, true);
+
+        assertNotNull(result);
+        // Descendant recursion arranged the component + its functions.
+        assertEquals("Component recursed into", 1, result.entity().nestedContainersArranged());
+        assertEquals("comp fitted width", 140, comp.getBounds().getWidth());
+        assertEquals("comp fitted height", 176, comp.getBounds().getHeight());
+        // Band fitted around comp: 140+2*10 = 160 wide, 176+34(inset)+10(pad) = 220 tall.
+        assertEquals("band fitted width", 160, band.getBounds().getWidth());
+        assertEquals("band fitted height", 220, band.getBounds().getHeight());
+        // Ancestor resize propagated UP to the outer group.
+        assertEquals("Outer ancestor resized", 1, result.entity().ancestorsResized());
+        // Outer fits band at (10,34) sized 160x220 → 10+160+10 = 180 wide, 34+220+10 = 264 tall.
+        assertEquals("outer fitted width", 180, outer.getBounds().getWidth());
+        assertEquals("outer fitted height", 264, outer.getBounds().getHeight());
+    }
+
+    /**
+     * Recursive grid arrangement derives the column count from the element count
+     * (or explicit columns), NOT the container width — verified via exact positions.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_gridUsesColumnCountNotWidth() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup band = addNativeGroup(view, "grid-band", "Band", 0, 0, 600, 500, view);
+        IArchimateElement compEl = factory.createApplicationComponent();
+        compEl.setId("grid-comp");
+        compEl.setName("Service");
+        IDiagramModelArchimateObject comp = addElementContainer(model, view, band, compEl,
+                "grid-comp-vo", 10, 34, 400, 300);
+        IDiagramModelArchimateObject[] fns = new IDiagramModelArchimateObject[4];
+        for (int i = 1; i <= 4; i++) {
+            IArchimateElement fEl = factory.createApplicationFunction();
+            fEl.setId("grid-f" + i);
+            fEl.setName("F" + i);
+            fns[i - 1] = addElementContainer(model, view, comp, fEl, "grid-f" + i + "-vo", 0, 0, 120, 50);
+        }
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "grid-band",
+                        "grid", 10, 10, null, null, true, false, 2, false, true);
+
+        assertNotNull(result);
+        assertEquals("grid", result.entity().arrangement());
+        assertNotNull("columnsUsed populated for grid", result.entity().columnsUsed());
+        // Functions inside comp: 2-col grid, cell = maxW 120 x maxH 50, element inset 46.
+        // Row 0: (10,56) (140,56); Row 1: (10,116) (140,116).
+        IDiagramModelObject f1 = fns[0];
+        IDiagramModelObject f2 = fns[1];
+        IDiagramModelObject f3 = fns[2];
+        assertEquals("f1 x", 10, f1.getBounds().getX());
+        assertEquals("f1 y", 56, f1.getBounds().getY());
+        assertEquals("f2 x (col 2)", 140, f2.getBounds().getX());
+        assertEquals("f2 y (row 1)", 56, f2.getBounds().getY());
+        assertEquals("f3 x (col 1)", 10, f3.getBounds().getX());
+        assertEquals("f3 y (row 2)", 116, f3.getBounds().getY());
+        // Comp fitted around the 2x2 grid: 140+120+10 = 270 wide, 116+50+10 = 176 tall.
+        assertEquals("comp fitted width", 270, comp.getBounds().getWidth());
+        assertEquals("comp fitted height", 176, comp.getBounds().getHeight());
+    }
+
+    /**
+     * Recursive autoWidth sizes each nested leaf to its label text.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_autoWidthSizesLeavesToLabel() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup band = addNativeGroup(view, "aw-band", "Band", 0, 0, 600, 500, view);
+        IArchimateElement compEl = factory.createApplicationComponent();
+        compEl.setId("aw-comp");
+        compEl.setName("Service");
+        IDiagramModelArchimateObject comp = addElementContainer(model, view, band, compEl,
+                "aw-comp-vo", 10, 34, 400, 300);
+        IArchimateElement shortEl = factory.createApplicationFunction();
+        shortEl.setId("aw-short");
+        shortEl.setName("X"); // len 1 → 8+30=38 → floored to 60
+        IDiagramModelArchimateObject shortVo = addElementContainer(model, view, comp, shortEl,
+                "aw-short-vo", 0, 0, 200, 50);
+        IArchimateElement longEl = factory.createApplicationFunction();
+        longEl.setId("aw-long");
+        longEl.setName("Authorize Payment"); // len 17 → 17*8+30=166
+        IDiagramModelArchimateObject longVo = addElementContainer(model, view, comp, longEl,
+                "aw-long-vo", 0, 0, 200, 50);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "aw-band",
+                        "column", 10, 10, null, null, true, true, null, false, true);
+
+        assertNotNull(result);
+        assertTrue("autoWidth reported", result.entity().autoWidth());
+        assertEquals("short leaf floored to MIN_AUTO_WIDTH", 60, shortVo.getBounds().getWidth());
+        assertEquals("long leaf sized to label (17*8+30)", 166, longVo.getBounds().getWidth());
+    }
+
+    /**
+     * A nested container whose only children are notes is treated as a leaf (not recursed
+     * into), so its size and its note child are preserved.
+     */
+    @Test
+    public void layoutWithinGroup_recursiveChildren_noteOnlyContainerTreatedAsLeaf() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+        IArchimateModel model = createTestModel();
+        IArchimateDiagramModel view = (IArchimateDiagramModel) model.getFolder(FolderType.DIAGRAMS)
+                .getElements().get(0);
+
+        IDiagramModelGroup band = addNativeGroup(view, "no-band", "Band", 0, 0, 600, 500, view);
+        IArchimateElement compEl = factory.createApplicationComponent();
+        compEl.setId("no-comp");
+        compEl.setName("Service");
+        IDiagramModelArchimateObject comp = addElementContainer(model, view, band, compEl,
+                "no-comp-vo", 40, 40, 250, 130);
+        // comp's ONLY child is a note.
+        IDiagramModelNote note = factory.createDiagramModelNote();
+        note.setId("no-note");
+        note.setBounds(9, 9, 88, 44);
+        comp.getChildren().add(note);
+
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<LayoutWithinGroupResultDto> result =
+                accessor.layoutWithinGroup("default", "view-001", "no-band",
+                        "column", 10, 10, null, null, true, false, null, false, true);
+
+        assertNotNull(result);
+        // comp is note-only → not a recursable container → treated as a leaf.
+        assertEquals("No containers recursed into", 0, result.entity().nestedContainersArranged());
+        assertEquals("Only the band's direct child arranged", 1, result.entity().elementsRepositioned());
+        // comp size preserved (leaf, no elementWidth override).
+        assertEquals("comp width preserved", 250, comp.getBounds().getWidth());
+        assertEquals("comp height preserved", 130, comp.getBounds().getHeight());
+        // The note inside comp is untouched.
+        assertEquals("note x untouched", 9, note.getBounds().getX());
+        assertEquals("note y untouched", 9, note.getBounds().getY());
     }
 
     // ---- arrange-groups tests ----
@@ -8261,20 +10714,15 @@ public class ArchiModelAccessorImplTest {
 
         // Directly exercise the helper with the same shape that
         // computeGroupedLayoutPass uses (post-resize virtual dimensions).
-        List<IDiagramModelGroup> orderedGroups = new ArrayList<>();
+        List<IDiagramModelObject> orderedGroups = new ArrayList<>();
         for (IDiagramModelObject child : view.getChildren()) {
             if (child instanceof IDiagramModelGroup g) orderedGroups.add(g);
         }
         assertEquals(2, orderedGroups.size());
 
-        // Helper keys lookups by wrapper (IDiagramModelObject) ID, not underlying element ID.
-        java.util.Map<String, String> elementToGroup = new java.util.HashMap<>();
-        elementToGroup.put("vo-producer", "g-producers");
-        elementToGroup.put("vo-consumer", "g-consumers");
-
         List<ArrangeGroupsStandaloneLane.QualifyingStandaloneElement> qualifiers =
                 ArrangeGroupsStandaloneLane.classify(
-                        view.getChildren(), orderedGroups, elementToGroup);
+                        view.getChildren(), orderedGroups);
         assertEquals("Hub qualifies (connected to elements in both groups)",
                 1, qualifiers.size());
         assertEquals("vo-hub", qualifiers.get(0).element().getId());
@@ -8838,11 +11286,11 @@ public class ArchiModelAccessorImplTest {
 
         IFolder strategyRoot = model.getFolder(FolderType.STRATEGY);
         IFolder sub1 = IArchimateFactory.eINSTANCE.createFolder();
-        sub1.setName("L1");
+        sub1.setName("Level1");
         sub1.setType(FolderType.USER);
         strategyRoot.getFolders().add(sub1);
         IFolder sub2 = IArchimateFactory.eINSTANCE.createFolder();
-        sub2.setName("L2");
+        sub2.setName("Level2");
         sub2.setType(FolderType.USER);
         sub1.getFolders().add(sub2);
 
@@ -9345,7 +11793,7 @@ public class ArchiModelAccessorImplTest {
                 Map.of("overlaps", "poor", "edgeCrossings", "fair",
                         "labelOverlaps", "good", "overall", "poor"),
                 3, 5, 1);
-        assertEquals("overlaps", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+        assertEquals("overlaps", QualityTargetTermination.findLimitingFactor(assessment));
     }
 
     @Test
@@ -9354,7 +11802,7 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto assessment = buildAssessment(
                 Map.of("overlaps", "fair", "edgeCrossings", "fair", "overall", "fair"),
                 2, 10, 0);
-        assertEquals("edgeCrossings", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+        assertEquals("edgeCrossings", QualityTargetTermination.findLimitingFactor(assessment));
     }
 
     @Test
@@ -9363,7 +11811,7 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto assessment = buildAssessment(
                 Map.of("overlaps", "pass", "edgeCrossings", "fair", "overall", "fair"),
                 0, 5, 0);
-        assertEquals("edgeCrossings", ArchiModelAccessorImpl.findLimitingFactor(assessment));
+        assertEquals("edgeCrossings", QualityTargetTermination.findLimitingFactor(assessment));
     }
 
     @Test
@@ -9373,7 +11821,7 @@ public class ArchiModelAccessorImplTest {
                 Map.of("overlaps", "pass", "edgeCrossings", "pass",
                         "labelOverlaps", "pass", "overall", "fair"),
                 0, 0, 0);
-        assertNull(ArchiModelAccessorImpl.findLimitingFactor(assessment));
+        assertNull(QualityTargetTermination.findLimitingFactor(assessment));
     }
 
     @Test
@@ -9386,10 +11834,10 @@ public class ArchiModelAccessorImplTest {
                 "boundaryViolations", "parentLabelObscured", "offCanvas", "labelTruncations",
                 "interiorTerminations", "zigzags", "connectionEdgeCoincidence", "hubPortQuality",
                 "coincidentSegments", "nonOrthogonalTerminals"};
-        String defaultText = ArchiModelAccessorImpl.getRemediation("unknownMetric");
+        String defaultText = QualityTargetTermination.getRemediation("unknownMetric");
         java.util.Set<String> seen = new java.util.HashSet<>();
         for (String factor : factors) {
-            String remediation = ArchiModelAccessorImpl.getRemediation(factor);
+            String remediation = QualityTargetTermination.getRemediation(factor);
             assertNotNull("Remediation for " + factor + " should not be null", remediation);
             assertNotEquals("Remediation for " + factor + " must not fall back to default",
                     defaultText, remediation);
@@ -9400,9 +11848,313 @@ public class ArchiModelAccessorImplTest {
 
     @Test
     public void getRemediation_shouldReturnFallbackForUnknownFactor() {
-        String remediation = ArchiModelAccessorImpl.getRemediation("unknownMetric");
+        String remediation = QualityTargetTermination.getRemediation("unknownMetric");
         assertNotNull("Unknown factor should get a fallback remediation", remediation);
         assertTrue(remediation.contains("assess-layout"));
+    }
+
+    // ---- quality-target termination taxonomy ----
+    //
+    // The two quality loops cannot be executed by any test: they need a live EMF model, a command
+    // stack and a real assess-layout pass. Their DECISIONS are therefore pinned here, against the
+    // collaborator that owns them, and their WIRING is pinned by the source-level test at the end
+    // of this block. Neither is a substitute for the other, and the source test is declared as a
+    // wiring pin rather than reported as behavioural coverage.
+
+    @Test
+    public void terminationReason_shouldGiveEachOfTheFiveExitsADistinctValue() {
+        List<String> reasons = List.of(
+                QualityTargetTermination.limitingFactorNotRemediable("nonOrthogonalTerminals"),
+                QualityTargetTermination.goalReachedAtIteration(2),
+                QualityTargetTermination.allMetricsPassAtIteration(2),
+                QualityTargetTermination.plateauAtIteration(3),
+                QualityTargetTermination.budgetExhaustedAfter(5));
+
+        assertEquals("all five exits must be distinguishable on the wire",
+                5, new java.util.HashSet<>(reasons).size());
+        for (String reason : reasons) {
+            assertNotNull(reason);
+            assertFalse("a reason must never be blank", reason.isBlank());
+        }
+    }
+
+    @Test
+    public void terminationReason_nonRemediableExitShouldNameTheFactorAndNotAliasBudgetExhaustion() {
+        String nonRemediable =
+                QualityTargetTermination.limitingFactorNotRemediable("nonOrthogonalTerminals");
+        String budget = QualityTargetTermination.budgetExhaustedAfter(5);
+
+        // Exit 1 and exit 5 demand OPPOSITE agent behaviour — one says the lever is disproved,
+        // the other says the run was cut short — so they must not be confusable by prefix.
+        assertTrue("exit 1 must interpolate the factor so the token is self-sufficient",
+                nonRemediable.contains("nonOrthogonalTerminals"));
+        assertFalse(nonRemediable.startsWith(
+                QualityTargetTermination.REASON_BUDGET_EXHAUSTED_PREFIX));
+        assertFalse(budget.startsWith(
+                QualityTargetTermination.REASON_LIMITING_FACTOR_NOT_REMEDIABLE_PREFIX));
+    }
+
+    @Test
+    public void terminationReason_shouldReuseTheVocabularyTheSpacingControlLoopAlreadyPublishes() {
+        // An agent that has learned one control loop must be able to read the other. These are the
+        // SAME tokens, not merely the same house style.
+        assertTrue(QualityTargetTermination.goalReachedAtIteration(2)
+                .startsWith(SpacingControlLoop.REASON_GOAL_REACHED_PREFIX));
+        assertEquals(SpacingControlLoop.REASON_BUDGET_EXHAUSTED_PREFIX + "5"
+                        + SpacingControlLoop.REASON_BUDGET_EXHAUSTED_SUFFIX,
+                QualityTargetTermination.budgetExhaustedAfter(5));
+    }
+
+    @Test
+    public void terminationReason_shouldBeAmendedWhenTheLabelFallbackReachesTheTargetAfterTheLoop() {
+        // executeLabelFallback runs AFTER the loop and overwrites bestRating. A reason captured at
+        // the break can therefore be falsified before it is serialized: "labelOverlaps is not
+        // remediable" beside achievedRating "good" is a self-contradicting response.
+        String captured =
+                QualityTargetTermination.limitingFactorNotRemediable("labelOverlaps");
+
+        String amended = QualityTargetTermination.reconcileAfterLoop(
+                captured, /* targetMetBefore= */ false, /* targetMetAfter= */ true);
+
+        assertEquals(QualityTargetTermination.REASON_GOAL_REACHED_AFTER_LABEL_FALLBACK, amended);
+    }
+
+    @Test
+    public void terminationReason_shouldSurviveALabelFallbackThatDidNotReachTheTarget() {
+        String captured =
+                QualityTargetTermination.limitingFactorNotRemediable("labelOverlaps");
+
+        assertEquals("a fallback that did not reach the target does not falsify the loop's reason",
+                captured,
+                QualityTargetTermination.reconcileAfterLoop(captured, false, false));
+        assertEquals("a target already met before the fallback keeps the loop's own reason",
+                QualityTargetTermination.goalReachedAtIteration(1),
+                QualityTargetTermination.reconcileAfterLoop(
+                        QualityTargetTermination.goalReachedAtIteration(1), true, true));
+    }
+
+    @Test
+    public void terminationReason_shouldNotClaimTheGoalWasReachedWhenTheReportedRatingMissesIt() {
+        // Adversarial-review finding, reproduced before being accepted. The loop breaks on the
+        // rating of the attempt it JUST measured, but the response reports the best attempt it
+        // KEPT — and those part company when the higher-priority veto rejects the very attempt
+        // that met the target. Reachable because a metric's rating band tolerates a small non-zero
+        // count: coincidentSegments 0 -> 1 still reads "good" (LayoutQualityAssessor's band), so
+        // the overall rating can rise fair -> good on the same iteration whose raw count regressed.
+        // Without this reconciliation the wire carries achievedRating "fair" beside
+        // terminationReason "goal_reached_at_iteration_2", and the guidance says both
+        // "not achieved" and "the target rating was reached" in consecutive sentences.
+        String claimed = QualityTargetTermination.goalReachedAtIteration(2);
+
+        String reconciled = QualityTargetTermination.reconcileAfterLoop(
+                claimed, /* targetMetBefore= */ false, /* targetMetAfter= */ false);
+
+        assertEquals(QualityTargetTermination.targetMetButAttemptRegressed(2), reconciled);
+        assertFalse("the corrected reason must not still claim the goal was reached",
+                reconciled.startsWith(QualityTargetTermination.REASON_GOAL_REACHED_PREFIX));
+        assertTrue("the iteration the attempt was made on is preserved", reconciled.endsWith("2"));
+
+        String prose = QualityTargetTermination.describe(reconciled);
+        assertTrue("the prose must say the attempt was discarded rather than that it succeeded",
+                prose.contains("discarded"));
+        assertFalse(prose.isBlank() || prose.equals(reconciled));
+    }
+
+    @Test
+    public void terminationReason_reconciliationMustNotDowngradeAGenuineSuccessOrARescue() {
+        // Negative controls for the test above — the correction must be reachable AND narrow.
+        assertEquals("a genuine success is untouched",
+                QualityTargetTermination.goalReachedAtIteration(2),
+                QualityTargetTermination.reconcileAfterLoop(
+                        QualityTargetTermination.goalReachedAtIteration(2), true, true));
+        assertEquals("a label-fallback rescue outranks the downgrade",
+                QualityTargetTermination.REASON_GOAL_REACHED_AFTER_LABEL_FALLBACK,
+                QualityTargetTermination.reconcileAfterLoop(
+                        QualityTargetTermination.limitingFactorNotRemediable("labelOverlaps"),
+                        false, true));
+        // A miss that never claimed success keeps its own reason: only a goal-reached claim can be
+        // falsified by the reported rating, and exit 3 cannot reach this state at all (every metric
+        // passing means every higher-priority count is zero, which cannot be a regression).
+        for (String reason : List.of(
+                QualityTargetTermination.limitingFactorNotRemediable("nonOrthogonalTerminals"),
+                QualityTargetTermination.budgetExhaustedAfter(5),
+                QualityTargetTermination.plateauAtIteration(3),
+                QualityTargetTermination.allMetricsPassAtIteration(2))) {
+            assertEquals("a non-success reason is never rewritten: " + reason,
+                    reason, QualityTargetTermination.reconcileAfterLoop(reason, false, false));
+        }
+    }
+
+    @Test
+    public void remediationTypeFor_shouldPreserveBothLoopsDispatchTablesExactly() {
+        // Iteration 0 and a null factor are always the full pipeline, in both modes.
+        assertEquals("full-pipeline", QualityTargetTermination.remediationTypeFor("auto", 0, null));
+        assertEquals("full-pipeline",
+                QualityTargetTermination.remediationTypeFor("grouped", 0, "overlaps"));
+        assertEquals("full-pipeline",
+                QualityTargetTermination.remediationTypeFor("auto", 3, null));
+
+        // Flat (ELK) table.
+        assertEquals("elk-spacing-increase",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "overlaps"));
+        assertEquals("elk-spacing-increase",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "edgeCrossings"));
+        assertEquals("elk-spacing-increase",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "spacing"));
+        assertEquals("elk-spacing-increase",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "alignment"));
+        assertEquals("elk-spacing-increase",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "somethingUnmapped"));
+        assertEquals("reroute-only",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "passThroughs"));
+        assertEquals("reroute-only",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "coincidentSegments"));
+        assertEquals("early-exit-label",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "labelOverlaps"));
+        assertEquals("early-exit-nonorth",
+                QualityTargetTermination.remediationTypeFor("auto", 1, "nonOrthogonalTerminals"));
+
+        // Grouped table — it differs from flat on exactly one factor.
+        assertEquals("spacing-increase",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "overlaps"));
+        assertEquals("spacing-increase",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "spacing"));
+        assertEquals("spacing-increase",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "alignment"));
+        assertEquals("spacing-increase",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "somethingUnmapped"));
+        assertEquals("grouped mode reorders rather than re-spaces for crossings",
+                "reorder-and-reroute",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "edgeCrossings"));
+        assertEquals("reroute-only",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "passThroughs"));
+        assertEquals("early-exit-label",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "labelOverlaps"));
+        assertEquals("early-exit-nonorth",
+                QualityTargetTermination.remediationTypeFor("grouped", 1, "nonOrthogonalTerminals"));
+    }
+
+    @Test
+    public void isEarlyExit_shouldRecogniseExactlyTheTwoNonRemediableDispatchTypes() {
+        assertTrue(QualityTargetTermination.isEarlyExit("early-exit-label"));
+        assertTrue(QualityTargetTermination.isEarlyExit("early-exit-nonorth"));
+        assertFalse(QualityTargetTermination.isEarlyExit("elk-spacing-increase"));
+        assertFalse(QualityTargetTermination.isEarlyExit("spacing-increase"));
+        assertFalse(QualityTargetTermination.isEarlyExit("reroute-only"));
+        assertFalse(QualityTargetTermination.isEarlyExit("reorder-and-reroute"));
+        assertFalse(QualityTargetTermination.isEarlyExit("full-pipeline"));
+    }
+
+    @Test
+    public void spacingCanHelp_shouldAnswerFromTheDispatchTableSoAdviceCannotDriftFromTheLoop() {
+        // The advice and the loop must not be able to disagree: this reads the same table the
+        // loop dispatches on rather than restating it.
+        assertTrue(QualityTargetTermination.spacingCanHelp("auto", "overlaps"));
+        assertTrue(QualityTargetTermination.spacingCanHelp("auto", "edgeCrossings"));
+        assertFalse("the exact factor the finding came from",
+                QualityTargetTermination.spacingCanHelp("auto", "nonOrthogonalTerminals"));
+        assertFalse(QualityTargetTermination.spacingCanHelp("auto", "labelOverlaps"));
+        assertFalse(QualityTargetTermination.spacingCanHelp("auto", "passThroughs"));
+
+        assertTrue(QualityTargetTermination.spacingCanHelp("grouped", "overlaps"));
+        assertFalse("grouped mode reorders for crossings, so spacing advice would be false there",
+                QualityTargetTermination.spacingCanHelp("grouped", "edgeCrossings"));
+        assertFalse(QualityTargetTermination.spacingCanHelp("grouped", "nonOrthogonalTerminals"));
+
+        assertFalse("no factor means no basis for any specific advice",
+                QualityTargetTermination.spacingCanHelp("auto", null));
+    }
+
+    @Test
+    public void describe_shouldRenderEveryReasonAsProseAnAgentReadsWithoutALookupTable() {
+        String nonRemediable = QualityTargetTermination.describe(
+                QualityTargetTermination.limitingFactorNotRemediable("nonOrthogonalTerminals"));
+        assertTrue("the prose must name the factor",
+                nonRemediable.contains("nonOrthogonalTerminals"));
+        assertFalse("the prose for a spacing-insensitive stop must not mention spacing at all",
+                nonRemediable.toLowerCase(java.util.Locale.ROOT).contains("spacing"));
+
+        String budget = QualityTargetTermination.describe(
+                QualityTargetTermination.budgetExhaustedAfter(5));
+        assertTrue("budget exhaustion must read as cut-short, not lever-exhausted",
+                budget.toLowerCase(java.util.Locale.ROOT).contains("budget"));
+        assertNotEquals("exits 1 and 5 must not read alike either", nonRemediable, budget);
+
+        for (String reason : List.of(
+                QualityTargetTermination.goalReachedAtIteration(2),
+                QualityTargetTermination.allMetricsPassAtIteration(2),
+                QualityTargetTermination.plateauAtIteration(3),
+                QualityTargetTermination.REASON_GOAL_REACHED_AFTER_LABEL_FALLBACK)) {
+            String prose = QualityTargetTermination.describe(reason);
+            assertNotNull(prose);
+            assertFalse("every reason must render prose, not the raw token: " + reason,
+                    prose.isBlank() || prose.equals(reason));
+        }
+
+        assertNotNull("an unrecognised reason must still render something readable",
+                QualityTargetTermination.describe("some_future_reason"));
+        assertNull(QualityTargetTermination.describe(null));
+    }
+
+    /**
+     * WIRING PIN, not behavioural coverage. No test can execute either quality loop — both need a
+     * live EMF model, a GEF command stack and a real assess-layout pass — so this asserts at the
+     * source level that each loop actually reaches the collaborator at all five of its exits and
+     * at the post-loop amendment. It would pass on a loop whose exits were mis-paired; the unit
+     * tests above are what pin the values themselves, and the live gate is what proves the pairing.
+     */
+    @Test
+    public void bothQualityLoops_shouldSetATerminationReasonAtEveryExit() throws Exception {
+        String src = readRepoSource(
+                "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/ArchiModelAccessorImpl.java");
+
+        for (String loop : List.of(
+                "private MutationResult<AutoLayoutAndRouteResultDto> executeQualityTargetLoop(",
+                "private MutationResult<AutoLayoutAndRouteResultDto> executeGroupedQualityTargetLoop(")) {
+            String body = methodBody(src, loop);
+            for (String call : List.of(
+                    "QualityTargetTermination.limitingFactorNotRemediable(",
+                    "QualityTargetTermination.goalReachedAtIteration(",
+                    "QualityTargetTermination.allMetricsPassAtIteration(",
+                    "QualityTargetTermination.plateauAtIteration(",
+                    "QualityTargetTermination.budgetExhaustedAfter(",
+                    "QualityTargetTermination.reconcileAfterLoop(")) {
+                assertTrue(loop + " must reach " + call, body.contains(call));
+            }
+            assertTrue(loop + " must hand the reason to the DTO builder",
+                    body.contains("terminationReason"));
+        }
+    }
+
+    /** Slices one 4-space-indented method body out of the source, signature to next member. */
+    private static String methodBody(String src, String signature) {
+        int start = src.indexOf(signature);
+        assertTrue("signature not found: " + signature, start >= 0);
+        int end = src.length();
+        for (String boundary : List.of("\n    private ", "\n    static ", "\n    // ----",
+                "\n    /**", "\n    @Override")) {
+            int at = src.indexOf(boundary, start + signature.length());
+            if (at >= 0 && at < end) {
+                end = at;
+            }
+        }
+        return src.substring(start, end);
+    }
+
+    /** Walks up from the working directory to find a repo-relative file. */
+    private static String readRepoSource(String relative) throws IOException {
+        java.nio.file.Path dir = java.nio.file.Path.of("").toAbsolutePath();
+        for (int i = 0; i < 6 && dir != null; i++) {
+            java.nio.file.Path candidate = dir.resolve(relative);
+            if (java.nio.file.Files.exists(candidate)) {
+                return java.nio.file.Files.readString(
+                        candidate, java.nio.charset.StandardCharsets.UTF_8);
+            }
+            dir = dir.getParent();
+        }
+        throw new AssertionError("Could not locate " + relative + " by walking up from "
+                + java.nio.file.Path.of("").toAbsolutePath() + ". Running this test from outside "
+                + "the repository checkout would silently disable the wiring pin.");
     }
 
     @Test
@@ -9411,11 +12163,11 @@ public class ArchiModelAccessorImplTest {
                 Map.of("overlaps", "poor", "edgeCrossings", "fair",
                         "labelOverlaps", "fair", "overall", "poor"),
                 4, 7, 2);
-        assertEquals(4, ArchiModelAccessorImpl.getMetricCount("overlaps", assessment));
-        assertEquals(7, ArchiModelAccessorImpl.getMetricCount("edgeCrossings", assessment));
-        assertEquals(2, ArchiModelAccessorImpl.getMetricCount("labelOverlaps", assessment));
-        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("spacing", assessment));
-        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("alignment", assessment));
+        assertEquals(4, QualityTargetTermination.getMetricCount("overlaps", assessment));
+        assertEquals(7, QualityTargetTermination.getMetricCount("edgeCrossings", assessment));
+        assertEquals(2, QualityTargetTermination.getMetricCount("labelOverlaps", assessment));
+        assertEquals(0, QualityTargetTermination.getMetricCount("spacing", assessment));
+        assertEquals(0, QualityTargetTermination.getMetricCount("alignment", assessment));
     }
 
     /**
@@ -9432,7 +12184,7 @@ public class ArchiModelAccessorImplTest {
                 labelOverlapCount, List.of(), 0, List.of(),
                 0, List.of(), false, 0, 0, null,
                 0, List.of(), 0, List.of(), 0, List.of(), null, List.of(),
-                // Assessor.Redesign M2-M6 (defaults — test does not exercise new metrics)
+                // M2-M6 (defaults — test does not exercise the perception-aligned metrics)
                 0, List.of(), 0, List.of(), 0, List.of(), 1.0, List.of(),
                 "fair", "fair",
                 // R8 (defaults — test does not exercise new metric)
@@ -9473,7 +12225,7 @@ public class ArchiModelAccessorImplTest {
             int connectionEdgeCoincidenceCount, double hubPortQualityScore,
             List<String> boundaryViolations, int parentLabelObscuredCount,
             int labelOverlapCount, int labelTruncationCount) {
-        return new AssessLayoutResultDto(
+        return withChargedPassThroughs(new AssessLayoutResultDto(
                 "v-1", 5, 3,
                 overlapCount, 0, edgeCrossingCount, 0.0,
                 50.0, 80, "fair", Map.of(),
@@ -9482,12 +12234,29 @@ public class ArchiModelAccessorImplTest {
                 0, List.of(), false, coincidentSegmentCount, nonOrthogonalTerminalCount, null,
                 labelTruncationCount, List.of(), parentLabelObscuredCount, List.of(),
                 0, List.of(), null, List.of(),
-                // Assessor.Redesign M2-M6
+                // M2-M6
                 interiorTerminationCount, List.of(), zigzagCount, List.of(),
                 connectionEdgeCoincidenceCount, List.of(), hubPortQualityScore, List.of(),
                 "fair", "fair",
                 // R8 (defaults — test does not exercise new metric)
-                1.0, List.of());
+                1.0, List.of()),
+                connectionPassThroughs == null ? 0 : connectionPassThroughs.size());
+    }
+
+    /**
+     * Rebuilds a scoring fixture with the CHARGED cross-element pass-through tally set apart from
+     * the description list.
+     *
+     * <p>Every constructor above the widest one defaults that tally to zero, so a fixture built
+     * through a narrower form reads zero however many entries its description list holds. The two
+     * builders above therefore pass {@code list.size()} through here — the reading each of their
+     * callers means, since none of them distinguishes charged from unrated pass-throughs — while
+     * the cases that DO distinguish them call this directly with the two set apart.</p>
+     */
+    private AssessLayoutResultDto withChargedPassThroughs(
+            AssessLayoutResultDto base, int chargedCount) {
+        return ViewPlacementHandlerTest.withComponent(
+                base, "crossElementPassThroughCount", chargedCount);
     }
 
     // ---- tierWeightedScore / hasTier1Regression ----
@@ -9500,15 +12269,19 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto oneOverlap = buildScoringAssessment(1, List.of(), 0, 0, 0);
         AssessLayoutResultDto fourCrossings = buildScoringAssessment(0, List.of(), 0, 4, 0);
         assertTrue("1 overlap (10) should score higher than 4 crossings (4) under M6",
-                ArchiModelAccessorImpl.tierWeightedScore(oneOverlap)
-                        > ArchiModelAccessorImpl.tierWeightedScore(fourCrossings));
+                QualityTargetTermination.tierWeightedScore(oneOverlap)
+                        > QualityTargetTermination.tierWeightedScore(fourCrossings));
     }
 
     @Test
-    public void tierWeightedScore_shouldHandleNullPassThroughs() {
-        // null connectionPassThroughs should be treated as 0
-        AssessLayoutResultDto nullPt = buildScoringAssessment(0, null, 0, 5, 0);
-        assertEquals(5, ArchiModelAccessorImpl.tierWeightedScore(nullPt)); // 5 crossings * 1 (M6)
+    public void tierWeightedScore_shouldReadTheChargedTally_whenTheDescriptionListIsNull() {
+        // The charged tally is an int on the DTO, so there is no list to fall back to and no null
+        // guard to take. A null description list beside a non-zero charged count is the shape that
+        // proves which of the two the score is sourced from: sourced from the list it reads zero.
+        AssessLayoutResultDto nullList =
+                withChargedPassThroughs(buildScoringAssessment(0, null, 0, 5, 0), 2);
+        assertEquals("2 charged crossings (16) + 5 crossings (5)",
+                21, QualityTargetTermination.tierWeightedScore(nullList));
     }
 
     @Test
@@ -9516,7 +12289,7 @@ public class ArchiModelAccessorImplTest {
         // M6 weights: 2 overlaps(20) + 1 PT(8) + 3 coincident(18) + 4 nonOrth(12) + 5 crossings(5) = 63
         // (nonOrth promoted to Tier 2R ×3; crossings demoted to Tier 3R ×1)
         AssessLayoutResultDto all = buildScoringAssessment(2, List.of("pt1"), 3, 5, 4);
-        assertEquals(63, ArchiModelAccessorImpl.tierWeightedScore(all));
+        assertEquals(63, QualityTargetTermination.tierWeightedScore(all));
     }
 
     @Test
@@ -9525,7 +12298,7 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto current = buildScoringAssessment(0, List.of("pt1"), 0, 5, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 0, 10, 0);
         assertTrue("PT increase should trigger veto even with fewer crossings",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9534,7 +12307,7 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto current = buildScoringAssessment(0, List.of("a", "b"), 0, 5, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of("a", "b"), 0, 10, 0);
         assertFalse("Same PT count with fewer crossings should not veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9542,7 +12315,7 @@ public class ArchiModelAccessorImplTest {
         // First iteration — no baseline to regress against
         AssessLayoutResultDto current = buildScoringAssessment(1, List.of("pt1"), 2, 5, 3);
         assertFalse("Null best (first iteration) should never veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, null));
+                QualityTargetTermination.hasTier1Regression(current, null));
     }
 
     @Test
@@ -9550,7 +12323,7 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto current = buildScoringAssessment(3, List.of(), 0, 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(2, List.of(), 0, 0, 0);
         assertTrue("Overlap increase should trigger veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9558,16 +12331,19 @@ public class ArchiModelAccessorImplTest {
         AssessLayoutResultDto current = buildScoringAssessment(0, List.of(), 5, 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 3, 0, 0);
         assertTrue("Coincident segment increase should trigger veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
-    public void hasTier1Regression_shouldHandleNullPassThroughsOnBothSides() {
-        // Both null — no regression
-        AssessLayoutResultDto current = buildScoringAssessment(0, null, 0, 5, 0);
-        AssessLayoutResultDto best = buildScoringAssessment(0, null, 0, 10, 0);
-        assertFalse("Both null PT should not veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+    public void hasTier1Regression_shouldVeto_whenTheChargedTallyRisesWithBothListsNull() {
+        // Both description lists null, so a veto sourced from them can never fire; only the
+        // charged tally moves, and it is the thing the Tier-1R comparison is about.
+        AssessLayoutResultDto current =
+                withChargedPassThroughs(buildScoringAssessment(0, null, 0, 5, 0), 6);
+        AssessLayoutResultDto best =
+                withChargedPassThroughs(buildScoringAssessment(0, null, 0, 10, 0), 1);
+        assertTrue("the veto reads the charged tally, not a list that was never partitioned",
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     // ---- M6 weight-coverage ----
@@ -9580,7 +12356,7 @@ public class ArchiModelAccessorImplTest {
                 3, 0, 0, 1.0,
                 List.of(), 0,
                 0, 0);
-        assertEquals(24, ArchiModelAccessorImpl.tierWeightedScore(threeInterior));
+        assertEquals(24, QualityTargetTermination.tierWeightedScore(threeInterior));
     }
 
     @Test
@@ -9591,7 +12367,7 @@ public class ArchiModelAccessorImplTest {
                 0, 2, 0, 1.0,
                 List.of(), 0,
                 0, 0);
-        assertEquals(16, ArchiModelAccessorImpl.tierWeightedScore(twoZigzags));
+        assertEquals(16, QualityTargetTermination.tierWeightedScore(twoZigzags));
     }
 
     @Test
@@ -9602,7 +12378,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0, 4, 1.0,
                 List.of(), 0,
                 0, 0);
-        assertEquals(12, ArchiModelAccessorImpl.tierWeightedScore(fourEdgeCoinc));
+        assertEquals(12, QualityTargetTermination.tierWeightedScore(fourEdgeCoinc));
     }
 
     @Test
@@ -9613,7 +12389,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0, 0, 0.25,
                 List.of(), 0,
                 0, 0);
-        assertEquals(2, ArchiModelAccessorImpl.tierWeightedScore(lowHubPort));
+        assertEquals(2, QualityTargetTermination.tierWeightedScore(lowHubPort));
 
         // hubPortQualityScore=0.75 (above FAIR threshold) → 0 × weight 2 = 0
         AssessLayoutResultDto goodHubPort = buildScoringAssessmentWithM6(
@@ -9621,7 +12397,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0, 0, 0.75,
                 List.of(), 0,
                 0, 0);
-        assertEquals(0, ArchiModelAccessorImpl.tierWeightedScore(goodHubPort));
+        assertEquals(0, QualityTargetTermination.tierWeightedScore(goodHubPort));
     }
 
     // ---- M6 veto-coverage ----
@@ -9636,7 +12412,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 0, 0, 0);
         assertTrue("Interior termination regression should trigger Tier 1R veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9649,7 +12425,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 0, 0, 0);
         assertTrue("Zigzag regression should trigger Tier 1R veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9662,7 +12438,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 0, 0, 0);
         assertTrue("Boundary violation regression should trigger Tier 1L veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9675,7 +12451,7 @@ public class ArchiModelAccessorImplTest {
                 0, 0);
         AssessLayoutResultDto best = buildScoringAssessment(0, List.of(), 0, 0, 0);
         assertTrue("Parent-label-obscured regression should trigger Tier 1L veto",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     @Test
@@ -9694,7 +12470,7 @@ public class ArchiModelAccessorImplTest {
                 List.of(), 0,
                 0, 0);
         assertFalse("Tier 2R / Tier 3R regressions must NOT veto — Tier 1 only",
-                ArchiModelAccessorImpl.hasTier1Regression(current, best));
+                QualityTargetTermination.hasTier1Regression(current, best));
     }
 
     // ---- getMetricCount mapping ----
@@ -9722,31 +12498,38 @@ public class ArchiModelAccessorImplTest {
                 0, List.of(), false,
                 4, 6, null,
                 3, List.of(), 2, List.of(), 0, List.of(), null, List.of(),
-                // Assessor.Redesign M2-M6 — non-zero values exercise the new mappings
+                // M2-M6 — non-zero values exercise the perception-aligned mappings
                 4, List.of(), 5, List.of(), 6, List.of(), 0.25, List.of(),
                 "fair", "fair",
                 // R8 (defaults — test does not exercise new metric)
                 1.0, List.of());
+        // The back-compat constructor above defaults the charged cross-element tally to 0 while
+        // its description list holds TWO entries. Set the tally to THREE — a value the list size
+        // cannot produce — so the pass-through assertion below fails if the mapping is ever
+        // sourced from the list again. A tally equal to the list size would leave that assertion
+        // green under either reading, certifying nothing about which field the mapping reads.
+        assessment = withChargedPassThroughs(assessment, 3);
 
-        assertEquals(3, ArchiModelAccessorImpl.getMetricCount("overlaps", assessment));
-        assertEquals(7, ArchiModelAccessorImpl.getMetricCount("edgeCrossings", assessment));
-        assertEquals(2, ArchiModelAccessorImpl.getMetricCount("passThroughs", assessment));
-        assertEquals(5, ArchiModelAccessorImpl.getMetricCount("labelOverlaps", assessment));
-        assertEquals(4, ArchiModelAccessorImpl.getMetricCount("coincidentSegments", assessment));
-        assertEquals(6, ArchiModelAccessorImpl.getMetricCount("nonOrthogonalTerminals", assessment));
-        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("spacing", assessment));
-        assertEquals(0, ArchiModelAccessorImpl.getMetricCount("alignment", assessment));
+        assertEquals(3, QualityTargetTermination.getMetricCount("overlaps", assessment));
+        assertEquals(7, QualityTargetTermination.getMetricCount("edgeCrossings", assessment));
+        assertEquals("the charged tally, not the two-entry description list beside it",
+                3, QualityTargetTermination.getMetricCount("passThroughs", assessment));
+        assertEquals(5, QualityTargetTermination.getMetricCount("labelOverlaps", assessment));
+        assertEquals(4, QualityTargetTermination.getMetricCount("coincidentSegments", assessment));
+        assertEquals(6, QualityTargetTermination.getMetricCount("nonOrthogonalTerminals", assessment));
+        assertEquals(0, QualityTargetTermination.getMetricCount("spacing", assessment));
+        assertEquals(0, QualityTargetTermination.getMetricCount("alignment", assessment));
 
         // M6 + Tier-1L promotions
-        assertEquals(1, ArchiModelAccessorImpl.getMetricCount("boundaryViolations", assessment));
-        assertEquals(2, ArchiModelAccessorImpl.getMetricCount("parentLabelObscured", assessment));
-        assertEquals(2, ArchiModelAccessorImpl.getMetricCount("offCanvas", assessment));
-        assertEquals(3, ArchiModelAccessorImpl.getMetricCount("labelTruncations", assessment));
-        assertEquals(4, ArchiModelAccessorImpl.getMetricCount("interiorTerminations", assessment));
-        assertEquals(5, ArchiModelAccessorImpl.getMetricCount("zigzags", assessment));
-        assertEquals(6, ArchiModelAccessorImpl.getMetricCount("connectionEdgeCoincidence", assessment));
+        assertEquals(1, QualityTargetTermination.getMetricCount("boundaryViolations", assessment));
+        assertEquals(2, QualityTargetTermination.getMetricCount("parentLabelObscured", assessment));
+        assertEquals(2, QualityTargetTermination.getMetricCount("offCanvas", assessment));
+        assertEquals(3, QualityTargetTermination.getMetricCount("labelTruncations", assessment));
+        assertEquals(4, QualityTargetTermination.getMetricCount("interiorTerminations", assessment));
+        assertEquals(5, QualityTargetTermination.getMetricCount("zigzags", assessment));
+        assertEquals(6, QualityTargetTermination.getMetricCount("connectionEdgeCoincidence", assessment));
         // hubPortQualityScore=0.25 < FAIR threshold (0.5) → binary 1
-        assertEquals(1, ArchiModelAccessorImpl.getMetricCount("hubPortQuality", assessment));
+        assertEquals(1, QualityTargetTermination.getMetricCount("hubPortQuality", assessment));
     }
 
     // ---- Test helpers ----
@@ -10011,7 +12794,7 @@ public class ArchiModelAccessorImplTest {
         // Call auto-connect-view — should only connect the contained rel-001,
         // NOT the orphaned rel-orphan-003
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         assertNotNull(result);
         // Only the contained relationship (rel-001: ac-001 -> bp-001) should produce a connection
@@ -10392,7 +13175,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     // ============================================================
-    // W2 — cloud-icon container-node-collision (2026-05-20).
+    // Icon-band growth — cloud-icon container-node-collision (2026-05-20).
     // Accessor-level integration pins for the icon-band parent-resize
     // lever at the CREATION moment (`prepareAddToView`) AND
     // the MUTATION moment (`prepareUpdateViewObject`), covering
@@ -10422,7 +13205,7 @@ public class ArchiModelAccessorImplTest {
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
         // Parent grew by exactly ICON_BAND_HEIGHT (24). Explicit assertEquals,
         // NOT assertTrue(>=), so a silent `max(...)` regression cannot pass.
-        assertEquals("W2 CREATION moment: parent grows by ICON_BAND_HEIGHT (=24)",
+        assertEquals("icon-band CREATION moment: parent grows by ICON_BAND_HEIGHT (=24)",
                 100 + ImageHelper.ICON_BAND_HEIGHT,
                 parent.getBounds().getHeight());
         // X/Y/Width untouched — only height grew.
@@ -10451,7 +13234,7 @@ public class ArchiModelAccessorImplTest {
 
         IDiagramModelGroup parent = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
-        // Sanity: before the update, parent height is still 100 (no W2 fire yet —
+        // Sanity: before the update, parent height is still 100 (no icon-band fire yet —
         // the parent has no image at creation).
         assertEquals(100, parent.getBounds().getHeight());
 
@@ -10461,7 +13244,7 @@ public class ArchiModelAccessorImplTest {
                 null, new ImageParams(null, "bottom-left", null), null);
 
         // Parent grew by exactly ICON_BAND_HEIGHT — Case B firing path.
-        assertEquals("W2 MUTATION moment: parent grows by ICON_BAND_HEIGHT (=24)",
+        assertEquals("icon-band MUTATION moment: parent grows by ICON_BAND_HEIGHT (=24)",
                 100 + ImageHelper.ICON_BAND_HEIGHT,
                 parent.getBounds().getHeight());
         assertEquals(50, parent.getBounds().getX());
@@ -10472,7 +13255,7 @@ public class ArchiModelAccessorImplTest {
     @Test
     public void w2_leafElementWithBottomLeftIcon_isByteIdenticalToToday() {
         // leaf no-regression pin: a leaf element with `imagePosition:bottom-left`
-        // (NO `parentViewObjectId`) must produce byte-identical bounds — the W2
+        // (NO `parentViewObjectId`) must produce byte-identical bounds — the icon-band
         // lever short-circuits because `parentContainer` resolves to the view
         // itself (not a real `IDiagramModelObject` parent).
         IArchimateModel model = createTestModel();
@@ -10484,7 +13267,7 @@ public class ArchiModelAccessorImplTest {
                 50, 50, 120, 55, false, null, null,
                 new ImageParams(null, "bottom-left", null));
 
-        // Bit-for-bit pre-W2 bounds.
+        // Bit-for-bit pre-icon-band bounds.
         assertEquals(50, result.entity().viewObject().x());
         assertEquals(50, result.entity().viewObject().y());
         assertEquals(120, result.entity().viewObject().width());
@@ -10494,9 +13277,9 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void w2_containerWithoutImage_isByteIdenticalToToday_AC14CaseA() {
+    public void w2_containerWithoutImage_isByteIdenticalToToday_caseA() {
         // Case A pin: parent has NO image at all (no path, no position, no showIcon)
-        // → the W2 lever short-circuits BEFORE the predicate even runs.
+        // → the icon-band lever short-circuits BEFORE the predicate even runs.
         // Parent + nested child bounds are bit-for-bit identical to today.
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
@@ -10511,7 +13294,7 @@ public class ArchiModelAccessorImplTest {
 
         IDiagramModelGroup parent = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
-        // Bit-for-bit identical — no W2 fire.
+        // Bit-for-bit identical — no icon-band fire.
         assertEquals(50, parent.getBounds().getX());
         assertEquals(50, parent.getBounds().getY());
         assertEquals(200, parent.getBounds().getWidth());
@@ -10519,7 +13302,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void w2_containerWithIconButCornerEmpty_isByteIdenticalToToday_AC14CaseB() {
+    public void w2_containerWithIconButCornerEmpty_isByteIdenticalToToday_caseB() {
         // Case B pin: parent has `imagePosition:bottom-left` AND a child
         // placed entirely in the TOP half (corner empty) → predicate returns
         // false → lever short-circuits → bounds bit-for-bit identical to today.
@@ -10540,11 +13323,1477 @@ public class ArchiModelAccessorImplTest {
         IDiagramModelGroup parent = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
         // BYTE-IDENTICAL — height literally 100, NOT 100+ε.
-        assertEquals("AC-14 Case B: child-elsewhere → byte-identical parent height",
+        assertEquals("Case B: child-elsewhere → byte-identical parent height",
                 100, parent.getBounds().getHeight());
         assertEquals(50, parent.getBounds().getX());
         assertEquals(50, parent.getBounds().getY());
         assertEquals(200, parent.getBounds().getWidth());
+    }
+
+    // ============================================================
+    // Intra-batch parent-auto-fit clobber (2026-07-25).
+    // Within one bulk-mutate, the child-move op's parent-fit is
+    // prepared against the group's STALE original bounds (an
+    // earlier op's explicit set has not executed yet), so its
+    // resize can silently overwrite the explicit geometry. The
+    // fix seeds the fit with the batch's pending explicit bounds
+    // so an explicit group size set earlier in the SAME batch is a
+    // FLOOR the auto-fit may exceed but never shrink below.
+    // ============================================================
+
+    private IDiagramModelGroup groupById(IArchimateModel model, String id) {
+        return (IDiagramModelGroup)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, id);
+    }
+
+    @Test
+    public void bulkMutate_explicitGroupHeight_survivesSameBatchChildMove() {
+        // PRIMARY: set group tall (800) then move a child down — child fits
+        // within 800, so the explicit height must survive (baseline clobbers to 510).
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        // child bottom = 400 + 100 = 500 < 800 → no grow needed → explicit 800 stands.
+        assertEquals("explicit group height set earlier in the batch must survive a later child move",
+                800, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_explicitBelowRequired_growOnlyStillGrows() {
+        // GROW-ONLY FLOOR: explicit 300 but child needs 510 → group grows to 510
+        // (contains child), never clamped to 300. The explicit size is a floor, not a ceiling.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 300)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "y", 400, "height", 100)));
+        accessor.executeBulk("default", ops, null, false);
+
+        // child bottom 500 + padding 10 = 510 > explicit 300 → grow to contain.
+        assertEquals("explicit floor below need must still grow to contain the child",
+                510, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_moveChildThenSetGroupHeight_explicitWins() {
+        // PRECEDENCE: reverse order — the explicit set lands LAST and wins outright;
+        // the child-move (nothing precedes it) is unaffected by the seed.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "y", 400, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("explicit set landing last in the batch wins outright",
+                800, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_explicitGroupWidth_survivesSameBatchChildMove() {
+        // WIDTH parity: same clobber class on width. Set width 800, move child right;
+        // child right edge 510 < 800 → explicit width survives (baseline clobbers to 510).
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "width", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "x", 400, "width", 100)));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("explicit group width set earlier in the batch must survive a later child move",
+                800, groupById(model, groupId).getBounds().getWidth());
+    }
+
+    @Test
+    public void bulkMutate_continueOnError_droppedExplicitSet_noPhantomFloor() {
+        // PHANTOM-FLOOR GUARD: an explicit-set op that FAILS (dropped from the compound)
+        // must leave NO floor behind — the surviving child-move fits the group from its
+        // real bounds, never from a size no executed command set.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        // op0 attempts to set G height to an invalid (negative) value → prepare fails → dropped.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", -5)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "y", 400, "height", 100)));
+        accessor.executeBulk("default", ops, null, true);
+
+        // No phantom 800/whatever floor: group is exactly the child-fit (510), not floored by the failed op.
+        assertEquals("a dropped explicit-set op must not seed a phantom floor",
+                510, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_grandparentExplicitHeight_survivesCascade() {
+        // CASCADE: explicit grandparent height must survive a same-batch grandchild move
+        // whose fit cascades up. Every explicitly-set group in the batch is protected.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> gp = accessor.addGroupToView(
+                "default", "view-001", "GP", 100, 100, 400, 400, null, null, null);
+        String gpId = gp.entity().viewObjectId();
+        MutationResult<ViewGroupDto> p = accessor.addGroupToView(
+                "default", "view-001", "P", 20, 20, 300, 300, gpId, null, null);
+        String pId = p.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 80, 80, false, pId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        // Set GP tall (1200); move the grandchild so it overflows P (P grows to ~410),
+        // which in turn overflows GP's STALE original height (400) → the cascade would
+        // clobber GP to ~440 at baseline. The seeded GP floor (1200) must survive.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", gpId, "height", 1200)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "y", 300, "height", 100)));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("explicit grandparent height must survive a same-batch cascade",
+                1200, groupById(model, gpId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_twoChildMoves_largerRequirementNotClobbered() {
+        // No explicit group set at all: two child-moves grow the SAME parent to
+        // DIFFERENT sizes. The earlier (larger) cascade-required size must not be
+        // clobbered by the later (smaller) move reading stale bounds.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c1 = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String c1Id = c1.entity().viewObject().viewObjectId();
+        MutationResult<AddToViewResultDto> c2 = accessor.addToView(
+                "default", "view-001", "bp-001", 20, 20, 100, 100, false, groupId, null, null);
+        String c2Id = c2.entity().viewObject().viewObjectId();
+
+        // op0: move C1 so the group needs height 900 (790+100+10). op1: move C2 so it
+        // needs only 850 (740+100+10) — must NOT shrink the group below C1's 900.
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", c1Id, "y", 790, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", c2Id, "y", 740, "height", 100)));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("earlier child-move's larger required group size must survive a later smaller move",
+                900, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    // ============================================================
+    // Intra-batch SAME-OBJECT partial re-edit (2026-07-25).
+    // A later op that partially re-edits an object edited earlier in
+    // the SAME bulk-mutate must inherit the earlier op's value for any
+    // omitted dimension, not the stale pre-batch getBounds() value.
+    // Phase 1 prepares every op against the pre-batch model, so without
+    // the pending-bounds seed the second op's mergeBounds reads the
+    // object's ORIGINAL bounds and reverts the first op's field.
+    // ============================================================
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_groupHeightSurvivesLaterWidthSet() {
+        // op0 sets height=800, op1 sets width=500. width omits height, so op1 must
+        // inherit the pending 800 — not the stale original 300. Baseline reverts to 300.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "width", 500)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        assertEquals("op0 height must survive op1's width-only re-edit",
+                800, groupById(model, groupId).getBounds().getHeight());
+        assertEquals("op1 width applies", 500, groupById(model, groupId).getBounds().getWidth());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_widthThenHeight_orderIndependent() {
+        // Reverse order: op0 width=500, op1 height=800. op1 omits width → must inherit 500.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "width", 500)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("op0 width must survive op1's height-only re-edit",
+                500, groupById(model, groupId).getBounds().getWidth());
+        assertEquals("op1 height applies", 800, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_leafElementNotGroupGated() {
+        // The revert is general, not group-specific: a top-level ELEMENT re-edited
+        // twice must also preserve both fields. Proves the record is not group-gated.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<AddToViewResultDto> e = accessor.addToView(
+                "default", "view-001", "ba-001", 100, 100, 120, 55, false, null, null, null);
+        String elId = e.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", elId, "width", 200)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", elId, "height", 100)));
+        accessor.executeBulk("default", ops, null, false);
+
+        IDiagramModelObject el = (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, elId);
+        assertEquals("leaf element width survives", 200, el.getBounds().getWidth());
+        assertEquals("leaf element height survives", 100, el.getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_threeOpChain_noRecordPoisoning() {
+        // Three ops each touch a different field. op2 must read op1's EFFECTIVE width
+        // (400), not a poisoned/reverted value — proving the pending record holds the
+        // merged value, not the reverted one. Baseline reverts x and width.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<AddToViewResultDto> e = accessor.addToView(
+                "default", "view-001", "ba-001", 100, 100, 120, 55, false, null, null, null);
+        String oId = e.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", oId, "x", 10)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", oId, "width", 400)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", oId, "height", 250)));
+        accessor.executeBulk("default", ops, null, false);
+
+        IDiagramModelObject o = (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, oId);
+        assertEquals("op0 x survives the chain", 10, o.getBounds().getX());
+        assertEquals("op1 width survives the chain", 400, o.getBounds().getWidth());
+        assertEquals("op2 height applies", 250, o.getBounds().getHeight());
+        assertEquals("untouched y preserved from pre-batch", 100, o.getBounds().getY());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_nonGeometrySecondOp_geometryNotReverted() {
+        // The UpdateViewObjectCommand sets bounds unconditionally, so even a
+        // styling-only second op emits a setBounds to its merged bounds. Without the
+        // pending seed those merged bounds are stale → op0's height is reverted.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "fillColor", "#FF0000")));
+        accessor.executeBulk("default", ops, null, false);
+
+        assertEquals("op0 height must survive a later non-geometry (styling) re-edit",
+                800, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_backRefCreatedInBatch_bothFieldsSurvive() {
+        // The back-reference path (object created earlier in the SAME batch, addressed via
+        // "$0.id") routes to prepareUpdateViewObjectDirect — a second prepare path. Two partial
+        // re-edits of that object must also preserve each other's fields; the Direct path must
+        // honour the pending record too. Baseline: op2 reads the creation bounds and reverts op1.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "x", 100, "y", 100, "width", 120, "height", 55)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id", "height", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id", "width", 500)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        com.archimatetool.model.IDiagramModelContainer view = (com.archimatetool.model.IDiagramModelContainer)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, "view-001");
+        IDiagramModelObject created = (IDiagramModelObject) view.getChildren().get(0);
+        assertEquals("back-ref object height survives the second re-edit", 800, created.getBounds().getHeight());
+        assertEquals("back-ref object width applies", 500, created.getBounds().getWidth());
+    }
+
+    @Test
+    public void bulkMutate_sameObjectPartialReedit_nestedChild_relativeBoundsSurvive() {
+        // Coordinate-space check: a nested child (bounds relative to its parent group) re-edited
+        // twice must preserve both fields in the SAME relative frame. Group is large enough that
+        // neither edit triggers a parent grow, isolating the merge from the cascade.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 50, 50, 400, 400, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> c = accessor.addToView(
+                "default", "view-001", "ba-001", 20, 20, 100, 100, false, groupId, null, null);
+        String childId = c.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "height", 200)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", childId, "width", 200)));
+        accessor.executeBulk("default", ops, null, false);
+
+        IDiagramModelObject child = (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, childId);
+        assertEquals("nested child height survives (relative frame)", 200, child.getBounds().getHeight());
+        assertEquals("nested child width applies (relative frame)", 200, child.getBounds().getWidth());
+        assertEquals("nested child relative x untouched", 20, child.getBounds().getX());
+        assertEquals("nested child relative y untouched", 20, child.getBounds().getY());
+    }
+
+    @Test
+    public void bulkMutate_nonBulkSingleUpdate_preservesUntouchedDim_byteIdentical() {
+        // Non-bulk guard: a single update-view-object (bulkPendingGroupBounds null) must
+        // merge the untouched height from getBounds() exactly as before the fix.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        accessor.updateViewObject("default", groupId,
+                null, null, 500, null, null, null, null, null);
+
+        assertEquals("single-op width applies", 500, groupById(model, groupId).getBounds().getWidth());
+        assertEquals("single-op untouched height preserved from current bounds",
+                300, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    // ============================================================
+    // Reachability invariant (executeBulk ONLY): bulk-mutate
+    // update-view-object does NOT thread anchor params. The dispatcher
+    // (ArchiModelAccessorImpl update-view-object case) extracts x/y/width/
+    // height/text/styling/image/labelExpression but hard-passes null for
+    // anchorTarget/anchorEdge/anchorDx/anchorDy. AnchorResolver.mergeBounds
+    // only reads the anchor target's bounds when anchorTarget != null, and
+    // executeBulk's pending-bounds map is only populated inside executeBulk —
+    // so within executeBulk, "anchor being set" and "same-batch pending map
+    // live" are mutually exclusive. These two pins guard that invariant. If a
+    // future change wires anchor params through the bulk dispatcher, BOTH pins
+    // flip — a signal that the anchor-target bounds read must first learn to
+    // prefer the same-batch pending bounds (mirror the object's own
+    // currentBoundsOverride).
+    //
+    // SCOPE CAVEAT: this invariant is about executeBulk ONLY. The identical
+    // AnchorResolver.mergeBounds target-bounds staleness IS reachable through
+    // the begin-batch / end-batch session queuing mode, where the single-tool
+    // updateViewObject path (which DOES pass anchorTarget) runs while an
+    // earlier update-view-object command sits un-executed in the queue. That
+    // path has no pending-bounds tracking at all and is tracked separately.
+    // ============================================================
+
+    @Test
+    public void bulkMutate_updateViewObject_dropsAnchorTargetParam_geometryStillApplies() {
+        // A bulk update-view-object carrying anchorTarget alongside geometry applies the
+        // geometry but SILENTLY drops the anchor: the dispatcher never reads anchorTarget,
+        // so no anchor feature is written. Guards the invariant that makes the mergeBounds
+        // anchor-target staleness unreachable from a batch.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<AddToViewResultDto> t = accessor.addToView(
+                "default", "view-001", "bp-001", 100, 100, 200, 50, false, null, null, null);
+        String targetId = t.entity().viewObject().viewObjectId();
+        MutationResult<AddToViewResultDto> o = accessor.addToView(
+                "default", "view-001", "ba-001", 0, 0, 120, 55, false, null, null, null);
+        String oId = o.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of(
+                        "viewObjectId", oId,
+                        "anchorTarget", targetId, "anchorEdge", "below", "anchorDy", 10,
+                        "x", 10, "y", 20)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        IDiagramModelObject oObj = (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, oId);
+        assertEquals("bulk applied the explicit x", 10, oObj.getBounds().getX());
+        assertEquals("bulk applied the explicit y", 20, oObj.getBounds().getY());
+        assertNull("bulk-mutate must NOT set an anchor from the anchorTarget param",
+                oObj.getFeatures().getString("anchorTarget", null));
+    }
+
+    @Test
+    public void bulkMutate_updateViewObject_anchorTargetOnly_errorsBecauseBulkIgnoresParam() {
+        // A bulk update-view-object whose only field is anchorTarget errors: the dispatcher
+        // ignores anchorTarget, so prepareUpdateViewObject sees NO recognized field and trips
+        // the "at least one field" guard. Proves anchor cannot be the sole effect of a bulk op.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<AddToViewResultDto> t = accessor.addToView(
+                "default", "view-001", "bp-001", 100, 100, 200, 50, false, null, null, null);
+        String targetId = t.entity().viewObject().viewObjectId();
+        MutationResult<AddToViewResultDto> o = accessor.addToView(
+                "default", "view-001", "ba-001", 0, 0, 120, 55, false, null, null, null);
+        String oId = o.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of(
+                        "viewObjectId", oId,
+                        "anchorTarget", targetId, "anchorEdge", "below")));
+        try {
+            accessor.executeBulk("default", ops, null, false);
+            fail("Expected ModelAccessException: bulk update-view-object ignores anchorTarget, "
+                    + "so an anchor-only op has no recognized field");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.BULK_VALIDATION_FAILED, e.getErrorCode());
+        }
+    }
+
+    // ============================================================
+    // Back-reference parent-group cascade (bulk-mutate).
+    // An add-to-view inside a batch creates a DETACHED view object:
+    // AddToViewCommand sets EMF containment only at execute time, while
+    // executeBulk prepares EVERY operation first. So when a later op in the
+    // same batch addresses that object via "$N.id", the update routes to
+    // prepareUpdateViewObjectDirect with eContainer() == null and the
+    // parent-group auto-fit never runs — the SAME move addressed by a
+    // literal viewObjectId grows the group. These pins hold the two
+    // dispatcher branches to one meaning: the pending-parent map supplies
+    // the container the batch intends, the fit is seeded from the batch's
+    // pending bounds, and the resulting group bounds are folded back so a
+    // later op sees them.
+    // ============================================================
+
+    @Test
+    public void bulkMutate_backRefChildMove_growsBatchCreatedParentGroup() {
+        // The primary bulk idiom: group + child + child-move all in ONE batch, the
+        // child addressed by back-reference. Child bottom 400+100 +10 padding = 510,
+        // so the 300-tall group must grow to 510 exactly as the literal-id path does.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "G",
+                        "x", 100, "y", 100, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$0.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$1.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        IDiagramModelGroup group = firstGroupIn(model, "view-001");
+        assertEquals("back-ref child move must grow its batch-created parent group",
+                510, group.getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_growsPreExistingParentGroup() {
+        // Same shape, but the group exists BEFORE the batch and only the child is
+        // back-referenced. Proves the gap is the CHILD's detachment, not the group's.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        assertEquals("back-ref child move must grow a pre-existing parent group",
+                510, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_growsGroupWidth() {
+        // Width parity with the literal-id path: child right edge 400+100 +10 = 510.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "x", 400, "width", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        assertEquals("back-ref child move right must grow the group width",
+                510, groupById(model, groupId).getBounds().getWidth());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_negativeRelativeCoord_expandsOriginAndSize() {
+        // Left/top overflow arm: a negative relative x moves the group's origin left by
+        // (x - padding) and widens it by the same amount — identical to the literal-id path.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id", "x", -50)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("group origin shifts left by the overflow plus padding", 40, b.getX());
+        assertEquals("group widens by the same amount", 360, b.getWidth());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_seededByExplicitSameBatchGroupHeight() {
+        // SEED: an explicit group height set earlier in the SAME batch is a floor the back-ref
+        // child's grow-only fit may exceed but never shrink below. Unseeded the fit measures
+        // against the stale 300 and emits 510, silently reverting the explicit 800.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "height", 800)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        assertEquals("explicit same-batch group height must survive the back-ref child's fit",
+                800, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefCascadeGrow_visibleToLaterGroupReedit() {
+        // RECORD: the grow the back-ref child forced must be folded back into the batch's
+        // pending bounds, so a LATER partial re-edit of that group merges its untouched height
+        // from 510 instead of the stale 300. Both dimensions asserted so a half-fix cannot pass.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", groupId, "width", 800)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("cascade grow survives the later width-only re-edit", 510, b.getHeight());
+        assertEquals("the later width-only re-edit applies", 800, b.getWidth());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildWellInside_leavesGroupBoundsUntouched() {
+        // GROW-ONLY: a back-ref child that fits comfortably must emit no group resize at all.
+        // Full [x,y,w,h] asserted so a spurious shrink-to-fit in any dimension is caught.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 600, 600, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 50, "height", 60)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("no spurious x change", 100, b.getX());
+        assertEquals("no spurious y change", 100, b.getY());
+        assertEquals("no spurious width change", 600, b.getWidth());
+        assertEquals("no shrink-to-fit of the height", 600, b.getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefCascade_droppedAddOpLeavesNoPhantomFloor() {
+        // continueOnError: an add-to-view that fails validation is dropped and records nothing,
+        // so the surviving back-ref'd move fits the group from executed geometry only — exactly
+        // 510, never a floor contributed by an operation that never ran.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                // fails AFTER the parent container is resolved — the point at which a naive
+                // implementation would already have recorded a parent for an object never added
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "bp-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 900, "width", -5, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, true);
+
+        assertFalse("the invalid add must be reported as a failure", result.allSucceeded());
+        assertEquals("group fitted from executed geometry only",
+                510, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_groupParentedChildren_groupAccumulatesEveryChildRequirement() {
+        // ACCUMULATION CONTRACT: resize-elements-to-fit prepares every mutation of the pass BEFORE
+        // any command executes, so each parent-group fit would otherwise measure the group from its
+        // pre-pass EMF bounds and emit a competing absolute resize — last one wins, every earlier
+        // sibling's requirement silently discarded. The pass therefore shares ONE fit map across all
+        // of its prepare calls, so the group ends up at the MAXIMUM requirement over its children.
+        //
+        // "Customer" (<=15 chars -> default 120x55) at x=400 requires width 400+120+10 = 530.
+        // "Order Processing" (16 chars -> measured, height 55) at y=300 requires height 300+55+10 = 365.
+        // Height is UNCHANGED from the per-call-map behaviour; only the width moves (141 -> 530),
+        // which is itself the evidence that the fit accumulates rather than replaces.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-001", "ba-001", 400, 10, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 10, 300, 40, 20, false, groupId, null, null);
+
+        accessor.resizeElementsToFit("default", "view-001", null);
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("group x must not move", 0, b.getX());
+        assertEquals("group y must not move", 0, b.getY());
+        assertEquals("child A's required width must survive child B's fit", 530, b.getWidth());
+        assertEquals("child B's required height must survive too", 365, b.getHeight());
+    }
+
+    // ============================================================
+    // Group-parented resize accumulation (2026-07-26).
+    // resize-elements-to-fit is prepare-all-then-execute-one-compound: it calls the Direct
+    // prepare from four sites (Pass-1 leaf resize, Pass-2 child shift-down, Pass-2 parent
+    // resize, wrap-fit ancestor grow) and every one of them can force the enclosing group to
+    // grow. The fit map is shared across the whole pass so those requirements accumulate;
+    // the cases below cover each pair that can compete, including the pair that crosses the
+    // Pass-1/Pass-2 boundary (a fix scoped to one loop fails that one) and the grandparent
+    // recursion. All fixture names are <=15 chars so every expected number is derived from
+    // the 120x55 default and the 25px default label height, never from SWT font metrics.
+    // ============================================================
+
+    private IDiagramModelObject viewObjectById(IArchimateModel model, String id) {
+        return (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, id);
+    }
+
+    /** True iff {@code command} (recursing into nested compounds) resizes the view object {@code id}. */
+    private boolean resizesViewObject(Command command, String id) {
+        if (command instanceof CompoundCommand compound) {
+            for (Object sub : compound.getCommands()) {
+                if (resizesViewObject((Command) sub, id)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        return command instanceof UpdateViewObjectCommand u
+                && u.getDiagramObject() != null
+                && id.equals(u.getDiagramObject().getId());
+    }
+
+    @Test
+    public void resizeElementsToFit_groupParentedLeafAndParentElement_accumulateAcrossPasses() {
+        // CROSS-PASS: the leaf is fitted in Pass 1 and the parent element in Pass 2, and both are
+        // parented by the SAME group. Sharing a map inside one loop is not enough — the map must
+        // span the whole pass. Leaf at x=400 -> width 400+120+10 = 530; parent element grows to
+        // 150x120 (max(label 120, child right 130) + 2*10 side padding; 25 label top + child
+        // bottom 85 + 10) at y=300 -> height 300+120+10 = 430.
+        IArchimateModel model = createTestModelForGroupFit();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-groupfit", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-leaf-a", 400, 10, 40, 20, false, groupId, null, null);
+        MutationResult<AddToViewResultDto> par = accessor.addToView(
+                "default", "view-groupfit", "gf-par-a", 10, 300, 40, 20, false, groupId, null, null);
+        String parVoId = par.entity().viewObject().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-kid-a", 10, 30, 40, 20, false, parVoId, null, null);
+
+        accessor.resizeElementsToFit("default", "view-groupfit", null);
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("Pass-1 leaf's width requirement must survive the Pass-2 parent fit",
+                530, b.getWidth());
+        assertEquals("Pass-2 parent element's height requirement must survive too",
+                430, b.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_twoGroupParentedParentElements_bothRequirementsSurvive() {
+        // BOTH IN PASS 2: parentElements is sorted by nesting depth, so the execution order is not
+        // the caller's insertion order and neither requirement may depend on being last. Each
+        // parent grows to 150x120; the right-hand one at x=400 requires width 400+150+10 = 560,
+        // the lower one at y=300 requires height 300+120+10 = 430.
+        IArchimateModel model = createTestModelForGroupFit();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-groupfit", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> parA = accessor.addToView(
+                "default", "view-groupfit", "gf-par-a", 400, 10, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-groupfit", "gf-kid-a", 10, 30, 40, 20, false,
+                parA.entity().viewObject().viewObjectId(), null, null);
+        MutationResult<AddToViewResultDto> parB = accessor.addToView(
+                "default", "view-groupfit", "gf-par-b", 10, 300, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-groupfit", "gf-kid-b", 10, 30, 40, 20, false,
+                parB.entity().viewObject().viewObjectId(), null, null);
+
+        accessor.resizeElementsToFit("default", "view-groupfit", null);
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("the right-hand parent element's width requirement must survive", 560, b.getWidth());
+        assertEquals("the lower parent element's height requirement must survive", 430, b.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_wrapFitGroupParentedLeafAndAncestor_accumulate() {
+        // WRAP-FIT ARM: wrap-fit preserves width and grows height, and its Pass-2 ancestor grow is a
+        // fourth prepare site. The leaf keeps its 40px width at x=400, so the group's width
+        // requirement is a font-independent 400+40+10 = 450 — the per-call map loses it to the
+        // ancestor's fit, which needs no width growth at all. The height requirement is font-metric
+        // dependent (wrapped label height), so it is asserted against the ancestor's effective
+        // post-pass bounds read back from the model rather than a hard-coded number.
+        IArchimateModel model = createTestModelForGroupFit();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-groupfit", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-leaf-a", 400, 10, 40, 20, false, groupId, null, null);
+        MutationResult<AddToViewResultDto> par = accessor.addToView(
+                "default", "view-groupfit", "gf-par-a", 10, 300, 40, 20, false, groupId, null, null);
+        String parVoId = par.entity().viewObject().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-kid-a", 10, 30, 40, 20, false, parVoId, null, null);
+
+        accessor.resizeElementsToFit("default", "view-groupfit", null, true);
+
+        IBounds b = groupById(model, groupId).getBounds();
+        IBounds parB = viewObjectById(model, parVoId).getBounds();
+        assertEquals("the wrap-fitted leaf's width requirement must survive the ancestor grow",
+                450, b.getWidth());
+        assertEquals("and the grown ancestor must still fit inside the group",
+                parB.getY() + parB.getHeight() + 10, b.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_nestedGroups_grandparentContainsAccumulatedInnerGroup() {
+        // GRANDPARENT RECURSION: the fit recurses from the inner group to its enclosing group using
+        // the same map, so the outer group must be measured against the inner group's ACCUMULATED
+        // size, not a per-call view of it. Inner: 530x365 (as in the headline case, offset by its
+        // own 10,10 origin). Outer: 10+530+10 = 550 wide, 10+365+10 = 385 tall.
+        IArchimateModel model = createTestModelForGroupFit();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-groupfit", "Outer", 0, 0, 200, 200, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+        MutationResult<ViewGroupDto> inner = accessor.addGroupToView(
+                "default", "view-groupfit", "Inner", 10, 10, 100, 100, outerId, null, null);
+        String innerId = inner.entity().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-leaf-a", 400, 10, 40, 20, false, innerId, null, null);
+        accessor.addToView("default", "view-groupfit", "gf-leaf-b", 10, 300, 40, 20, false, innerId, null, null);
+
+        accessor.resizeElementsToFit("default", "view-groupfit", null);
+
+        IBounds in = groupById(model, innerId).getBounds();
+        assertEquals("inner group accumulates both children's widths", 530, in.getWidth());
+        assertEquals("inner group accumulates both children's heights", 365, in.getHeight());
+        IBounds out = groupById(model, outerId).getBounds();
+        assertEquals("outer group must contain the inner group's accumulated width", 550, out.getWidth());
+        assertEquals("outer group must contain the inner group's accumulated height", 385, out.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_childrenWellInsideLargeGroup_emitsNoGroupResizeAtAll() {
+        // GROW-ONLY: a shared map must not turn into a shrink-to-fit. Both children end up far
+        // inside a 1000x1000 group — one grows into place, the other is auto-sized SMALLER than it
+        // was placed — so the group must keep its exact bounds and no resize command for it may
+        // even be built.
+        IArchimateModel model = createTestModelForGroupFit();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-groupfit", "G", 0, 0, 1000, 1000, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-groupfit", "gf-leaf-a", 10, 10, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-groupfit", "gf-leaf-b", 100, 100, 300, 300, false, groupId, null, null);
+        dispatched.clear();
+
+        accessor.resizeElementsToFit("default", "view-groupfit", null);
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("group x untouched", 0, b.getX());
+        assertEquals("group y untouched", 0, b.getY());
+        assertEquals("group width untouched — never shrink to fit", 1000, b.getWidth());
+        assertEquals("group height untouched — never shrink to fit", 1000, b.getHeight());
+        assertEquals("the pass must still dispatch exactly one command", 1, dispatched.size());
+        assertFalse("no group resize command may be emitted when every child already fits",
+                resizesViewObject(dispatched.get(0), groupId));
+    }
+
+    @Test
+    public void resizeElementsToFit_groupParentedChildren_groupResizeLandsInOneUndoUnit() {
+        // ATOMICITY: every child resize AND every group resize it forced must reach the dispatcher
+        // as ONE top-level compound, so a single undo restores the whole pass.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-001", "ba-001", 400, 10, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 10, 300, 40, 20, false, groupId, null, null);
+        dispatched.clear();
+
+        accessor.resizeElementsToFit("default", "view-001", null);
+
+        assertEquals("the pass must dispatch exactly one top-level command", 1, dispatched.size());
+        assertTrue("that command must be a compound (one undo unit)",
+                dispatched.get(0) instanceof CompoundCommand);
+        assertTrue("and it must carry the group's resize", resizesViewObject(dispatched.get(0), groupId));
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("the accumulated width must be the one inside that compound", 530, b.getWidth());
+        assertEquals("and the accumulated height too", 365, b.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_approvalMode_appliedProposalHasAccumulatedBounds() {
+        // APPROVAL PARITY: the proposal is rebuilt against the current model at approve time, so the
+        // applied geometry must be the same accumulated value the immediate path produces.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        accessor.addToView("default", "view-001", "ba-001", 400, 10, 40, 20, false, groupId, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 10, 300, 40, 20, false, groupId, null, null);
+
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+        MutationResult<ResizeElementsResultDto> proposed =
+                accessor.resizeElementsToFit("default", "view-001", null);
+        assertNotNull("approval mode must produce a proposal", proposed.proposalContext());
+        assertEquals("nothing may be applied before approval",
+                100, groupById(model, groupId).getBounds().getWidth());
+
+        accessor.getMutationDispatcher().approveProposal(
+                "default", proposed.proposalContext().proposalId());
+
+        IBounds b = groupById(model, groupId).getBounds();
+        assertEquals("the applied proposal must carry the accumulated width", 530, b.getWidth());
+        assertEquals("and the accumulated height", 365, b.getHeight());
+    }
+
+    @Test
+    public void resizeElementsToFit_approvalMode_tracksResizedChildrenAndTheGroup() {
+        // STALENESS-GUARD SURFACE, MEASURED. CompoundChildTargets.collect walks only the compound's
+        // DIRECT children and does not recurse into nested compounds. While each cascading mutation
+        // was wrapped into its own nested compound, the guard tracked NEITHER the resized child nor
+        // the group — only the view anchor — so a human editing them during review did not
+        // reject-stale. Committing the group resizes as direct children of the pass compound makes
+        // both visible to the guard. That is a deliberate, asserted widening, not a side effect.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 0, 0, 100, 100, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> a = accessor.addToView(
+                "default", "view-001", "ba-001", 400, 10, 40, 20, false, groupId, null, null);
+        String childAId = a.entity().viewObject().viewObjectId();
+
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+        MutationResult<ResizeElementsResultDto> proposed =
+                accessor.resizeElementsToFit("default", "view-001", null);
+        PendingProposal pending = accessor.getMutationDispatcher().getProposal(
+                "default", proposed.proposalContext().proposalId());
+
+        java.util.Set<String> tracked = pending.capture().targetIds();
+        assertTrue("the view anchor is always tracked", tracked.contains("view-001"));
+        assertTrue("the resized child must be tracked", tracked.contains(childAId));
+        assertTrue("and the group the fit grows must be tracked", tracked.contains(groupId));
+    }
+
+    private IArchimateModel createTestModelForGroupFit() {
+        IArchimateFactory factory = IArchimateFactory.eINSTANCE;
+
+        IArchimateModel model = factory.createArchimateModel();
+        model.setName("Group Fit Test Model");
+        model.setId("model-groupfit");
+        model.setDefaults();
+
+        // Every name is <=15 chars, so ElementSizer returns the 120x55 default and a 25px label
+        // height on every platform — the expected numbers below never depend on SWT font metrics.
+        String[][] elements = {
+            { "gf-leaf-a", "Leaf A" }, { "gf-leaf-b", "Leaf B" },
+            { "gf-par-a", "Par A" }, { "gf-par-b", "Par B" },
+            { "gf-kid-a", "Kid A" }, { "gf-kid-b", "Kid B" },
+        };
+        for (String[] spec : elements) {
+            IApplicationComponent el = factory.createApplicationComponent();
+            el.setId(spec[0]);
+            el.setName(spec[1]);
+            model.getFolder(FolderType.APPLICATION).getElements().add(el);
+        }
+
+        IArchimateDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view-groupfit");
+        view.setName("Group Fit Test View");
+        model.getFolder(FolderType.DIAGRAMS).getElements().add(view);
+
+        return model;
+    }
+
+    @Test
+    public void bulkMutate_backRefCascade_groupResizeLandsInTheSameUndoUnit() {
+        // ATOMICITY: the whole batch — the child's update AND the group resize the fit forced —
+        // must reach the dispatcher as ONE top-level command, so one undo restores both.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        MutationResult<ViewGroupDto> g = accessor.addGroupToView(
+                "default", "view-001", "G", 100, 100, 300, 300, null, null, null);
+        String groupId = g.entity().viewObjectId();
+        dispatched.clear();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", groupId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        assertEquals("the batch must dispatch exactly one top-level command", 1, dispatched.size());
+        assertTrue("that command must be a compound (one undo unit)",
+                dispatched.get(0) instanceof CompoundCommand);
+        assertEquals("and the group must actually have grown inside it",
+                510, groupById(model, groupId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_batchCreatedGroup_cascadesToGrandparent() {
+        // CONTRACT: the ancestor walk must keep climbing THROUGH a group this same batch created.
+        // Such a group is still detached at prepare time (its add command executes in phase 2), so
+        // eContainer() is null and the next hop comes from the batch's recorded parent instead.
+        // Containment therefore holds at EVERY level, not just the child's immediate parent.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$0.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$1.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        IDiagramModelGroup inner = groupById(model, result.operations().get(0).entityId());
+        assertEquals("the inner (batch-created) group grows to contain the moved child: 400+100+10",
+                510, inner.getBounds().getHeight());
+
+        // Recursion re-frames the grown inner as the child, at its relative (10,10,300x510):
+        // required height = 10 + 510 + 10 = 530; required width = 10 + 300 + 10 = 320 <= 400.
+        IBounds ob = groupById(model, outerId).getBounds();
+        assertEquals("outer x is untouched by a pure height grow", 0, ob.getX());
+        assertEquals("outer y is untouched by a pure height grow", 0, ob.getY());
+        assertEquals("outer width is untouched — the child never overflows it horizontally",
+                400, ob.getWidth());
+        assertEquals("outer must grow to contain the grown inner group: 10+510+10",
+                530, ob.getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_batchCreatedGroupsDepthTwo_cascadeReachesEveryHop() {
+        // DEPTH >= 2: the walk must consult the batch's recorded parent at EVERY hop, not only the
+        // first. Two nested groups are created in this batch, so BOTH are detached at prepare time.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Mid",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", "$0.id", "x", 10, "y", 10, "width", 200, "height", 200)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$1.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$2.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        String midId = result.operations().get(0).entityId();
+        String innerId = result.operations().get(1).entityId();
+        assertEquals("inner grows to contain the child: 400+100+10",
+                510, groupById(model, innerId).getBounds().getHeight());
+        assertEquals("mid grows to contain the grown inner: 10+510+10",
+                530, groupById(model, midId).getBounds().getHeight());
+        assertEquals("outer grows to contain the grown mid: 10+530+10",
+                550, groupById(model, outerId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_bothGroupsBatchCreated_cascadesToGrandparent() {
+        // ROOT-PARENTED: the outer group is created in this batch too, directly on the view. Its
+        // own recorded parent is the view, which is not a group — so the walk stops there and the
+        // view is never "grown". Proves the record covers the root-parented case and that a
+        // view-root entry is inert.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Outer",
+                        "x", 100, "y", 100, "width", 400, "height", 400)),
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", "$0.id", "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$1.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$2.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        String outerId = result.operations().get(0).entityId();
+        assertEquals("inner grows to contain the child",
+                510, groupById(model, result.operations().get(1).entityId()).getBounds().getHeight());
+        IBounds ob = groupById(model, outerId).getBounds();
+        assertEquals("a batch-created outer group grows just like a pre-existing one",
+                530, ob.getHeight());
+        assertEquals("outer keeps its origin", 100, ob.getX());
+        assertEquals("outer keeps its origin", 100, ob.getY());
+        assertFalse("the view root is not a group and must never be resized",
+                resizesViewObject(dispatched.get(0), "view-001"));
+    }
+
+    @Test
+    public void bulkMutate_batchCreatedGroupCascade_explicitGrandparentHeightIsFloor() {
+        // FLOOR AT THE GRANDPARENT LEVEL: an explicit size set earlier in the SAME batch must reach
+        // the recursive hop as a floor the grow-only fit may exceed but never shrink below.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("update-view-object", Map.of("viewObjectId", outerId, "height", 900)),
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$1.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$2.id",
+                        "y", 400, "height", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        // Cascade requires only 530, well inside the explicit 900 — so 900 stands, not 530, not 400.
+        assertEquals("an explicit same-batch grandparent height survives the cascade",
+                900, groupById(model, outerId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_backRefParent_namesTheOperationItPointsAt_pastInterleavedNonCreatingOps() {
+        // The discriminating power of this fixture is the DISTANCE of each reference from zero,
+        // not the number of operations. Two non-creating operations precede the first referenced
+        // create, so if the index were ever read as a position in a list appended to only on
+        // create, $2/$4/$5 would each name a different object and every assertion below moves.
+        // A reference to $0 could not show that: at zero the two framings coincide.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> host = accessor.addGroupToView(
+                "default", "view-001", "Host", 0, 0, 1200, 1200, null, null, null);
+        String hostId = host.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                // 0 - creates nothing
+                new BulkOperation("update-view-object", Map.of("viewObjectId", hostId, "height", 1300)),
+                // 1 - creates nothing ("id", not "elementId", is this tool's key)
+                new BulkOperation("update-element", Map.of("id", "ac-001", "documentation", "probe")),
+                // 2 - the first create, referenced below
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Outer Zone",
+                        "parentViewObjectId", hostId, "x", 10, "y", 10, "width", 900, "height", 900)),
+                // 3 - creates nothing, and sits between two referenced creates
+                new BulkOperation("update-view-object", Map.of("viewObjectId", hostId, "width", 1400)),
+                // 4 - nests into op 2
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Middle Zone",
+                        "parentViewObjectId", "$2.id", "x", 20, "y", 20, "width", 600, "height", 600)),
+                // 5 - nests into op 4
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner Zone",
+                        "parentViewObjectId", "$4.id", "x", 30, "y", 30, "width", 300, "height", 300)),
+                // 6 - nests into op 5
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$5.id", "x", 40, "y", 40, "width", 100, "height", 100)));
+
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue("every operation must succeed", result.allSucceeded());
+
+        String outerZone = result.operations().get(2).entityId();
+        String middleZone = result.operations().get(4).entityId();
+        String innerZone = result.operations().get(5).entityId();
+        String leaf = result.operations().get(6).entityId();
+
+        // The write response's own per-operation container disclosure.
+        assertEquals("$2.id must name the object operation 2 created",
+                outerZone, result.operations().get(4).parentViewObjectId());
+        assertEquals("$4.id must name the object operation 4 created",
+                middleZone, result.operations().get(5).parentViewObjectId());
+        assertEquals("$5.id must name the object operation 5 created",
+                innerZone, result.operations().get(6).parentViewObjectId());
+
+        // The read path must agree with what the write response claimed.
+        ViewContentsDto contents = accessor.getViewContents("view-001").orElseThrow();
+        assertEquals("read path disagrees with the write response for the op-4 group",
+                outerZone, groupDtoById(contents, middleZone).parentViewObjectId());
+        assertEquals("read path disagrees with the write response for the op-5 group",
+                middleZone, groupDtoById(contents, innerZone).parentViewObjectId());
+        assertEquals("read path disagrees with the write response for the placed element",
+                innerZone, nodeDtoById(contents, leaf).parentViewObjectId());
+    }
+
+    private static ViewGroupDto groupDtoById(ViewContentsDto contents, String viewObjectId) {
+        return contents.groups().stream()
+                .filter(g -> viewObjectId.equals(g.viewObjectId())).findFirst()
+                .orElseThrow(() -> new AssertionError("no group " + viewObjectId + " on the view"));
+    }
+
+    private static ViewNodeDto nodeDtoById(ViewContentsDto contents, String viewObjectId) {
+        return contents.visualMetadata().stream()
+                .filter(n -> viewObjectId.equals(n.viewObjectId())).findFirst()
+                .orElseThrow(() -> new AssertionError("no node " + viewObjectId + " on the view"));
+    }
+
+    @Test
+    public void bulkMutate_batchCreatedGroupCascade_grownGrandparentVisibleToLaterOp() {
+        // VISIBILITY: the cascaded grow must be folded into the batch's pending bounds, so a LATER
+        // partial re-edit of the grandparent merges its untouched height from the GROWN value
+        // instead of reverting it to the stale pre-batch one.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$0.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$1.id",
+                        "y", 400, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", outerId, "width", 800)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IBounds ob = groupById(model, outerId).getBounds();
+        assertEquals("the later op sets the width it asked for", 800, ob.getWidth());
+        assertEquals("and must merge the untouched height from the CASCADED value, not the stale one",
+                530, ob.getHeight());
+    }
+
+    @Test
+    public void bulkMutate_batchCreatedGroupCascade_growOnly_noSpuriousGrandparentResize() {
+        // GROW-ONLY: the grown inner group still fits comfortably inside a huge grandparent, so the
+        // grandparent must keep its exact bounds AND no resize command for it may even be built.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 2000, 2000, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+        dispatched.clear();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$0.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$1.id",
+                        "y", 400, "height", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IBounds ob = groupById(model, outerId).getBounds();
+        assertEquals("grandparent x untouched", 0, ob.getX());
+        assertEquals("grandparent y untouched", 0, ob.getY());
+        assertEquals("grandparent width untouched — never shrink to fit", 2000, ob.getWidth());
+        assertEquals("grandparent height untouched — never shrink to fit", 2000, ob.getHeight());
+        assertFalse("no grandparent resize may be emitted when the grown child already fits",
+                resizesViewObject(dispatched.get(0), outerId));
+    }
+
+    @Test
+    public void bulkMutate_continueOnError_droppedAddGroup_noPhantomGrandparent() {
+        // PHANTOM GUARD: op0 resolves its parent container and THEN fails validation, so it is
+        // dropped from the compound. It must leave no recorded parent behind — the surviving chain
+        // must cascade exactly as if the failed op had never been written.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Ghost",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", -5, "height", 300)),
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$1.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$2.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, true);
+        assertFalse("the invalid add-group op must fail", result.allSucceeded());
+
+        int groups = 0;
+        for (Object c : ((com.archimatetool.model.IDiagramModelContainer) groupById(model, outerId)).getChildren()) {
+            if (c instanceof IDiagramModelGroup) groups++;
+        }
+        assertEquals("the dropped op must not have added a group", 1, groups);
+        assertEquals("and the surviving chain still cascades to the grandparent",
+                530, groupById(model, outerId).getBounds().getHeight());
+    }
+
+    @Test
+    public void bulkMutate_batchCreatedGroupCascade_isOneCompoundWithBothResizes() {
+        // ATOMICITY: the whole batch reaches the dispatcher as ONE top-level compound carrying the
+        // child update followed by both group resizes (inner then outer — the walk's insertion
+        // order), so a single undo restores child, inner and outer together.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<Command> dispatched = new ArrayList<>();
+        accessor = createCapturingAccessor(model, dispatched);
+
+        MutationResult<ViewGroupDto> outer = accessor.addGroupToView(
+                "default", "view-001", "Outer", 0, 0, 400, 400, null, null, null);
+        String outerId = outer.entity().viewObjectId();
+        dispatched.clear();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-group-to-view", Map.of("viewId", "view-001", "label", "Inner",
+                        "parentViewObjectId", outerId, "x", 10, "y", 10, "width", 300, "height", 300)),
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", "$0.id", "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$1.id",
+                        "y", 400, "height", 100)));
+        BulkMutationResult result = accessor.executeBulk("default", ops, null, false);
+        assertTrue(result.allSucceeded());
+
+        assertEquals("the batch must dispatch exactly one top-level command", 1, dispatched.size());
+        assertTrue("that command must be a compound (one undo unit)",
+                dispatched.get(0) instanceof CompoundCommand);
+
+        String innerId = result.operations().get(0).entityId();
+        String childId = result.operations().get(1).entityId();
+        List<String> resized = new ArrayList<>();
+        collectResizedIds(dispatched.get(0), resized);
+        assertEquals("the compound must carry exactly the child move plus both group resizes",
+                List.of(childId, innerId, outerId), resized);
+    }
+
+    /** Ordered ids of every UpdateViewObjectCommand inside a (possibly nested) command tree. */
+    private void collectResizedIds(Command command, List<String> sink) {
+        if (command instanceof CompoundCommand compound) {
+            for (Object sub : compound.getCommands()) collectResizedIds((Command) sub, sink);
+        } else if (command instanceof UpdateViewObjectCommand u && u.getDiagramObject() != null) {
+            sink.add(u.getDiagramObject().getId());
+        }
+    }
+
+    @Test
+    public void bulkMutate_backRefChildMove_elementParent_doesNotGrow() {
+        // DECLARED BOUNDARY: the parent-fit grows IDiagramModelGroup parents only. An element
+        // parent is left alone on BOTH dispatcher branches — pre-existing and symmetric.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<AddToViewResultDto> parent = accessor.addToView(
+                "default", "view-001", "bp-001", 0, 0, 300, 300, false, null, null, null);
+        String parentId = parent.entity().viewObject().viewObjectId();
+
+        List<BulkOperation> ops = List.of(
+                new BulkOperation("add-to-view", Map.of("viewId", "view-001", "elementId", "ba-001",
+                        "parentViewObjectId", parentId, "x", 20, "y", 20, "width", 100, "height", 100)),
+                new BulkOperation("update-view-object", Map.of("viewObjectId", "$0.id",
+                        "y", 400, "height", 100)));
+        assertTrue(accessor.executeBulk("default", ops, null, false).allSucceeded());
+
+        IDiagramModelObject parentObj = (IDiagramModelObject)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
+        assertEquals("an element parent is never grown by the child fit",
+                300, parentObj.getBounds().getHeight());
+    }
+
+    /** Accessor whose dispatcher records each top-level command before executing it. */
+    private ArchiModelAccessorImpl createCapturingAccessor(IArchimateModel model, List<Command> sink) {
+        MutationDispatcher capturing = new MutationDispatcher(() -> model) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                sink.add(command);
+                executeDecomposed(command);
+            }
+            @Override
+            protected void dispatchCommand(Command command) {
+                sink.add(command);
+                executeDecomposed(command);
+            }
+            private void executeDecomposed(Command command) {
+                if (command instanceof CompoundCommand compound) {
+                    for (Object sub : compound.getCommands()) executeDecomposed((Command) sub);
+                } else if (command != null && command.canExecute()) {
+                    command.execute();
+                }
+            }
+        };
+        capturing.setApprovalModeProvider(() -> false);
+        return new ArchiModelAccessorImpl(stubModelManager, capturing);
+    }
+
+    /** First group child of the named view — for batches where the group id is not known up front. */
+    private IDiagramModelGroup firstGroupIn(IArchimateModel model, String viewId) {
+        com.archimatetool.model.IDiagramModelContainer view = (com.archimatetool.model.IDiagramModelContainer)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, viewId);
+        for (Object child : view.getChildren()) {
+            if (child instanceof IDiagramModelGroup grp) return grp;
+        }
+        throw new AssertionError("no group in view " + viewId);
     }
 
     @Test
@@ -10575,7 +14824,7 @@ public class ArchiModelAccessorImplTest {
     @Test
     public void w2_creationMoment_doesNotFireForNonCornerImagePosition() {
         // byte-identical: parent with non-corner imagePosition (middle-right=5)
-        // → W2 lever does NOT fire → parent bounds unchanged.
+        // → icon-band lever does NOT fire → parent bounds unchanged.
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
@@ -10589,14 +14838,14 @@ public class ArchiModelAccessorImplTest {
 
         IDiagramModelGroup parent = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
-        // No W2 fire — non-corner imagePosition.
+        // No icon-band fire — non-corner imagePosition.
         assertEquals(100, parent.getBounds().getHeight());
     }
 
     @Test
     public void w2_creationMoment_doesNotFireForDefaultTopRightImagePosition() {
         // parent without any image params at all means imagePosition
-        // reads back as the Archi default (2 = top-right). The W2 accessor lever
+        // reads back as the Archi default (2 = top-right). The icon-band accessor lever
         // restricts firing to non-default corners (6, 8) — so even when a child
         // would overlap the top-right area, byte-identical bounds are preserved.
         IArchimateModel model = createTestModel();
@@ -10613,7 +14862,7 @@ public class ArchiModelAccessorImplTest {
 
         IDiagramModelGroup parent = (IDiagramModelGroup)
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
-        // Byte-identical — the W2 lever does NOT fire on default top-right.
+        // Byte-identical — the icon-band lever does NOT fire on default top-right.
         assertEquals(100, parent.getBounds().getHeight());
     }
 
@@ -10643,6 +14892,132 @@ public class ArchiModelAccessorImplTest {
         assertEquals(100 + ImageHelper.ICON_BAND_HEIGHT, parent.getBounds().getHeight());
     }
 
+    // ============================================================
+    // Nested child's OWN corner icon collides with the container's
+    // same-corner icon — the residual case the rectangle-only
+    // reservation above does not cover. When an occupying child
+    // carries a SAME-corner icon, the container reserves a SECOND
+    // band (2× total) so the two icon tiles clear each other.
+    // ============================================================
+
+    @Test
+    public void sameCornerChildIcon_mutationMoment_growsParentByTwoBandsWhenChildCarriesSameCornerIcon() {
+        // MUTATION reproduction (Region→AZ→Cluster): a nested cluster nearly
+        // fills its container and carries its OWN bottom-left icon; the
+        // container then gets a bottom-left icon set → the two icons would
+        // z-collide → the container reserves 2× ICON_BAND_HEIGHT so the child's
+        // icon tile clears the container's icon tile by a full band.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> parentResult = accessor.addGroupToView(
+                "default", "view-001", "Container", 50, 50, 200, 100,
+                null, null, null);
+        String parentId = parentResult.entity().viewObjectId();
+        // Child nearly fills the container and occupies the bottom-left band.
+        MutationResult<AddToViewResultDto> childResult = accessor.addToView(
+                "default", "view-001", "ba-001",
+                10, 8, 180, 84, false, parentId, null, null);
+        String childId = childResult.entity().viewObject().viewObjectId();
+
+        // Give the child its OWN bottom-left icon (position 6 + a non-empty
+        // image path so it renders an icon), simulating the cluster's eks icon.
+        com.archimatetool.model.IIconic childObj = (com.archimatetool.model.IIconic)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, childId);
+        childObj.setImagePath("images/eks.png");
+        childObj.setImagePosition(6); // bottom-left — SAME corner as the parent below
+
+        // Now set the container's bottom-left icon → same-corner collision.
+        accessor.updateViewObject("default", parentId,
+                null, null, null, null, null,
+                null, new ImageParams(null, "bottom-left", null), null);
+
+        IDiagramModelGroup parent = (IDiagramModelGroup)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
+        // Grew by exactly 2× ICON_BAND_HEIGHT (=48). Explicit assertEquals so a
+        // regression to 1× (child's icon left touching) is caught. Red on revert
+        // of the same-corner reservation.
+        assertEquals("Same-corner child icon: container grows by 2× ICON_BAND_HEIGHT (=48)",
+                100 + 2 * ImageHelper.ICON_BAND_HEIGHT,
+                parent.getBounds().getHeight());
+        assertEquals(50, parent.getBounds().getX());
+        assertEquals(50, parent.getBounds().getY());
+        assertEquals(200, parent.getBounds().getWidth());
+    }
+
+    @Test
+    public void sameCornerChildIcon_mutationMoment_differentCornerChildIconGrowsByOneBandOnly() {
+        // A child whose OWN icon is at a DIFFERENT corner does NOT collide
+        // → only the base rectangle band is reserved (1× ICON_BAND_HEIGHT), byte-
+        // identical to the shipped rectangle-occupancy behaviour. The extra band
+        // must NOT fire.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> parentResult = accessor.addGroupToView(
+                "default", "view-001", "Container", 50, 50, 200, 100,
+                null, null, null);
+        String parentId = parentResult.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> childResult = accessor.addToView(
+                "default", "view-001", "ba-001",
+                10, 8, 180, 84, false, parentId, null, null);
+        String childId = childResult.entity().viewObject().viewObjectId();
+
+        // Child carries a bottom-RIGHT (8) icon while the parent will get a
+        // bottom-LEFT (6) icon → different corner → no same-corner collision.
+        com.archimatetool.model.IIconic childObj = (com.archimatetool.model.IIconic)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, childId);
+        childObj.setImagePath("images/eks.png");
+        childObj.setImagePosition(8); // bottom-right — DIFFERENT corner
+
+        accessor.updateViewObject("default", parentId,
+                null, null, null, null, null,
+                null, new ImageParams(null, "bottom-left", null), null);
+
+        IDiagramModelGroup parent = (IDiagramModelGroup)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
+        // Only the base band — extra band did NOT fire.
+        assertEquals("Different-corner child icon: only the base ICON_BAND_HEIGHT (=24) reserved",
+                100 + ImageHelper.ICON_BAND_HEIGHT,
+                parent.getBounds().getHeight());
+    }
+
+    @Test
+    public void sameCornerChildIcon_mutationMoment_childWithoutImageGrowsByOneBandOnly() {
+        // A child that occupies the band but carries NO image (only a stored
+        // position) is exactly the shipped rectangle-only case → 1× band,
+        // byte-identical. Guards against keying the gate off imagePosition alone.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        MutationResult<ViewGroupDto> parentResult = accessor.addGroupToView(
+                "default", "view-001", "Container", 50, 50, 200, 100,
+                null, null, null);
+        String parentId = parentResult.entity().viewObjectId();
+        MutationResult<AddToViewResultDto> childResult = accessor.addToView(
+                "default", "view-001", "ba-001",
+                10, 8, 180, 84, false, parentId, null, null);
+        String childId = childResult.entity().viewObject().viewObjectId();
+
+        // Set a bottom-left position on the child but NO image path → not an icon.
+        com.archimatetool.model.IIconic childObj = (com.archimatetool.model.IIconic)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, childId);
+        childObj.setImagePosition(6); // position only, no path
+
+        accessor.updateViewObject("default", parentId,
+                null, null, null, null, null,
+                null, new ImageParams(null, "bottom-left", null), null);
+
+        IDiagramModelGroup parent = (IDiagramModelGroup)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, parentId);
+        assertEquals("Child with position but no image: only base band reserved",
+                100 + ImageHelper.ICON_BAND_HEIGHT,
+                parent.getBounds().getHeight());
+    }
+
     @Test
     public void w2_creationMoment_doesNotFireForTopCornerImagePosition() {
         // MVP scope: top-left (position 0) is recognised by the pure-geometry
@@ -10667,7 +15042,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void w2_creationMoment_AC3_grandparentGroupCascadesWhenIconBandGrowthExceedsGrandparentBounds() {
+    public void w2_creationMoment_grandparentGroupCascadesWhenIconBandGrowthExceedsGrandparentBounds() {
         // Review finding (adversarial review, 2026-05-20): pin that
         // the CREATION-moment lever flows through `resizeParentGroupIfNeeded` so
         // the grandparent group grows when the now-taller icon-bearing parent
@@ -10676,9 +15051,9 @@ public class ArchiModelAccessorImplTest {
         //
         // 3-level nesting: grandparent group → icon-bearing parent (bottom-left)
         //                                    → new child in the icon band.
-        // The new child triggers the W2 lever → parent grows by ICON_BAND_HEIGHT.
+        // The new child triggers the icon-band lever → parent grows by ICON_BAND_HEIGHT.
         // Grandparent is sized tightly to fit parent + DEFAULT_GROUP_PADDING (10);
-        // after W2, the parent's bottom edge exceeds the grandparent's bottom edge,
+        // after the icon band grows, the parent's bottom edge exceeds the grandparent's bottom edge,
         // so the cascade MUST resize the grandparent as well.
         IArchimateModel model = createTestModel();
         stubModelManager.setModels(List.of(model));
@@ -10696,7 +15071,7 @@ public class ArchiModelAccessorImplTest {
                 grandparentId, null, new ImageParams(null, "bottom-left", null));
         String parentId = parentResult.entity().viewObjectId();
 
-        // Child in the bottom-left icon band of the parent — triggers the W2 lever.
+        // Child in the bottom-left icon band of the parent — triggers the icon-band lever.
         accessor.addToView("default", "view-001", "ba-001",
                 10, 80, 30, 15, false, parentId, null, null);
 
@@ -10706,13 +15081,13 @@ public class ArchiModelAccessorImplTest {
                 com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, grandparentId);
 
         // Parent grew by exactly ICON_BAND_HEIGHT (=24).
-        assertEquals("W2 CREATION moment grew the icon-bearing parent by ICON_BAND_HEIGHT",
+        assertEquals("icon-band CREATION moment grew the icon-bearing parent by ICON_BAND_HEIGHT",
                 100 + ImageHelper.ICON_BAND_HEIGHT, parent.getBounds().getHeight());
 
         // Cascade fix verification: grandparent cascaded — its height grew to fit the
         // now-taller parent. Required grandparent height ≥ parent.y (10) +
         // parent.h (124) + DEFAULT_GROUP_PADDING (10) = 144.
-        assertTrue("Grandparent group cascaded: height grew to >= 144 (was 120 pre-W2)",
+        assertTrue("Grandparent group cascaded: height grew to >= 144 (was 120 pre-icon-band)",
                 grandparent.getBounds().getHeight() >= 144);
     }
 
@@ -10888,5 +15263,308 @@ public class ArchiModelAccessorImplTest {
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
         }
+    }
+
+    // ---- Approval-card disclosure: every parameter the approval will WRITE ------------------
+    //
+    // These pins read PendingProposal.proposedChanges() and .description() -- the MODEL layer.
+    // Asserting against the rendered card would pass on a card the wire never received, because
+    // the map travels onto the wire and into the Technical-details disclosure independently of
+    // any UI, and the card's visible row does not enumerate the map at all.
+
+    /** Captures the proposals a gated accessor stores, without dispatching anything. */
+    private List<PendingProposal> captureProposals(IArchimateModel model) {
+        List<PendingProposal> stored = new ArrayList<>();
+        MutationDispatcher capturing = new MutationDispatcher(() -> model) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                command.execute();
+            }
+            @Override
+            public String storeProposal(String sessionId, PendingProposal proposal) {
+                stored.add(proposal);
+                return "proposal-" + stored.size();
+            }
+        };
+        capturing.setApprovalModeProvider(() -> true);
+        accessor = new ArchiModelAccessorImpl(stubModelManager, capturing);
+        return stored;
+    }
+
+    @Test
+    public void shouldDiscloseProperties_whenGatedCreateElement() {
+        // THE SEED. create-element's sibling create-relationship discloses properties; this card
+        // did not, so a human approving a gated element create was not shown the properties the
+        // approval writes.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<PendingProposal> stored = captureProposals(model);
+
+        accessor.createElement("default", "ApplicationComponent", "gated", null,
+                Map.of("evidence", "high"), null, null, null);
+
+        assertEquals(1, stored.size());
+        assertEquals("the card must disclose the properties the approval will write",
+                Map.of("evidence", "high"), stored.get(0).proposedChanges().get("properties"));
+    }
+
+    @Test
+    public void shouldDiscloseEveryUpdatedAspect_whenGatedUpdateViewObject() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String viewObjectId = accessor.addGroupToView("default", "view-001", "Group A",
+                10, 10, 200, 100, null, null, null).entity().viewObjectId();
+        String anchorTargetId = accessor.addToView("default", "view-001", "ba-001",
+                400, 400, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewObject("default", viewObjectId, 200, 300, 180, 80, "new text",
+                new StylingParams("#FF0000", null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null),
+                new ImageParams(null, "top-left", "always"), "${name}",
+                anchorTargetId, "right", 10, -4);
+
+        assertEquals(1, stored.size());
+        Map<String, Object> proposed = stored.get(0).proposedChanges();
+        for (String key : List.of("x", "y", "width", "height", "text", "styling", "imageParams",
+                "labelExpression", "anchorTarget", "anchorEdge", "anchorDx", "anchorDy")) {
+            assertTrue("update-view-object's card must disclose '" + key + "' -- the method writes "
+                    + "it, so an approval applies it: " + proposed.keySet(),
+                    proposed.containsKey(key));
+        }
+        assertEquals("new text", proposed.get("text"));
+        assertEquals("${name}", proposed.get("labelExpression"));
+        assertEquals("right", proposed.get("anchorEdge"));
+    }
+
+    @Test
+    public void shouldNotAnnounceABoundsChange_whenGatedUpdateViewObjectSetsOnlyText() {
+        // The card's VISIBLE row reads the description, not the map. This sentence used to say
+        // "Update view object bounds for ..." unconditionally, so a caller renaming a box was
+        // announced to the approving human as moving it.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String viewObjectId = accessor.addGroupToView("default", "view-001", "Group A",
+                10, 10, 200, 100, null, null, null).entity().viewObjectId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewObject("default", viewObjectId, null, null, null, null, "renamed",
+                null, null, null, null, null, null, null);
+
+        assertEquals(1, stored.size());
+        String description = stored.get(0).description();
+        assertFalse("a text-only call must not be announced as a bounds change: " + description,
+                description.contains("bounds"));
+        assertTrue("and it must name what it does change: " + description,
+                description.contains("Update text for"));
+    }
+
+    @Test
+    public void shouldStillAnnounceBounds_whenGatedUpdateViewObjectSetsOnlyBounds() {
+        // The negative control for the pin above: the established wording must survive for the
+        // calls that were being described correctly all along.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String viewObjectId = accessor.addToView("default", "view-001", "ba-001",
+                50, 50, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewObject("default", viewObjectId, 200, 300, null, null, null,
+                null, null, null, null, null, null, null);
+
+        assertTrue(stored.get(0).description().startsWith("Update view object bounds for"));
+    }
+
+    @Test
+    public void shouldDiscloseRecedeOnlyStyling_whenGatedAddToView() {
+        // THE TRAP PIN. StylingParams.hasAnyValue() checks 16 of 17 fields -- recede is
+        // deliberately excluded because it governs the PARENT's fill. A disclosure guarded on
+        // hasAnyValue() would silently omit this call, reproducing the very defect being closed.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        StylingParams recedeOnly = new StylingParams(null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null, null, null, Boolean.FALSE);
+        assertFalse("precondition: hasAnyValue() cannot see recede", recedeOnly.hasAnyValue());
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 120, 55, false, null,
+                recedeOnly, null);
+
+        assertEquals(1, stored.size());
+        Object styling = stored.get(0).proposedChanges().get("styling");
+        assertNotNull("a recede-only call still changes what is written and must be disclosed",
+                styling);
+        assertEquals(Boolean.FALSE, ((Map<?, ?>) styling).get("recede"));
+    }
+
+    @Test
+    public void shouldNotAnnounceStyling_whenGatedUpdateViewObjectGetsOnlyRecede() {
+        // THE OTHER END OF THE RECEDE RULE, at the site where it actually misleads. recede governs
+        // a PARENT container's fill and is read by exactly one command, wrapped only by
+        // prepareAddToView / prepareAddGroupToView. update-view-object never reads it -- and
+        // UpdateViewObjectCommand gates all styling on hasAnyValue(), which excludes recede -- so a
+        // recede-only call writes NO styling here. Disclosing it would put "and styling" in the one
+        // sentence a non-expanding human reads, for a change that will not happen.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String viewObjectId = accessor.addGroupToView("default", "view-001", "Group A",
+                10, 10, 200, 100, null, null, null).entity().viewObjectId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewObject("default", viewObjectId, null, null, null, null, "renamed",
+                new StylingParams(null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, Boolean.FALSE),
+                null, null, null, null, null, null);
+
+        assertEquals(1, stored.size());
+        Map<String, Object> proposed = stored.get(0).proposedChanges();
+        assertFalse("recede is inert at update-view-object, so the card must not claim a styling "
+                + "change: " + proposed.keySet(), proposed.containsKey("styling"));
+        assertEquals("and the sentence must name only what really changes",
+                "Update text for DiagramModelGroup 'renamed' in view 'Main View'",
+                stored.get(0).description());
+    }
+
+    @Test
+    public void shouldDiscloseNoBendpointCount_whenGatedUpdateViewConnectionTouchesNeitherList() {
+        // Splitting the conflated count changed this case from always writing a misleading
+        // "bendpointCount": 0 to writing neither key. That is the correct behaviour -- a call that
+        // touches no bendpoints should assert no bendpoint fact -- but it shipped unpinned.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String srcVo = accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String tgtVo = accessor.addToView("default", "view-001", "bp-001", 250, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String connId = accessor.addConnectionToView("default", "view-001", "rel-001",
+                srcVo, tgtVo, null, null, null, null, null).entity().viewConnectionId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewConnection("default", connId, null, null, null, Boolean.TRUE, null);
+
+        assertEquals(1, stored.size());
+        Map<String, Object> proposed = stored.get(0).proposedChanges();
+        assertFalse("no relative bendpoints were supplied", proposed.containsKey("bendpointCount"));
+        assertFalse("and no absolute ones either", proposed.containsKey("absoluteBendpointCount"));
+        assertEquals("only what was actually supplied is disclosed",
+                Boolean.TRUE, proposed.get("showLabel"));
+    }
+
+    @Test
+    public void shouldDiscloseAbsoluteBendpointCount_whenGatedUpdateViewConnection() {
+        // update-view-connection's card carried bendpointCount ALONE, while its sibling
+        // add-connection-to-view a hundred lines away carried both counts under separate keys --
+        // so an absolute-only call was announced under the relative key's name.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String srcVo = accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String tgtVo = accessor.addToView("default", "view-001", "bp-001", 250, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String connId = accessor.addConnectionToView("default", "view-001", "rel-001",
+                srcVo, tgtVo, null, null, null, null, null).entity().viewConnectionId();
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.updateViewConnection("default", connId, null,
+                List.of(new AbsoluteBendpointDto(120, 200)),
+                new StylingParams("#00FF00", null, null, null, null, null, null, null, null,
+                        null, null, null, null, null, null, null, null),
+                Boolean.TRUE, 2);
+
+        assertEquals(1, stored.size());
+        Map<String, Object> proposed = stored.get(0).proposedChanges();
+        assertTrue("an absolute bendpoint list must be counted under its OWN key, not folded into "
+                + "the relative one: " + proposed.keySet(),
+                proposed.containsKey("absoluteBendpointCount"));
+        assertEquals(1, ((Number) proposed.get("absoluteBendpointCount")).intValue());
+        assertFalse("and must not be reported as a relative bendpoint count",
+                proposed.containsKey("bendpointCount"));
+        assertNotNull(proposed.get("styling"));
+        assertEquals(Boolean.TRUE, proposed.get("showLabel"));
+        assertEquals(2, proposed.get("textPosition"));
+    }
+
+    @Test
+    public void shouldDiscloseContinueOnError_whenGatedBulkMutate() {
+        // Whether a partial failure leaves partial writes behind is exactly what a human should
+        // know before approving a large batch.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        List<PendingProposal> stored = captureProposals(model);
+
+        accessor.executeBulk("default", List.of(new BulkOperation("update-element",
+                Map.of("id", "ba-001", "name", "renamed"))), "a batch", true, null);
+
+        assertEquals(1, stored.size());
+        assertEquals(Boolean.TRUE, stored.get(0).proposedChanges().get("continueOnError"));
+    }
+
+    @Test
+    public void shouldDiscloseWrapFit_whenGatedResizeElementsToFit() {
+        // wrapFit selects a different fit algorithm, so it changes WHICH rectangles get written.
+        // That is not a "how it was computed" input the outcome already shows.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        // Deliberately undersized, so the pass has something to resize and therefore reaches its
+        // approval gate at all -- a no-op resize returns before proposing anything.
+        accessor.addToView("default", "view-001", "ba-001", 50, 50, 20, 20, false, null, null, null);
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.resizeElementsToFit("default", "view-001", null, true);
+
+        assertEquals(1, stored.size());
+        assertEquals(Boolean.TRUE, stored.get(0).proposedChanges().get("wrapFit"));
+    }
+
+    @Test
+    public void shouldDiscloseForce_whenGatedAutoRouteConnections() {
+        // force OVERRIDES refusals: approving with it set applies routes the tool would otherwise
+        // have declined, and the card never said so.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String srcVo = accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String tgtVo = accessor.addToView("default", "view-001", "bp-001", 250, 250, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo,
+                null, null, null, null, null);
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.autoRouteConnections("default", "view-001", null, "orthogonal", true,
+                false, 20, 50, null, true, null);
+
+        assertEquals(1, stored.size());
+        assertEquals(Boolean.TRUE, stored.get(0).proposedChanges().get("force"));
+    }
+
+    @Test
+    public void shouldDiscloseForce_whenGatedAutoRouteConnectionsRunsTerminalsOnly() {
+        // The terminals-only pass builds a SEPARATE card, so it needs its own pin: a fix applied
+        // to one arm of a two-arm tool leaves the other arm exactly as silent as before.
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        String srcVo = accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        String tgtVo = accessor.addToView("default", "view-001", "bp-001", 250, 250, 120, 55,
+                false, null, null, null).entity().viewObject().viewObjectId();
+        accessor.addConnectionToView("default", "view-001", "rel-001", srcVo, tgtVo,
+                null, null, null, null, null);
+
+        List<PendingProposal> stored = captureProposals(model);
+        accessor.autoRouteConnections("default", "view-001", null, "orthogonal", true,
+                false, 20, 50, "terminals-only", true, null);
+
+        assertEquals(1, stored.size());
+        assertEquals("terminals-only", stored.get(0).proposedChanges().get("mode"));
+        assertEquals(Boolean.TRUE, stored.get(0).proposedChanges().get("force"));
     }
 }

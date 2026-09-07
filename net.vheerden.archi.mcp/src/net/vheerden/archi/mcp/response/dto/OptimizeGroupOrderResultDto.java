@@ -2,6 +2,8 @@ package net.vheerden.archi.mcp.response.dto;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 /**
  * Result DTO for the optimize-group-order tool.
  *
@@ -12,6 +14,21 @@ import java.util.List;
  * @param groupsOptimized     number of groups whose element order changed
  * @param elementsReordered   total number of elements that changed position
  * @param groupDetails        per-group optimization details
+ * @param resizedElements     every child whose SIZE this call changed, with the rectangle it
+ *                            landed at
+ *
+ * <p>{@code elementsReordered} counts the children this call re-placed. {@code resizedElements}
+ * names the ones whose SIZE it changed, which is a different fact: reordering a group's children
+ * re-runs the arrangement, and three things there choose a width other than the child's own — a
+ * grid gives every cell the width of the widest element in that group, {@code autoWidth} derives a
+ * width from the label, and an explicit {@code elementWidth} or {@code elementHeight} imposes one.
+ * The first two are silent by any reading. The third was asked for, and is still reported: the
+ * obligation is to say what the model ENDED UP holding, and a requested width the model did not
+ * end up holding is exactly the echo that obligation exists to forbid.</p>
+ *
+ * <p>The list is not filtered by which of the three chose the size. The observation compares the
+ * landed rectangle against the one the child effectively had and reports the difference; a filter
+ * would have to know WHY a size was chosen, which the observation deliberately does not.</p>
  */
 public record OptimizeGroupOrderResultDto(
 		String viewId,
@@ -20,7 +37,25 @@ public record OptimizeGroupOrderResultDto(
 		double reductionPercent,
 		int groupsOptimized,
 		int elementsReordered,
-		List<GroupDetail> groupDetails) {
+		List<GroupDetail> groupDetails,
+		@JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedElements) {
+
+	/**
+	 * Constructor matching the prior 7-field shape. Delegates with an empty
+	 * {@code resizedElements}, which is omitted from JSON — so a call that resized nothing
+	 * serializes byte-identically to before the field existed.
+	 */
+	public OptimizeGroupOrderResultDto(
+			String viewId, int crossingsBefore, int crossingsAfter, double reductionPercent,
+			int groupsOptimized, int elementsReordered, List<GroupDetail> groupDetails) {
+		this(viewId, crossingsBefore, crossingsAfter, reductionPercent, groupsOptimized,
+				elementsReordered, groupDetails, List.of());
+	}
+
+	/** Never null: the canonical constructor normalizes a null list to empty. */
+	public OptimizeGroupOrderResultDto {
+		resizedElements = resizedElements != null ? resizedElements : List.of();
+	}
 
 	/**
 	 * Per-group detail of optimization.

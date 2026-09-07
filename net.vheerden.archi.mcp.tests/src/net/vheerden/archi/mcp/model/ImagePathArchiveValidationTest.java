@@ -113,7 +113,7 @@ public class ImagePathArchiveValidationTest {
 
     /** Happy path: add-to-view with valid imagePath succeeds. */
     @Test
-    public void shouldAcceptValidImagePath_addToView_AC1() {
+    public void shouldAcceptValidImagePath_addToView() {
         ImageParams imageParams = new ImageParams(knownImagePath, null, null);
 
         MutationResult<AddToViewResultDto> result = accessor.addToView(
@@ -131,7 +131,7 @@ public class ImagePathArchiveValidationTest {
 
     /** Happy path: update-view-object with valid imagePath succeeds. */
     @Test
-    public void shouldAcceptValidImagePath_updateViewObject_AC2() {
+    public void shouldAcceptValidImagePath_updateViewObject() {
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null, null);
@@ -157,7 +157,7 @@ public class ImagePathArchiveValidationTest {
      * ({@code ViewPlacementHandler.java:1350}).
      */
     @Test
-    public void shouldAcceptEmptyStringAsClear_updateViewObject_AC3() {
+    public void shouldAcceptEmptyStringAsClear_updateViewObject() {
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null,
@@ -179,7 +179,7 @@ public class ImagePathArchiveValidationTest {
 
     /** Reject: add-to-view with typo'd imagePath, no EMF mutation. */
     @Test
-    public void shouldRejectInvalidImagePath_addToView_IMAGE_NOT_FOUND_AC4() {
+    public void shouldRejectInvalidImagePath_addToView_IMAGE_NOT_FOUND() {
         ImageParams imageParams = new ImageParams("images/doesnotexist.png", null, null);
 
         try {
@@ -198,7 +198,7 @@ public class ImagePathArchiveValidationTest {
 
     /** Reject: update-view-object with typo'd imagePath, no EMF mutation. */
     @Test
-    public void shouldRejectInvalidImagePath_updateViewObject_IMAGE_NOT_FOUND_AC5() {
+    public void shouldRejectInvalidImagePath_updateViewObject_IMAGE_NOT_FOUND() {
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null, null);
@@ -230,7 +230,7 @@ public class ImagePathArchiveValidationTest {
      * the "byte-identical reject payload across surfaces" requirement.
      */
     @Test
-    public void shouldProduceByteIdenticalRejectPayload_acrossAllThreeSurfaces_AC9() {
+    public void shouldProduceByteIdenticalRejectPayload_acrossAllThreeSurfaces() {
         String typo = "images/doesnotexist.png";
         ImageParams imageParams = new ImageParams(typo, null, null);
 

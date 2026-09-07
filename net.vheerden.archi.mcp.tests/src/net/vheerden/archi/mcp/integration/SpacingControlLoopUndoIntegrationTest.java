@@ -129,16 +129,16 @@ public class SpacingControlLoopUndoIntegrationTest {
         model.setDefaults();
 
         diagramModel = factory.createArchimateDiagramModel();
-        diagramModel.setName("AC-7.4 Test View");
+        diagramModel.setName("Undo Integration Test View");
         model.getDefaultFolderForObject(diagramModel)
                 .getElements().add(diagramModel);
 
         group = factory.createDiagramModelGroup();
-        group.setName("AC-7.4 Test Group");
+        group.setName("Undo Integration Test Group");
         diagramModel.getChildren().add(group);
 
         IArchimateElement archimateElement = factory.createApplicationComponent();
-        archimateElement.setName("AC-7.4 Test Element");
+        archimateElement.setName("Undo Integration Test Element");
         model.getDefaultFolderForObject(archimateElement)
                 .getElements().add(archimateElement);
 
@@ -170,11 +170,11 @@ public class SpacingControlLoopUndoIntegrationTest {
 
         CompoundCommand compound = wrapInCompound(
                 result.acceptedCommands(),
-                "AC-7.4 (a) one-tool-call-one-undo-entry pin");
+                "one-tool-call-one-undo-entry pin (a)");
 
         assertNotNull("Compound must be constructed", compound);
         assertEquals("Compound must wrap exactly the accepted-iteration count "
-                + "of inner GEF commands — verifies AC-7.4 (a) one tool call = "
+                + "of inner GEF commands — verifies (a) one tool call = "
                 + "one undo-stack entry property at the CompoundCommand level",
                 ACCEPTED_ITERATION_COUNT, compound.getCommands().size());
 
@@ -196,7 +196,7 @@ public class SpacingControlLoopUndoIntegrationTest {
         SpacingControlLoop.Result result = runLoopScripted(ACCEPTED_ITERATION_COUNT);
         CompoundCommand compound = wrapInCompound(
                 result.acceptedCommands(),
-                "AC-7.4 (b) atomic-undo pin");
+                "atomic-undo pin (b)");
 
         compound.execute();
         assertEquals("Pre-undo state should be the cumulative post-execute X",
@@ -204,7 +204,7 @@ public class SpacingControlLoopUndoIntegrationTest {
 
         compound.undo();
 
-        assertEquals("AC-7.4 (b) — single compound.undo() call must revert ALL "
+        assertEquals("(b) — single compound.undo() call must revert ALL "
                 + ACCEPTED_ITERATION_COUNT + " accepted iterations atomically; "
                 + "EMF state must be back at INITIAL_X (" + INITIAL_X + "), "
                 + "not at any intermediate value (110 / 120 / 130).",
@@ -221,7 +221,7 @@ public class SpacingControlLoopUndoIntegrationTest {
         SpacingControlLoop.Result result = runLoopScripted(ACCEPTED_ITERATION_COUNT);
         CompoundCommand compound = wrapInCompound(
                 result.acceptedCommands(),
-                "AC-7.4 (c) atomic-redo pin");
+                "atomic-redo pin (c)");
 
         compound.execute();
         compound.undo();
@@ -230,7 +230,7 @@ public class SpacingControlLoopUndoIntegrationTest {
 
         compound.redo();
 
-        assertEquals("AC-7.4 (c) — single compound.redo() call must replay ALL "
+        assertEquals("(c) — single compound.redo() call must replay ALL "
                 + ACCEPTED_ITERATION_COUNT + " accepted iterations atomically; "
                 + "EMF state must be back at EXPECTED_POST_EXECUTE_X ("
                 + EXPECTED_POST_EXECUTE_X + "), not at any intermediate value.",
@@ -249,7 +249,7 @@ public class SpacingControlLoopUndoIntegrationTest {
         SpacingControlLoop.Result result = runLoopScripted(ACCEPTED_ITERATION_COUNT);
         CompoundCommand compound = wrapInCompound(
                 result.acceptedCommands(),
-                "AC-7.4 (b)+(c) round-trip pin");
+                "(b)+(c) round-trip pin");
 
         compound.execute();
         compound.undo();
@@ -266,7 +266,7 @@ public class SpacingControlLoopUndoIntegrationTest {
         // inner commands across execute/undo/redo cycles. This is the
         // operative pin for "one tool call = one undo-stack entry" property
         // across multiple cycles.
-        assertEquals("AC-7.4 (b)+(c) round-trip — compound's inner-command "
+        assertEquals("(b)+(c) round-trip — compound's inner-command "
                 + "list is preserved unchanged across execute → undo → redo "
                 + "→ undo cycles (no GEF state-machine quirk drops or "
                 + "duplicates inner commands).",
@@ -306,7 +306,7 @@ public class SpacingControlLoopUndoIntegrationTest {
                 /*iterationBudget=*/ acceptedCount,
                 /*perIterationStepCapPx=*/ Integer.MAX_VALUE,
                 /*initialMetrics=*/ layoutMetrics(/*thresholdsMet=*/ 0),
-                /*toolLabel=*/ "AC-7.4-test");
+                /*toolLabel=*/ "undo-integration-test");
 
         return SpacingControlLoop.iterate(request,
                 new EmfMutatingScriptedCallbacks(observationScript, element));

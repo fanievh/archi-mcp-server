@@ -25,7 +25,7 @@ import com.archimatetool.model.util.ArchimateModelUtils;
 /**
  * Decides, at approve-time, whether a pending proposal went <strong>stale</strong> because the human
  * edited or removed an object the proposal targets during the (human-paced, minutes-long) review window
- * (Design §4 D5 — retires the held-Command landmine that {@code ApprovalService}/{@code
+ * (retires the held-Command landmine that {@code ApprovalService}/{@code
  * PendingApprovalsView} previously only caught <em>after</em> a misapply).
  *
  * <p><strong>One listener, monotonic sequence.</strong> The guard registers <em>exactly one</em>
@@ -139,11 +139,24 @@ final class ProposalStalenessGuard {
     // ---- Propose-time capture ----
 
     /**
-     * Snapshots the current sequence and a fingerprint + display name for each currently-resolvable
-     * target id. Ids that do not resolve (or a null model) are skipped — at propose-time the targets of a
-     * valid mutation always resolve (the prepare step already validated them).
+     * Snapshots the current sequence and a fingerprint + display name for each resolvable target
+     * id. Ids that resolve to nothing at all (or a null model) are skipped.
+     *
+     * <p>A target may be resolvable in two ways. Most are in containment. Some are not yet: a
+     * prepare can resolve its target against an open batch's command queue, giving the caller a
+     * real id for an object that joins containment only at commit. Both are fingerprinted here,
+     * through {@code queuedResolver}, because the object is the same object either way — the queue
+     * is simply where it lives for the moment.</p>
+     *
+     * <p>Fingerprinting it, rather than recording the id with a placeholder, is what keeps the
+     * approve-time comparison honest. {@link #decide} reads a tracked id with no propose-time
+     * fingerprint as removed, so a placeholder would refuse a target that had committed perfectly
+     * normally with a message saying it no longer exists.</p>
+     *
+     * @param queuedResolver resolves an id against the caller's open batch, or null for no queue
      */
-    StalenessCapture capture(java.util.Set<String> targetIds) {
+    StalenessCapture capture(java.util.Set<String> targetIds,
+            java.util.function.Function<String, EObject> queuedResolver) {
         if (targetIds == null || targetIds.isEmpty()) {
             return new StalenessCapture(sequence.get(), Map.of(), Map.of());
         }
@@ -157,7 +170,7 @@ final class ProposalStalenessGuard {
                 if (id == null) {
                     continue;
                 }
-                EObject obj = ArchimateModelUtils.getObjectByID(model, id);
+                EObject obj = resolve(model, id, queuedResolver);
                 if (obj != null) {
                     fingerprints.put(id, fingerprint(obj));
                     names.put(id, displayName(obj, id));
@@ -177,8 +190,15 @@ final class ProposalStalenessGuard {
      * Vets a captured proposal against the <em>current</em> model: re-resolves each tracked target and
      * compares fingerprints, factoring in whether a human command intervened. Returns a fresh verdict, or
      * a stale verdict carrying the plain-language, target-named reason.
+     *
+     * <p>Re-resolves through the same two places {@link #capture} looked, and must: a target that was
+     * queued at propose time can be approved before the batch commits, and reading only containment
+     * would find nothing and report as removed something that is about to exist.</p>
+     *
+     * @param queuedResolver resolves an id against the caller's open batch, or null for no queue
      */
-    StaleVerdict vet(StalenessCapture capture) {
+    StaleVerdict vet(StalenessCapture capture,
+            java.util.function.Function<String, EObject> queuedResolver) {
         if (capture == null || capture.targetIds().isEmpty()) {
             return StaleVerdict.fresh();
         }
@@ -188,7 +208,7 @@ final class ProposalStalenessGuard {
         Map<String, String> currentNames = new LinkedHashMap<>();
         Map<String, String> currentBounds = new LinkedHashMap<>();
         for (String id : capture.targetIds()) {
-            EObject obj = (model != null) ? ArchimateModelUtils.getObjectByID(model, id) : null;
+            EObject obj = (model != null) ? resolve(model, id, queuedResolver) : null;
             if (obj != null) {
                 currentFingerprints.put(id, fingerprint(obj));
                 currentNames.put(id, displayName(obj, id));
@@ -293,6 +313,19 @@ final class ProposalStalenessGuard {
      * orthogonally by {@link #boundsFingerprint(EObject)} so a rename and a drag stay
      * distinguishable.
      */
+    /**
+     * An id's object, from containment or — failing that — from the caller's open batch queue.
+     *
+     * <p>The single place that knows a target can live in either, so the propose-time snapshot and
+     * the approve-time comparison cannot disagree about whether a target exists. Splitting them is
+     * how one side comes to see a removal the other never saw.</p>
+     */
+    private static EObject resolve(IArchimateModel model, String id,
+            java.util.function.Function<String, EObject> queuedResolver) {
+        EObject obj = ArchimateModelUtils.getObjectByID(model, id);
+        return (obj != null || queuedResolver == null) ? obj : queuedResolver.apply(id);
+    }
+
     static String fingerprint(EObject obj) {
         if (obj == null) {
             return null;

@@ -89,6 +89,7 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing get-relationships", toolNames.contains("get-relationships"));
         assertTrue("Missing set-session-filter", toolNames.contains("set-session-filter"));
         assertTrue("Missing get-session-filters", toolNames.contains("get-session-filters"));
+        assertTrue("Missing get-guidance", toolNames.contains("get-guidance"));
         assertTrue("Missing get-folders", toolNames.contains("get-folders"));
         assertTrue("Missing get-folder-tree", toolNames.contains("get-folder-tree"));
         assertTrue("Missing begin-batch", toolNames.contains("begin-batch"));
@@ -106,8 +107,8 @@ public class ToolDiscoveryIntegrationTest {
         // set-approval-mode (toggle) and decide-mutation (approve/reject) were removed — the
         // control plane is the human's, so the agent cannot move its own gate.
         assertTrue("Missing list-pending-approvals", toolNames.contains("list-pending-approvals"));
-        assertFalse("set-approval-mode must be removed (S6a AC-1)", toolNames.contains("set-approval-mode"));
-        assertFalse("decide-mutation must be removed (S6a AC-2)", toolNames.contains("decide-mutation"));
+        assertFalse("set-approval-mode must be removed", toolNames.contains("set-approval-mode"));
+        assertFalse("decide-mutation must be removed", toolNames.contains("decide-mutation"));
         // View placement tools
         assertTrue("Missing add-to-view", toolNames.contains("add-to-view"));
         assertTrue("Missing add-connection-to-view", toolNames.contains("add-connection-to-view"));
@@ -442,6 +443,16 @@ public class ToolDiscoveryIntegrationTest {
                 createRelSchema.required().contains("targetId"));
         assertFalse("create-relationship 'name' should be optional",
                 createRelSchema.required().contains("name"));
+        // Provenance trio — the same three create-element takes, so an agent reaching for the
+        // create tool first is not left to infer that relationship provenance is impossible.
+        assertTrue("create-relationship should have 'documentation' property",
+                createRelSchema.properties().containsKey("documentation"));
+        assertTrue("create-relationship should have 'properties' property",
+                createRelSchema.properties().containsKey("properties"));
+        assertTrue("create-relationship should have 'source' property",
+                createRelSchema.properties().containsKey("source"));
+        assertFalse("create-relationship 'documentation' should be optional",
+                createRelSchema.required().contains("documentation"));
 
         // create-view: requires name; optional viewpoint, folderId
         McpSchema.JsonSchema createViewSchema = findTool("create-view").inputSchema();

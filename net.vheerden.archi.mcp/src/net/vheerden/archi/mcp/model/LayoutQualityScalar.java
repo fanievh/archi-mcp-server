@@ -1,14 +1,15 @@
 package net.vheerden.archi.mcp.model;
 
+import net.vheerden.archi.mcp.response.dto.AssessLayoutResultDto;
+
 /**
- * Pure-EMF-free graded intrinsic layout-quality scalar — Decision-A.1.3 =
- * α''' Fix-2 (RC-2).
+ * Pure-EMF-free graded intrinsic layout-quality scalar.
  *
  * <p><strong>Why this exists.</strong> The original tool-layer aggregate
  * scored
  * {@code thresholdsMet} as a 4-condition binary-at-zero pseudo-aggregate:
  * {@code (coincSeg==0) + (M4==0) + (boundaryViolations.isEmpty()) +
- * (HPQ>=0.75)}, range [0,4]. RC-2 (root-cause diagnosis):
+ * (HPQ>=0.75)}, range [0,4]. Root-cause diagnosis:
  * on the dense gate views M4 stays 3–18 and coincSeg 0–16, so the
  * {@code M4==0} / {@code coincSeg==0} bits are dead weight (≈ always 0). The
  * live signal collapsed to a hypersensitive 2-bit HPQ+boundaryViolations
@@ -36,15 +37,20 @@ package net.vheerden.archi.mcp.model;
  * <ul>
  *   <li><strong>Aggregate back-off, NOT per-metric monotonic:</strong>
  *       {@link SpacingControlLoop#acceptStepDecision} is UNCHANGED — it still
- *       compares {@code post.thresholdsMet() >= best.thresholdsMet()} as a
- *       single opaque scalar; only the range widens [0,4] → [0,12]. Quinn
+ *       compares this value as a single opaque scalar; only the range widens
+ *       [0,4] → [0,12]. (Read that predicate rather than this sentence: it
+ *       accepts on a STRICTLY greater scalar and otherwise falls through four
+ *       tie-break tiers before defaulting to accept. The {@code >=} shorthand
+ *       that used to stand here is not what the body does, and a design draft
+ *       built on it will pin the tie-break while believing it pins the accept
+ *       rule.) Quinn
  *       adversarial attack A1 (per-metric-monotonic in disguise) FAILS because
  *       components are summed, never compared individually — a step that
  *       improves M4 by 2 bands + HPQ by 2 bands but regresses coincSeg by 1
  *       band scores net +3 → ACCEPT, reproducing the aggregate verdict the
  *       2026-05-13 Arm-6 lesson mandates
  *       ({@code feedback_discipline_rules_aggregate_not_per_metric}).</li>
- *   <li><strong>HALT 10.2 Q2 (intrinsic-only):</strong> band boundaries are
+ *   <li><strong>Intrinsic-only:</strong> band boundaries are
  *       sourced from {@code LayoutQualityAssessor}'s perceptual cut-points
  *       ({@code EDGE_COINCIDENCE_GOOD_MAX=2}/{@code _FAIR_MAX=5};
  *       {@code GOOD_MAX_COINCIDENT=3}/{@code FAIR_MAX_COINCIDENT=8};
@@ -82,7 +88,7 @@ public final class LayoutQualityScalar {
     // ------------------------------------------------------------------
     // Band boundaries — sourced from LayoutQualityAssessor v3 perceptual
     // cut-points, coarsened so every band spans >= 3 consecutive integers
-    // (Quinn Task-10.6 T4 band-width property: no band <= 2 units wide,
+    // (band-width property: no band <= 2 units wide,
     // so reroute jitter +/-1 cannot cross a band). PUBLIC so the property
     // test asserts against the single source of truth.
     // ------------------------------------------------------------------
@@ -173,8 +179,12 @@ public final class LayoutQualityScalar {
      * overlap is a genuine correctness defect, NOT a graded-quality
      * dimension — these STAY binary-at-0 deliberately). Range [0, 3].
      *
-     * @param boundaryViolations H6 sentinel count; 0 → credit
-     * @param passThroughs       connection pass-through count; 0 → credit
+     * @param boundaryViolations sentinel count; 0 → credit
+     * @param passThroughs       the CHARGED cross-element pass-through count; 0 → credit.
+     *                           A self-element pass-through is charged at zero and so keeps the
+     *                           credit — it is unrated because no re-route or spacing change
+     *                           reliably removes one, and a bit the loop cannot win is a bit that
+     *                           only rejects steps
      * @param overlaps           sibling overlap count; 0 → credit
      */
     public static int correctnessBits(int boundaryViolations,
@@ -192,8 +202,12 @@ public final class LayoutQualityScalar {
      * {@link LayoutMetrics#thresholdsMet()}. Range [0,
      * {@value #MAX_QUALITY_SCALAR}]. Higher is better.
      *
-     * @param boundaryViolations H6 sentinel count
-     * @param passThroughs       connection pass-through count
+     * @param boundaryViolations sentinel count
+     * @param passThroughs       the CHARGED cross-element pass-through count
+     *                           ({@code crossElementPassThroughCount}), never the size of the
+     *                           {@code connectionPassThroughs} description list — that list is
+     *                           capped at ten entries and also names the self-element
+     *                           pass-throughs the rating does not charge
      * @param overlaps           sibling overlap count
      * @param m4                 connectionEdgeCoincidenceCount
      * @param coincSeg           coincidentSegmentCount
@@ -205,5 +219,63 @@ public final class LayoutQualityScalar {
                 + severityTierCreditM4(m4)
                 + severityTierCreditCoincSeg(coincSeg)
                 + severityTierCreditHpq(hpq);
+    }
+
+    /**
+     * Converts an {@link AssessLayoutResultDto} into the pure-EMF-free
+     * {@link LayoutMetrics} snapshot the {@link SpacingControlLoop} consumes.
+     *
+     * <p><strong>Graded quality scalar (2026-05-16).</strong>
+     * The {@code thresholdsMet} aggregate was the
+     * 4-condition binary-at-zero pseudo-aggregate
+     * {@code (coincSeg==0) +
+     * (M4==0) + (boundaryViolations.isEmpty()) + (HPQ>=0.75)}, range [0,4].
+     * Root-cause diagnosis: on dense gate views the {@code M4==0} /
+     * {@code coincSeg==0} bits are dead weight (M4 stays 3–18), collapsing the
+     * signal to a hypersensitive 2-bit proxy → deterministic iteration-0 revert
+     * across Sessions 6–10. It is now the graded intrinsic
+     * {@link LayoutQualityScalar#qualityScalar} (range [0,
+     * {@value LayoutQualityScalar#MAX_QUALITY_SCALAR}]) per the
+     * ratified design
+     * (§ 3.2). The back-off predicate
+     * {@link SpacingControlLoop#acceptStepDecision} is UNCHANGED — it still
+     * compares this value as a single opaque scalar; only the range widens
+     * [0,4] → [0,12], preserving the aggregate-not-per-metric discipline.</p>
+     */
+    static LayoutMetrics toLayoutMetrics(AssessLayoutResultDto a) {
+        // The two correctness reads below deliberately differ, and the asymmetry is not an
+        // oversight. A boundary violation is a homogeneous population, so its capped description
+        // list and its uncapped count agree at every value a binary-at-zero read can see — a cap
+        // truncates, it never empties. The pass-through description list does NOT agree: it also
+        // names the self-element pass-throughs the rating charges at zero, so its size is non-zero
+        // on a view with no charged crossing at all, and the bit would be forfeited for geometry
+        // no spacing lever can move.
+        int boundaryViolationsCount = (a.boundaryViolations() == null)
+                ? 0 : a.boundaryViolations().size();
+        int chargedPassThroughCount = a.crossElementPassThroughCount();
+        int thresholdsMet = LayoutQualityScalar.qualityScalar(
+                boundaryViolationsCount,
+                chargedPassThroughCount,
+                a.overlapCount(),
+                a.connectionEdgeCoincidenceCount(),
+                a.coincidentSegmentCount(),
+                a.hubPortQualityScore());
+        double vp10 = (a.vAxisParallelGapP10() == null)
+                ? 0.0 : a.vAxisParallelGapP10();
+        return new LayoutMetrics(
+                thresholdsMet,
+                a.hubPortQualityScore(),
+                a.connectionEdgeCoincidenceCount(),
+                a.coincidentSegmentCount(),
+                boundaryViolationsCount,
+                vp10,
+                a.edgeCrossingCount(),
+                // The spacing-regime-position axis input, sourced
+                // from the EXISTING assess read (NOT a new
+                // LayoutQualityAssessor metric). Canonical 8-arg form — every
+                // OTHER `new LayoutMetrics(...)` site keeps the 7-arg
+                // delegating ctor (avgSpacingPx = NaN → density discriminator
+                // inert → pin baseline preserved).
+                a.averageSpacing());
     }
 }

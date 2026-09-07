@@ -46,7 +46,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldRegisterFindConceptUsageTool_AC2() {
+    public void shouldRegisterFindConceptUsageTool() {
         StubAccessor accessor = new StubAccessor();
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.Tool tool = findToolSpec("find-concept-usage").tool();
@@ -63,7 +63,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturnUsageForElement_withOneViewReference_AC3() throws Exception {
+    public void shouldReturnUsageForElement_withOneViewReference() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("c1", 1);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -78,7 +78,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturnUsageForRelationship_withOneViewReference_AC3() throws Exception {
+    public void shouldReturnUsageForRelationship_withOneViewReference() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = relationshipUsage("r1");
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -92,7 +92,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturnEmptyVisualObjects_whenOrphanConcept_AC3() throws Exception {
+    public void shouldReturnEmptyVisualObjects_whenOrphanConcept() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("orphan", 0);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -107,7 +107,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldRejectMissingConceptId_AC6() throws Exception {
+    public void shouldRejectMissingConceptId() throws Exception {
         StubAccessor accessor = new StubAccessor();
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.CallToolResult result = invoke(null);
@@ -119,7 +119,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldRejectBlankConceptId_AC6() throws Exception {
+    public void shouldRejectBlankConceptId() throws Exception {
         StubAccessor accessor = new StubAccessor();
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.CallToolResult result = invoke("   ");
@@ -131,7 +131,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturn404_whenConceptIdNotFound_AC3() throws Exception {
+    public void shouldReturn404_whenConceptIdNotFound() throws Exception {
         StubAccessor accessor = new StubAccessor(); // canned == null → returns Optional.empty
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.CallToolResult result = invoke("unknown-id");
@@ -145,7 +145,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldRejectFolderId_withInvalidParameter_AC3() throws Exception {
+    public void shouldRejectFolderId_withInvalidParameter() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.knownFolderIds.add("folder-1");
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -160,7 +160,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldRejectViewId_withInvalidParameter_AC3() throws Exception {
+    public void shouldRejectViewId_withInvalidParameter() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.knownViewIds.add("view-1");
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -175,7 +175,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturnConceptKindElement_forArchimateElement_AC4() throws Exception {
+    public void shouldReturnConceptKindElement_forArchimateElement() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("e1", 1);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -184,7 +184,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldReturnConceptKindRelationship_forArchimateRelationship_AC4() throws Exception {
+    public void shouldReturnConceptKindRelationship_forArchimateRelationship() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = relationshipUsage("r1");
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -193,7 +193,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldEmitOrphanNextSteps_whenZeroReferences_AC9() throws Exception {
+    public void shouldEmitOrphanNextSteps_whenZeroReferences() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("orphan", 0);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -206,7 +206,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldEmitSingleViewNextSteps_whenOneReference_AC9() throws Exception {
+    public void shouldEmitSingleViewNextSteps_whenOneReference() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("c1", 1);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -218,7 +218,7 @@ public class FindConceptUsageHandlerTest {
     }
 
     @Test
-    public void shouldEmitMultiViewNextSteps_whenManyReferences_AC9() throws Exception {
+    public void shouldEmitMultiViewNextSteps_whenManyReferences() throws Exception {
         StubAccessor accessor = new StubAccessor();
         accessor.canned = elementUsage("c1", 3);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();

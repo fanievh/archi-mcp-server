@@ -82,6 +82,45 @@ public class ElementCreationHandlerTest {
     }
 
     @Test
+    public void createRelationship_descriptionShouldDocumentResponseFields() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(spec -> "create-relationship".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must name sourceName", desc.contains("sourceName"));
+        // alreadyExisted is @JsonInclude(NON_DEFAULT): it is ABSENT rather than false on
+        // a fresh create, so an agent testing `alreadyExisted == false` never matches.
+        assertTrue("must name alreadyExisted", desc.contains("alreadyExisted"));
+        assertTrue("must state the flag is absent rather than false on a fresh create",
+                desc.contains("absent, not false"));
+        // The duplicate-detection path builds the DTO with (…, true, null, null, null,
+        // null): sourceName/targetName are NON_NULL and therefore vanish. Listing them
+        // unconditionally would promise endpoint names that a duplicate never returns.
+        assertTrue("sourceName/targetName must be scoped to the fresh-create path",
+                desc.contains("only on a fresh create"));
+        assertTrue("must state the duplicate path omits the name fields",
+                desc.contains("omits the two name fields"));
+    }
+
+    @Test
+    public void createView_descriptionShouldDocumentResponseFields() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(spec -> "create-view".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must name folderPath", desc.contains("folderPath"));
+        // viewpointType is dropped by DtoMapper when unset/empty.
+        assertTrue("must gate viewpointType on a viewpoint having been set",
+                desc.contains("viewpointType is present only when"));
+        // DtoMapper.mapConnectionRouterType returns null for CONNECTION_ROUTER_BENDPOINT
+        // — i.e. for 'manual', which is both the tool default AND the value this very
+        // description tells agents to prefer. So the field is absent in the recommended
+        // case; documenting it as always-returned is backwards.
+        assertTrue("must state connectionRouterType comes back only for manhattan",
+                desc.contains("only for 'manhattan'"));
+        assertTrue("must state the default manual router is omitted",
+                desc.contains("'manual' is omitted"));
+    }
+
+    @Test
     public void shouldRegisterCreateViewTool() {
         boolean found = registry.getToolSpecifications().stream()
                 .anyMatch(spec -> "create-view".equals(spec.tool().name()));
@@ -739,11 +778,11 @@ public class ElementCreationHandlerTest {
         assertTrue("create-view should have connectionRouterType property", found);
     }
 
-    // ---- G1 tests ----
+    // ---- relationship semantic-attribute tests ----
 
     @Test
     @SuppressWarnings("unchecked")
-    public void shouldAdvertiseG1ParamsInCreateRelationshipSchema_AC2() {
+    public void shouldAdvertiseSemanticAttributeParamsInCreateRelationshipSchema() {
         Map<String, Object> properties = registry.getToolSpecifications().stream()
                 .filter(spec -> "create-relationship".equals(spec.tool().name()))
                 .findFirst()
@@ -767,7 +806,7 @@ public class ElementCreationHandlerTest {
     }
 
     @Test
-    public void shouldPassAccessTypeThroughHandler_toAccessor_AC2() throws Exception {
+    public void shouldPassAccessTypeThroughHandler_toAccessor() throws Exception {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("type", "AccessRelationship");
         args.put("sourceId", "src-1");
@@ -781,8 +820,55 @@ public class ElementCreationHandlerTest {
         assertNull(accessor.capturedSemanticAttributes.influenceStrength());
     }
 
+    /**
+     * The provenance trio must reach the accessor. The published schema advertising them is not
+     * evidence that a handler read exists — a tool can describe a parameter it never consumes — so
+     * this asserts the forwarding rather than the description.
+     */
     @Test
-    public void shouldRejectAccessTypeOnNonAccessType_atHandler_AC7() throws Exception {
+    public void shouldPassProvenanceThroughHandler_toAccessor() throws Exception {
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("type", "ServingRelationship");
+        args.put("sourceId", "src-1");
+        args.put("targetId", "tgt-1");
+        args.put("documentation", "Derived from diagram edge 42");
+        args.put("properties", Map.of("evidence", "high"));
+        args.put("source", Map.of("file", "architecture.drawio"));
+        callTool("create-relationship", args);
+
+        assertEquals("documentation must reach the accessor",
+                "Derived from diagram edge 42", accessor.capturedRelationshipDocumentation);
+        assertNotNull("properties must reach the accessor",
+                accessor.capturedRelationshipProperties);
+        assertEquals("high", accessor.capturedRelationshipProperties.get("evidence"));
+        assertNotNull("source must reach the accessor", accessor.capturedRelationshipSource);
+        assertEquals("architecture.drawio", accessor.capturedRelationshipSource.get("file"));
+    }
+
+    /**
+     * The three parameters must also be advertised, or an agent reading the schema concludes the
+     * capability does not exist — which is the failure this pairing exists to prevent.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldAdvertiseProvenanceParameters_onCreateRelationshipSchema() throws Exception {
+        Map<String, Object> properties = registry.getToolSpecifications().stream()
+                .filter(spec -> "create-relationship".equals(spec.tool().name()))
+                .findFirst()
+                .orElseThrow()
+                .tool().inputSchema().properties();
+        assertTrue("documentation must be advertised", properties.containsKey("documentation"));
+        assertTrue("properties must be advertised", properties.containsKey("properties"));
+        assertTrue("source must be advertised", properties.containsKey("source"));
+
+        Map<String, Object> sourceProp = (Map<String, Object>) properties.get("source");
+        assertEquals("object", sourceProp.get("type"));
+        assertTrue("source description must name the prefix it applies",
+                String.valueOf(sourceProp.get("description")).contains("mcp.source."));
+    }
+
+    @Test
+    public void shouldRejectAccessTypeOnNonAccessType_atHandler() throws Exception {
         accessor.setCreateRelationshipBehavior((sessionId, type, sourceId, targetId, name) -> {
             throw new ModelAccessException(
                     "accessType only applies to AccessRelationship; got CompositionRelationship.",
@@ -808,7 +894,7 @@ public class ElementCreationHandlerTest {
     }
 
     @Test
-    public void shouldCaptureAllThreeG1Fields_AC5() throws Exception {
+    public void shouldCaptureAllThreeSemanticAttributeFields() throws Exception {
         Map<String, Object> args = new LinkedHashMap<>();
         args.put("type", "AccessRelationship");
         args.put("sourceId", "src-1");
@@ -900,6 +986,9 @@ public class ElementCreationHandlerTest {
         Map<String, String> capturedSource;
         String capturedSpecialization;
         RelationshipSemanticAttributes capturedSemanticAttributes;
+        String capturedRelationshipDocumentation;
+        Map<String, String> capturedRelationshipProperties;
+        Map<String, String> capturedRelationshipSource;
 
         StubCreationAccessor() {
             super(true);
@@ -987,9 +1076,13 @@ public class ElementCreationHandlerTest {
         @Override
         public MutationResult<RelationshipDto> createRelationship(String sessionId,
                 String type, String sourceId, String targetId, String name, String specialization,
-                RelationshipSemanticAttributes semanticAttributes) {
+                RelationshipSemanticAttributes semanticAttributes,
+                String documentation, Map<String, String> properties, Map<String, String> source) {
             capturedSpecialization = specialization;
             capturedSemanticAttributes = semanticAttributes;
+            capturedRelationshipDocumentation = documentation;
+            capturedRelationshipProperties = properties;
+            capturedRelationshipSource = source;
             return createRelationshipBehavior.apply(sessionId, type, sourceId, targetId, name);
         }
 

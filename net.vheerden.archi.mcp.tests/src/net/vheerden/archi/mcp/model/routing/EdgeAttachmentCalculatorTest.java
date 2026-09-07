@@ -1781,12 +1781,12 @@ public class EdgeAttachmentCalculatorTest {
 
         calculator.correctApproachDirection(ids, connections, sourceFaces, targetFaces);
 
-        assertEquals("B46 should correct source at 1.25:1 ratio", Face.BOTTOM, sourceFaces[0]);
-        assertEquals("B46 should correct target at 1.25:1 ratio", Face.TOP, targetFaces[0]);
+        assertEquals("approach-direction correction should fire on source at 1.25:1 ratio", Face.BOTTOM, sourceFaces[0]);
+        assertEquals("approach-direction correction should fire on target at 1.25:1 ratio", Face.TOP, targetFaces[0]);
     }
 
     @Test
-    public void shouldNotCorrect_whenRatioBelowB46Threshold() {
+    public void shouldNotCorrect_whenRatioBelowCorrectionThreshold() {
         // Elements at exactly 1.2:1 ratio (boundary — NOT triggered, need strictly greater)
         RoutingRect source = new RoutingRect(0, 0, 100, 60, "src");     // center (50, 30)
         RoutingRect target = new RoutingRect(100, 120, 100, 60, "tgt"); // center (150, 150)
@@ -1862,7 +1862,7 @@ public class EdgeAttachmentCalculatorTest {
     }
 
     @Test
-    public void shouldPreserveB32Behavior_whenStrongAlignment() {
+    public void shouldPreservePriorCorrectionBehaviour_whenStrongAlignment() {
         // Existing 2:1+ cases corrected identically to the prior behaviour
         RoutingRect source = new RoutingRect(100, 0, 120, 80, "src");   // center (160, 40)
         RoutingRect target = new RoutingRect(16, 200, 120, 80, "tgt");  // center (76, 240)

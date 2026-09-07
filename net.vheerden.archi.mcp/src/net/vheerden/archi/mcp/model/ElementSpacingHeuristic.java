@@ -19,11 +19,16 @@ package net.vheerden.archi.mcp.model;
  * heuristic table requires a coordinated edit across FOUR artefacts —
  * (1) the markdown resource, (2) this class's
  * {@link #targetSpacingForConnectionCount(int, boolean)} method, (3) the
- * JUnit test, (4) the four production callsites that derive
- * {@code hasLargeHubs} upstream and forward it ({@code ArchiModelAccessorImpl
- * .applyElementSpacingRecommendations}, {@code AdjustViewSpacingDefault
- * ResolutionDecision.decide}, plus their group-side siblings via
- * {@link GroupSpacingHeuristic}). Edit one without the others and the test
+ * JUnit test, (4) the five production callsites that derive
+ * {@code hasLargeHubs} upstream and forward it. All five live in
+ * {@code ArchiModelAccessorImpl} — {@code computeAdjustViewSpacing},
+ * {@code applyElementSpacingRecommendations},
+ * {@code applyGroupSpacingRecommendations},
+ * {@code applySpacingRecommendations} and {@code arrangeGroups} — and all
+ * five derive the flag through {@link HubSpacingSignal}, which is where a
+ * change to its meaning belongs. The two
+ * {@code ...DefaultResolutionDecision.decide} methods take the boolean as a
+ * parameter and do not derive it. Edit one without the others and the test
  * fails until they all agree.</p>
  */
 public final class ElementSpacingHeuristic {
@@ -36,8 +41,10 @@ public final class ElementSpacingHeuristic {
      * Returns the recommended element spacing in pixels for the given total
      * connection count on a view, picking the no-large-hubs or hub-aware
      * column based on whether the view contains at least one element with
-     * more than 6 connections (the canonical hub-candidate threshold per
-     * archimate-view-patterns.md §1).
+     * more than 6 connections — the large-hub threshold, which is a higher
+     * cut than the {@code >= 5} hub-candidate threshold
+     * archimate-view-patterns.md §1 defines. {@link HubSpacingSignal} owns
+     * the predicate; callers must not re-derive it.
      *
      * <table border="1">
      *   <caption>Heuristic tiers (archimate-view-patterns.md Pre-Layout Planning §2)</caption>
@@ -50,7 +57,7 @@ public final class ElementSpacingHeuristic {
      * <p>The hub-aware column adds +20px per tier to account for the corridor
      * space that formula-resized hubs consume. Without it, the heuristic
      * undershoots post-hub-resize and coincSeg residuals persist (Row C of
-     * the 2026-05-06 rating-signal investigation, F4 closure).</p>
+     * the 2026-05-06 rating-signal investigation).</p>
      *
      * @param connectionCount total visible archimate-relationship connections
      *                        on the view (sourced from

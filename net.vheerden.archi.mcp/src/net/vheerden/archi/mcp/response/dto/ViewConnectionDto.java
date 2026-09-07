@@ -41,6 +41,26 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * ({@code CENTER=2}), keeping the wire byte-identical to before on both older platforms and un-offset
  * labels. This is the read-back channel for a label offset that is otherwise invisible to
  * MCP-side verification (neither {@code assess-layout} nor {@code export-view} reflect it).</p>
+ *
+ * <p>Added {@code sourceRenderFace} / {@code targetRenderFace}: the element face the connection is
+ * actually <em>drawn</em> leaving and entering. This is not derivable from anything else in the
+ * payload — {@code sourceAnchor} and {@code targetAnchor} are the element centres the renderer aims
+ * <em>from</em>, and a stored bendpoint is a waypoint it aims <em>at</em>, so neither is the point
+ * where the line meets the box. That point is computed at paint time by a connection anchor, from
+ * the element's untruncated bounds, and the server derives the same thing here. The value is one of
+ * {@code top}, {@code bottom}, {@code left} or {@code right}, and is null — hence omitted — whenever
+ * it cannot be established. Seven reasons produce that absence: the attachment is a corner, on two
+ * face lines at once; the reference lands inside the box; the figure's rounded corner puts the
+ * attachment on an arc; the element has no size; the endpoint is a Junction, which anchors on an
+ * ellipse; the endpoint is a Grouping on its alternate figure, whose fallback anchor is shifted by
+ * figure state the model does not carry; or the two anchor algorithms Archi can be configured with
+ * would name different faces. Absence never means "no face".</p>
+ *
+ * <p>On a connection with bendpoints the reference is the {@code absoluteBendpoints} value this
+ * response publishes, whose single division truncates toward zero, while the renderer blends in
+ * {@code double} and converts with {@code floor}. They agree on every non-negative coordinate and
+ * can differ by one pixel on a negative one, which at a band boundary changes the face — so on
+ * those coordinates this field declines where the renderer attaches, rather than guessing.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ViewConnectionDto(
@@ -62,15 +82,20 @@ public record ViewConnectionDto(
     Integer fontSize,
     String fontStyle,
     String labelExpression,
-    Integer relativePosition
+    Integer relativePosition,
+    String sourceRenderFace,
+    String targetRenderFace
 ) {
 
     /**
      * Constructor matching the prior 18-field shape (with labelExpression but no
-     * relativePosition). Delegates to the canonical 19-field constructor with one trailing null
-     * for relativePosition. Preserves every existing 18-arg call site (collect/read-back,
-     * prepare-update-connection, bulk-mutate, and the shorter convenience constructors that
-     * delegate through this arity) byte-identically.
+     * relativePosition). Delegates to the canonical constructor with trailing nulls for
+     * relativePosition and the two render faces. Preserves every existing 18-arg call site
+     * (collect/read-back, prepare-update-connection, bulk-mutate, and the shorter convenience
+     * constructors that delegate through this arity) byte-identically.
+     *
+     * <p>This is the only arity that reaches the canonical record: the 14-, 17-, 6- and 10-arg
+     * forms all delegate through here, so a new trailing component is added in exactly one place.
      */
     public ViewConnectionDto(
             String viewConnectionId,
@@ -95,7 +120,7 @@ public record ViewConnectionDto(
                 sourceViewObjectId, targetViewObjectId, bendpoints,
                 absoluteBendpoints, sourceAnchor, targetAnchor, textPosition,
                 lineColor, lineWidth, fontColor, nameVisible,
-                fontName, fontSize, fontStyle, labelExpression, null);
+                fontName, fontSize, fontStyle, labelExpression, null, null, null);
     }
 
     /**

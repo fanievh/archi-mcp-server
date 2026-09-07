@@ -73,7 +73,8 @@ public class EdgeNudger {
      * @param bendpointLists mutable bendpoint lists per connection (modified in place and returned)
      * @param sourceCenters  source center [x, y] per connection
      * @param targetCenters  target center [x, y] per connection
-     * @param allObstacles   all element rectangles on the view (for corridor width computation)
+     * @param allObstacles   every non-container view object — elements, notes and images alike
+     *                       (for corridor width computation)
      * @return nudged bendpoint lists (same list references, modified in place)
      */
     public List<List<AbsoluteBendpointDto>> nudgePaths(

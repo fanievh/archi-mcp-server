@@ -98,7 +98,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * preserved by construction. The only residual risk &mdash; two pushes landing on the same
  * orthogonal coordinate &rarr; coincident parallel runs &mdash; is prevented because
  * {@link #run} processes connections sequentially and re-discovers each hug against the
- * CURRENT (post-applied-predecessors) geometry, so Fix-2's connection-gap check sees an
+ * CURRENT (post-applied-predecessors) geometry, so the connection-gap check sees an
  * already-pushed predecessor as a neighbour and keeps {@code requiredConnGap} away from it.
  *
  * <p><b>Guards.</b> Per-proposal: (i) the terminal bendpoint is byte-identical (by
@@ -129,13 +129,15 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * Two scope boundaries that made the predecessor a sound no-op on view G's container-nested hub are
  * lifted, both confined to this class:
  * <ol>
- *   <li><b>Ancestor-aware Tier-1.</b> The {@link #tier1Clean} foreign-passthrough check now
- *       runs against the per-connection ANCESTOR-EXCLUDED obstacle set
- *       ({@link RoutingPipeline.ConnectionEndpoints#obstacles()} &mdash; "source/target/ancestors
- *       already excluded"), not the full {@code allObstacles}, so a cleared run may lie inside the
- *       target's/source's own enclosing container (the legitimate corridor wall of a container-nested
- *       hub) without being flagged as a passthrough. A genuine foreign element is still present in
- *       that set, so a real passthrough is still rejected (soundness). Own-face hug detection
+ *   <li><b>Hierarchy-aware Tier-1.</b> The {@link #tier1Clean} foreign-passthrough check now
+ *       runs against the per-connection HIERARCHY-EXCLUDED obstacle set
+ *       ({@link RoutingPipeline.ConnectionEndpoints#obstacles()} &mdash; "source/target and both
+ *       endpoints' ancestors and descendants already excluded"), not the full
+ *       {@code allObstacles}, so a cleared run may lie inside the target's/source's own enclosing
+ *       container (the legitimate corridor wall of a container-nested hub), or around that
+ *       container's own nested contents, without being flagged as a passthrough. A genuine
+ *       foreign element is still present in that set, so a real passthrough is still rejected
+ *       (soundness). Own-face hug detection
  *       ({@link #collectOverlappingEdges} + the edge-clearing in {@link #findClearedOrthogonal})
  *       deliberately stays on {@code allObstacles} (it needs the element's own face). When
  *       {@code conn.obstacles()} is empty (no foreign elements exist) it falls back to
@@ -179,7 +181,7 @@ public class TerminalEgressClearancePass {
      * Absolute connection-gap floor (px), mirroring {@code RoutingPipeline.MIN_CLEARANCE} (8).
      * <p><b>Superseded as the live floor by {@link #HEALTHY_PARALLEL_GAP_PX}</b> (the old
      * {@code max(MIN_CONNECTION_GAP_PX, ceil(V_p10))} formula and its helper were removed). Retained
-     * for the historical Fix-2 description in the class Javadoc; not referenced by any current
+     * for the historical connection-gap description in the class Javadoc; not referenced by any
      * code path.
      */
     static final int MIN_CONNECTION_GAP_PX = 8;
@@ -248,7 +250,8 @@ public class TerminalEgressClearancePass {
      *
      * @param connections  index-parallel per-route endpoint records
      * @param paths        index-parallel per-route bendpoint lists (MUTATED in place)
-     * @param allObstacles all element rectangles on the view. <b>Contract:</b> must include the
+     * @param allObstacles every non-container view object — elements, notes and images alike.
+     *                     <b>Contract:</b> must include the
      *                     source/target element rects (consistent with M4 assessor semantics
      *                     where the element is not self-excluded) — the hug is confirmed against the
      *                     element's OWN face edge, so omitting it would silently miss self-face hugs.
@@ -585,8 +588,8 @@ public class TerminalEgressClearancePass {
                 collectNeighbouringConnectionSegments(orthIsY, spanLo, spanHi, pathIndex, allPaths);
 
         // The Tier-1 foreign-passthrough check runs against the per-connection
-        // ANCESTOR-EXCLUDED obstacle set (conn.obstacles() — "source/target/ancestors already
-        // excluded"), NOT the full allObstacles. This lets
+        // HIERARCHY-EXCLUDED obstacle set (conn.obstacles() — "source/target and both endpoints'
+        // ancestors and descendants already excluded"), NOT the full allObstacles. This lets
         // the cleared run lie inside the target's/source's own ancestor container (the legitimate
         // enclosing element of a container-nested hub) without being flagged as a passthrough — the
         // dominant blocker that made the predecessor a sound no-op on view G. A GENUINE foreign
@@ -630,7 +633,7 @@ public class TerminalEgressClearancePass {
      * {@code A' = (term.parallel, newOrth)} immediately interior-ward of the terminal. Parallel
      * coordinates are unchanged (so the hub slot is preserved → HPQ cannot regress from the
      * transform, and the perimeter-terminal immutability invariant holds by construction). Pure; allocates a fresh list (paths are short, so
-     * the per-candidate build the Fix-2 retry needs is cheap).
+     * the per-candidate build the Tier-1 retry needs is cheap).
      */
     private static List<AbsoluteBendpointDto> buildAfterPath(List<AbsoluteBendpointDto> path,
                                                              int cornerIdx, AbsoluteBendpointDto term,
@@ -667,7 +670,7 @@ public class TerminalEgressClearancePass {
             oriented = new ArrayList<>(after);
             Collections.reverse(oriented);
         }
-        return TerminalAnchoring.preservesTerminalAnchoring(anchoring, elem, center, oriented);
+        return TerminalAnchoring.preservesTerminalAnchoring(anchoring, elem, oriented);
     }
 
     /** Away-from-interior sign on the orthogonal axis for each face (perimeter-terminal-immutability line = edge + sign). */
@@ -682,8 +685,8 @@ public class TerminalEgressClearancePass {
      * Smallest clearance k in [{@link #TARGET_EGRESS_CLEARANCE_PX}, {@link #MAX_EGRESS_CLEARANCE_PX}]
      * such that {@code geomEdge + away*k} clears every overlapping element edge by
      * {@code EDGE_COINCIDENCE_TOLERANCE_PX + CLEAR_SAFETY_MARGIN_PX} (v1 behaviour) AND every
-     * neighbouring co-axial connection-segment coordinate by {@code requiredConnGap} (Fix-2a) AND
-     * (when non-null) the per-candidate {@code candidateFeasible} predicate (G-Fix-2:
+     * neighbouring co-axial connection-segment coordinate by {@code requiredConnGap} AND
+     * (when non-null) the per-candidate {@code candidateFeasible} predicate (Tier-1 retry:
      * the candidate's perimeter-terminal immutability + Tier-1 feasibility). The loop ascends, so the smallest feasible k is
      * returned; a candidate that fails ONLY the Tier-1 predicate no longer aborts the search (the
      * predecessor returned the first edge/conn-cleared candidate and let the caller no-op when
@@ -697,8 +700,8 @@ public class TerminalEgressClearancePass {
         for (int k = TARGET_EGRESS_CLEARANCE_PX; k <= MAX_EGRESS_CLEARANCE_PX; k++) {
             int cand = geomEdge + away * k;
             if (!clears(cand, edges, edgeRequired)) continue;
-            if (!clears(cand, connSegCoords, requiredConnGap)) continue;            // Fix-2a
-            if (candidateFeasible != null && !candidateFeasible.test(cand)) continue; // G-Fix-2
+            if (!clears(cand, connSegCoords, requiredConnGap)) continue;         // connection gap
+            if (candidateFeasible != null && !candidateFeasible.test(cand)) continue; // Tier-1
             return cand;
         }
         return null;
@@ -749,7 +752,7 @@ public class TerminalEgressClearancePass {
     }
 
     /**
-     * Fix-2a — collect the orthogonal coordinates of every OTHER connection's CO-AXIAL segment
+     * Connection-gap-aware room search — collect the orthogonal coordinates of every OTHER
      * (same orientation as the hug run) whose parallel span overlaps the hug's span by at least
      * {@link #EDGE_COINCIDENCE_MIN_OVERLAP_PX}. The cleared run must keep {@code requiredConnGap}
      * from each of these. Under the Option B floor ({@code requiredConnGap = HEALTHY_PARALLEL_GAP_PX})

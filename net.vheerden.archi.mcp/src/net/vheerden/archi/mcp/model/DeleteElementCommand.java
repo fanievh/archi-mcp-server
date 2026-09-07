@@ -38,7 +38,7 @@ import org.eclipse.emf.ecore.EObject;
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
  * Direct invocation of {@code execute()} bypasses undo tracking.</p>
  */
-public class DeleteElementCommand extends Command {
+public class DeleteElementCommand extends Command implements NameCapturingCommand {
 
     private final IArchimateElement element;
     private final IFolder elementFolder;
@@ -71,6 +71,8 @@ public class DeleteElementCommand extends Command {
     private final EObject elementSuccessor;
     private final List<EObject> relationshipSuccessors;
     private final List<IDiagramModelObject> viewReferenceSuccessors;
+
+    private String nameAtExecute;
 
     /**
      * Creates a command to delete an element and cascade-remove all dependencies.
@@ -118,6 +120,8 @@ public class DeleteElementCommand extends Command {
 
     @Override
     public void execute() {
+        nameAtExecute = null;
+
         // 1. Disconnect all view connections
         for (IDiagramModelConnection conn : viewConnectionsToDisconnect) {
             conn.disconnect();
@@ -134,8 +138,16 @@ public class DeleteElementCommand extends Command {
             rel.folder.getElements().remove(rel.relationship);
         }
 
-        // 4. Remove element from folder
-        elementFolder.getElements().remove(element);
+        // 4. Remove element from folder, recording what it was called as it goes. Read here rather
+        // than on the way in, and kept only when the removal actually removed something: an
+        // earlier command in the same compound may have renamed this element, and may equally
+        // have already deleted it — a detached element is still reachable and still writable, so
+        // reporting the name it carries when a redundant delete runs would name it by something
+        // it never was while it existed.
+        String subjectName = element.getName();
+        if (elementFolder.getElements().remove(element)) {
+            nameAtExecute = subjectName;
+        }
     }
 
     @Override
@@ -166,6 +178,11 @@ public class DeleteElementCommand extends Command {
 
     // Default redo() calls execute() — safe because all state is in final fields
 
+    @Override
+    public String getNameAtExecute() {
+        return nameAtExecute;
+    }
+
     /** The item that immediately followed {@code item} in {@code list}, or
      *  {@code null} if it was last / not present. Used to capture a stable
      *  re-insertion anchor at construction time. Relies on EMF default identity
@@ -178,6 +195,13 @@ public class DeleteElementCommand extends Command {
 
     private static void safeAddElement(IFolder folder, int index, EObject element,
                                        EObject successorAnchor) {
+        // Already restored → nothing to do. A batch that removes the same element twice (queued
+        // twice, or an element delete overlapping the delete of a folder that cascades it) undoes
+        // in reverse and would re-add the element a second time; EMF containment lists forbid
+        // duplicates and would throw. See SiblingUndoAnchor.restore for the shared-helper twin.
+        if (folder.getElements().contains(element)) {
+            return;
+        }
         int anchorIndex = (successorAnchor != null)
                 ? folder.getElements().indexOf(successorAnchor) : -1;
         if (anchorIndex >= 0) {
@@ -192,6 +216,12 @@ public class DeleteElementCommand extends Command {
     private static void safeAddChild(IDiagramModelContainer container, int index,
                                       IDiagramModelObject child,
                                       IDiagramModelObject successorAnchor) {
+        // Already restored → nothing to do (see safeAddElement): a redundant/overlapping delete's
+        // reverse-order undo can re-add the same cascaded view child twice, which the unique
+        // containment list would reject.
+        if (container.getChildren().contains(child)) {
+            return;
+        }
         int anchorIndex = (successorAnchor != null)
                 ? container.getChildren().indexOf(successorAnchor) : -1;
         if (anchorIndex >= 0) {

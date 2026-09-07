@@ -30,17 +30,23 @@ import java.util.List;
  *                                  source of truth — {@code assess-layout}
  *                                  connectionCount field)
  * @param interGroupConnectionCount count of connections crossing a top-level
- *                                  group boundary; computed by
- *                                  {@code countInterGroupConnections} (same
- *                                  source as the apply-group sibling tool)
+ *                                  container boundary — a native view group
+ *                                  and an ArchiMate {@code Grouping} element
+ *                                  alike; computed by
+ *                                  {@code TopLevelGroupTargets
+ *                                  .countInterGroupConnections} (same source
+ *                                  as the apply-group sibling tool)
  * @param isConnected               true when
  *                                  {@code interGroupConnectionCount > 0};
  *                                  selects the connected column on the
  *                                  group-spacing heuristic
  * @param hasLargeHubs              true when at least one element on the
- *                                  view has &gt; 6 connections (canonical
- *                                  hub-candidate threshold per
- *                                  {@code HubSizingSuggestionBuilder}); both
+ *                                  view has &gt; 6 connections — the
+ *                                  large-hub threshold, computed by
+ *                                  {@code HubSpacingSignal}. Distinct from
+ *                                  the &ge; 5 hub-candidate cut and from the
+ *                                  &gt; 12 high-fan-out cut in
+ *                                  {@code HubSizingSuggestionBuilder}; both
  *                                  heuristic tables consume this flag
  * @param currentElementSpacingPx   minimum per-group element spacing across
  *                                  all top-level groups (most-tight wins)
@@ -77,7 +83,9 @@ import java.util.List;
  *                                  ({@code interGroupDelta <
  *                                  proposedGroupDelta})
  * @param noChangeReason            populated when BOTH clamped deltas are
- *                                  0 (short-circuit); null otherwise
+ *                                  0 (short-circuit), naming each in-scope
+ *                                  arm's own reason — the structural refusals
+ *                                  included; null otherwise
  * @param elementTargetOverride     echoed input — when non-null, the
  *                                  caller-provided override that supplied
  *                                  {@code elementTargetSpacingPx}
@@ -144,7 +152,80 @@ public record ApplySpacingRecommendationsResultDto(
         // Each arm's actionable PASS-honest reflow diagnosis; null on every
         // non-PASS-honest path. Appended; backwards-compat preserved.
         String elementDensityFloorDiagnosis,
-        String groupDensityFloorDiagnosis) {
+        String groupDensityFloorDiagnosis,
+        /**
+         * The rating-regression disclosure: one entry when this call committed a view whose
+         * overall quality is worse than the view it was handed, empty otherwise.
+         *
+         * <p>One entry for the call, not one per arm. Both arms' commands are spliced into a
+         * single compound and dispatched once, so there is exactly one committed state to compare
+         * against the one pre-call state.</p>
+         *
+         * <p>Empty is the ordinary case and is omitted from the wire entirely, so a clean run
+         * serializes exactly as it did before this field existed.</p>
+         *
+         * <p><strong>Empty does not certify a clean result on a queued call.</strong> When a batch
+         * is open the accepted commands are queued rather than executed and both arms have already
+         * reset the model, so {@code after} re-reads the unmutated view and the comparison is
+         * structurally blind. {@code nextSteps} says so in words on that path rather than leaving
+         * the silence to be read as "nothing regressed".</p>
+         */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<StructuredWarningDto> structuredWarnings) {
+
+    /**
+     * Backwards-compatible constructor for every call site that predates the rating-regression
+     * disclosure — the pre-loop short-circuit, dry-run and no-change paths, which take no
+     * comparison and therefore have nothing to disclose.
+     *
+     * <p>Delegates with an empty warning list, which {@code NON_EMPTY} omits, so these paths
+     * serialize byte-identically to before.</p>
+     */
+    public ApplySpacingRecommendationsResultDto(
+            String viewId,
+            String scope,
+            boolean dryRun,
+            int connectionCount,
+            int interGroupConnectionCount,
+            boolean isConnected,
+            boolean hasLargeHubs,
+            int currentElementSpacingPx,
+            int currentGroupSpacingPx,
+            int elementTargetSpacingPx,
+            int groupTargetSpacingPx,
+            int proposedElementDelta,
+            int proposedGroupDelta,
+            int interElementDelta,
+            int interGroupDelta,
+            boolean elementKneeClampApplied,
+            boolean groupKneeClampApplied,
+            String noChangeReason,
+            Integer elementTargetOverride,
+            Integer groupTargetOverride,
+            AssessLayoutResultDto before,
+            AssessLayoutResultDto after,
+            AdjustViewSpacingResultDto adjustResult,
+            String elementTerminationReason,
+            int elementIterationCount,
+            List<Integer> elementAppliedDeltas,
+            String groupTerminationReason,
+            int groupIterationCount,
+            List<Integer> groupAppliedDeltas,
+            String elementDensityFloorDiagnosis,
+            String groupDensityFloorDiagnosis) {
+        this(viewId, scope, dryRun, connectionCount, interGroupConnectionCount,
+                isConnected, hasLargeHubs, currentElementSpacingPx,
+                currentGroupSpacingPx, elementTargetSpacingPx,
+                groupTargetSpacingPx, proposedElementDelta, proposedGroupDelta,
+                interElementDelta, interGroupDelta, elementKneeClampApplied,
+                groupKneeClampApplied, noChangeReason, elementTargetOverride,
+                groupTargetOverride, before, after, adjustResult,
+                elementTerminationReason, elementIterationCount,
+                elementAppliedDeltas, groupTerminationReason,
+                groupIterationCount, groupAppliedDeltas,
+                elementDensityFloorDiagnosis, groupDensityFloorDiagnosis,
+                /*structuredWarnings=*/ List.of());
+    }
 
     /**
      * Backwards-compatible 29-arg constructor — preserves every

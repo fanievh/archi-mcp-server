@@ -71,6 +71,32 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
+    public void getModelInfo_descriptionShouldDocumentApprovalEnvelopeReshape() {
+        StubAccessor accessor = new StubAccessor(true);
+        ModelQueryHandler handler = new ModelQueryHandler(accessor, formatter, registry, null);
+        handler.registerTools();
+
+        String desc = findToolSpec("get-model-info").tool().description();
+        assertTrue("must name the approvalMode field it already returns",
+                desc.contains("approvalMode"));
+        assertTrue("must state where the result moves under the gate",
+                desc.contains("result.preview"));
+        assertTrue("must name the proposal sibling", desc.contains("result.proposal"));
+        // The proposal stores a deferred rebuild handle, so approving re-runs prepareXxx and
+        // creates a NEW object: a created id previewed here never resolves. Pin the condition,
+        // not just the word "id" — the distinction from update/delete is the whole point.
+        assertTrue("must mark created ids provisional",
+                desc.contains("newly created "));
+        assertTrue("must say the provisional id never resolves",
+                desc.contains("provisional and will never resolve"));
+        assertTrue("must scope stability to existing targets",
+                desc.contains("updated or deleted are stable"));
+        // Three tools do not follow this shape; stating it unconditionally would be false.
+        assertTrue("must route the divergent tools to their own descriptions",
+                desc.contains("shape this differently"));
+    }
+
+    @Test
     public void shouldHaveEmptyInputSchema() {
         StubAccessor accessor = new StubAccessor(true);
         ModelQueryHandler handler = new ModelQueryHandler(accessor, formatter, registry, null);
@@ -1389,7 +1415,7 @@ public class ModelQueryHandlerTest {
     // ---- update-model tests (G6) ----
 
     @Test
-    public void shouldRegisterUpdateModelTool_whenRegisterToolsCalled_AC2() {
+    public void shouldRegisterUpdateModelTool_whenRegisterToolsCalled() {
         StubAccessor accessor = new StubAccessor(true);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("update-model");
@@ -1400,7 +1426,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldExposeNameParam_inUpdateModelSchema_AC2() {
+    public void shouldExposeNameParam_inUpdateModelSchema() {
         StubAccessor accessor = new StubAccessor(true);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.JsonSchema schema = findToolSpec("update-model").tool().inputSchema();
@@ -1409,7 +1435,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldExposePurposeParam_inUpdateModelSchema_AC4() {
+    public void shouldExposePurposeParam_inUpdateModelSchema() {
         StubAccessor accessor = new StubAccessor(true);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.JsonSchema schema = findToolSpec("update-model").tool().inputSchema();
@@ -1423,7 +1449,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldExposePropertiesParam_inUpdateModelSchema_AC5() {
+    public void shouldExposePropertiesParam_inUpdateModelSchema() {
         StubAccessor accessor = new StubAccessor(true);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
         McpSchema.JsonSchema schema = findToolSpec("update-model").tool().inputSchema();
@@ -1434,7 +1460,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldRejectEmptyName_whenNamePassedAsEmptyString_AC8() throws Exception {
+    public void shouldRejectEmptyName_whenNamePassedAsEmptyString() throws Exception {
         // True regression pin: HandlerUtils.optionalStringParam collapses "" to null via
         // !isBlank(). Without the explicit args.containsKey("name") + "".equals(...) guard
         // in handleUpdateModel, an empty name would be silently stripped and the accessor
@@ -1450,7 +1476,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldProduceCorrectErrorMessage_whenNameIsEmpty_AC8() throws Exception {
+    public void shouldProduceCorrectErrorMessage_whenNameIsEmpty() throws Exception {
         // End-to-end pin: the accessor's prepareUpdateModel must reject "" with the
         // required message — once the handler forwards "" correctly (per the test above),
         // this asserts the accessor wires the boundary rejection.
@@ -1469,7 +1495,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldRejectNoFieldsToUpdate_whenAllFieldsOmitted_AC2_AC8() throws Exception {
+    public void shouldRejectNoFieldsToUpdate_whenAllFieldsOmitted() throws Exception {
         RejectingUpdateModelAccessor accessor = new RejectingUpdateModelAccessor(
                 net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
                 "No fields to update — provide at least one of: name, purpose, properties");
@@ -1483,7 +1509,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldReturnUpdatedModelInfoDto_whenSucceeds_AC11() throws Exception {
+    public void shouldReturnUpdatedModelInfoDto_whenSucceeds() throws Exception {
         RecordingUpdateModelAccessor accessor = new RecordingUpdateModelAccessor(
                 new ModelInfoDto("New Name", "New purpose", Map.of("Author", "Jane"),
                         10, 5, 3, 0, Map.of(), Map.of(), Map.of()));
@@ -1505,7 +1531,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldSurfacePurpose_inGetModelInfoResponse_AC11() throws Exception {
+    public void shouldSurfacePurpose_inGetModelInfoResponse() throws Exception {
         ModelMetadataAwareAccessor accessor = new ModelMetadataAwareAccessor(
                 "Test Model", "Strategic EA", null);
         new ModelQueryHandler(accessor, formatter, registry, null).registerTools();
@@ -1518,7 +1544,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldSurfaceProperties_inGetModelInfoResponse_AC11() throws Exception {
+    public void shouldSurfaceProperties_inGetModelInfoResponse() throws Exception {
         Map<String, String> modelProps = new LinkedHashMap<>();
         modelProps.put("Author", "Jane");
         modelProps.put("Tag", "draft");
@@ -1538,7 +1564,7 @@ public class ModelQueryHandlerTest {
     }
 
     @Test
-    public void shouldCarryClearPurposeSignal_throughHandlerBoundary_AC12() {
+    public void shouldCarryClearPurposeSignal_throughHandlerBoundary() {
         // Proposal rendering itself lives in ArchiModelAccessorImpl (Layer 3).
         // At the handler boundary (Layer 2), what matters is that an empty-string
         // "purpose" is forwarded to accessor.updateModel as "" (not null) — the

@@ -5,5 +5,11 @@ CLAUDE.md
 __pycache__/
 *.pyc
 
-# M0-1 headless test harness output (tools/run-tests.sh)
+# Headless test harness output (tools/run-tests.sh)
 build/
+
+# Empty lockfile left behind by `npx` runs; there is no package.json in this repo
+package-lock.json
+
+# Generated PDF report output (prompts/archimate-model-to-pdf-report.py)
+archi-report/

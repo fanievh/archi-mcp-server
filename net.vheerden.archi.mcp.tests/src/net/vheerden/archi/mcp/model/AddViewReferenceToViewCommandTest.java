@@ -52,7 +52,7 @@ public class AddViewReferenceToViewCommandTest {
     }
 
     @Test
-    public void shouldAddViewReferenceToContainerOnExecute_AC5() {
+    public void shouldAddViewReferenceToContainerOnExecute() {
         AddViewReferenceToViewCommand cmd =
                 new AddViewReferenceToViewCommand(viewRef, targetView);
 
@@ -67,7 +67,7 @@ public class AddViewReferenceToViewCommandTest {
     }
 
     @Test
-    public void shouldRemoveViewReferenceFromContainerOnUndo_AC5() {
+    public void shouldRemoveViewReferenceFromContainerOnUndo() {
         AddViewReferenceToViewCommand cmd =
                 new AddViewReferenceToViewCommand(viewRef, targetView);
         cmd.execute();
@@ -81,7 +81,7 @@ public class AddViewReferenceToViewCommandTest {
     }
 
     @Test
-    public void shouldPreserveOrderInContainerChildren_AC5() {
+    public void shouldPreserveOrderInContainerChildren() {
         IDiagramModelGroup group = factory.createDiagramModelGroup();
         group.setName("Existing group");
         group.setBounds(0, 0, 300, 200);

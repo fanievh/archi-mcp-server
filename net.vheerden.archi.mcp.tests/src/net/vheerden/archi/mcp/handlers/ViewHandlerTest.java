@@ -2,6 +2,12 @@ package net.vheerden.archi.mcp.handlers;
 
 import static org.junit.Assert.*;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +33,7 @@ import net.vheerden.archi.mcp.model.ProposalContext;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
+import net.vheerden.archi.mcp.response.FieldSelector;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 
 import org.eclipse.gef.commands.Command;
@@ -37,7 +44,10 @@ import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
+import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
+import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNodeDto;
+import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
@@ -1027,6 +1037,214 @@ public class ViewHandlerTest {
     }
 
     @SuppressWarnings("unchecked")
+    private int dryRunTokens(String tool, Map<String, Object> extraArgs, String preset) throws Exception {
+        Map<String, Object> args = new HashMap<>(extraArgs);
+        args.put("dryRun", true);
+        args.put("fields", preset);
+        McpSchema.CallToolResult result = findToolSpec(tool).callHandler()
+                .apply(null, new McpSchema.CallToolRequest(tool, args));
+        assertFalse(result.isError());
+        Map<String, Object> dryRun = (Map<String, Object>) parseJson(result).get("dryRun");
+        assertNotNull("dryRun key must be present at " + preset, dryRun);
+        return ((Number) dryRun.get("estimatedTokens")).intValue();
+    }
+
+    @Test
+    public void shouldRaiseDryRunEstimate_whenFieldsIsFull_forGetViews() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // The full preset adds documentation and properties to a view row, so the dry-run
+        // estimate must be larger than the same query at standard.
+        Map<String, Object> none = new HashMap<>();
+        int minimal = dryRunTokens("get-views", none, "minimal");
+        int standard = dryRunTokens("get-views", none, "standard");
+        int full = dryRunTokens("get-views", none, "full");
+        assertTrue("minimal (" + minimal + ") must be cheaper than standard (" + standard + ")",
+                minimal < standard);
+        assertTrue("full (" + full + ") must exceed standard (" + standard + ")", standard < full);
+    }
+
+    @Test
+    public void shouldRaiseDryRunEstimate_whenFieldsIsFull_forGetViewContents() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // View contents carry relationships, whose full row is wider than the standard one,
+        // so the estimate must follow the preset even though its element half cannot.
+        Map<String, Object> viewArg = new HashMap<>();
+        viewArg.put("viewId", "view-1");
+        int minimal = dryRunTokens("get-view-contents", viewArg, "minimal");
+        int standard = dryRunTokens("get-view-contents", viewArg, "standard");
+        int full = dryRunTokens("get-view-contents", viewArg, "full");
+        assertTrue("minimal (" + minimal + ") must be cheaper than standard (" + standard + ")",
+                minimal < standard);
+        assertTrue("full (" + full + ") must exceed standard (" + standard + ")", standard < full);
+    }
+
+    /**
+     * The companion the ordering pin above needs, and the reason it needs one.
+     *
+     * <p>The ordering assertion was written when this estimate had two terms and both followed the
+     * preset, so it was a check on essentially the whole quantity. Now five of the seven arrays
+     * are charged and none of them moves with the preset, so the ordering still holds while the
+     * part of the estimate it can see has shrunk to a minority of the total -- it would stay green
+     * over a fix that charged the visual arrays at any width at all, including zero. A pin that
+     * survives a change by becoming insensitive to it has not passed it.</p>
+     *
+     * <p>So this asserts the MAGNITUDE the ordering cannot: on a view that carries visual rows,
+     * narrowing the preset reaches two arrays of seven and the saving is a minority of the
+     * payload. Before the visual arrays were charged, this same view advertised a 50% saving; it
+     * is really about 18%, and the difference is a reduction the caller was promised and did not
+     * receive. The bound goes red if the visual terms stop being charged, which is the defect.</p>
+     */
+    /**
+     * Every array the response carries is charged, pinned end to end through the handler.
+     *
+     * <p>The saving bound below cannot see one array going missing: with the connection term
+     * still charged, dropping the node term moves the advertised saving by four points and stays
+     * inside any bound loose enough to be a bound. Only the arithmetic itself distinguishes six
+     * charged arrays from five, so the arithmetic is what this asserts.</p>
+     */
+    @Test
+    public void shouldChargeEveryArrayTheResponseCarries_forGetViewContents() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // view-1 returns 2 element rows, 1 relationship row, 2 visualMetadata rows and 2
+        // connection rows -- two connections for the one relationship, because the element and
+        // relationship arrays are deduplicated by concept id and the visual arrays are not. Its
+        // groups, notes and images arrays are null, so those three terms contribute nothing.
+        //
+        //   standard: 2*250 + 1*185 + 2*205 + 2*640 + 280 = 2655 chars -> 664 tokens
+        //   minimal : 2* 80 + 1* 55 + 2*205 + 2*640 + 280 = 2185 chars -> 547 tokens
+        //   full    : 2*250 + 1*365 + 2*205 + 2*640 + 280 = 2835 chars -> 709 tokens
+        //
+        // The element width is the same at standard and full, so only the relationship half
+        // separates those two.
+        Map<String, Object> viewArg = new HashMap<>();
+        viewArg.put("viewId", "view-1");
+        assertEquals(547, dryRunTokens("get-view-contents", viewArg, "minimal"));
+        assertEquals(664, dryRunTokens("get-view-contents", viewArg, "standard"));
+        assertEquals(709, dryRunTokens("get-view-contents", viewArg, "full"));
+    }
+
+    /**
+     * The three arrays that arrive null when empty, charged on a view that actually has them.
+     *
+     * <p>Every other view in this class is built with the convenience constructor that leaves
+     * groups, notes and images null, which is why the three views the defect was originally
+     * measured on showed four arrays rather than seven -- and why a fix that charged only the four
+     * would have looked complete. It also pins the null-guard the other direction: on those other
+     * views these three are null, and an unguarded {@code size()} would fail the dry-run branch
+     * where it used to work.</p>
+     */
+    @Test
+    public void shouldChargeGroupsNotesAndImages_whenTheViewCarriesThem() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        Map<String, Object> viewArg = new HashMap<>();
+        viewArg.put("viewId", "view-decorated");
+        // 1 element, no relationships, 1 node row, no connections, and one row in each of the
+        // three arrays that are null on every other view here:
+        //   1*250 + 1*205 + 1*435 + 1*430 + 1*345 + 280 = 1945 chars -> 487 tokens
+        assertEquals(487, dryRunTokens("get-view-contents", viewArg, "standard"));
+
+        Map<String, Object> excluded = new HashMap<>(viewArg);
+        excluded.put("exclude", List.of("groups", "notes", "images"));
+        // 1*250 + 1*205 + 280 = 735 chars -> 184 tokens
+        assertEquals(184, dryRunTokens("get-view-contents", excluded, "standard"));
+    }
+
+    /**
+     * The caller who followed the tool's own advice.
+     *
+     * <p>The dry-run suggestions recommend {@code exclude=['visualMetadata','connections']}, and
+     * the two arrays that removes are two of the five this estimate now charges for. An estimate
+     * blind to the exclusion would quote a caller for arrays they will not receive -- turning a
+     * large under-report into a large over-report for exactly the caller who did the right thing.
+     * Nothing else in this class exercises the dry-run branch with an exclusion, so without this
+     * the handler could ignore the parameter entirely and every test would stay green.</p>
+     */
+    @Test
+    public void shouldChargeNothingForAnExcludedArray_forGetViewContents() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        Map<String, Object> viewArg = new HashMap<>();
+        viewArg.put("viewId", "view-1");
+        Map<String, Object> excluded = new HashMap<>(viewArg);
+        excluded.put("exclude", List.of("visualMetadata", "connections"));
+
+        // Both visual arrays gone: 2*250 + 1*185 + 280 = 965 chars -> 242 tokens.
+        assertEquals(242, dryRunTokens("get-view-contents", excluded, "standard"));
+        assertTrue("excluding the two visual arrays must reduce the estimate",
+                dryRunTokens("get-view-contents", excluded, "standard")
+                        < dryRunTokens("get-view-contents", viewArg, "standard"));
+
+        // And one at a time, so a fix that honours the parameter only when both are named fails.
+        Map<String, Object> nodesOnly = new HashMap<>(viewArg);
+        nodesOnly.put("exclude", List.of("visualMetadata"));
+        // 2*250 + 1*185 + 2*640 + 280 = 2245 chars -> 562 tokens.
+        assertEquals(562, dryRunTokens("get-view-contents", nodesOnly, "standard"));
+
+        Map<String, Object> connectionsOnly = new HashMap<>(viewArg);
+        connectionsOnly.put("exclude", List.of("connections"));
+        // 2*250 + 1*185 + 2*205 + 280 = 1375 chars -> 344 tokens.
+        assertEquals(344, dryRunTokens("get-view-contents", connectionsOnly, "standard"));
+    }
+
+    /**
+     * The exclusion suggestion's gate, including the partial case nothing pinned before.
+     *
+     * <p>The middle two cases are the ones that decide the gate's shape, and they decide it
+     * against tightening: a caller who has dropped only {@code visualMetadata} must still be
+     * offered the exclusion, because a connection row is about three times a node row and is the
+     * larger of the two savings. A conjunction of negations reads tidier and would withdraw the
+     * suggestion the moment either array went, taking the bigger saving with it.</p>
+     */
+    @Test
+    public void shouldOfferTheExclusionWhileEitherArrayIsStillReturned_forGetViewContents()
+            throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String suggestion = "Use exclude=['visualMetadata','connections'] to omit position and routing data";
+
+        assertTrue("a caller excluding nothing must be offered the exclusion",
+                dryRunNextSteps(null).contains(suggestion));
+        assertTrue("a caller who has dropped only visualMetadata must still be offered it -- the "
+                + "connection rows they are still receiving are the wider of the two",
+                dryRunNextSteps(List.of("visualMetadata")).contains(suggestion));
+        assertTrue("and likewise a caller who has dropped only connections",
+                dryRunNextSteps(List.of("connections")).contains(suggestion));
+        assertFalse("but once both are gone there is nothing left to suggest",
+                dryRunNextSteps(List.of("visualMetadata", "connections")).contains(suggestion));
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> dryRunNextSteps(List<String> exclude) throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("dryRun", true);
+        if (exclude != null) {
+            args.put("exclude", exclude);
+        }
+        McpSchema.CallToolResult result = findToolSpec("get-view-contents").callHandler()
+                .apply(null, new McpSchema.CallToolRequest("get-view-contents", args));
+        assertFalse(result.isError());
+        return (List<String>) parseJson(result).get("nextSteps");
+    }
+
+    @Test
+    public void shouldNotAdvertiseAMajoritySaving_whenTheViewCarriesVisualRows() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // view-1 draws 2 elements and 2 connections for 1 relationship. The preset reaches the
+        // element and relationship rows only: 2*(250-80) + 1*(185-55) = 470 chars of the 2655 a
+        // standard response costs, so a little under a fifth.
+        Map<String, Object> viewArg = new HashMap<>();
+        viewArg.put("viewId", "view-1");
+        int minimal = dryRunTokens("get-view-contents", viewArg, "minimal");
+        int standard = dryRunTokens("get-view-contents", viewArg, "standard");
+        double saving = 1.0 - (minimal / (double) standard);
+        assertTrue("narrowing the preset must still save something (minimal " + minimal
+                + ", standard " + standard + ")", saving > 0);
+        assertTrue("five of the seven arrays do not follow the preset, so the saving on a view "
+                + "carrying visual rows must be a minority of the payload -- it was " + saving
+                + ", which is the majority saving the two-term estimate used to advertise",
+                saving < 0.30);
+    }
+
+    @SuppressWarnings("unchecked")
     @Test
     public void shouldReturnDryRunEstimate_forGetViewContents() throws Exception {
         StubAccessor accessor = new StubAccessor(true);
@@ -1411,6 +1629,95 @@ public class ViewHandlerTest {
                 : Collections.emptyMap();
         McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("get-views", args);
         return spec.callHandler().apply(null, request);
+    }
+
+    // ---- Read-payload width on get-view-contents, per preset ----------------------------
+
+    /**
+     * A view whose relationship carries every optional field populated.
+     *
+     * <p>The production mapper left all four hardcoded null until this surface's preset was
+     * honoured, so nothing here could ever prove what {@code get-view-contents} does with them.
+     * Supplying them is what pins this tool independently of the mapper — the nested
+     * {@code relationships} array goes through the same {@code FieldSelector} path as
+     * {@code get-relationships}, and must agree with it preset for preset.</p>
+     */
+    private static class WideViewContentsAccessor extends StubAccessor {
+        WideViewContentsAccessor() {
+            super(true);
+        }
+
+        @Override
+        public Optional<ViewContentsDto> getViewContents(String viewId) {
+            return Optional.of(new ViewContentsDto(
+                    "view-1", "Application Landscape", "Application Usage",
+                    List.of(ElementDto.standard("elem-1", "Customer Portal",
+                            "ApplicationComponent", null, "Application", "Main web app", List.of())),
+                    List.of(new RelationshipDto("rel-1", "Serves", "ServingRelationship",
+                            "Critical", "elem-1", "elem-2", false,
+                            "view relationship documentation",
+                            List.of(Map.of("key", "owner", "value", "ops")),
+                            "Customer Portal", "API Gateway", null, null, null)),
+                    List.of(), List.of()));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> viewContentsRelationshipRow(String fieldsPreset) throws Exception {
+        registry = new CommandRegistry();
+        ViewHandler handler = new ViewHandler(
+                new WideViewContentsAccessor(), formatter, registry, null);
+        handler.registerTools();
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        if (fieldsPreset != null) {
+            args.put("fields", fieldsPreset);
+        }
+        Map<String, Object> envelope = parseJson(findToolSpec("get-view-contents").callHandler()
+                .apply(null, new McpSchema.CallToolRequest("get-view-contents", args)));
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("get-view-contents must return a result: " + envelope, result);
+        List<Map<String, Object>> rels = (List<Map<String, Object>>) result.get("relationships");
+        assertNotNull("and must carry a relationships array: " + envelope, rels);
+        return rels.get(0);
+    }
+
+    @Test
+    public void getViewContents_shouldOmitTheFourOptionalFields_atTheDefaultPreset() throws Exception {
+        Map<String, Object> row = viewContentsRelationshipRow(null);
+
+        assertEquals("the default preset decides the width of every relationship row this view "
+                + "returns; it was: " + row.keySet(),
+                java.util.Set.of("id", "name", "type", "sourceId", "targetId"), row.keySet());
+    }
+
+    @Test
+    public void getViewContents_shouldOmitTheFourOptionalFields_atStandard() throws Exception {
+        Map<String, Object> row = viewContentsRelationshipRow("standard");
+
+        assertEquals("standard must stay identical to the default; it was: " + row.keySet(),
+                java.util.Set.of("id", "name", "type", "sourceId", "targetId"), row.keySet());
+    }
+
+    @Test
+    public void getViewContents_shouldReturnOnlyIdAndName_atMinimal() throws Exception {
+        Map<String, Object> row = viewContentsRelationshipRow("minimal");
+
+        assertEquals("minimal must stay two fields wide; it was: " + row.keySet(),
+                java.util.Set.of("id", "name"), row.keySet());
+    }
+
+    @Test
+    public void getViewContents_shouldDeliverTheFourOptionalFields_atFull() throws Exception {
+        Map<String, Object> row = viewContentsRelationshipRow("full");
+
+        assertTrue("full must deliver the fields its preset names; it was: " + row.keySet(),
+                row.keySet().containsAll(java.util.Set.of(
+                        "documentation", "properties", "sourceName", "targetName",
+                        "specialization")));
+        assertEquals("view relationship documentation", row.get("documentation"));
+        assertEquals("Customer Portal", row.get("sourceName"));
+        assertEquals("API Gateway", row.get("targetName"));
     }
 
     private McpSchema.CallToolResult invokeGetViewContents(String viewId) {
@@ -1838,6 +2145,26 @@ public class ViewHandlerTest {
                         "view-1", "Application Landscape", "Application Usage",
                         elements, relationships, visualMetadata, connections));
             }
+            if ("view-decorated".equals(viewId)) {
+                // The three arrays that arrive null when a view has none of that object. Every
+                // other view here uses the convenience constructor that leaves all three null, so
+                // without this view their terms are unreachable from a handler test and an
+                // estimate that dropped them would look correct.
+                return Optional.of(new ViewContentsDto(
+                        "view-decorated", "Decorated View", null, "manual",
+                        List.of(ElementDto.standard("elem-1", "Customer Portal",
+                                "ApplicationComponent", null, "Application", "Main web app",
+                                List.of())),
+                        List.of(),
+                        List.of(new ViewNodeDto("vo-1", "elem-1", 100, 50, 120, 55)),
+                        List.of(),
+                        List.of(new ViewGroupDto("grp-1", "Channels", 20, 20, 400, 300, null,
+                                List.of("vo-1"))),
+                        List.of(new ViewNoteDto("note-1", "Reviewed 2026-09", 460, 20, 200, 80,
+                                null)),
+                        List.of(new DiagramImageDto("img-1", "images/_BRJagKIjEfGmoYmHSR0RJQ.png",
+                                700, 20, 180, 120, null, null, null))));
+            }
             if ("view-empty".equals(viewId)) {
                 return Optional.of(new ViewContentsDto(
                         "view-empty", "Empty View", null,
@@ -1975,4 +2302,485 @@ public class ViewHandlerTest {
             // no-op for handler tests
         }
     }
+
+    // ---- The reach of the 'fields' preset over the response's seven arrays -----------------------
+
+    /**
+     * The clause that carries the disclosure, held as one constant so the pin and its two mutation
+     * directions all move together.
+     *
+     * <p>It names the boundary itself — which rows the preset reaches — rather than any one array,
+     * because a caller who reads only "element and relationship rows" has already been told what
+     * {@code minimal} will and will not shrink.</p>
+     */
+    private static final String PRESET_REACH_CLAUSE =
+            "the preset reaches the element and relationship rows only";
+
+    /** The five arrays the preset does not reach, in the order the response emits them. */
+    private static final List<String> VISUAL_ARRAYS =
+            List.of("visualMetadata", "connections", "groups", "notes", "images");
+
+    /**
+     * The sentence both tool-description pins anchor on before asserting anything.
+     *
+     * <p>Single-sourced deliberately: two methods guard prose in the same passage, and a copy of the
+     * anchor in each is a copy that can be re-pointed in one and left stale in the other, leaving a
+     * "the prose has moved" message pointing at prose that did not move.</p>
+     */
+    private static final String PROJECTION_ANCHOR = "Use 'fields' to control response verbosity";
+
+    /**
+     * The reach clause lives in the {@code fields} property description, where the caller picks the
+     * preset — not merely somewhere in the served text.
+     *
+     * <p>Asserted against the property description <em>alone</em>. A clause that migrated up into
+     * the tool description would still be served, and would still read as true, but it would no
+     * longer sit beside the parameter whose reach it qualifies — which is exactly where the caller
+     * who set {@code fields: "minimal"} and then measured the payload was looking.</p>
+     */
+    @Test
+    public void shouldStateTheReachOfThePreset_insideTheFieldsPropertyDescription() {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String fieldsDescription = propertyDescriptionOf("get-view-contents", "fields");
+
+        assertTrue("The 'fields' description no longer describes a verbosity preset at all, so the "
+                + "assertions below are guarding prose that has moved. Re-point them — do not "
+                + "delete them. It read: " + fieldsDescription,
+                fieldsDescription.contains("Field verbosity preset"));
+
+        assertTrue("The 'fields' description does not say which of the response's seven arrays the "
+                + "preset reaches. A caller sizing a large view reads this string to decide, and "
+                + "'minimal returns only id and name' reads as covering the whole response when it "
+                + "governs two arrays of seven. Expected: \"" + PRESET_REACH_CLAUSE + "\". It read: "
+                + fieldsDescription,
+                fieldsDescription.toLowerCase(java.util.Locale.ROOT).contains(PRESET_REACH_CLAUSE));
+
+        List<String> unnamed = new ArrayList<>();
+        for (String array : VISUAL_ARRAYS) {
+            if (!fieldsDescription.contains(array)) {
+                unnamed.add(array);
+            }
+        }
+        assertTrue("The reach clause has to name the arrays it excludes, or the caller cannot tell "
+                + "which part of the payload 'exclude' is for. Unnamed: " + unnamed,
+                unnamed.isEmpty());
+
+        assertTrue("The reach clause states what the preset does NOT move without naming a "
+                + "parameter that does, which leaves the caller with a diagnosis and no remedy.",
+                fieldsDescription.contains("Use exclude"));
+
+        assertTrue("The reach clause is stated as a fact about the preset, but handleGetViewContents "
+                + "returns before the field selector runs on format=summary and format=tree, so on "
+                + "those two the preset reaches NOTHING — not even the rows this clause says it does. "
+                + "An unscoped sentence is false on half the format enum.",
+                fieldsDescription.contains("format=summary") && fieldsDescription.contains("format=tree"));
+    }
+
+    /**
+     * The negative control, and the reason it exists: a planning row asked for the sentence "there
+     * is no field projection" to be published here. Both parameters have been declared and
+     * documented on this tool throughout, so that sentence would have been false at the moment it
+     * was written.
+     *
+     * <p><strong>Reach limit.</strong> This pin matches known spellings of the claim, not the claim
+     * in every possible sentence form — there is no general reader for "asserts an absence" over
+     * English prose. It covers the row's own wording, the two paraphrases nearest to it, and the
+     * bare-negation form. A future rewording could evade it; the sibling reach pin above is what
+     * makes such a sentence contradict the surface rather than merely sit beside it.</p>
+     */
+    @Test
+    public void shouldNeverClaimTheToolHasNoFieldProjection_onAnyServedSurface() {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String surface = servedSurfaceOf("get-view-contents");
+
+        assertTrue("get-view-contents no longer publishes its field-selection parameters at all, "
+                + "so this absence check would pass vacuously. Re-point it — do not delete it.",
+                surface.contains("'fields'") && surface.contains("'exclude'"));
+
+        List<String> falseClaims = List.of(
+                "no field projection",
+                "does not support fields",
+                "has no exclude",
+                "has no 'exclude'",
+                "does not support field selection",
+                "no field selection",
+                "there is no projection",
+                "does not project fields",
+                "cannot select fields",
+                "field selection is unsupported",
+                "field selection is not available",
+                "field selection is not supported",
+                "without field selection");
+        List<String> found = new ArrayList<>();
+        for (String claim : falseClaims) {
+            if (surface.toLowerCase(java.util.Locale.ROOT).contains(claim)) {
+                found.add(claim);
+            }
+        }
+
+        assertTrue("A served surface of get-view-contents claims the tool has no field projection. "
+                + "It has had both 'fields' and 'exclude' since they were declared, so this is a "
+                + "false statement reaching an LLM agent that is being asked to act on it. Found: "
+                + found, found.isEmpty());
+    }
+
+    /**
+     * The mechanism, not the sentence.
+     *
+     * <p>A phrase pin goes red when someone deletes the disclosure. It stays green when someone
+     * makes the disclosure false — routes one of the five visual arrays through the preset, and the
+     * published sentence quietly stops describing the code. This drives the real
+     * {@link FieldSelector} at two presets and asserts the boundary itself: the five visual arrays
+     * come back identical, and the two preset-aware arrays do not.</p>
+     *
+     * <p>Every one of the seven arrays is populated in the fixture. An empty array is identical to
+     * itself at every preset, so a fixture that left any of the five empty would assert the
+     * boundary vacuously for that array.</p>
+     *
+     * <p>All three presets are visited, not the two that bracket the interesting case. The
+     * published sentence says the five arrays come back in full at <em>every</em> preset, and a
+     * change that enriched them at {@code full} alone would leave {@code minimal} and
+     * {@code standard} agreeing with each other while the sentence stopped being true.</p>
+     */
+    @Test
+    public void shouldReturnTheFiveVisualArraysUnchanged_acrossEveryPreset() {
+        ViewContentsDto dto = sevenArrayViewContents();
+
+        Map<String, Object> minimal = viewContentsAt(dto, FieldSelector.FieldPreset.MINIMAL);
+        Map<String, Object> standard = viewContentsAt(dto, FieldSelector.FieldPreset.STANDARD);
+        Map<String, Object> full = viewContentsAt(dto, FieldSelector.FieldPreset.FULL);
+
+        for (String array : VISUAL_ARRAYS) {
+            assertNotNull("the fixture must populate " + array + " — an absent array is identical "
+                    + "at every preset and would pin nothing", standard.get(array));
+            assertEquals("The published 'fields' description tells a caller that " + array
+                    + " comes back in full at every preset. It differed between minimal and "
+                    + "standard, so that sentence is now false. Either the disclosure or this "
+                    + "change is wrong; do not simply re-point the assertion.",
+                    standard.get(array), minimal.get(array));
+            assertEquals("The published 'fields' description says every preset, and " + array
+                    + " differed at full. A preset now reaches a visual array, so the sentence is "
+                    + "false at one end of the range even though the other two presets agree.",
+                    standard.get(array), full.get(array));
+        }
+
+        assertNotEquals("the preset must still reach the element rows — if it reaches nothing, the "
+                + "clause naming what it does reach is no longer true either",
+                standard.get("elements"), minimal.get("elements"));
+        assertNotEquals("and the relationship rows, the other half of the documented reach",
+                standard.get("relationships"), minimal.get("relationships"));
+    }
+
+    /**
+     * The arm the populated fixture cannot reach: three of the five arrays arrive <em>null</em>, not
+     * empty.
+     *
+     * <p>{@code ArchiModelAccessorImpl.getViewContents} maps each of {@code groups}, {@code notes}
+     * and {@code images} through {@code isEmpty() ? null : …}, so a view carrying none of that
+     * object hands the selector a null — and the selector's outer {@code if (dto.X() != null)} guard
+     * then omits the key entirely. That is the shape of most real views: the live gate for this
+     * change measured a 47-element view whose {@code notes} and {@code images} came back absent.</p>
+     *
+     * <p>The published sentence has to hold there too. Pinned as <em>absent at every preset</em>
+     * rather than as equal values, because a key that is missing from all three maps is exactly what
+     * "returned in full at every preset" means when there is nothing to return — and because a
+     * change making the null guard preset-dependent (say {@code dto.groups() != null && preset !=
+     * MINIMAL}) would leave the populated fixture green while the disclosure quietly went false.</p>
+     */
+    @Test
+    public void shouldTreatAnAbsentVisualArrayIdentically_atEveryPreset() {
+        ViewContentsDto dto = new ViewContentsDto(
+                "view-1", "Application Landscape", "Application Usage", "manual",
+                List.of(ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
+                        null, "Application", "Main web app", List.of())),
+                List.of(new RelationshipDto("rel-1", "Serves", "ServingRelationship", "Critical",
+                        "elem-1", "elem-2", false, "doc", List.of(Map.of("key", "k", "value", "v")),
+                        "Customer Portal", "API Gateway", null, null, null)),
+                List.of(new ViewNodeDto("vo-1", "elem-1", 100, 50, 120, 55)),
+                List.of(new ViewConnectionDto("vc-1", "rel-1", "ServingRelationship",
+                        "vo-1", "vo-2", List.of())),
+                null, null, null);
+
+        assertNull("the fixture must hand the selector a NULL groups array — an empty list is a "
+                + "different arm and is covered by the populated fixture", dto.groups());
+
+        Map<String, Object> minimal = viewContentsAt(dto, FieldSelector.FieldPreset.MINIMAL);
+        Map<String, Object> standard = viewContentsAt(dto, FieldSelector.FieldPreset.STANDARD);
+        Map<String, Object> full = viewContentsAt(dto, FieldSelector.FieldPreset.FULL);
+
+        for (String array : List.of("groups", "notes", "images")) {
+            assertFalse("An absent " + array + " array must stay absent at minimal. If a preset can "
+                    + "add or drop the key, the published sentence about what every preset returns "
+                    + "is false on the view shape most callers actually have.",
+                    minimal.containsKey(array));
+            assertFalse("and at standard", standard.containsKey(array));
+            assertFalse("and at full", full.containsKey(array));
+        }
+
+        for (String array : List.of("visualMetadata", "connections")) {
+            assertNotNull("the fixture must still populate " + array + ", or this test would assert "
+                    + "nothing about the arrays that ARE present alongside the absent ones",
+                    standard.get(array));
+            assertEquals(array + " is present on this view and must still be preset-independent",
+                    standard.get(array), minimal.get(array));
+            assertEquals(array + " must be preset-independent at the full end too",
+                    standard.get(array), full.get(array));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> viewContentsAt(ViewContentsDto dto,
+            FieldSelector.FieldPreset preset) {
+        Object result = FieldSelector.applyFieldSelection(dto, preset, null);
+        assertTrue("applyFieldSelection no longer returns a map for a ViewContentsDto, so the "
+                + "assertions that read the arrays by name cannot run. Re-point them — do not "
+                + "delete them. At " + preset + " it returned: " + result,
+                result instanceof Map);
+        return (Map<String, Object>) result;
+    }
+
+    /**
+     * The other half of the disclosure, on the other surface.
+     *
+     * <p>The tool description coordinated the two parameters in one sentence — "use 'fields' to
+     * control response verbosity and 'exclude' to omit specific fields" — which reads as two levers
+     * on one axis. They are not: one narrows two arrays of seven, the other drops five. The reach
+     * clause on the {@code fields} property is what a caller reads when picking a preset; this is
+     * what they read when deciding whether a preset is the right instrument at all.</p>
+     *
+     * <p>Kept a separate method from the worked-example pin below deliberately. They fail for
+     * different reasons — a missing qualification and a missing remedy — and folding them would let
+     * either hide behind the other.</p>
+     */
+    @Test
+    public void shouldQualifyTheProjectionSentence_inTheToolDescription() {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String description = findToolSpec("get-view-contents").tool().description();
+
+        assertTrue("The get-view-contents description no longer coordinates 'fields' and 'exclude' "
+                + "at all, so this pin is guarding prose that has moved. Re-point it — do not "
+                + "delete it.",
+                description.contains(PROJECTION_ANCHOR));
+
+        assertTrue("The description still presents 'fields' and 'exclude' as interchangeable levers "
+                + "on one axis. A caller sizing a large view picks 'fields' on that reading and "
+                + "narrows two arrays of seven. The description has to say that the preset reaches "
+                + "the element and relationship rows only.",
+                description.contains("'fields' narrows the element")
+                        && description.contains("relationship rows only"));
+
+        assertTrue("The description does not name 'exclude' as the parameter that moves response "
+                + "size on a view with connections, which is the whole of the remedy — the "
+                + "qualification without it tells the caller their instrument is wrong and not "
+                + "which one is right.",
+                description.contains("'exclude'")
+                        && description.contains("moves the response size"));
+
+        assertFalse("The size claim must stay HEDGED. Which parameter dominates depends on the "
+                + "view: excluding connections beat narrowing the preset on the measured view, but "
+                + "a connection-light view carrying heavily documented elements inverts that. An "
+                + "unconditional 'exclude is THE parameter' is a claim the code cannot keep, and "
+                + "pinning the unconditional spelling would turn a future correction red.",
+                description.contains("'exclude' is the parameter that moves the response size"));
+
+        assertTrue("format=summary and format=tree return before the field selector runs, so the "
+                + "coordination sentence has to say both parameters are inert there.",
+                description.contains("ignored by format=summary and format=tree"));
+    }
+
+    /**
+     * The worked example that names the two widest arrays by name. It is the shortest path from
+     * "my response is too big" to a call that fixes it, and it predates this story's reach clause.
+     */
+    @Test
+    public void shouldKeepTheExcludeExample_inTheToolDescription() {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String description = findToolSpec("get-view-contents").tool().description();
+
+        assertTrue("The get-view-contents description no longer coordinates 'fields' and 'exclude' "
+                + "at all, so this pin is guarding prose that has moved. Re-point it — do not "
+                + "delete it.",
+                description.contains(PROJECTION_ANCHOR));
+
+        assertTrue("The worked exclude example has left the description. It names the two widest "
+                + "arrays a view response carries and is the concrete half of the reach "
+                + "disclosure — the clause that says 'exclude' moves the size is advice without it.",
+                description.contains(
+                        "Use exclude=['visualMetadata','connections'] to omit position and routing data"));
+    }
+
+    /**
+     * The served format table, which an agent reads before it picks a format.
+     *
+     * <p>Its {@code json} row listed five of the seven arrays: it omitted {@code images}, and it
+     * omitted {@code connections} — the widest row the response carries. A page whose job is
+     * "which format should I use" understated the default format by leaving out its largest
+     * component, and said "field selection needed" without saying what field selection reaches.</p>
+     */
+    @Test
+    public void shouldNameAllSevenArrays_inTheServedFormatTable() {
+        String page = readViewPatternsPage();
+
+        assertTrue("The 'Which get-view-contents Format to Use' table has left "
+                + "archimate-view-patterns.md, so this pin is guarding prose that has moved. "
+                + "Re-point it — do not delete it.",
+                page.contains("Which `get-view-contents` Format to Use"));
+
+        String jsonRow = tableRowContaining(
+                sectionOf(page, "Which `get-view-contents` Format to Use"), "`json` (default)");
+        List<String> missing = new ArrayList<>();
+        for (String array : List.of("elements", "relationships")) {
+            if (!jsonRow.contains(array)) {
+                missing.add(array);
+            }
+        }
+        for (String array : VISUAL_ARRAYS) {
+            if (!jsonRow.contains(array)) {
+                missing.add(array);
+            }
+        }
+
+        assertTrue("The json row of the served format table does not name all seven arrays the "
+                + "format returns. An agent choosing a format off this page is told the default "
+                + "returns less than it does, and the omitted names are the ones 'exclude' takes. "
+                + "Missing: " + missing + ". The row read: " + jsonRow,
+                missing.isEmpty());
+
+        assertFalse("The row still says 'field selection needed' without saying what field "
+                + "selection reaches — which is the phrase that sent a caller to 'fields' for a "
+                + "saving only 'exclude' could deliver.",
+                jsonRow.contains("field selection needed"));
+    }
+
+    // ---- harness for the reach pins ------------------------------------------------------------
+
+    /** A view carrying all seven arrays, each non-empty, with rows the preset can visibly narrow. */
+    private static ViewContentsDto sevenArrayViewContents() {
+        List<ElementDto> elements = List.of(
+                ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
+                        null, "Application", "Main web app",
+                        List.of(Map.of("key", "owner", "value", "ops"))),
+                ElementDto.standard("elem-2", "API Gateway", "ApplicationComponent",
+                        null, "Application", "REST API gateway", List.of()));
+        List<RelationshipDto> relationships = List.of(
+                new RelationshipDto("rel-1", "Serves", "ServingRelationship", "Critical",
+                        "elem-1", "elem-2", false, "view relationship documentation",
+                        List.of(Map.of("key", "owner", "value", "ops")),
+                        "Customer Portal", "API Gateway", null, null, null));
+        return new ViewContentsDto(
+                "view-1", "Application Landscape", "Application Usage", "manual",
+                elements, relationships,
+                List.of(new ViewNodeDto("vo-1", "elem-1", 100, 50, 120, 55),
+                        new ViewNodeDto("vo-2", "elem-2", 300, 50, 120, 55)),
+                List.of(new ViewConnectionDto("vc-1", "rel-1", "ServingRelationship",
+                        "vo-1", "vo-2", List.of(new BendpointDto(60, 0, -60, 0)))),
+                List.of(new ViewGroupDto("grp-1", "Channels", 20, 20, 400, 300, null,
+                        List.of("vo-1"))),
+                List.of(new ViewNoteDto("note-1", "Reviewed", 460, 20, 200, 80, null)),
+                List.of(new DiagramImageDto("img-1", "images/icon.png", 700, 20, 180, 120,
+                        null, null, null)));
+    }
+
+    /** Description plus every input-schema property description — all of what a client is served. */
+    private String servedSurfaceOf(String toolName) {
+        McpSchema.Tool tool = findToolSpec(toolName).tool();
+        StringBuilder surface = new StringBuilder(tool.description());
+        Map<String, Object> props = tool.inputSchema() == null ? null : tool.inputSchema().properties();
+        if (props != null) {
+            for (Object value : props.values()) {
+                surface.append(' ').append(schemaDescriptionOf(value));
+            }
+        }
+        return surface.toString();
+    }
+
+    /** One named property's description alone, so a clause that migrated elsewhere fails the pin. */
+    private String propertyDescriptionOf(String toolName, String property) {
+        Map<String, Object> props = findToolSpec(toolName).tool().inputSchema().properties();
+        Object prop = props.get(property);
+        if (prop == null) {
+            throw new AssertionError(toolName + " no longer registers a '" + property + "' input "
+                    + "property — if the preset was removed this check should go with it, not pass "
+                    + "vacuously on its absence.");
+        }
+        return schemaDescriptionOf(prop);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String schemaDescriptionOf(Object schemaProperty) {
+        if (!(schemaProperty instanceof Map)) {
+            return "";
+        }
+        Object description = ((Map<String, Object>) schemaProperty).get("description");
+        return description == null ? "" : description.toString();
+    }
+
+    /**
+     * The one table body row carrying the given fragment.
+     *
+     * <p>Row-scoped, and body rows only: the fragment appearing somewhere on the page says nothing
+     * about whether the format table carries it, and a header row would satisfy a uniqueness check
+     * while answering a different question.</p>
+     */
+    private static String tableRowContaining(String page, String fragment) {
+        List<String> matches = new ArrayList<>();
+        boolean inBody = false;
+        for (String line : page.split("\n", -1)) {
+            String trimmed = line.trim();
+            if (!trimmed.startsWith("|")) {
+                inBody = false;
+                continue;
+            }
+            if (trimmed.replace("|", "").trim().matches("^[-: ]*$")) {
+                inBody = true;
+                continue;
+            }
+            if (inBody && trimmed.contains(fragment)) {
+                matches.add(trimmed);
+            }
+        }
+        assertEquals("Expected exactly one table body row matching \"" + fragment + "\"; found "
+                + matches.size() + ": " + matches, 1, matches.size());
+        return matches.get(0);
+    }
+
+    /**
+     * The slice of a Markdown page under one heading, up to the next heading of the same or higher
+     * level.
+     *
+     * <p>The row lookup is scoped through this rather than run over the whole page: the uniqueness
+     * assertion below is what makes the match trustworthy, and an unrelated table elsewhere on the
+     * page growing a row with the same fragment would break it for a reason that has nothing to do
+     * with the format table.</p>
+     */
+    private static String sectionOf(String page, String heading) {
+        int start = page.indexOf("## " + heading);
+        assertTrue("The \"" + heading + "\" section has left archimate-view-patterns.md, so this "
+                + "pin is guarding prose that has moved. Re-point it — do not delete it.", start >= 0);
+        int next = page.indexOf("\n## ", start + 1);
+        return next < 0 ? page.substring(start) : page.substring(start, next);
+    }
+
+    private static final String[] VIEW_PATTERNS_CANDIDATES = {
+            "net.vheerden.archi.mcp/resources/reference/archimate-view-patterns.md",
+            "../net.vheerden.archi.mcp/resources/reference/archimate-view-patterns.md",
+    };
+
+    private static String readViewPatternsPage() {
+        for (String candidate : VIEW_PATTERNS_CANDIDATES) {
+            Path path = Paths.get(candidate);
+            if (Files.isRegularFile(path)) {
+                try {
+                    return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+        }
+        throw new AssertionError("archimate-view-patterns.md resolved from none of "
+                + String.join(", ", VIEW_PATTERNS_CANDIDATES) + " (cwd "
+                + Paths.get("").toAbsolutePath() + ") — this pin cannot silently pass over a file "
+                + "it never read.");
+    }
+
 }

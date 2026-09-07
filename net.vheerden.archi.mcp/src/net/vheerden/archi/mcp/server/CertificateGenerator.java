@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.Objects;
 
 /**
  * Generates self-signed certificates and PKCS12 keystores using the JDK's
@@ -21,6 +22,14 @@ public class CertificateGenerator {
 
     /** Default keystore filename. */
     private static final String KEYSTORE_FILENAME = "keystore.p12";
+
+    /**
+     * Environment variable carrying the keystore password to {@code keytool}.
+     *
+     * <p>Only the variable <em>name</em> reaches the command line; the value is read by
+     * {@code keytool} from the child process environment.</p>
+     */
+    private static final String PASSWORD_ENV_VAR = "ARCHI_MCP_KEYSTORE_PASSWORD";
 
     private CertificateGenerator() {
         // Utility class
@@ -59,13 +68,32 @@ public class CertificateGenerator {
      * @throws InterruptedException if the keytool process is interrupted
      */
     public static Result generate(String keystorePath) throws IOException, InterruptedException {
+        return generate(keystorePath, generatePassword());
+    }
+
+    /**
+     * Generates a self-signed certificate protected by a caller-supplied password.
+     *
+     * <p>Package-private seam: lets tests pin a specific password instead of taking
+     * whatever {@link #generatePassword()} happens to draw.</p>
+     *
+     * @param keystorePath absolute path for the keystore file
+     * @param password     the password to protect the keystore and its private key; must be non-null
+     * @return the generation result
+     * @throws IOException if generation fails
+     * @throws InterruptedException if the keytool process is interrupted
+     * @throws NullPointerException if {@code password} is null
+     */
+    static Result generate(String keystorePath, String password) throws IOException, InterruptedException {
+        // Fail here rather than several lines later inside the environment map, where a null
+        // surfaces as an opaque NullPointerException from java.lang with no mention of a password.
+        Objects.requireNonNull(password, "password");
+
         Path path = Paths.get(keystorePath);
         Files.createDirectories(path.getParent());
 
         // Delete existing keystore to avoid keytool alias collision
         Files.deleteIfExists(path);
-
-        String password = generatePassword();
 
         ProcessBuilder pb = new ProcessBuilder(
                 "keytool",
@@ -76,10 +104,16 @@ public class CertificateGenerator {
                 "-validity", "365",
                 "-storetype", "PKCS12",
                 "-keystore", keystorePath,
-                "-storepass", password,
+                "-storepass:env", PASSWORD_ENV_VAR,
                 "-dname", "CN=localhost",
                 "-ext", "SAN=dns:localhost,ip:127.0.0.1"
         );
+        // The password travels in the environment, never in argv: the JDK launcher pre-scans argv
+        // and consumes any argument beginning with "-J" as a JVM option before keytool's own parser
+        // runs, so a password drawn from the Base64 URL alphabet (which includes '-') could be eaten
+        // and its remainder handed to the JVM as a main class name. keytool derives the PKCS12 key
+        // password from the store password, so no -keypass is needed.
+        pb.environment().put(PASSWORD_ENV_VAR, password);
         pb.redirectErrorStream(true);
 
         Process process = pb.start();

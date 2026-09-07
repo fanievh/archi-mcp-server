@@ -15,17 +15,17 @@ import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
 
 /**
- * Single-undo-unit pins for the G5 styling rail extensions to
+ * Single-undo-unit pins for the typography and decoration styling-rail extensions to
  * {@link UpdateViewObjectCommand}: gradient, note borderType, deriveLineColor,
  * outlineOpacity, and the typography composite-string merge.
  *
  * <p>Each test follows the predecessor pattern:
  * construct → capture-at-construction → execute → assert new state → undo →
  * assert old state restored. The single-undo-unit property is satisfied by construction
- * since all G5 fields ride the existing styling rail and share the same
+ * since all typography and decoration fields ride the existing styling rail and share the same
  * {@code hasStylingChange} boundary.</p>
  */
-public class UpdateViewObjectCommandG5Test {
+public class UpdateViewObjectCommandTypographyAndDecorationTest {
 
     private static IDiagramModelGroup freshGroup() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
@@ -43,7 +43,7 @@ public class UpdateViewObjectCommandG5Test {
         return note;
     }
 
-    private static StylingParams onlyG5(String gradient, String borderType,
+    private static StylingParams onlyTypographyAndDecoration(String gradient, String borderType,
                                          Boolean deriveLineColor, Integer outlineOpacity,
                                          String fontName, Integer fontSize, String fontStyle) {
         return new StylingParams(
@@ -64,27 +64,27 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyGradient_whenStylingProvided_AC5() {
+    public void shouldApplyGradient_whenStylingProvided() {
         IDiagramModelGroup group = freshGroup();
         assertEquals(IDiagramModelObject.GRADIENT_NONE, group.getGradient());
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5("top-bottom", null, null, null, null, null, null), null);
+                onlyTypographyAndDecoration("top-bottom", null, null, null, null, null, null), null);
 
         cmd.execute();
         assertEquals(0, group.getGradient());   // top-bottom → 0
     }
 
     @Test
-    public void shouldUndoGradient_whenUndone_AC10() {
+    public void shouldUndoGradient_whenUndone() {
         IDiagramModelGroup group = freshGroup();
         // Pre-set gradient — captured as oldGradient.
         group.setGradient(2);   // right-left
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5("top-bottom", null, null, null, null, null, null), null);
+                onlyTypographyAndDecoration("top-bottom", null, null, null, null, null, null), null);
         cmd.execute();
         assertEquals(0, group.getGradient());
         cmd.undo();
@@ -92,13 +92,13 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     @Test
-    public void shouldClearGradientToDefault_whenEmptyString_AC5() {
+    public void shouldClearGradientToDefault_whenEmptyString() {
         IDiagramModelGroup group = freshGroup();
         group.setGradient(1);  // left-right
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5("", null, null, null, null, null, null), null);
+                onlyTypographyAndDecoration("", null, null, null, null, null, null), null);
         cmd.execute();
         assertEquals(IDiagramModelObject.GRADIENT_NONE, group.getGradient());
         cmd.undo();
@@ -110,13 +110,13 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyBorderType_onNote_AC6() {
+    public void shouldApplyBorderType_onNote() {
         IDiagramModelNote note = freshNote();
         assertEquals(IDiagramModelNote.BORDER_DOGEAR, note.getBorderType());
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 note, 0, 0, 100, 50, null,
-                onlyG5(null, "rectangle", null, null, null, null, null), null);
+                onlyTypographyAndDecoration(null, "rectangle", null, null, null, null, null), null);
         cmd.execute();
         assertEquals(IDiagramModelNote.BORDER_RECTANGLE, note.getBorderType());
 
@@ -125,9 +125,9 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     @Test
-    public void shouldNotApplyBorderType_onGroup_AC6() {
-        // Predecessor figureType uses tabbed/rectangular vocabulary on groups; G5
-        // borderType (dogear/rectangle/none) is note-only — applying to a group
+    public void shouldNotApplyBorderType_onGroup() {
+        // Predecessor figureType uses tabbed/rectangular vocabulary on groups; the
+        // borderType field (dogear/rectangle/none) is note-only — applying to a group
         // must NOT call setBorderType. The command's oldBorderType is null for
         // non-notes, so the apply-branch is a no-op.
         IDiagramModelGroup group = freshGroup();
@@ -135,7 +135,7 @@ public class UpdateViewObjectCommandG5Test {
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5(null, "rectangle", null, null, null, null, null), null);
+                onlyTypographyAndDecoration(null, "rectangle", null, null, null, null, null), null);
         cmd.execute();
         // Group's borderType is its figureType semantic — unchanged by note borderType.
         assertEquals(initialBorderType, group.getBorderType());
@@ -149,13 +149,13 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyDeriveLineColor_AC7() {
+    public void shouldApplyDeriveLineColor() {
         IDiagramModelGroup group = freshGroup();
         assertTrue(group.getDeriveElementLineColor());  // Archi default true
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5(null, null, Boolean.FALSE, null, null, null, null), null);
+                onlyTypographyAndDecoration(null, null, Boolean.FALSE, null, null, null, null), null);
         cmd.execute();
         assertFalse(group.getDeriveElementLineColor());
 
@@ -168,13 +168,13 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyOutlineOpacity_AC8() {
+    public void shouldApplyOutlineOpacity() {
         IDiagramModelGroup group = freshGroup();
         assertEquals(IDiagramModelObject.FEATURE_LINE_ALPHA_DEFAULT, group.getLineAlpha());
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5(null, null, null, 128, null, null, null), null);
+                onlyTypographyAndDecoration(null, null, null, 128, null, null, null), null);
         cmd.execute();
         assertEquals(128, group.getLineAlpha());
 
@@ -187,13 +187,13 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyFont_whenAllThreeTypographyFieldsProvided_AC2() {
+    public void shouldApplyFont_whenAllThreeTypographyFieldsProvided() {
         IDiagramModelGroup group = freshGroup();
         assertNull(group.getFont());
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5(null, null, null, null, "Arial", 14, "bold"), null);
+                onlyTypographyAndDecoration(null, null, null, null, "Arial", 14, "bold"), null);
         cmd.execute();
         assertEquals("Arial|14|1", group.getFont());
 
@@ -202,14 +202,14 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     @Test
-    public void shouldMergeFontSizeOnly_whenOtherComponentsAbsent_AC2() {
+    public void shouldMergeFontSizeOnly_whenOtherComponentsAbsent() {
         IDiagramModelGroup group = freshGroup();
         group.setFont("Segoe UI|9|0");   // pre-existing font: Segoe UI / 9pt / NORMAL
 
         // Update size only.
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null,
-                onlyG5(null, null, null, null, null, 18, null), null);
+                onlyTypographyAndDecoration(null, null, null, null, null, 18, null), null);
         cmd.execute();
         assertEquals("Segoe UI|18|0", group.getFont());
 
@@ -222,7 +222,7 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyLineStyle_dashed_onViewObject_AC4() {
+    public void shouldApplyLineStyle_dashed_onViewObject() {
         IDiagramModelGroup group = freshGroup();
         assertEquals(IDiagramModelObject.LINE_STYLE_DEFAULT, group.getLineStyle());
 
@@ -236,7 +236,7 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     @Test
-    public void shouldApplyLineStyle_none_AC4() {
+    public void shouldApplyLineStyle_none() {
         IDiagramModelGroup group = freshGroup();
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null, onlyLineStyle("none"), null);
@@ -245,7 +245,7 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     @Test
-    public void shouldClearLineStyleToDefault_onEmptyString_AC4() {
+    public void shouldClearLineStyleToDefault_onEmptyString() {
         IDiagramModelGroup group = freshGroup();
         group.setLineStyle(IDiagramModelObject.LINE_STYLE_DOTTED);
 
@@ -259,29 +259,29 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     // ------------------------------------------------------------------
-    // back-compat byte-identical when no G5 fields set
+    // back-compat byte-identical when no typography or decoration fields set
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldLeaveAllG5FieldsAtDefault_whenNoG5StylingProvided_AC11() {
+    public void shouldLeaveAllTypographyAndDecorationFieldsAtDefault_whenNoStylingProvided() {
         IDiagramModelGroup group = freshGroup();
         int initialGradient = group.getGradient();
         boolean initialDerive = group.getDeriveElementLineColor();
         int initialLineAlpha = group.getLineAlpha();
         String initialFont = group.getFont();
 
-        // Construct a command with NO G5 fields (typography/gradient/etc all null) but with
-        // a pre-G5 styling field (lineWidth) to trigger the styling rail.
-        StylingParams pre14_2_styling = new StylingParams(
+        // Construct a command with NO typography or decoration fields (all null) but with
+        // a pre-existing styling field (lineWidth) to trigger the styling rail.
+        StylingParams preExistingStyling = new StylingParams(
                 "#FF0000", null, null, null, 2,
                 null, null, null,
                 null, null, null, null, null, null, null, null);
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
-                group, 0, 0, 100, 50, null, pre14_2_styling, null);
+                group, 0, 0, 100, 50, null, preExistingStyling, null);
         cmd.execute();
 
-        // G5 fields unchanged from their captured values (which were the initial defaults).
+        // Typography and decoration fields unchanged from their captured values (the initial defaults).
         assertEquals(initialGradient, group.getGradient());
         assertEquals(initialDerive, group.getDeriveElementLineColor());
         assertEquals(initialLineAlpha, group.getLineAlpha());
@@ -289,14 +289,14 @@ public class UpdateViewObjectCommandG5Test {
     }
 
     // ------------------------------------------------------------------
-    // single undo unit covering pre-G5 + G5 fields together
+    // single undo unit covering the pre-existing and the typography/decoration fields together
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldUndoAllG5FieldsTogether_AC10() {
+    public void shouldUndoAllTypographyAndDecorationFieldsTogether() {
         IDiagramModelNote note = freshNote();
 
-        // Combine ALL G5 fields plus a pre-G5 styling change into one command.
+        // Combine ALL typography and decoration fields plus a pre-existing styling change into one command.
         StylingParams styling = new StylingParams(
                 "#AABBCC", null, null, 200, null,
                 null, null, null,
@@ -306,7 +306,7 @@ public class UpdateViewObjectCommandG5Test {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 note, 0, 0, 100, 50, null, styling, null);
         cmd.execute();
-        // All G5 fields applied.
+        // All typography and decoration fields applied.
         assertEquals(1, note.getGradient());  // left-right
         assertEquals(IDiagramModelNote.BORDER_RECTANGLE, note.getBorderType());
         assertFalse(note.getDeriveElementLineColor());
@@ -329,7 +329,7 @@ public class UpdateViewObjectCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldExposeCapturedG5State_forTesting() {
+    public void shouldExposeCapturedStylingState_forTesting() {
         IDiagramModelGroup group = freshGroup();
         group.setGradient(1);
         group.setDeriveElementLineColor(false);

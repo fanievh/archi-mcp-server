@@ -171,8 +171,7 @@ public class FolderHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -412,8 +411,7 @@ public class FolderHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }

@@ -2,6 +2,8 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -118,7 +120,7 @@ class LayoutQualityAssessor {
     /** Above this element count, add a performance warning to suggestions. */
     static final int LARGE_VIEW_WARNING_THRESHOLD = 500;
 
-    // ---- Assessor.Redesign metric constants (2026-04-26) ----
+    // ---- Perception-aligned metric constants ----
 
     /**
      * Tolerance (px) for testing whether a bendpoint lies on an element's perimeter line (M1).
@@ -163,6 +165,41 @@ class LayoutQualityAssessor {
      * point would diagonalise the route, so it was never truly redundant.
      */
     static final double REDUNDANT_BENDPOINT_AXIS_COLLINEAR_EPSILON_PX = 0.5;
+
+    /**
+     * Noise floor (px) below which a disagreement between a bendpoint's two stored reconstructions
+     * is representable-precision noise rather than movement.
+     *
+     * <p>Derivation, not measurement. Archi stores a bendpoint's offsets as <strong>integers</strong>
+     * against element centres that are half-integral whenever the box width or height is odd
+     * ({@code x + width / 2}). Writing one absolute point through both anchors therefore rounds
+     * twice, independently, each by at most ±0.5 px, so two reconstructions of an <em>unmoved</em>
+     * point can differ by up to 1.0 px. Anything beyond that is not representable as rounding: some
+     * endpoint moved or was resized after the route was written.
+     *
+     * <p>Deliberately NOT fitted to any model. The largest innocent disagreement observable on a
+     * given view is usually 0.5 px, because that needs only one endpoint to have an odd dimension —
+     * but a view whose connection joins two odd-dimensioned boxes reaches the full 1.0, and a floor
+     * tuned to the commoner case would report it as drift.
+     */
+    static final double ANCHOR_DRIFT_NOISE_FLOOR_PX = 1.0;
+
+    /**
+     * Largest perpendicular sidestep (px) that still reads as a lateral jog rather than a deliberate
+     * detour, for the four-point reversal test in {@link #countLateralJogReversals}.
+     *
+     * <p>Mirrors the derivation of {@link #OFF_FACE_MIN_STUB_PX} (8.0), the clearance that already
+     * separates a hugging exit from a legitimate one: a sidestep narrower than the minimum stub a
+     * healthy route uses cannot be routing around anything, so the two arms it separates are the
+     * same corridor traversed twice.
+     *
+     * <p>The constant is an upper bound only. A sidestep of <em>any</em> width puts the two arms on
+     * two parallel lines, so no triple inside the window ever carries two live arms and
+     * {@link #countZigzags} cannot claim the shape at any tolerance — narrowing the jog does not
+     * hand it back. What the bound separates is a reversal from a legitimate detour: above 8px the
+     * route is genuinely going around something, and is correctly reported by nobody.
+     */
+    static final double LATERAL_JOG_MAX_PX = 8.0;
 
     /**
      * Distance (px) within which a connection segment is considered coincident with a
@@ -224,6 +261,26 @@ class LayoutQualityAssessor {
     /** Hub-port quality at or above this is treated as a clean signal (no defect). */
     static final double HUB_PORT_QUALITY_PASS_THRESHOLD = 0.95;
 
+    /**
+     * The rating band {@code hubPortQuality} lands in for {@code score} — one of {@code "pass"},
+     * {@code "good"}, {@code "fair"} or {@code "poor"}, the four values the rating breakdown
+     * publishes for the metric.
+     *
+     * <p>This is the single definition of the boundaries. Both the breakdown entry and every
+     * remedy keyed off the metric read it, because the remedy's job is to explain a band the
+     * rating has already assigned: {@code fair} and {@code poor} each cap the view's routing
+     * tier, so a view sitting anywhere in either band has been marked down for hub-port
+     * allocation and needs to be told so. Encoding that boundary a second time as a literal is
+     * how the two came apart before — the metric capped the whole quarter-wide {@code fair}
+     * interval while the remedies fired only below the {@code poor} edge.</p>
+     */
+    static String hubPortQualityBand(double score) {
+        if (score >= HUB_PORT_QUALITY_PASS_THRESHOLD) return "pass";
+        if (score >= HUB_PORT_QUALITY_GOOD_THRESHOLD) return "good";
+        if (score >= HUB_PORT_QUALITY_FAIR_THRESHOLD) return "fair";
+        return "poor";
+    }
+
     /** M4 edge-coincidence count thresholds for breakdown rating. */
     static final int EDGE_COINCIDENCE_GOOD_MAX = 2;
     static final int EDGE_COINCIDENCE_FAIR_MAX = 5;
@@ -236,7 +293,7 @@ class LayoutQualityAssessor {
      * flagged by eye (2026-05-19); the common 1-5 forced-hug case stays cap-fair. MUST be
      * &gt; {@link #EDGE_COINCIDENCE_FAIR_MAX} for the escalation to be meaningful (below FAIR_MAX the
      * breakdown rating is not yet "poor", so escalating it would not change overall). Validated
-     * 2026-05-21 as the regression guardrail beside the Lever-B router fix; live
+     * 2026-05-21 as the regression guardrail beside the egress-lift router fix; live
      * geometry proved an egregious count is router-eliminable, not a topology floor.
      */
     static final int EDGE_COINCIDENCE_EGREGIOUS_MAX = 7;
@@ -276,8 +333,8 @@ class LayoutQualityAssessor {
      */
     static final int CROWDING_MIN_ADJACENT_K = 3;
 
-    // ---- Assessor.Redesign Successor D — parallelConnectionGap metric constants ----
-    // (2026-05-12)
+    // ---- parallelConnectionGap metric constants ----
+    // Informational narrow-corridor signal; no rating impact.
 
     /**
      * Tolerance (px) for testing whether a bendpoint pair forms an axis-aligned segment
@@ -353,10 +410,15 @@ class LayoutQualityAssessor {
         LabelOverlapResult labelResult = countLabelOverlaps(connections, layoutNodes);
         BoundaryViolationResult boundaryResult = detectBoundaryViolations(layoutNodes, includeViolatorIds);
         PassThroughResult passThroughResult = detectPassThroughs(connections, layoutNodes, includeViolatorIds);
-        // Count groups for group-aware suggestions
+        // Whether the grouped tool family applies to this view — which is what every consumer of
+        // this flag actually asks (the crossing leniency below, the suggestion prose, and the
+        // next-steps builder all branch on "is this a zoned view?"). Both container kinds answer
+        // yes: an ArchiMate Grouping is a zone the group-aware remedies work on exactly as a
+        // native group is, and reporting false for one left an agent told a canvas full of
+        // populated zones had none.
         boolean hasGroups = false;
         for (AssessmentNode node : layoutNodes) {
-            if (node.isGroup()) {
+            if (node.isContainer()) {
                 hasGroups = true;
                 break;
             }
@@ -378,10 +440,19 @@ class LayoutQualityAssessor {
                 countNonOrthogonalTerminals(connections, layoutNodes, includeViolatorIds);
         int nonOrthogonalTerminalCount = nonOrthResult.count();
 
-        // Assessor.Redesign M2-M5: new perception-aligned metrics.
+        // M2-M5: perception-aligned metrics.
         InteriorTerminationResult interiorResult =
                 countInteriorTerminations(connections, layoutNodes, includeViolatorIds);
         ZigzagResult zigzagResult = countZigzags(connections, passThroughResult.violatorIds(), includeViolatorIds);
+        // Anchor drift — a stored route whose geometry moved underneath it. Measured in the
+        // collector, because the midpoint blend it performs is what makes the drift invisible to
+        // every shape-based dimension below. Informational only; never fed into the rating.
+        AnchorDriftResult anchorDriftResult = detectAnchorDrift(connections, includeViolatorIds);
+        // Lateral-jog reversal — two opposite arms joined by a sidestep too narrow to be a detour.
+        // The four-point shape the three-point zigzag predicate cannot express. Informational only.
+        LateralJogReversalResult lateralJogResult = countLateralJogReversals(
+                connections, passThroughResult.violatorIds(), zigzagResult.violatorIds(),
+                includeViolatorIds);
         EdgeCoincidenceResult edgeCoincidenceResult =
                 countConnectionEdgeCoincidence(connections, layoutNodes, includeViolatorIds);
         HubPortQualityResult hubPortResult =
@@ -393,7 +464,7 @@ class LayoutQualityAssessor {
         // flag caps the rating at fair (Tier 2L), the clearance scalar feeds the emitter.
         HubNeighbourCrowdingResult hubCrowdingResult =
                 computeHubNeighbourCrowding(connections, layoutNodes);
-        // Successor D parallelConnectionGap (2026-05-12).
+        // parallelConnectionGap (2026-05-12).
         // Informational only — does NOT contribute to rating/suggestions.
         ParallelConnectionGapResult parallelGapResult =
                 computeParallelConnectionGap(connections, includeViolatorIds);
@@ -404,6 +475,15 @@ class LayoutQualityAssessor {
         LabelTruncationResult labelTruncResult = detectLabelTruncation(layoutNodes);
         ParentLabelObscuredResult parentLabelResult = detectParentLabelObscuredByChild(layoutNodes);
         ImageSiblingOverlapResult imageSiblingResult = detectImageSiblingOverlap(layoutNodes);
+        // Overlay-icon collision across a containment pair — the axis the sibling detector above
+        // cannot reach (it compares only within a parent bucket). Informational only; never an
+        // argument to the rating or suggestion calls below.
+        OverlayIconCollisionResult overlayIconResult = detectOverlayIconCollision(layoutNodes);
+        // An element's own icon drawn over its own title — the axis both detectors above
+        // are blind to, because the icon rect is clamped to the very box the title sits in.
+        // The title's side is read from the object's own textAlignment, not assumed.
+        // Informational only; never an argument to the rating or suggestion calls below.
+        OwnIconOverLabelResult ownIconOverLabelResult = detectOwnIconOverLabel(layoutNodes);
         // Non-orthogonal interior-segment detection (off-cardinal mid segments). Hoisted above the
         // rating call — it contributes to routingRating (cap-fair, tier 2), mirroring the terminal
         // sibling: a route that bends off-cardinal mid-path is just as visible as one bending at an
@@ -414,12 +494,22 @@ class LayoutQualityAssessor {
         // Connection-through-note/image detection. Hoisted above the rating call — it contributes
         // to routingRating (cap-good, tier 3) on binary presence: a line routed through a Note or
         // image visual is an obstacle the router failed to avoid, always jarring to the reader.
-        // Notes are excluded from the scoring node set and an image rect can overhang its element
-        // box, so this clutter is invisible to detectPassThroughs (scoring elements only) — the two
-        // detectors are disjoint, so the same crossing is never charged twice. The descriptions it
-        // carries are consumed later when the result is assembled.
+        // Notes are excluded from the scoring node set, so a route through a Note is invisible to
+        // detectPassThroughs (scoring elements only). An image rect is bounded by its element box,
+        // so a route through an element's image is also a box pass-through; where a crossing trips
+        // both, the routing tier takes the worse of the two and it is never charged twice. The
+        // descriptions it carries are consumed later when the result is assembled.
         ConnectionThroughVisualResult throughVisualResult =
                 detectConnectionThroughVisuals(connections, layoutNodes, noteNodes);
+        // Off-face parallel-terminal detection: a route that departs an element face then runs
+        // parallel to and hugs it. Hoisted above the rating call — it contributes to routingRating
+        // (Tier-2R cap-fair, binary presence): any such hug is a plainly-visible defect the
+        // visible-length-guarded terminal metric suppresses as a sub-pixel stub, so the headline
+        // cannot read good/excellent while the render shows the hug. Disjoint from the terminal-angle
+        // and interior-segment metrics by construction. Its descriptions/violatorIds (carrying the
+        // layout-bound spacing remedy) are consumed later when the result is assembled.
+        OffFaceParallelTerminalResult offFaceParallelResult =
+                countOffFaceParallelTerminals(connections, layoutNodes, includeViolatorIds);
 
         // Rating and suggestions use sibling overlaps only
         // Two-dimensional rating (layout-tier × routing-tier × min combiner).
@@ -429,22 +519,26 @@ class LayoutQualityAssessor {
                 overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
                 labelResult.count(), passThroughResult.crossElementCount(), coincidentSegmentCount,
                 nonOrthogonalTerminalCount, connections.size(), hasGroups,
-                boundaryResult.descriptions().size(), parentLabelResult.count(),
+                boundaryResult.violationCount(), parentLabelResult.count(),
                 offCanvas.size(), labelTruncResult.count(),
                 interiorResult.count(), zigzagResult.count(),
                 edgeCoincidenceResult.count(), hubPortResult.viewAggregate(),
                 hubCrowdingResult.crowded(), nonOrthInteriorResult.count(),
-                throughVisualResult.count());
+                throughVisualResult.count(), offFaceParallelResult.count());
         String rating = ratingResult.rating();
         Map<String, String> ratingBreakdown = ratingResult.breakdown();
-        List<String> suggestions = generateSuggestions(
-                overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
-                boundaryResult.descriptions().size(), offCanvas.size(), layoutNodes.size(),
-                labelResult.count(), hasGroups, connections.size(), coincidentSegmentCount,
-                nonOrthogonalTerminalCount, labelResult.shortSegmentCount(),
-                overlapResult.containmentCount(), nonOrthResult.zeroBendpointCount(),
-                interiorResult.count(), zigzagResult.count(),
-                edgeCoincidenceResult.count(), hubPortResult.viewAggregate());
+        // Built ONCE, here, and read by both consumers below: the prose this call produces and the
+        // coverage field the response publishes. Constructing it twice would let the sentence and
+        // the map disagree — the sentence is only trustworthy because it is arithmetic over the
+        // very map the caller can read back.
+        CoverageDeclaration coverageDeclaration = new CoverageDeclaration(
+                buildCoverageMap(labelResult.shortSegmentCount() > 0,
+                        ownIconOverLabelResult.unmeasuredTitle(),
+                        parentLabelResult.unmeasuredParentBand()));
+        // The suggestions are built AFTER every detector below has run, not here. They used to be
+        // built at this point, which put two thirds of the view's metrics structurally out of reach
+        // of the verdict that speaks for all of them. Nothing between here and the call reads
+        // `suggestions`, so the move is a relocation of one statement rather than a reordering.
 
         // Density-aware crossing metric
         double crossingsPerConnection = connections.size() > 0
@@ -475,17 +569,123 @@ class LayoutQualityAssessor {
         // nested child's fill (the flat-blob the emitter must not touch). No rating impact.
         ContainerFillResult containerFillResult =
                 countContainerFillEqualsChild(nodes, includeViolatorIds);
-        // Informational off-face parallel-terminal detection: a route that departs an element face
-        // then runs parallel to and hugs it. No rating impact — kept OUT of the rating path so the
-        // rating-bearing nonOrthogonalTerminalCount (and its visible-length calibration) stay intact.
-        OffFaceParallelTerminalResult offFaceParallelResult =
-                countOffFaceParallelTerminals(connections, layoutNodes, includeViolatorIds);
         // Coincident same-face ports — 2+ connection terminals overlapping on one perimeter point.
         // Closes the M5 face-guard blind spot (computeHubPortQuality skips faces below its
         // connection-count guard, so a 2–3-connection coincident face reads a vacuous 1.0).
         // Informational only — never fed into the rating.
         CoincidentFacePortResult coincidentPortResult =
                 countCoincidentFacePorts(connections, layoutNodes, includeViolatorIds);
+
+        // Every count-valued metric this run measured, in the order the response publishes them.
+        // The verdict at the end of generateSuggestions is answerable for all of them; the list is
+        // the one place a metric added later has to be registered, and the parity pin over the
+        // result record's own components is what makes forgetting it a red test rather than a
+        // silently narrower verdict.
+        //
+        // Each entry carries TWO names: the metric id the prose prints, and the component of the
+        // published result that holds the count. The second is what makes the registry answerable
+        // in both directions — the pin resolves every printed id against the published registers,
+        // and partitions every count-valued component of the result into "registered here" or
+        // "declared not a finding", so a count added to the result and forgotten here is a red
+        // test. The two names differ wherever the id is a coverage-dimension id (most of them are)
+        // and the field is the result component; they coincide where no dimension id exists.
+        MetricFindings metricFindings = new MetricFindings(List.of(
+                new MetricFinding("overlaps", "overlapCount", overlapResult.siblingCount()),
+                new MetricFinding("cousinOverlaps", "cousinOverlapCount",
+                        overlapResult.cousinCount()),
+                new MetricFinding("edgeCrossings", "edgeCrossingCount", crossingCount),
+                new MetricFinding("boundaryViolations", "boundaryViolationCount",
+                        boundaryResult.violationCount()),
+                new MetricFinding("labelOverlaps", "labelOverlapCount", labelResult.count()),
+                new MetricFinding("noteOverlap", "noteOverlapCount", noteOverlapResult.count()),
+                new MetricFinding("noteClip", "noteClipCount", noteClipResult.count()),
+                new MetricFinding("coincidentSegments", "coincidentSegmentCount",
+                        coincidentSegmentCount),
+                new MetricFinding("nonOrthogonalTerminals", "nonOrthogonalTerminalCount",
+                        nonOrthogonalTerminalCount),
+                new MetricFinding("nonOrthogonalTerminalsZeroBendpoint", "zeroBendpointNonOrthogonalTerminalCount",
+                        nonOrthResult.zeroBendpointCount()),
+                new MetricFinding("nonOrthogonalTerminalsRouted", "routedNonOrthogonalTerminalCount",
+                        nonOrthResult.routedCount()),
+                new MetricFinding("labelTruncations", "labelTruncationCount",
+                        labelTruncResult.count()),
+                new MetricFinding("parentLabelObscured", "parentLabelObscuredCount",
+                        parentLabelResult.count()),
+                new MetricFinding("imageSiblingOverlap", "imageSiblingOverlapCount",
+                        imageSiblingResult.count()),
+                new MetricFinding("overlayIconCollision", "overlayIconCollisionCount",
+                        overlayIconResult.count()),
+                new MetricFinding("ownIconOverLabel", "ownIconOverLabelCount",
+                        ownIconOverLabelResult.count()),
+                new MetricFinding("interiorTerminations", "interiorTerminationCount",
+                        interiorResult.count()),
+                new MetricFinding("zigzags", "zigzagCount", zigzagResult.count()),
+                new MetricFinding("connectionEdgeCoincidence", "connectionEdgeCoincidenceCount",
+                        edgeCoincidenceResult.count()),
+                new MetricFinding("edgeCoincidenceGrazedElements", "edgeCoincidenceGrazedElementCount",
+                        edgeCoincidenceResult.grazedElementCount()),
+                new MetricFinding("anchorDrift", "anchorDriftCount", anchorDriftResult.count()),
+                new MetricFinding("lateralJogReversals", "lateralJogReversalCount",
+                        lateralJogResult.count()),
+                new MetricFinding("vAxisParallelGapNarrow25Count", "vAxisParallelGapNarrow25Count",
+                        parallelGapResult.vAxis().narrowGapCount25()),
+                new MetricFinding("hAxisParallelGapNarrow25Count", "hAxisParallelGapNarrow25Count",
+                        parallelGapResult.hAxis().narrowGapCount25()),
+                new MetricFinding("connectionThroughNote", "connectionThroughNoteCount",
+                        throughVisualResult.count()),
+                new MetricFinding("connectionGrazesVisual", "connectionGrazesVisualCount",
+                        throughVisualResult.grazeCount()),
+                new MetricFinding("redundantBendpoints", "connectionRedundantBendpointCount",
+                        redundantBendpointResult.count()),
+                new MetricFinding("nonOrthogonalInteriorSegments", "nonOrthogonalInteriorSegmentCount",
+                        nonOrthInteriorResult.count()),
+                new MetricFinding("containerFillRecession", "containerFillEqualsChildCount",
+                        containerFillResult.count()),
+                new MetricFinding("labelOnNote", "labelOnNoteCount", labelOnNoteResult.count()),
+                new MetricFinding("labelOnGroup", "labelOnGroupCount", labelOnGroupResult.count()),
+                new MetricFinding("offFaceParallelTerminals", "offFaceParallelTerminalCount",
+                        offFaceParallelResult.count()),
+                new MetricFinding("coincidentFacePorts", "coincidentFacePortCount", coincidentPortResult.count()),
+                // Field and count are the SAME measured quantity: crossElementPassThroughCount is
+                // the published component carrying exactly the cross-element tally registered
+                // beside it, which is the number the rating charges. The field is deliberately not
+                // connectionPassThroughs — that list is a capped description of what was seen, it
+                // also names the self-element pass-throughs (published for visibility, and
+                // deliberately unrated), and its size is therefore neither this count nor reliably
+                // related to it in either direction. The distinction still matters downstream: the
+                // pass-through remedy below reconciles the charged count against what that list
+                // manages to name. The objects behind the charged count are recoverable in full
+                // from the passThroughs violator-id key, which is uncapped and cross-element only.
+                new MetricFinding("passThroughs", "crossElementPassThroughCount",
+                        passThroughResult.crossElementCount())));
+
+        // The metrics that move a rating and, until now, explained none of it. Named, never
+        // counted: a tally beside the list it counts goes stale the moment the list grows.
+        RatingBearingFindings ratingBearingFindings = new RatingBearingFindings(
+                parentLabelResult, labelTruncResult, nonOrthInteriorResult,
+                offFaceParallelResult, throughVisualResult, passThroughResult,
+                hubCrowdingResult);
+
+        // The thirteen that move no rating and, until now, explained nothing either.
+        InformationalFindings informationalFindings = new InformationalFindings(
+                overlapResult, noteOverlapResult, noteClipResult, imageSiblingResult,
+                overlayIconResult, edgeCoincidenceResult, parallelGapResult, throughVisualResult,
+                redundantBendpointResult, containerFillResult, labelOnNoteResult,
+                labelOnGroupResult, coincidentPortResult);
+
+        List<String> suggestions = generateSuggestions(
+                overlapResult.siblingCount(), crossingCount, avgSpacing, alignment,
+                boundaryResult.violationCount(), offCanvas.size(), layoutNodes.size(),
+                labelResult.count(), hasGroups, connections.size(), coincidentSegmentCount,
+                nonOrthogonalTerminalCount, labelResult.shortSegmentCount(),
+                overlapResult.containmentCount(), nonOrthResult.zeroBendpointCount(),
+                nonOrthResult.routedCount(),
+                interiorResult.count(), zigzagResult.count(),
+                edgeCoincidenceResult.count(), hubPortResult.viewAggregate(),
+                anchorDriftResult.count(), lateralJogResult.count(),
+                ownIconOverLabelResult, coverageDeclaration,
+                metricFindings, ratingBearingFindings, informationalFindings,
+                ratingBreakdown);
 
         // Compute bounding box of ALL visual content (elements + groups + notes)
         ContentBounds contentBounds = computeContentBounds(nodes);
@@ -496,6 +696,12 @@ class LayoutQualityAssessor {
             violatorIds = new LinkedHashMap<>();
             if (!overlapResult.violatorIds().isEmpty()) {
                 violatorIds.put("overlaps", overlapResult.violatorIds());
+            }
+            // Without this the cross-branch metric cannot serve its purpose past the description
+            // cap: the count is uncapped, so a view with many cross-branch pairs would report a
+            // number with no way to enumerate the objects behind it.
+            if (!overlapResult.cousinViolatorIds().isEmpty()) {
+                violatorIds.put("cousinOverlaps", overlapResult.cousinViolatorIds());
             }
             if (!passThroughResult.violatorIds().isEmpty()) {
                 violatorIds.put("passThroughs", passThroughResult.violatorIds());
@@ -515,10 +721,19 @@ class LayoutQualityAssessor {
             if (!nonOrthResult.violatorIds().isEmpty()) {
                 violatorIds.put("nonOrthogonalTerminals", nonOrthResult.violatorIds());
             }
+            // The union key above keeps its whole-population meaning; these two name its disjoint
+            // halves, so a remedy that applies to only one half can be scoped to just those ids.
+            if (!nonOrthResult.zeroBendpointViolatorIds().isEmpty()) {
+                violatorIds.put("nonOrthogonalTerminalsZeroBendpoint",
+                        nonOrthResult.zeroBendpointViolatorIds());
+            }
+            if (!nonOrthResult.routedViolatorIds().isEmpty()) {
+                violatorIds.put("nonOrthogonalTerminalsRouted", nonOrthResult.routedViolatorIds());
+            }
             if (!boundaryResult.violatorIds().isEmpty()) {
                 violatorIds.put("boundaryViolations", boundaryResult.violatorIds());
             }
-            // Assessor.Redesign M2-M5: violator IDs for new metrics.
+            // M2-M5: violator IDs for the perception-aligned metrics.
             if (!interiorResult.violatorIds().isEmpty()) {
                 violatorIds.put("interiorTerminations", interiorResult.violatorIds());
             }
@@ -527,6 +742,12 @@ class LayoutQualityAssessor {
             }
             if (!redundantBendpointResult.violatorIds().isEmpty()) {
                 violatorIds.put("redundantBendpoints", redundantBendpointResult.violatorIds());
+            }
+            if (!anchorDriftResult.violatorIds().isEmpty()) {
+                violatorIds.put("anchorDrift", anchorDriftResult.violatorIds());
+            }
+            if (!lateralJogResult.violatorIds().isEmpty()) {
+                violatorIds.put("lateralJogReversals", lateralJogResult.violatorIds());
             }
             if (!nonOrthInteriorResult.violatorIds().isEmpty()) {
                 violatorIds.put("nonOrthogonalInteriorSegments", nonOrthInteriorResult.violatorIds());
@@ -554,7 +775,7 @@ class LayoutQualityAssessor {
             if (!hubPortResult.lowQualityElementIds().isEmpty()) {
                 violatorIds.put("hubPortLowQuality", hubPortResult.lowQualityElementIds());
             }
-            // Successor D parallelConnectionGap (per-axis V/H violator surfaces).
+            // parallelConnectionGap (per-axis V/H violator surfaces).
             if (!parallelGapResult.vAxis().violatorIds().isEmpty()) {
                 violatorIds.put("parallelConnectionGapV", parallelGapResult.vAxis().violatorIds());
             }
@@ -590,9 +811,10 @@ class LayoutQualityAssessor {
                 labelTruncResult.count(), labelTruncResult.descriptions(),
                 parentLabelResult.count(), parentLabelResult.descriptions(),
                 imageSiblingResult.count(), imageSiblingResult.descriptions(),
+                overlayIconResult.count(), overlayIconResult.descriptions(),
                 violatorIds,
                 suggestions,
-                // Assessor.Redesign M2-M6 (appended)
+                // M2-M6 (appended to the record tail; backwards-compat)
                 interiorResult.count(), interiorResult.descriptions(),
                 zigzagResult.count(), zigzagResult.descriptions(),
                 edgeCoincidenceResult.count(), edgeCoincidenceResult.descriptions(),
@@ -602,9 +824,10 @@ class LayoutQualityAssessor {
                 // R8 Corridor Utilisation (2026-05-03)
                 corridorUtilisationResult.viewAggregate(),
                 corridorUtilisationResult.perChannelDetails(),
-                // Successor D parallelConnectionGap (2026-05-12)
+                // parallelConnectionGap (2026-05-12)
                 parallelGapResult.vAxis().p10(),
                 parallelGapResult.vAxis().narrowGapCount25(),
+                parallelGapResult.hAxis().narrowGapCount25(),
                 includeViolatorIds ? buildParallelGapDetail(parallelGapResult) : null,
                 // Hub-to-neighbour crowding clearance (2026-06-25)
                 hubCrowdingResult.minClearance(),
@@ -612,7 +835,9 @@ class LayoutQualityAssessor {
                 // (fully covered), "partial" (some failure modes uncovered), or "not-checked".
                 // labelOverlaps downgrades to "partial" on a run carrying a label wider than its
                 // hosting segment (the overlap count cannot certify that crowding mode clean).
-                buildCoverageMap(labelResult.shortSegmentCount() > 0),
+                // A READ of the value hoisted above, not a second construction: the suggestion
+                // prose quotes figures counted off this same map.
+                coverageDeclaration.coverage(),
                 // Connection-through-note/image (count drives routing Tier-3R cap-good; descriptions are output)
                 throughVisualResult.count(), throughVisualResult.descriptions(),
                 // Redundant (collinear / removable) bendpoints (informational; no rating impact)
@@ -638,7 +863,26 @@ class LayoutQualityAssessor {
                 offFaceParallelResult.count(), offFaceParallelResult.descriptions(),
                 // Coincident same-face ports (informational; no rating impact — the rating-bearing
                 // hubPortQualityScore/M5 is unchanged; this enumerates faces below M5's connection guard)
-                coincidentPortResult.count(), coincidentPortResult.descriptions());
+                coincidentPortResult.count(), coincidentPortResult.descriptions(),
+                // An element's own icon over its own title (informational; no rating impact —
+                // the two icon counts above compare an icon against OTHER geometry and cannot see it)
+                ownIconOverLabelResult.count(), ownIconOverLabelResult.descriptions(),
+                // Cross-branch overlaps (informational; no rating impact — the rating-bearing
+                // overlapCount above reports this pair's ancestors, never the pair itself)
+                overlapResult.cousinCount(), overlapResult.cousinDescriptions(),
+                // TRUE uncapped boundary-violation count (the description list beside it is capped)
+                boundaryResult.violationCount(),
+                // Anchor drift (informational; no rating impact — the disagreement is measured in the
+                // collector, before the midpoint blend that hides it from every dimension above)
+                anchorDriftResult.count(), anchorDriftResult.descriptions(),
+                // Lateral-jog reversals (informational; no rating impact — the four-point shape the
+                // three-point zigzagCount predicate above structurally cannot express)
+                lateralJogResult.count(), lateralJogResult.descriptions(),
+                // The two measured halves of nonOrthogonalTerminalCount above (which is unchanged).
+                nonOrthResult.zeroBendpointCount(), nonOrthResult.routedCount(),
+                // The charged pass-through count — the same reading computeRatingWithBreakdown was
+                // given above, so the number published and the number rated cannot diverge.
+                passThroughResult.crossElementCount());
     }
 
     /**
@@ -682,7 +926,12 @@ class LayoutQualityAssessor {
                 // Walk up the ancestor chain and add ALL ancestor:descendant pairs
                 String descendantId = node.id();
                 AssessmentNode current = nodeMap.get(node.parentId());
-                while (current != null) {
+                // EMF containment is a real tree, so a parent cycle cannot occur on the live
+                // path. This walker is also reachable through the package-visible assess seam
+                // with hand-built parent ids, where a self-parent or a mutual pair would spin
+                // forever without allocating — a silent hang with no failure and no diagnostic.
+                Set<String> seen = new HashSet<>();
+                while (current != null && seen.add(current.id())) {
                     pairs.add(current.id() + ":" + descendantId);
                     if (current.parentId() == null) break;
                     current = nodeMap.get(current.parentId());
@@ -700,53 +949,58 @@ class LayoutQualityAssessor {
 
     /**
      * Collects all descendant IDs for a given node (children, grandchildren, etc.).
+     *
+     * <p>Delegates to {@link RoutingExcludeSets#descendantIds}, which is this walk — plus the
+     * geometric filter that drops a descendant dragged clear of the node it is nested under. Two
+     * definitions of "descendants" in one package is what let the routing exclusion sets stop at
+     * direct children while this class already walked the whole subtree — a disagreement nobody saw
+     * because nothing compared them. One definition cannot disagree with itself.</p>
      */
     private Set<String> getDescendantIds(String nodeId, List<AssessmentNode> nodes) {
-        Set<String> descendants = new HashSet<>();
-        // Seed with direct children, then iteratively expand
-        Set<String> frontier = new HashSet<>();
-        frontier.add(nodeId);
-        boolean changed = true;
-        while (changed) {
-            changed = false;
-            for (AssessmentNode n : nodes) {
-                if (n.parentId() != null && frontier.contains(n.parentId())
-                        && descendants.add(n.id())) {
-                    frontier.add(n.id());
-                    changed = true;
-                }
-            }
-        }
-        return descendants;
+        return RoutingExcludeSets.descendantIds(nodeId, nodes);
     }
 
     /**
      * Collects all ancestor IDs for a given node by walking the parentId chain.
+     *
+     * <p>Delegates to {@link RoutingExcludeSets#ancestorIds}, which is this walk — cycle guard and
+     * all — plus the geometric filter that stops a "parent" dragged clear of its child from being
+     * treated as a box the child's connections must cross. Two definitions of "ancestors" in one
+     * package is the same shape as the descendant fork one class over: it survived only for as long
+     * as nothing compared them, and the two disagreed about termination the whole time. One
+     * definition cannot disagree with itself.</p>
      */
     private Set<String> getAncestorIds(String nodeId,
                                         Map<String, AssessmentNode> nodeMap) {
-        Set<String> ancestors = new HashSet<>();
-        AssessmentNode current = nodeMap.get(nodeId);
-        while (current != null && current.parentId() != null) {
-            ancestors.add(current.parentId());
-            current = nodeMap.get(current.parentId());
-        }
-        return ancestors;
+        return RoutingExcludeSets.ancestorIds(nodeId, nodeMap);
     }
 
     // ---- Overlap Detection (Finding #2: exclude containment, #10: single pass, transitive) ----
 
-    /** Combined sibling + containment counts and descriptions from a single pass. */
+    /**
+     * Combined sibling + containment + cross-branch counts and descriptions from a single pass.
+     *
+     * <p>{@code cousinCount} is informational only. It never feeds the rating or the tiers — it
+     * exists so the colliding objects themselves can be named, which the sibling arm cannot do
+     * when the overlap crosses a container boundary. It counts EVERY such pair, including pairs
+     * where one side is a container, so it is a list of pairs to inspect rather than a count of
+     * distinct visible collisions.</p>
+     */
     record OverlapResult(int siblingCount, int containmentCount,
-                         List<String> siblingDescriptions, Set<String> violatorIds) {}
+                         List<String> siblingDescriptions, Set<String> violatorIds,
+                         int cousinCount, List<String> cousinDescriptions,
+                         Set<String> cousinViolatorIds) {}
 
     OverlapResult computeOverlaps(List<AssessmentNode> nodes,
                                    Set<String> containmentPairs,
                                    boolean collectViolatorIds) {
         int siblingCount = 0;
         int containmentCount = 0;
+        int cousinCount = 0;
         List<String> siblingDescriptions = new ArrayList<>();
+        List<String> cousinDescriptions = new ArrayList<>();
         Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
+        Set<String> cousinViolatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
         for (int i = 0; i < nodes.size(); i++) {
             for (int j = i + 1; j < nodes.size(); j++) {
                 AssessmentNode a = nodes.get(i);
@@ -758,9 +1012,24 @@ class LayoutQualityAssessor {
                 if (isContainmentPair(a, b, containmentPairs)) {
                     containmentCount++;
                 } else if (Objects.equals(a.parentId(), b.parentId())) {
-                    // Only count overlaps between siblings (same parent).
-                    // Elements in different groups near a shared boundary are NOT
-                    // sibling overlaps — they are cross-group boundary proximity.
+                    // Count only SAME-PARENT overlaps. Two top-level objects both carry a null
+                    // parentId, and Objects.equals(null, null) is true, so they are siblings of
+                    // each other here.
+                    //
+                    // The cross-branch case — different parents, no ancestor relationship — is
+                    // excluded DELIBERATELY AND PERMANENTLY, not for want of a check, and it is
+                    // never thereby hidden. If every child sits inside its parent, then two
+                    // overlapping cross-branch objects force the ancestors that are children of
+                    // their lowest common ancestor to overlap as well; those ancestors share a
+                    // parent, so this arm fires on THEM. If instead a child escaped its parent,
+                    // detectBoundaryViolations reports the escape, in the same uncapped severity
+                    // band. Counting the cross-branch pair here would therefore charge an
+                    // already-reported defect a second time and move ratings model-wide.
+                    //
+                    // What the exclusion does cost is ATTRIBUTION: the pair named here is the
+                    // ancestor pair, one or more levels up from what a reader sees colliding.
+                    // The cousin arm below closes that gap by naming the colliding objects
+                    // themselves among its pairs, without touching this count.
                     siblingCount++;
                     if (siblingDescriptions.size() < MAX_DESCRIPTIONS) {
                         siblingDescriptions.add("Element '" + a.id()
@@ -770,10 +1039,27 @@ class LayoutQualityAssessor {
                         violatorIds.add(a.id());
                         violatorIds.add(b.id());
                     }
+                } else {
+                    // Cross-branch overlap. Informational: named, never rated.
+                    cousinCount++;
+                    if (collectViolatorIds) {
+                        cousinViolatorIds.add(a.id());
+                        cousinViolatorIds.add(b.id());
+                    }
+                    if (cousinDescriptions.size() < MAX_DESCRIPTIONS) {
+                        // Either side may be a container, so name each by what it is — the same
+                        // reason the boundary description below distinguishes group from element.
+                        cousinDescriptions.add((a.isGroup() ? "Group '" : "Element '") + a.id()
+                                + "' overlaps with " + (b.isGroup() ? "group '" : "element '")
+                                + b.id()
+                                + "' across a container boundary (different parents, neither is"
+                                + " an ancestor of the other)");
+                    }
                 }
             }
         }
-        return new OverlapResult(siblingCount, containmentCount, siblingDescriptions, violatorIds);
+        return new OverlapResult(siblingCount, containmentCount, siblingDescriptions, violatorIds,
+                cousinCount, cousinDescriptions, cousinViolatorIds);
     }
 
     private boolean rectanglesOverlap(AssessmentNode a, AssessmentNode b) {
@@ -906,10 +1192,12 @@ class LayoutQualityAssessor {
     // ---- Alignment Score (Finding #9: exclude groups, #12: 0 for empty) ----
 
     int computeAlignmentScore(List<AssessmentNode> nodes) {
-        // Filter to non-group (leaf) elements only for alignment scoring
+        // Filter to non-container (leaf) elements only for alignment scoring. A zone's own edges
+        // are placed by the arrangement, not by the author aligning peers, so scoring them as
+        // alignment participants measures the arranger rather than the layout.
         List<AssessmentNode> leafNodes = new ArrayList<>();
         for (AssessmentNode node : nodes) {
-            if (!node.isGroup()) {
+            if (!node.isContainer()) {
                 leafNodes.add(node);
             }
         }
@@ -980,7 +1268,7 @@ class LayoutQualityAssessor {
 
     /**
      * Result of rating computation including per-metric breakdown and
-     * the two-dimensional layout/routing decomposition (Assessor.Redesign M6).
+     * the two-dimensional layout/routing decomposition (M6).
      *
      * <p>Under M6, {@code rating} is the worse of {@code layoutRating} and {@code routingRating}
      * ("min" in human terms — `excellent < good < fair < poor` — i.e. worse-dimension dominates).</p>
@@ -1010,12 +1298,78 @@ class LayoutQualityAssessor {
      */
     static final String COVERAGE_PARTIAL = "partial";
     /**
-     * Coverage value: the detector exists but the view structurally cannot exhibit this
-     * dimension (e.g. a group metric on a view with no groups). Reserved — currently unused
-     * because implemented detectors run unconditionally and honestly report {@code checked}
-     * (ran, found nothing) rather than {@code not-applicable}.
+     * Coverage value: the view structurally cannot exhibit this dimension, so there is nothing
+     * for a detector to find and no render-verification to do. Stronger than
+     * {@link #COVERAGE_NOT_CHECKED} and therefore only ever claimed where the failure mode is
+     * genuinely unreachable — claiming it for a mode that IS reachable would be a false
+     * all-clear, the one error this whole map exists to prevent.
+     *
+     * <p>Emitted by {@link #buildDegenerateCoverageMap(int)} for a view holding at most one
+     * object: every dimension on a zero-object view, and on a one-object view those whose
+     * failure mode requires two or more view objects. On the fully-assessed path implemented
+     * detectors run unconditionally and honestly report {@code checked} (ran, found nothing)
+     * instead.</p>
      */
     static final String COVERAGE_NOT_APPLICABLE = "not-applicable";
+
+    /**
+     * The run-scoped condition under which a dimension's declared coverage level is downgraded to
+     * {@link #COVERAGE_PARTIAL} — the distinction {@code docs/glossary.md} publishes as
+     * <em>contextual</em> {@code partial} versus <em>permanent</em> {@code partial}.
+     *
+     * <p>A PERMANENT {@code partial} is declared on the dimension itself and reported on every run,
+     * because the detector's blind spot is unconditional; it is a property of the code and is the
+     * same on every view. A CONTEXTUAL one is declared {@code checked} and downgraded only on a run
+     * that actually triggered it, so it is a property of THIS run — which is what makes it the
+     * news a consumer has to act on, and the constant is not.</p>
+     *
+     * <p>Declared here, on the dimension itself, rather than as a branch inside
+     * {@link #buildCoverageMap} — the same reason
+     * {@link CoverageDimension#degenerateCoverage} is declared at its definition site: a dimension
+     * added later cannot compile without stating its trigger, so it cannot silently inherit
+     * {@link #NONE} and report a certified {@code checked} for a mode nothing examined. That is the
+     * false all-clear this whole map exists to prevent, and defaulting is exactly how it would
+     * return.</p>
+     *
+     * <p>The reason text is the prose an agent reads. It is carried here, beside the trigger, so
+     * the map and the sentence explaining it cannot drift apart.</p>
+     */
+    enum ContextualTrigger {
+        /** No run-scoped downgrade: the declared level is final on every run. */
+        NONE(null),
+        /**
+         * This run carries a connection label wider than the segment hosting it. Such a label can
+         * crowd a neighbouring box while still clearing it geometrically, so an overlap count of
+         * zero does not certify that crowding mode clean.
+         */
+        LABEL_EXCEEDS_SEGMENT("a connection label is wider than the segment hosting it, so a label"
+                + " can crowd a neighbouring box while still clearing it geometrically"),
+        /**
+         * This run carries a named, icon-bearing object whose title width could not be measured —
+         * a native group, which is never measured, or a Grouping or element whose text measurement
+         * failed. There was no title rectangle to test the icon against.
+         */
+        UNMEASURED_TITLE("a named, icon-bearing object's title width could not be measured, so its"
+                + " icon was never compared against a title rectangle"),
+        /**
+         * This run carries a parent, with children, whose title band width was never measured. Its
+         * band was sized as a single line however long the title is, so a title that wraps is
+         * compared against only its first row.
+         */
+        UNMEASURED_PARENT_BAND("a parent holding children had its title band width left unmeasured,"
+                + " so its clearance verdict was answered against a single-line band");
+
+        /**
+         * Why the dimension could not be certified on a run that fired this trigger, phrased as a
+         * clause for the caller's prose. Null on {@link #NONE}, which never downgrades anything and
+         * therefore has nothing to explain.
+         */
+        final String reason;
+
+        ContextualTrigger(String reason) {
+            this.reason = reason;
+        }
+    }
 
     /**
      * Canonical, ordered registry of every layout/routing defect dimension {@code assess-layout}
@@ -1028,7 +1382,7 @@ class LayoutQualityAssessor {
      * is deliberately distinct from {@code not-checked}), {@link #COVERAGE_PARTIAL} (a detector
      * exists but covers only some failure modes — the rest must be render-verified), or
      * {@link #COVERAGE_NOT_CHECKED} (no detector at all). The declared level is the BASELINE:
-     * {@link #buildCoverageMap(boolean)} emits it verbatim unless it contextually downgrades a
+     * {@link #buildCoverageMap(boolean, boolean, boolean)} emits it verbatim unless it contextually downgrades a
      * dimension for the current run (e.g. {@code labelOverlaps} → {@code partial} when a label
      * exceeds its hosting segment). To add a partially-covered dimension later and then close it,
      * flip that entry to {@code COVERAGE_CHECKED} once its gaps are covered.</p>
@@ -1037,44 +1391,102 @@ class LayoutQualityAssessor {
      * {@code ratingBreakdown} keys (which answer "how did it score?" not "did we look?").</p>
      */
     enum CoverageDimension {
-        OVERLAPS("overlaps", COVERAGE_CHECKED),
-        CONTAINMENT_OVERLAPS("containmentOverlaps", COVERAGE_CHECKED),
-        EDGE_CROSSINGS("edgeCrossings", COVERAGE_CHECKED),
-        SPACING("spacing", COVERAGE_CHECKED),
-        ALIGNMENT("alignment", COVERAGE_CHECKED),
+        OVERLAPS("overlaps", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        CONTAINMENT_OVERLAPS("containmentOverlaps", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        COUSIN_OVERLAPS("cousinOverlaps", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        EDGE_CROSSINGS("edgeCrossings", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        SPACING("spacing", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        ALIGNMENT("alignment", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
         // Fully covered: label-vs-element and label-vs-label overlaps, plus the own-endpoint pass (a
         // label rendered on its own source/target box) — including the wide-label-on-short-segment
         // case, where a label wider than its hosting segment drapes both endpoint boxes at a per-box
         // fraction below the base bar yet is still caught via the promoted
-        // LABEL_OWN_ENDPOINT_SHORT_SEGMENT_OVERLAP_FRACTION. A label over a Group is covered by the
-        // separate labelOnGroup dimension below (this detector intentionally skips group hosts, which
-        // a label may legitimately sit within). The declared level is the baseline: at runtime this
+        // LABEL_OWN_ENDPOINT_SHORT_SEGMENT_OVERLAP_FRACTION. A label over a CONTAINER — a native
+        // group or an ArchiMate Grouping alike — is covered by the separate labelOnGroup dimension
+        // below (this detector intentionally skips container hosts, which a label may legitimately
+        // sit within). Both detectors test the same predicate, so exactly one of them owns any
+        // given (label, container) pair; when they disagreed, one label over one zone was a false
+        // positive here and a false negative there at the same time. The declared level is the baseline: at runtime this
         // dimension is DOWNGRADED to "partial" on a run carrying a label wider than its hosting
         // segment (see buildCoverageMap), because such a label can crowd a neighbour while clearing
         // it geometrically — an overlap count of zero cannot certify that mode clean.
-        LABEL_OVERLAPS("labelOverlaps", COVERAGE_CHECKED),
+        LABEL_OVERLAPS("labelOverlaps", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.LABEL_EXCEEDS_SEGMENT),
         // A connection's label rendered ON a Note rectangle (informational; no rating impact). A
         // separate concern from labelOverlaps (label vs non-note element / other label) and from the
         // route-vs-visual connectionThroughNote/connectionGrazesVisual dimensions: a label is
         // positioned independently of the line, so the route detectors cannot see it. Fully covered.
-        LABEL_ON_NOTE("labelOnNote", COVERAGE_CHECKED),
-        // A connection's label rendered on a visual Group's TITLE BAND (informational; no rating
-        // impact). The label-vs-element detector (labelOverlaps) skips groups wholesale, hiding this
-        // title collision; this dimension tests the group's top title strip only (a label in the
-        // group body is normal). Fully covered.
-        LABEL_ON_GROUP("labelOnGroup", COVERAGE_CHECKED),
-        LABEL_TRUNCATIONS("labelTruncations", COVERAGE_CHECKED),
-        PARENT_LABEL_OBSCURED("parentLabelObscured", COVERAGE_CHECKED),
-        BOUNDARY_VIOLATIONS("boundaryViolations", COVERAGE_CHECKED),
-        OFF_CANVAS("offCanvas", COVERAGE_CHECKED),
-        CONNECTION_PASS_THROUGHS("connectionPassThroughs", COVERAGE_CHECKED),
-        COINCIDENT_SEGMENTS("coincidentSegments", COVERAGE_CHECKED),
-        NON_ORTHOGONAL_TERMINALS("nonOrthogonalTerminals", COVERAGE_CHECKED),
-        INTERIOR_TERMINATIONS("interiorTerminations", COVERAGE_CHECKED),
-        ZIGZAGS("zigzags", COVERAGE_CHECKED),
-        EDGE_COINCIDENCE("edgeCoincidence", COVERAGE_CHECKED),
-        HUB_PORT_QUALITY("hubPortQuality", COVERAGE_CHECKED),
-        CORRIDOR_UTILISATION("corridorUtilisation", COVERAGE_CHECKED),
+        LABEL_ON_NOTE("labelOnNote", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // A connection's label rendered on a CONTAINER's TITLE BAND (informational; no rating
+        // impact) — a native group or an ArchiMate Grouping, which renders as the same transparent
+        // labelled box. The label-vs-element detector (labelOverlaps) skips containers wholesale,
+        // hiding this title collision; this dimension tests the container's top title strip only (a
+        // label in the body is normal). Fully covered — and "fully" is load-bearing: while this
+        // detector asked only whether the host was a native group, a Grouping's title band was
+        // never examined and the dimension reported a certified zero for a case it never looked at.
+        LABEL_ON_GROUP("labelOnGroup", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // Partial by construction, two layers deep: AssessmentCollector guards its label
+        // measurement with `!isGroup && !isNote`, so a visual group's title width is never measured
+        // and keeps its 0.0 initialiser; detectLabelTruncation then discards the node at
+        // `node.isGroup()` — the first clause of its entry guard — before any width, box or wrap
+        // arithmetic runs. A separate width test a few lines later, `textWidth <= 0`, discards a
+        // normal element whose measurement failed, so two distinct unmeasured modes arrive as one
+        // indistinguishable sentinel. A zero therefore certifies only that every MEASURED element label fits its box;
+        // it says nothing about a group's title or an unmeasured width, both of which must be
+        // render-verified. This is a permanent declaration rather than a contextual downgrade
+        // because both skips are unconditional — there is no run on which a group's title mode is
+        // covered. Flip to COVERAGE_CHECKED only when a detector actually measures group titles.
+        LABEL_TRUNCATIONS("labelTruncations", COVERAGE_PARTIAL, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // The declared level is the baseline: at runtime this dimension is DOWNGRADED to "partial"
+        // on a run carrying a parent, with children, whose label width was never measured — a
+        // visual group (excluded from measurement outright) or an element whose text measurement
+        // failed, which arrive as the same zero width. Such a parent's title band is sized as a
+        // single line however long its title is, so a title that wraps is compared against only its
+        // first row and a child sitting under the remaining rows is not flagged. Note this detector
+        // does NOT skip those parents the way the truncation detector skips groups: it examines
+        // them and returns a verdict, so the downgrade is what stops that verdict reading as
+        // certified. The downgrade is contextual rather than declared because a run whose parents
+        // were all measured genuinely is fully covered.
+        PARENT_LABEL_OBSCURED("parentLabelObscured", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.UNMEASURED_PARENT_BAND),
+        BOUNDARY_VIOLATIONS("boundaryViolations", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        OFF_CANVAS("offCanvas", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        CONNECTION_PASS_THROUGHS("connectionPassThroughs", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        COINCIDENT_SEGMENTS("coincidentSegments", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        NON_ORTHOGONAL_TERMINALS("nonOrthogonalTerminals", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        INTERIOR_TERMINATIONS("interiorTerminations", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        ZIGZAGS("zigzags", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // Partial by construction: countConnectionEdgeCoincidence classifies each segment as
+        // horizontal or vertical and skips everything else outright, so a DIAGONAL segment is never
+        // compared against any element edge — it returns before an element is consulted. The
+        // examined modes are further bounded to an EDGE_COINCIDENCE_TOLERANCE_PX band. A zero
+        // therefore certifies only that no axis-aligned segment hugs within that band; it says
+        // nothing about the diagonal mode, which must be render-verified. This is a permanent
+        // declaration rather than a contextual downgrade because the skip is unconditional — there
+        // is no run on which the diagonal mode is covered. Flip to COVERAGE_CHECKED only when a
+        // detector actually examines non-axis-aligned segments.
+        EDGE_COINCIDENCE("edgeCoincidence", COVERAGE_PARTIAL, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        HUB_PORT_QUALITY("hubPortQuality", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        CORRIDOR_UTILISATION("corridorUtilisation", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
         // Whether a single connection route sits centred within its corridor band versus hugs one
         // edge. The corridorUtilisation metric above measures multi-occupant occupancy/spread (how
         // widely two or more parallel routes sharing a wall-pair fan out) and cannot see this: a
@@ -1082,50 +1494,126 @@ class LayoutQualityAssessor {
         // wall-hugging clamps to 1.0 (edge-hugging surfaces via edgeCoincidence, not here). No
         // detector covers single-route centring, so this dimension is not-checked — a perfect
         // occupancy score is NOT evidence the route is centred; render-verify.
-        CORRIDOR_CENTERING("corridorCentering", COVERAGE_NOT_CHECKED),
-        HUB_NEIGHBOUR_CROWDING("hubNeighbourCrowding", COVERAGE_CHECKED),
-        PARALLEL_CONNECTION_GAP("parallelConnectionGap", COVERAGE_CHECKED),
-        NOTE_OVERLAP("noteOverlap", COVERAGE_CHECKED),
-        NOTE_CLIP("noteClip", COVERAGE_CHECKED),
-        IMAGE_SIBLING_OVERLAP("imageSiblingOverlap", COVERAGE_CHECKED),
+        CORRIDOR_CENTERING("corridorCentering", COVERAGE_NOT_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        HUB_NEIGHBOUR_CROWDING("hubNeighbourCrowding", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        PARALLEL_CONNECTION_GAP("parallelConnectionGap", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        NOTE_OVERLAP("noteOverlap", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        NOTE_CLIP("noteClip", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        IMAGE_SIBLING_OVERLAP("imageSiblingOverlap", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        // The companion containment axis: the sibling dimension above compares only within a
+        // parent bucket, so an element's icon colliding with the icon of an element containing
+        // it is covered here instead. Informational; no rating impact.
+        OVERLAY_ICON_COLLISION("overlayIconCollision", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
+        // The third icon axis: an element's own icon drawn over its own title, wherever that
+        // title's own textAlignment puts it. Neither dimension above can reach it — the icon
+        // rectangle is clamped to its element box, so the icon and the title it covers are never
+        // compared. Informational; no rating impact.
+        // Contextual, like labelOverlaps below-declared: downgrades to "partial" on a run carrying
+        // an icon-bearing named object whose title width could not be measured, so the icon was
+        // never actually compared against anything.
+        OWN_ICON_OVER_LABEL("ownIconOverLabel", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.UNMEASURED_TITLE),
         // The connection-route-vs-visual class: a connection penetrating a Note/image interior
         // (this dimension; drives routing Tier-3R, cap-good) OR grazing its border (the sibling
         // connectionGrazesVisual dimension below). Both route-vs-visual modes are now covered, so
         // this dimension is fully checked. (A label sitting ON a note is a separate label concern,
         // not part of this route dimension.)
-        CONNECTION_THROUGH_NOTE("connectionThroughNote", COVERAGE_CHECKED),
+        CONNECTION_THROUGH_NOTE("connectionThroughNote", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
         // A connection grazing a Note/image BORDER — the outer band the through-visual inset
         // discards, including visuals too small to inset (informational; no rating impact).
         // Disjoint from connectionThroughNote (interior penetration), together completing the
         // connection-route-vs-visual class.
-        CONNECTION_GRAZES_VISUAL("connectionGrazesVisual", COVERAGE_CHECKED),
+        CONNECTION_GRAZES_VISUAL("connectionGrazesVisual", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
         // Redundant (collinear / removable) bendpoints (informational; no rating impact).
-        REDUNDANT_BENDPOINTS("redundantBendpoints", COVERAGE_CHECKED),
+        REDUNDANT_BENDPOINTS("redundantBendpoints", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
         // Non-orthogonal interior (mid) segments — off-cardinal segments between the terminals
         // (informational; no rating impact, distinct from the rating-affecting terminal count).
-        NON_ORTHOGONAL_INTERIOR_SEGMENTS("nonOrthogonalInteriorSegments", COVERAGE_CHECKED),
+        NON_ORTHOGONAL_INTERIOR_SEGMENTS("nonOrthogonalInteriorSegments", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
         // Container fill == nested-child fill — backstop for the container-recession emitter
         // (informational; no rating impact). Flags the authored same-colour blob the emitter
         // is forbidden to touch; the emitter itself prevents the unauthored-fill blob at add time.
-        CONTAINER_FILL_RECESSION("containerFillRecession", COVERAGE_CHECKED),
+        CONTAINER_FILL_RECESSION("containerFillRecession", COVERAGE_CHECKED, COVERAGE_NOT_APPLICABLE,
+                ContextualTrigger.NONE),
         // A terminal route that departs an element face then runs parallel to and hugs that face
         // (perpendicular clearance below the stub minimum) — the visible hugging exit the raw
         // terminal-angle check misses (informational; no rating impact). Distinct from the
         // rating-bearing nonOrthogonalTerminals dimension, which stays checked.
-        OFF_FACE_PARALLEL_TERMINALS("offFaceParallelTerminals", COVERAGE_CHECKED),
+        OFF_FACE_PARALLEL_TERMINALS("offFaceParallelTerminals", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
         // Element faces on which two or more connection terminals coincide (share a perimeter point
         // within the hub-port slot tolerance) — the same-face port collision the M5 hubPortQuality
         // metric misses on any face below its four-connection guard (informational; no rating impact;
         // the rating-bearing hubPortQuality dimension above stays checked).
-        COINCIDENT_FACE_PORTS("coincidentFacePorts", COVERAGE_CHECKED);
+        COINCIDENT_FACE_PORTS("coincidentFacePorts", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // Connections whose two stored bendpoint reconstructions disagree by more than the
+        // representable-precision floor — a route computed for a geometry that has since moved
+        // (informational; no rating impact). NOT_CHECKED on a single-object view, with the rest of
+        // the connection family: a lone object can carry a self-referencing connection, so no
+        // object count writes the mode off. A self-loop's source and target centres are the same
+        // value, so the centre terms cancel and the drift reduces to |startX - endX| — zero for any
+        // self-loop written correctly, since both offsets must describe one absolute point. That is
+        // an argument about well-behaved writers, not about structure, and this enum requires the
+        // weaker claim wherever applicability rests on such an argument.
+        ANCHOR_DRIFT("anchorDrift", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE),
+        // Connections doubling back through a sidestep too narrow to be a detour — the four-point
+        // reversal the three-point zigzag predicate cannot express (informational; no rating
+        // impact). NOT_CHECKED on a single-object view: the shape lives entirely on one connection's
+        // own polyline, so a self-referencing connection on a lone object can exhibit it in full —
+        // leave a face, step aside, re-enter — and nothing about a one-object view prevents it.
+        LATERAL_JOG_REVERSALS("lateralJogReversals", COVERAGE_CHECKED, COVERAGE_NOT_CHECKED,
+                ContextualTrigger.NONE);
 
         final String id;
         /** One of the {@code COVERAGE_*} levels — the coverage state this dimension declares. */
         final String coverage;
+        /**
+         * The level this dimension reports on a <em>single-object</em> view, where the assessor
+         * does not run at all — one of {@link #COVERAGE_NOT_APPLICABLE} (the failure mode
+         * structurally requires two or more view objects, so no single object can exhibit it)
+         * or {@link #COVERAGE_NOT_CHECKED} (the mode IS reachable with one object — on its own
+         * or via a self-referencing connection — but no detector ran, so absence of a finding
+         * is not evidence of absence).
+         *
+         * <p>Declared per dimension at its definition site rather than derived by a builder
+         * branch, so a dimension added later cannot compile without stating it and silently
+         * inherit whatever a default happened to be. Where applicability is uncertain the
+         * weaker claim {@code not-checked} is mandatory: it costs a consumer one unnecessary
+         * render-verify, whereas {@code not-applicable} on a reachable mode is a false
+         * all-clear.</p>
+         */
+        final String degenerateCoverage;
+        /**
+         * The run-scoped condition that downgrades this dimension to {@link #COVERAGE_PARTIAL},
+         * or {@link ContextualTrigger#NONE} when its declared level is final on every run.
+         *
+         * <p>This is the authority for the permanent-versus-contextual classification: a dimension
+         * is CONTEXTUALLY downgradable exactly when this is not {@code NONE}, and
+         * {@link #buildCoverageMap} derives the downgrade from it rather than from a hand-written
+         * branch listing the dimensions by name. Stating it at the definition site is what keeps
+         * the classification from being copied into a second list that can then go stale — the
+         * failure this field replaced.</p>
+         */
+        final ContextualTrigger contextualTrigger;
 
-        CoverageDimension(String id, String coverage) {
+        CoverageDimension(String id, String coverage, String degenerateCoverage,
+                ContextualTrigger contextualTrigger) {
             this.id = id;
             this.coverage = coverage;
+            this.degenerateCoverage = degenerateCoverage;
+            this.contextualTrigger = contextualTrigger;
         }
     }
 
@@ -1135,28 +1623,393 @@ class LayoutQualityAssessor {
      * {@code not-checked}) verbatim. Insertion order follows the registry. The map is never null
      * and contains exactly one entry per registry dimension (informational only — no rating impact).
      *
-     * <p>One value is contextual: when {@code labelExceedsSegment} is true (this run carries at
+     * <p>Three values are contextual. When {@code labelExceedsSegment} is true (this run carries at
      * least one connection label wider than its hosting segment), {@code labelOverlaps} is
      * downgraded from its declared {@code checked} to {@code partial}. A label that overruns its
      * segment can crowd a neighbour while still clearing it geometrically, so an overlap count of
-     * zero does NOT certify that mode clean — the consumer must render-verify. The declared level
-     * is the baseline; coverage may only downgrade contextually, never silently upgrade.</p>
+     * zero does NOT certify that mode clean — the consumer must render-verify. When
+     * {@code unmeasuredTitle} is true (this run carries a named, icon-bearing object whose title
+     * width could not be measured — a native group, which is never measured, or a Grouping or
+     * element whose measureText failed), {@code ownIconOverLabel} is downgraded the same way:
+     * there was no title rectangle to test the icon against, so that object was never examined
+     * and its zero certifies nothing. When
+     * {@code unmeasuredParentBand} is true (this run carries a parent, with children, whose label
+     * width was never measured), {@code parentLabelObscured} is downgraded too: that parent's title
+     * band was sized as a single line however long the title is, so the clearance verdict returned
+     * for it was never really tested. The declared level is the baseline; coverage may only
+     * downgrade contextually, never silently upgrade.</p>
      */
-    static Map<String, String> buildCoverageMap(boolean labelExceedsSegment) {
+    static Map<String, String> buildCoverageMap(boolean labelExceedsSegment,
+                                                boolean unmeasuredTitle,
+                                                boolean unmeasuredParentBand) {
+        // Which run-scoped conditions actually fired. The mapping from a condition to the
+        // dimension it downgrades is declared on the dimension itself
+        // (CoverageDimension.contextualTrigger), so this loop never names a dimension: adding a
+        // contextually-downgradable dimension later is a registry edit, and the classification
+        // cannot drift from the map it produces because there is only the one statement of it.
+        Set<ContextualTrigger> fired = EnumSet.noneOf(ContextualTrigger.class);
+        if (labelExceedsSegment) {
+            fired.add(ContextualTrigger.LABEL_EXCEEDS_SEGMENT);
+        }
+        if (unmeasuredTitle) {
+            fired.add(ContextualTrigger.UNMEASURED_TITLE);
+        }
+        if (unmeasuredParentBand) {
+            fired.add(ContextualTrigger.UNMEASURED_PARENT_BAND);
+        }
         Map<String, String> coverage = new LinkedHashMap<>();
         for (CoverageDimension dim : CoverageDimension.values()) {
-            String level = (dim == CoverageDimension.LABEL_OVERLAPS && labelExceedsSegment)
-                    ? COVERAGE_PARTIAL
-                    : dim.coverage;
-            coverage.put(dim.id, level);
+            // NONE is never added above, so a dimension declaring it can never be downgraded here.
+            coverage.put(dim.id,
+                    fired.contains(dim.contextualTrigger) ? COVERAGE_PARTIAL : dim.coverage);
         }
         return coverage;
     }
 
     /**
+     * The dimensions this run downgraded CONTEXTUALLY — declared {@code checked} in the registry
+     * and reported {@code partial} only because something on this particular view could not be
+     * measured. Derived from the registry and the supplied map, in registry order.
+     *
+     * <p>Deliberately NOT every dimension reading {@code partial}. Two dimensions declare
+     * {@code partial} permanently and a third declares {@code not-checked}, so every fully-assessed
+     * run carries at least three non-{@code checked} entries before anything about the view is
+     * considered. Those are a property of the code, identical on every response; repeating them as
+     * though they were findings would bury the entries that ARE this run's news. The permanent set
+     * is disclosed as a count instead, and {@code coverage} carries the detail.</p>
+     *
+     * @param coverage a coverage map as built by {@link #buildCoverageMap} or
+     *                 {@link #buildDegenerateCoverageMap}; an unknown or absent id is simply not
+     *                 matched, so a legacy empty map yields an empty list rather than throwing
+     */
+    static List<String> contextualPartialDimensions(Map<String, String> coverage) {
+        List<String> ids = new ArrayList<>();
+        for (CoverageDimension dim : contextuallyPartial(coverage)) {
+            ids.add(dim.id);
+        }
+        return List.copyOf(ids);
+    }
+
+    /**
+     * The same selection as {@link #contextualPartialDimensions}, as registry entries rather than
+     * ids, so a caller needing a dimension's trigger or reason does not have to look the id back
+     * up. Both forms read the one selection, so the published field and the prose describing it
+     * cannot select differently.
+     */
+    private static List<CoverageDimension> contextuallyPartial(Map<String, String> coverage) {
+        if (coverage == null || coverage.isEmpty()) {
+            return List.of();
+        }
+        List<CoverageDimension> dimensions = new ArrayList<>();
+        for (CoverageDimension dim : CoverageDimension.values()) {
+            if (dim.contextualTrigger != ContextualTrigger.NONE
+                    && COVERAGE_PARTIAL.equals(coverage.get(dim.id))) {
+                dimensions.add(dim);
+            }
+        }
+        return List.copyOf(dimensions);
+    }
+
+    /**
+     * The one coverage map a run produced, wrapped so the prose and the published field cannot
+     * diverge and so the argument cannot be miswired.
+     *
+     * <p>WHY A TYPE AND NOT THE BARE MAP. {@link #generateSuggestions} already takes 23 positional
+     * arguments, and {@code ratingBreakdown} — also a {@code Map<String, String>} — is in scope one
+     * line above its call site. Passing the coverage map as a bare {@code Map} would let
+     * {@code ratingBreakdown} be handed over by mistake and still compile, returning plausible
+     * nonsense; a purpose-built type makes that miswire a compile error instead of a silent
+     * defect.</p>
+     *
+     * <p>Every figure the prose quotes is derived from this one map, so a sentence claiming N
+     * dimensions were not fully examined is arithmetic over the very map the response publishes,
+     * never a second count that could drift from it.</p>
+     *
+     * @param coverage the map exactly as built for this run; insertion order is registry order and
+     *                 is contractual, so it is held as given rather than re-copied into a
+     *                 hash-ordered map
+     */
+    record CoverageDeclaration(Map<String, String> coverage) {
+
+        /** Total dimensions declared — the denominator the prose quotes. */
+        int dimensionCount() {
+            return coverage.size();
+        }
+
+        /**
+         * Dimensions this run did NOT fully examine: every entry whose level is not
+         * {@code checked}, whether that is a permanent {@code partial}, a contextual one, a
+         * standing {@code not-checked} or a {@code not-applicable}. This is the number a caller
+         * needs in order to read a zero correctly, and it is counted off the published map rather
+         * than tracked alongside it.
+         */
+        int notFullyExaminedCount() {
+            int count = 0;
+            for (String level : coverage.values()) {
+                if (!COVERAGE_CHECKED.equals(level)) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        /**
+         * This run's contextually-downgraded dimensions, in registry order.
+         *
+         * <p>The dimensions themselves rather than their ids, so the prose can read each one's
+         * trigger — and its reason — directly off the registry entry instead of looking the id
+         * back up. {@link #contextualPartialDimensions} is the id projection of this same list,
+         * for the published field.</p>
+         */
+        List<CoverageDimension> contextualPartials() {
+            return contextuallyPartial(coverage);
+        }
+    }
+
+    /**
+     * Builds the per-dimension coverage map for a <em>degenerate</em> view — one holding at most
+     * one object, where the assessor never runs and no geometric comparison is possible. Same
+     * invariants as {@link #buildCoverageMap}: never null, insertion order follows the registry,
+     * exactly one entry per dimension, informational only. It exists as a sibling rather than a
+     * branch inside {@code buildCoverageMap} so the fully-assessed path is untouched.
+     *
+     * <p>A degenerate view is silent, not clean: with no map at all a consumer cannot tell a
+     * dimension that could not apply from one that was never evaluated, and a rating-bearing
+     * detection suppressed by the short-circuit ({@code labelTruncations}, {@code offCanvas})
+     * reads as a zero it never earned.</p>
+     *
+     * <p>{@code objectCount == 0} ⇒ every dimension is {@link #COVERAGE_NOT_APPLICABLE}: with no
+     * objects there can be no connection either, so nothing is reachable. Otherwise each
+     * dimension reports its own declared {@link CoverageDimension#degenerateCoverage} — a single
+     * object can carry a self-referencing connection, so the whole connection family stays
+     * {@link #COVERAGE_NOT_CHECKED} rather than being written off.</p>
+     *
+     * @param objectCount view objects in the degenerate view — elements, groups and notes alike;
+     *                    must be 0 or 1
+     * @throws IllegalArgumentException if {@code objectCount} is outside 0..1
+     */
+    static Map<String, String> buildDegenerateCoverageMap(int objectCount) {
+        requireDegenerateObjectCount(objectCount);
+        Map<String, String> coverage = new LinkedHashMap<>();
+        for (CoverageDimension dim : CoverageDimension.values()) {
+            coverage.put(dim.id,
+                    objectCount == 0 ? COVERAGE_NOT_APPLICABLE : dim.degenerateCoverage);
+        }
+        return coverage;
+    }
+
+    /**
+     * Rejects an object count no degenerate view can have. Both degenerate helpers branch on
+     * {@code == 0} and treat everything else as the single-object case, so an out-of-range count
+     * would otherwise be answered confidently and wrongly — a view of five objects would be told
+     * it holds one, and told which dimensions "could not apply" when in truth all of them were
+     * assessable. Silence dressed as an answer is the exact failure this coverage map exists to
+     * remove, so the helpers refuse the question rather than answer it badly.
+     */
+    private static void requireDegenerateObjectCount(int objectCount) {
+        if (objectCount < 0 || objectCount > 1) {
+            throw new IllegalArgumentException(
+                    "Degenerate coverage is defined only for a view of 0 or 1 objects, but got "
+                            + objectCount + ". A view with more objects is fully assessed — use "
+                            + "buildCoverageMap with the assessment's contextual flags instead.");
+        }
+    }
+
+    /**
+     * The suggestion text a degenerate view returns. Says "object", not "element": the count is
+     * over every view object — elements, groups and notes alike — so a view holding one note or
+     * one group would otherwise be described as having an element it does not contain.
+     *
+     * <p>Lives here rather than at the short-circuit so this response text, which an agent reads
+     * as prose, is pinned by an executable test.</p>
+     *
+     * @param objectCount view objects in the degenerate view; must be 0 or 1
+     * @throws IllegalArgumentException if {@code objectCount} is outside 0..1
+     */
+    static String degenerateSuggestion(int objectCount) {
+        requireDegenerateObjectCount(objectCount);
+        return objectCount == 0
+                ? "View has no objects — layout assessment is not applicable."
+                : "View has only one object — layout assessment is not applicable.";
+    }
+
+    /**
+     * The object-local findings of a degenerate view, plus the coverage map that declares which
+     * detectors actually ran to produce them.
+     *
+     * <p>{@code connectionCount} is a measured count, not an assessment: a lone object can carry a
+     * self-referencing connection, and reporting a hard {@code 0} beside a coverage map that says
+     * the connection dimensions are {@code not-checked} asserts as fact something no detector
+     * established. The connection dimensions stay {@code not-checked} precisely because counting a
+     * connection is not assessing it.</p>
+     */
+    record DegenerateAssessment(List<String> offCanvasWarnings,
+            int labelTruncationCount, List<String> labelTruncations,
+            int ownIconOverLabelCount, List<String> ownIconOverLabelDescriptions,
+            int noteClipCount, List<String> noteClipDescriptions,
+            int connectionCount, Map<String, String> coverage, List<String> suggestions) {}
+
+    /**
+     * Assesses a view holding at most one object by running exactly those detectors that are
+     * computable on a single object, and declaring in {@code coverage} which ones did run.
+     *
+     * <p>Four detections are object-local — they inspect one object's own geometry and need no
+     * second object to compare against: {@code offCanvas} and {@code labelTruncations} (both
+     * rating-bearing on a normal run), plus the informational {@code ownIconOverLabel} and
+     * {@code noteClip}. Suppressing them made a one-object view carrying a real, visible defect
+     * report as unassessable, with every count a zero it never earned.</p>
+     *
+     * <p><b>The view still does not RATE.</b> Rating is deliberately left {@code not-applicable}:
+     * {@link #computeAverageSpacing} and {@link #computeAlignmentScore} both return an explicit
+     * no-data sentinel below two objects ({@code 0.0} and {@code 0}), and feeding those to the
+     * rating would score a pristine one-object view {@code fair} on both layout axes purely for
+     * having nothing to compare against — a sentinel laundered into a judgment. The findings are
+     * therefore reported <em>beside</em> the non-rating, in the counts, the descriptions, and the
+     * suggestion list, so a defect is visible without inventing a score for it.</p>
+     *
+     * <p>A dimension is upgraded out of {@code not-checked} only when its detector actually had an
+     * object to look at, and is then reported at exactly the level the fully-assessed path would
+     * report for the same node set — no better. Any residual imprecision (for instance that the
+     * truncation detector skips groups) is a property of the main path too, not something this
+     * path introduces; equating the two is what keeps the vocabulary meaning one thing.</p>
+     *
+     * @param nodes       the view's objects; must number 0 or 1
+     * @param connections connections reconstructed for those objects — a self-referencing
+     *                    connection on a lone object is real and is counted here
+     * @throws IllegalArgumentException if {@code nodes} holds more than one object
+     */
+    DegenerateAssessment assessDegenerate(List<AssessmentNode> nodes,
+            List<AssessmentConnection> connections) {
+        requireDegenerateObjectCount(nodes.size());
+        Map<String, String> coverage = buildDegenerateCoverageMap(nodes.size());
+        int connectionCount = connections.size();
+        if (nodes.isEmpty()) {
+            // Nothing to look at, so nothing is upgraded: every dimension stays not-applicable.
+            return new DegenerateAssessment(List.of(), 0, List.of(), 0, List.of(), 0, List.of(),
+                    connectionCount, coverage, List.of(degenerateSuggestion(0)));
+        }
+
+        // Same split rule the fully-assessed path uses, so a dimension means the same thing here.
+        List<AssessmentNode> layoutNodes = new ArrayList<>();
+        List<AssessmentNode> noteNodes = new ArrayList<>();
+        for (AssessmentNode node : nodes) {
+            if (node.isNote()) {
+                noteNodes.add(node);
+            } else {
+                layoutNodes.add(node);
+            }
+        }
+
+        List<String> offCanvas = detectOffCanvas(layoutNodes);
+        LabelTruncationResult truncation = detectLabelTruncation(layoutNodes);
+        OwnIconOverLabelResult ownIcon = detectOwnIconOverLabel(layoutNodes);
+        NoteClipResult noteClip = detectNoteTextClipping(noteNodes);
+
+        // Upgrade ONLY the dimensions whose detector actually EXAMINED an object. Being handed a
+        // non-empty list is not enough: a detector can skip the only object at its own entry guard
+        // and return a clean zero having compared nothing. Claiming "checked" off the back of that
+        // is the same false all-clear this map exists to prevent, so the tests below pin one node
+        // shape per guard.
+        Map<String, String> declared = new LinkedHashMap<>(coverage);
+        if (!layoutNodes.isEmpty()) {
+            // detectOffCanvas has no entry guard — it tests every layout node's coordinates.
+            declared.put(CoverageDimension.OFF_CANVAS.id, CoverageDimension.OFF_CANVAS.coverage);
+            // detectOwnIconOverLabel skips an object with no overlay icon, but that is a DECIDED
+            // result (no icon means no collision is possible), not an unmeasured one. Its genuinely
+            // unmeasured case is a named, icon-bearing object whose title width could not be
+            // measured, which it reports itself.
+            declared.put(CoverageDimension.OWN_ICON_OVER_LABEL.id,
+                    ownIcon.unmeasuredTitle()
+                            ? COVERAGE_PARTIAL
+                            : CoverageDimension.OWN_ICON_OVER_LABEL.coverage);
+        }
+        if (labelTruncationExamined(layoutNodes)) {
+            declared.put(CoverageDimension.LABEL_TRUNCATIONS.id,
+                    CoverageDimension.LABEL_TRUNCATIONS.coverage);
+        }
+        if (noteClipExamined(noteNodes)) {
+            declared.put(CoverageDimension.NOTE_CLIP.id, CoverageDimension.NOTE_CLIP.coverage);
+        }
+
+        return new DegenerateAssessment(offCanvas,
+                truncation.count(), truncation.descriptions(),
+                ownIcon.count(), ownIcon.descriptions(),
+                noteClip.count(), noteClip.descriptions(),
+                connectionCount, declared,
+                degenerateSuggestions(nodes.size(), offCanvas, truncation, ownIcon, noteClip));
+    }
+
+    /**
+     * Whether {@link #detectLabelTruncation} actually compared a label against its box for any of
+     * these nodes, rather than skipping every one at its entry guard.
+     *
+     * <p>Mirrors that detector's guards for the degenerate case. A GROUP is skipped because the
+     * detector cannot measure a title band; a box with no room beside the type icon, or a label of
+     * unmeasured width, cannot be compared either — all three leave the mode unexamined. An object
+     * with no name is different in kind: there is no label, so there is nothing to truncate and the
+     * absence of a finding is a decided result rather than an unmeasured one.</p>
+     *
+     * <p>Where this is uncertain it answers false, because an unnecessary render-verify costs one
+     * look while a false {@code checked} costs the guarantee.</p>
+     */
+    private static boolean labelTruncationExamined(List<AssessmentNode> layoutNodes) {
+        for (AssessmentNode node : layoutNodes) {
+            if (node.isGroup()) {
+                continue;
+            }
+            if (node.name() == null || node.name().isEmpty()) {
+                return true;
+            }
+            if (node.width() - TYPE_ICON_WIDTH > 0 && node.labelTextWidth() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether {@link #detectNoteTextClipping} actually measured any note. It skips a note whose
+     * required height is unavailable ("no content / measurement unavailable"), so a view holding
+     * only such a note has had nothing examined and must not report the dimension as covered.
+     */
+    private static boolean noteClipExamined(List<AssessmentNode> noteNodes) {
+        for (AssessmentNode note : noteNodes) {
+            if (note.noteRequiredHeight() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The suggestion list for a degenerate view. The base line still says the layout is not rated,
+     * because it is not — but where a detector found something, the findings follow it verbatim.
+     * A rating-bearing defect that is suppressed from the rating AND absent from the prose is
+     * invisible, which is the failure this path had; carrying the descriptions is what makes the
+     * non-rating honest rather than silencing.
+     */
+    private static List<String> degenerateSuggestions(int objectCount, List<String> offCanvas,
+            LabelTruncationResult truncation, OwnIconOverLabelResult ownIcon,
+            NoteClipResult noteClip) {
+        List<String> suggestions = new ArrayList<>();
+        suggestions.add(degenerateSuggestion(objectCount));
+        int findings = offCanvas.size() + truncation.count() + ownIcon.count() + noteClip.count();
+        if (findings == 0) {
+            return suggestions;
+        }
+        suggestions.add("Layout is not rated on a view holding one object, but " + findings
+                + " object-level issue(s) were detected on that object and still need attention.");
+        suggestions.addAll(offCanvas);
+        suggestions.addAll(truncation.descriptions());
+        suggestions.addAll(ownIcon.descriptions());
+        suggestions.addAll(noteClip.descriptions());
+        return suggestions;
+    }
+
+    /**
      * Computes the overall quality rating with per-metric breakdown.
      * Delegates to the breakdown-aware overload with {@code hasGroups=false} and
-     * zero values for the M2-M5 + L1-L3 inputs.
+     * zero values for the M2-M5 + layout-tier inputs.
      *
      * @deprecated Use {@link #computeRatingWithBreakdown} to get both the rating
      *             and per-metric breakdown, and to enable grouped-view leniency.
@@ -1175,7 +2028,7 @@ class LayoutQualityAssessor {
      * Computes the overall quality rating with per-metric breakdown — M6 two-dimensional model.
      *
      * <p>Backwards-compatible delegating overload (10-arg). Existing callers pass zeros for the
-     * M2-M5 + L1-L3 inputs; M6 promotions for parentLabelObscured and labelTruncation are then
+     * M2-M5 + layout-tier inputs; M6 promotions for parentLabelObscured and labelTruncation are then
      * inactive (count = 0). Use the 18-arg expanded overload to exercise the full M6 model.</p>
      */
     RatingResult computeRatingWithBreakdown(int overlaps, int crossings,
@@ -1193,13 +2046,13 @@ class LayoutQualityAssessor {
     /**
      * Computes the overall quality rating with per-metric breakdown (M6).
      *
-     * <p><b>M6 model (Assessor.Redesign 2026-04-26):</b> Each metric contributes an individual
+     * <p><b>M6 model:</b> Each metric contributes an individual
      * rating ("pass"/"excellent"/"good"/"fair"/"poor"). The overall rating uses a two-dimensional
-     * decomposition: a layout-tier rating (L1: overlaps, boundary, parentLabelObscured-promoted;
-     * L2 cap-fair: spacing, off-canvas; L3 cap-good: alignment) AND a routing-tier rating
-     * (R1: passThroughs, M2 interior, M3 zigzag, conn-vs-conn coincident; R2 cap-fair: M1 nonOrth,
+     * decomposition: a layout-tier rating (Tier 1L: overlaps, boundary, parentLabelObscured-promoted;
+     * Tier 2L cap-fair: spacing, off-canvas; Tier 3L cap-good: alignment) AND a routing-tier rating
+     * (Tier 1R: passThroughs, M2 interior, M3 zigzag, conn-vs-conn coincident; Tier 2R cap-fair: M1 nonOrth,
      * M4 edge-coincidence, M5 low hub-port quality, labelOverlap-promoted, labelTruncation-promoted;
-     * R3 cap-good: edge crossings). Combined {@code overall = worse(layoutRating, routingRating)}.
+     * Tier 3R cap-good: edge crossings). Combined {@code overall = worse(layoutRating, routingRating)}.
      * Per spec, layout is the prerequisite — a view with sibling overlaps is broken regardless
      * of routing quality.</p>
      *
@@ -1288,7 +2141,7 @@ class LayoutQualityAssessor {
     }
 
     /**
-     * Full rating overload (21-arg) with the connection-through-note/image count.
+     * Rating overload (21-arg) with the connection-through-note/image count.
      *
      * <p>{@code connectionThroughNoteCount} adds a routing Tier-3R (cap-good) breakdown entry on
      * binary presence: a connection routed through a Note or image visual is an obstacle the
@@ -1298,6 +2151,10 @@ class LayoutQualityAssessor {
      * from the element {@code passThroughs} entry (Tier-1R) by construction — notes/images are not
      * in the scoring node set — so the two never stack on the same crossing. When the count is zero
      * the entry is {@code pass} and the overall rating is unchanged from the 20-arg form.</p>
+     *
+     * <p>Delegating overload: forwards {@code offFaceParallelTerminalCount = 0} to the widest form,
+     * so the off-face parallel-terminal entry is {@code pass} and the rating is unchanged — every
+     * existing caller therefore keeps byte-identical output.</p>
      */
     RatingResult computeRatingWithBreakdown(int overlaps, int crossings,
                                              double avgSpacing, int alignmentScore,
@@ -1312,16 +2169,56 @@ class LayoutQualityAssessor {
                                              boolean hubNeighbourCrowded,
                                              int nonOrthogonalInteriorSegmentCount,
                                              int connectionThroughNoteCount) {
+        return computeRatingWithBreakdown(overlaps, crossings, avgSpacing, alignmentScore,
+                labelOverlapCount, passThroughCount, coincidentSegments, nonOrthogonalTerminals,
+                connectionCount, hasGroups, boundaryViolationCount, parentLabelObscuredCount,
+                offCanvasCount, labelTruncationCount, interiorTerminationCount, zigzagCount,
+                connectionEdgeCoincidenceCount, hubPortQualityScore, hubNeighbourCrowded,
+                nonOrthogonalInteriorSegmentCount, connectionThroughNoteCount, 0);
+    }
+
+    /**
+     * Full rating overload (22-arg) with the off-face parallel-terminal hug count.
+     *
+     * <p>{@code offFaceParallelTerminalCount} adds a routing Tier-2R (cap-fair) breakdown entry on
+     * binary presence: a terminal route that departs an element face then runs parallel to and
+     * hugging it (within {@link #OFF_FACE_MIN_STUB_PX}) is a plainly-visible defect that the
+     * visible-length-guarded terminal metric {@code nonOrthogonalTerminals} suppresses as a
+     * sub-pixel stub. Presence, not magnitude — any single hug caps routing at {@code fair} (never
+     * {@code poor}), so a view whose ONLY routing defect is an off-face hug cannot read
+     * {@code good}/{@code excellent} at the headline while the render plainly shows the hug. Disjoint
+     * from {@code nonOrthogonalTerminals} (visible diagonal) and {@code nonOrthogonalInteriorSegments}
+     * (off-cardinal mid segment) by construction; the routing tier combines the family by
+     * {@code Math.max}, so a connection tripping two of them is capped once, not stacked. Where the
+     * hug is layout-bound (a rolled-back egress lift, {@code EGRESS_LIFT_LAYOUT_BOUND}), the remedy is
+     * spacing not re-routing — the collector's per-hug description already prescribes it. When the
+     * count is zero the entry is {@code pass} and the overall rating is unchanged from the 21-arg
+     * form.</p>
+     */
+    RatingResult computeRatingWithBreakdown(int overlaps, int crossings,
+                                             double avgSpacing, int alignmentScore,
+                                             int labelOverlapCount, int passThroughCount,
+                                             int coincidentSegments, int nonOrthogonalTerminals,
+                                             int connectionCount, boolean hasGroups,
+                                             int boundaryViolationCount, int parentLabelObscuredCount,
+                                             int offCanvasCount, int labelTruncationCount,
+                                             int interiorTerminationCount, int zigzagCount,
+                                             int connectionEdgeCoincidenceCount,
+                                             double hubPortQualityScore,
+                                             boolean hubNeighbourCrowded,
+                                             int nonOrthogonalInteriorSegmentCount,
+                                             int connectionThroughNoteCount,
+                                             int offFaceParallelTerminalCount) {
         Map<String, String> breakdown = new LinkedHashMap<>();
 
-        // 1. Overlaps rating (L1) — binary >0 → poor (sibling overlaps are tier-1L layout-severity)
+        // 1. Overlaps rating (Tier 1L) — binary >0 → poor (sibling overlaps are tier-1L layout-severity)
         if (overlaps == 0) {
             breakdown.put("overlaps", "pass");
         } else {
             breakdown.put("overlaps", "poor");
         }
 
-        // 2. Edge crossings rating (R3 cap-good — density-aware, Stories 11-12 / 11-22)
+        // 2. Edge crossings rating (Tier 3R cap-good — density-aware)
         double crossingRatio = connectionCount > 0
                 ? (double) crossings / connectionCount : crossings;
         String crossingRating;
@@ -1352,7 +2249,7 @@ class LayoutQualityAssessor {
         }
         breakdown.put("edgeCrossings", crossingRating);
 
-        // 3. Spacing rating (L2 cap-fair)
+        // 3. Spacing rating (Tier 2L cap-fair)
         if (avgSpacing > EXCELLENT_MIN_SPACING) {
             breakdown.put("spacing", "pass");
         } else if (avgSpacing > GOOD_MIN_SPACING) {
@@ -1361,7 +2258,7 @@ class LayoutQualityAssessor {
             breakdown.put("spacing", "fair");
         }
 
-        // 4. Alignment rating (L3 cap-good)
+        // 4. Alignment rating (Tier 3L cap-good)
         if (alignmentScore > EXCELLENT_MIN_ALIGNMENT) {
             breakdown.put("alignment", "pass");
         } else if (alignmentScore > GOOD_MIN_ALIGNMENT) {
@@ -1370,7 +2267,7 @@ class LayoutQualityAssessor {
             breakdown.put("alignment", "fair");
         }
 
-        // 5. Label overlaps rating (R2 cap-fair — promoted from R3 under M6)
+        // 5. Label overlaps rating (Tier 2R cap-fair — promoted from Tier 3R under M6)
         if (labelOverlapCount == 0) {
             breakdown.put("labelOverlaps", "pass");
         } else if (labelOverlapCount <= 2) {
@@ -1379,7 +2276,7 @@ class LayoutQualityAssessor {
             breakdown.put("labelOverlaps", "fair");
         }
 
-        // 6. Pass-throughs rating (R1)
+        // 6. Pass-throughs rating (Tier 1R)
         if (passThroughCount == 0) {
             breakdown.put("passThroughs", "pass");
         } else if (passThroughCount <= FAIR_MAX_PASS_THROUGHS) {
@@ -1388,7 +2285,7 @@ class LayoutQualityAssessor {
             breakdown.put("passThroughs", "poor");
         }
 
-        // 7. Coincident segments rating (R1 conn-vs-conn)
+        // 7. Coincident segments rating (Tier 1R conn-vs-conn)
         if (coincidentSegments == 0) {
             breakdown.put("coincidentSegments", "pass");
         } else if (coincidentSegments <= GOOD_MAX_COINCIDENT) {
@@ -1399,7 +2296,7 @@ class LayoutQualityAssessor {
             breakdown.put("coincidentSegments", "poor");
         }
 
-        // 8. Non-orthogonal terminals rating (R2 cap-fair — promoted from R3 under M6, density-aware).
+        // 8. Non-orthogonal terminals rating (Tier 2R cap-fair — promoted from Tier 3R under M6, density-aware).
         // M1 corrected definition (visible post-clip segment) flows through `nonOrthogonalTerminals`.
         if (nonOrthogonalTerminals == 0) {
             breakdown.put("nonOrthogonalTerminals", "pass");
@@ -1417,7 +2314,7 @@ class LayoutQualityAssessor {
             breakdown.put("nonOrthogonalTerminals", "fair");
         }
 
-        // 8b. Non-orthogonal interior segments rating (R2 cap-fair — density-aware, mirrors the
+        // 8b. Non-orthogonal interior segments rating (Tier 2R cap-fair — density-aware, mirrors the
         //     terminal sibling above). An off-cardinal mid-route hop is just as visible as one at an
         //     endpoint, so it shares the terminal sibling's ratio buckets and routing tier. The
         //     routing tier combines members by Math.max, so a connection diagonal at both a terminal
@@ -1438,35 +2335,48 @@ class LayoutQualityAssessor {
             breakdown.put("nonOrthogonalInteriorSegments", "fair");
         }
 
-        // 8c. Connection-through-note/image rating (R3 cap-good — binary presence). A line routed
+        // 8b-ii. Off-face parallel-terminal hug rating (Tier 2R cap-fair — binary presence). A terminal
+        //     route that departs an element face then runs parallel to and hugging it (within
+        //     OFF_FACE_MIN_STUB_PX) is a plainly-visible defect that the visible-length-guarded
+        //     terminal metric (nonOrthogonalTerminals) suppresses as a sub-pixel stub. Presence, not
+        //     magnitude: any single hug caps routing at fair (never poor), so a view whose only
+        //     routing defect is an off-face hug cannot read good/excellent at the headline while the
+        //     render shows the hug. Disjoint from nonOrthogonalTerminals (visible diagonal) and
+        //     nonOrthogonalInteriorSegments (off-cardinal mid segment) by construction; the routing
+        //     tier combines the family by Math.max, so a connection tripping two of them is capped
+        //     once. Where the hug is layout-bound (a rolled-back egress lift), the collector's per-hug
+        //     description prescribes the spacing remedy — the rating stays binary.
+        breakdown.put("offFaceParallelTerminals", offFaceParallelTerminalCount == 0 ? "pass" : "fair");
+
+        // 8c. Connection-through-note/image rating (Tier 3R cap-good — binary presence). A line routed
         //     through a Note or image visual is an obstacle the router failed to avoid: always
         //     jarring to the reader, so any single crossing nudges routing to good. Presence, not
         //     magnitude — one crossing and three both rate good; the routing Tier-3 cap holds it at
         //     good (never fair/poor). Notes are excluded from the element pass-through scoring set;
-        //     for image-bearing elements this rates the image RECT (which can overhang the box). If a
-        //     route ever crosses both an element box and its image rect, the routing tier takes the
-        //     max, so the Tier-1R passThroughs entry dominates — no double penalty.
+        //     for image-bearing elements this rates the image RECT, which is clipped to the element
+        //     box. A route crossing an element's image therefore also crosses its box: the routing
+        //     tier takes the max, so the Tier-1R passThroughs entry dominates — no double penalty.
         breakdown.put("connectionThroughNote", connectionThroughNoteCount == 0 ? "pass" : "good");
 
-        // 9. Boundary violations (L1 — Assessor.Redesign promotion: any violation is layout-Tier-1L)
+        // 9. Boundary violations (Tier 1L — promoted: any violation is layout-Tier-1L)
         breakdown.put("boundaryViolations", boundaryViolationCount == 0 ? "pass" : "poor");
 
-        // 10. Parent label obscured (L1 — promoted from info per M6)
+        // 10. Parent label obscured (Tier 1L — promoted from informational under M6)
         breakdown.put("parentLabelObscured", parentLabelObscuredCount == 0 ? "pass" : "poor");
 
-        // 11. Off-canvas (L2 cap-fair — was partial; explicit under M6)
+        // 11. Off-canvas (Tier 2L cap-fair — was partial; explicit under M6)
         breakdown.put("offCanvas", offCanvasCount == 0 ? "pass" : "fair");
 
-        // 12. Label truncation (R2 cap-fair — promoted from info per M6)
+        // 12. Label truncation (Tier 2R cap-fair — promoted from info per M6)
         breakdown.put("labelTruncations", labelTruncationCount == 0 ? "pass" : "fair");
 
-        // 13. Interior terminations (R1 — M2)
+        // 13. Interior terminations (Tier 1R — M2)
         breakdown.put("interiorTerminations", interiorTerminationCount == 0 ? "pass" : "poor");
 
-        // 14. Zigzags (R1 — M3)
+        // 14. Zigzags (Tier 1R — M3)
         breakdown.put("zigzags", zigzagCount == 0 ? "pass" : "poor");
 
-        // 15. Edge-coincidence (R2 cap-fair — M4; A-gated: Tier-1R escalation at
+        // 15. Edge-coincidence (Tier 2R cap-fair — M4; A-gated: Tier-1R escalation at
         //     count >= EDGE_COINCIDENCE_EGREGIOUS_MAX, see computeRoutingTierLevel)
         if (connectionEdgeCoincidenceCount == 0) {
             breakdown.put("connectionEdgeCoincidence", "pass");
@@ -1478,18 +2388,12 @@ class LayoutQualityAssessor {
             breakdown.put("connectionEdgeCoincidence", "poor");
         }
 
-        // 16. Hub-port quality (R2 cap-fair — M5; threshold quality < 0.5 contributes)
-        if (hubPortQualityScore >= HUB_PORT_QUALITY_PASS_THRESHOLD) {
-            breakdown.put("hubPortQuality", "pass");
-        } else if (hubPortQualityScore >= HUB_PORT_QUALITY_GOOD_THRESHOLD) {
-            breakdown.put("hubPortQuality", "good");
-        } else if (hubPortQualityScore >= HUB_PORT_QUALITY_FAIR_THRESHOLD) {
-            breakdown.put("hubPortQuality", "fair");
-        } else {
-            breakdown.put("hubPortQuality", "poor");
-        }
+        // 16. Hub-port quality (Tier 2R cap-fair — M5). The band boundaries live in one place so
+        //     the remedies keyed off this metric cannot come to disagree with the band published
+        //     here about which views the metric has marked down.
+        breakdown.put("hubPortQuality", hubPortQualityBand(hubPortQualityScore));
 
-        // 17. Hub-to-neighbour crowding (L2 cap-fair). A hub edge collapsing a neighbouring
+        // 17. Hub-to-neighbour crowding (Tier 2L cap-fair). A hub edge collapsing a neighbouring
         //     spoke-row corridor is a layout-spacing defect: it caps overall at fair (never
         //     poor), so a crowded resize can no longer rate good. Stays pass when not crowded,
         //     leaving every non-crowded view's rating untouched.
@@ -1555,8 +2459,8 @@ class LayoutQualityAssessor {
      *       <b>plus M4 edge-coincidence when the count is egregious</b>
      *       (&ge; {@link #EDGE_COINCIDENCE_EGREGIOUS_MAX} — A-gated escalation)</li>
      *   <li><b>Tier 2R</b> (cap fair=2): M1 nonOrth terminals, nonOrth interior segments,
-     *       M4 edge-coincidence (count &lt; EGREGIOUS), M5 low hub-port quality, labelOverlaps
-     *       (promoted), labelTruncations (promoted)</li>
+     *       off-face parallel terminals (binary presence), M4 edge-coincidence (count &lt; EGREGIOUS),
+     *       M5 low hub-port quality, labelOverlaps (promoted), labelTruncations (promoted)</li>
      *   <li><b>Tier 3R</b> (cap good=1): edge crossings, connectionThroughNote (binary presence)</li>
      * </ul>
      */
@@ -1575,13 +2479,14 @@ class LayoutQualityAssessor {
             tier1 = Math.max(tier1,
                     ratingLevel(breakdown.getOrDefault("connectionEdgeCoincidence", "pass")));
         }
-        int tier2 = Math.max(Math.max(Math.max(Math.max(Math.max(
+        int tier2 = Math.max(Math.max(Math.max(Math.max(Math.max(Math.max(
                 ratingLevel(breakdown.getOrDefault("nonOrthogonalTerminals", "pass")),
                 ratingLevel(breakdown.getOrDefault("connectionEdgeCoincidence", "pass"))),
                 ratingLevel(breakdown.getOrDefault("hubPortQuality", "pass"))),
                 ratingLevel(breakdown.getOrDefault("labelOverlaps", "pass"))),
                 ratingLevel(breakdown.getOrDefault("labelTruncations", "pass"))),
-                ratingLevel(breakdown.getOrDefault("nonOrthogonalInteriorSegments", "pass")));
+                ratingLevel(breakdown.getOrDefault("nonOrthogonalInteriorSegments", "pass"))),
+                ratingLevel(breakdown.getOrDefault("offFaceParallelTerminals", "pass")));
         // Tier 3R (cap good=1): edge crossings and connection-through-note share the band by
         // Math.max — connectionThroughNote is binary-good, so it nudges routing to good at worst.
         int tier3 = Math.max(
@@ -1616,8 +2521,32 @@ class LayoutQualityAssessor {
 
     // ---- Non-Orthogonal Terminal Detection (M1 corrected post-clip) ----
 
-    /** Result of non-orthogonal terminal detection (adds violator IDs and zero-bendpoint count). */
-    record NonOrthogonalTerminalResult(int count, Set<String> violatorIds, int zeroBendpointCount) {}
+    /**
+     * Result of non-orthogonal terminal detection.
+     *
+     * <p>The flagged population is PARTITIONED into two disjoint subsets at the moment of
+     * flagging, and every count below is derived from those subsets rather than from a
+     * subtraction. A connection whose path holds exactly two points is a straight line between
+     * two element centres — the ELK auto-layout signature — and belongs to
+     * {@code zeroBendpointViolatorIds}; anything longer carries a stored route and belongs to
+     * {@code routedViolatorIds}. The distinction is load-bearing because the two subsets have
+     * OPPOSITE remedies: a zero-bendpoint connection has no routed body to preserve, while
+     * re-routing the routed subset wholesale is exactly what the zero-bendpoint remedy warns
+     * against.</p>
+     *
+     * <p>Classifying in both terminal branches is what makes the split trustworthy. The source
+     * and target branches guard against DIFFERENT rectangles, so a two-point diagonal can be
+     * suppressed on the source side and flagged on the target side; deriving the routed subset by
+     * subtracting the zero-bendpoint count from the total would file such a connection as routed
+     * and send the agent to re-route a route that does not exist.</p>
+     *
+     * <p>{@code violatorIds} is the UNION of the two subsets and keeps its whole-population
+     * meaning. All three id sets are empty unless the caller asked for them; the counts are
+     * reported either way.</p>
+     */
+    record NonOrthogonalTerminalResult(int count, Set<String> violatorIds, int zeroBendpointCount,
+                                        Set<String> zeroBendpointViolatorIds,
+                                        int routedCount, Set<String> routedViolatorIds) {}
 
     /**
      * Backwards-compatible delegating overload (no node lookup — falls back to geometric semantics).
@@ -1634,7 +2563,7 @@ class LayoutQualityAssessor {
     /**
      * Counts connections with at least one non-orthogonal terminal segment.
      *
-     * <p><b>M1 corrected definition (Assessor.Redesign 2026-04-26):</b> the terminal segment is
+     * <p><b>M1 corrected definition:</b> the terminal segment is
      * the portion of {@code [sourceAnchor → BP1]} (or {@code [BP_last → targetAnchor]}) that lies
      * <i>outside</i> the source/target element bounds. Archi clips connection rendering at the
      * perimeter; the geometric diagonal between an element-center sourceAnchor and an on-perimeter
@@ -1669,7 +2598,7 @@ class LayoutQualityAssessor {
      *
      * @param connections      connection paths to evaluate
      * @param layoutNodes      lookup for source/target rectangles (may be empty for legacy callers)
-     * @param collectViolatorIds when true, populates violator set
+     * @param collectViolatorIds when true, populates the union violator set and both subset sets
      */
     NonOrthogonalTerminalResult countNonOrthogonalTerminals(
             List<AssessmentConnection> connections, List<AssessmentNode> layoutNodes,
@@ -1678,9 +2607,10 @@ class LayoutQualityAssessor {
         for (AssessmentNode n : layoutNodes) {
             nodeById.put(n.id(), n);
         }
-        int count = 0;
-        int zeroBpCount = 0;
-        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
+        // The two subsets are built unconditionally: they are what the counts are derived from,
+        // so they cannot be gated on the caller wanting the ids. Only their EXPOSURE is gated.
+        Set<String> zeroBpIds = new HashSet<>();
+        Set<String> routedIds = new HashSet<>();
         for (AssessmentConnection conn : connections) {
             List<double[]> path = conn.pathPoints();
             if (path.size() < 2) continue;
@@ -1698,14 +2628,8 @@ class LayoutQualityAssessor {
                 sourceVisibleNonOrth = true;
             }
             if (sourceVisibleNonOrth) {
-                count++;
-                if (collectViolatorIds) {
-                    violatorIds.add(conn.id());
-                }
                 // zero-bendpoint = 2-point path (source center + target center, no intermediate BPs)
-                if (path.size() == 2) {
-                    zeroBpCount++;
-                }
+                (path.size() == 2 ? zeroBpIds : routedIds).add(conn.id());
                 continue;
             }
             // Target terminal — M1: skip when path[size-2] is on or inside target rect,
@@ -1718,15 +2642,22 @@ class LayoutQualityAssessor {
                     && isNonOrthogonal(path.get(last - 1), path.get(last))
                     && visibleSegmentLength(path.get(last), path.get(last - 1), target)
                             >= VISIBLE_DIAGONAL_MIN_PX) {
-                count++;
-                if (collectViolatorIds) {
-                    violatorIds.add(conn.id());
-                }
-                // 2-point paths are zero-bendpoint, but for 2-point paths source and target
-                // terminals are the same segment — already handled above via continue
+                // Classify here too. Reaching this branch on a 2-point path is NOT a
+                // contradiction of the source branch above: the two guards clip against
+                // different rectangles, so the source side can suppress a diagonal that the
+                // target side flags. Such a path still carries no bendpoints.
+                (path.size() == 2 ? zeroBpIds : routedIds).add(conn.id());
             }
         }
-        return new NonOrthogonalTerminalResult(count, violatorIds, zeroBpCount);
+        Set<String> unionIds = new HashSet<>(zeroBpIds);
+        unionIds.addAll(routedIds);
+        return new NonOrthogonalTerminalResult(
+                unionIds.size(),
+                collectViolatorIds ? unionIds : Set.of(),
+                zeroBpIds.size(),
+                collectViolatorIds ? zeroBpIds : Set.of(),
+                routedIds.size(),
+                collectViolatorIds ? routedIds : Set.of());
     }
 
     /** Result of off-face parallel-terminal detection (informational; no rating impact). */
@@ -1747,10 +2678,23 @@ class LayoutQualityAssessor {
      *
      * <p>Per connection (a route hugging a face at either terminal counts once); each offending
      * terminal contributes one description, so a both-ends offender yields one count and two
-     * descriptions. <b>INFORMATIONAL ONLY</b> — never fed into the rating; the rating-bearing
-     * {@code nonOrthogonalTerminalCount} and its visible-length calibration are left untouched.
-     * Disjoint in purpose from {@link #countNonOrthogonalTerminals} (raw terminal-segment angle) and
-     * {@link #countNonOrthogonalInteriorSegments} (off-cardinal mid segments).
+     * descriptions.
+     *
+     * <p><b>Rating-bearing.</b> The count enters the breakdown as {@code offFaceParallelTerminals}
+     * and joins the routing Tier-2 chain, where <em>presence</em> rather than magnitude decides: any
+     * nonzero count caps the routing tier at {@code fair} and can never drive it to {@code poor}.
+     * Ratio-bucketing was rejected because a low hug-per-connection ratio would still read
+     * {@code good} and defeat the point of detecting the hug at all. An earlier revision of this
+     * javadoc described the count as informational only and never fed into the rating; that stopped
+     * being true when the breakdown entry was added, and both the glossary and the published
+     * {@code assess-layout} description already describe it as rating-bearing. What this count does
+     * leave untouched is the separately rating-bearing {@code nonOrthogonalTerminalCount} and its
+     * visible-length calibration — the two are distinct breakdown entries.
+     *
+     * <p>Disjoint in purpose from {@link #countNonOrthogonalTerminals} (raw terminal-segment angle)
+     * and {@link #countNonOrthogonalInteriorSegments} (off-cardinal mid segments); the routing tier
+     * combines the family with {@code Math.max}, so a connection tripping more than one of them is
+     * capped once.
      *
      * <p>The {@link #OFF_FACE_MIN_STUB_PX} clearance is what separates a hugging exit from a legitimate
      * short orthogonal jog: a first segment that turns to run parallel within that many pixels of the
@@ -2023,7 +2967,7 @@ class LayoutQualityAssessor {
      * TOP: y=elem.y; BOTTOM: y=elem.y+h) — this matches the spec example where Archi stores
      * a bendpoint at (641, 259) on an element whose LEFT face is x=641. {@code RoutingPipeline}
      * uses a different 1px-offset convention internally (Layer 3 sub-package) — those are
-     * deliberately distinct under Task 2.2 design (inline duplicate, no Layer-3 cross-coupling).</p>
+     * deliberately distinct by design (inline duplicate, no Layer-3 cross-coupling).</p>
      */
     static boolean isOnOrInsideElement(double[] bp, AssessmentNode elem) {
         if (elem == null) return false;
@@ -2172,7 +3116,7 @@ class LayoutQualityAssessor {
         return deviation > NON_ORTH_ANGLE_THRESHOLD;
     }
 
-    // ---- Assessor.Redesign M2: Interior-Termination Detection ----
+    // ---- M2: Interior-Termination Detection ----
 
     /** Result of M2 interior-termination detection. */
     record InteriorTerminationResult(int count, List<String> descriptions, Set<String> violatorIds) {}
@@ -2226,7 +3170,7 @@ class LayoutQualityAssessor {
         return new InteriorTerminationResult(count, descriptions, violatorIds);
     }
 
-    // ---- Assessor.Redesign M3: Zigzag / Reversal Detection ----
+    // ---- M3: Zigzag / Reversal Detection ----
 
     /** Result of M3 zigzag detection. */
     record ZigzagResult(int count, List<String> descriptions, Set<String> violatorIds) {}
@@ -2251,7 +3195,17 @@ class LayoutQualityAssessor {
      * pattern produces a small reversal because the detour failed and passed through, and the
      * visually-correct label is passthrough-only.</p>
      *
+     * <p><strong>{@code collectViolatorIds} does not gate this detector's violator set.</strong> The
+     * set is a precedence skip-set consumed by {@link #countLateralJogReversals}, so emptying it when
+     * the caller declines IDs would let one connection be counted under two reversal dimensions on
+     * the rating-only path. The parameter is retained for signature symmetry with the sibling
+     * detectors, and {@link #detectPassThroughs} — the first detector to become a skip-set — carries
+     * the same now-ungated parameter for the same reason. The outer {@code assess} enrichment block
+     * is what actually decides whether these IDs reach the response.
+     *
+     * @param collectViolatorIds retained for symmetry; does NOT gate the returned violator set
      * @see #detectPassThroughs(List, List, boolean)
+     * @see #countLateralJogReversals(List, Set, Set, boolean)
      */
     ZigzagResult countZigzags(List<AssessmentConnection> connections,
                               Set<String> passThroughViolatorIds,
@@ -2259,7 +3213,11 @@ class LayoutQualityAssessor {
         Objects.requireNonNull(passThroughViolatorIds, "passThroughViolatorIds must not be null");
         int count = 0;
         List<String> descriptions = new ArrayList<>();
-        Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
+        // Violator IDs are collected unconditionally so the classification precedence guard in
+        // countLateralJogReversals() works regardless of collectViolatorIds (which gates only the
+        // outer assess() enrichment block) — the same reason detectPassThroughs() collects its own
+        // unconditionally.
+        Set<String> violatorIds = new HashSet<>();
         for (AssessmentConnection conn : connections) {
             if (passThroughViolatorIds.contains(conn.id())) continue;
             List<double[]> path = conn.pathPoints();
@@ -2276,9 +3234,7 @@ class LayoutQualityAssessor {
                                 + " (" + formatPoint(a) + " → " + formatPoint(b)
                                 + " → " + formatPoint(c) + ")");
                     }
-                    if (collectViolatorIds) {
-                        violatorIds.add(conn.id());
-                    }
+                    violatorIds.add(conn.id());
                     break; // binary defect per connection — one triple is enough
                 }
             }
@@ -2316,6 +3272,196 @@ class LayoutQualityAssessor {
 
     private static String formatPoint(double[] p) {
         return "(" + Math.round(p[0]) + "," + Math.round(p[1]) + ")";
+    }
+
+    // ---- Anchor drift: a stored route whose geometry has moved underneath it ----
+
+    /** Result of anchor-drift detection. */
+    record AnchorDriftResult(int count, List<String> descriptions, Set<String> violatorIds) {}
+
+    /**
+     * Counts connections whose stored route was computed against a geometry that has since changed.
+     *
+     * <p>Archi stores every bendpoint twice — {@code startX/startY} relative to the source centre and
+     * {@code endX/endY} relative to the target centre — and both describe the same absolute point at
+     * the moment the route was written. Moving or resizing an endpoint afterwards leaves the stored
+     * offsets untouched, so the two reconstructions drift apart by however far the endpoint travelled.
+     * A connection flags when that disagreement exceeds {@link #ANCHOR_DRIFT_NOISE_FLOOR_PX} on
+     * either axis. Binary per connection.
+     *
+     * <p>The drift itself is measured in {@code AssessmentCollector}, which is the last place it
+     * exists: the collector blends the two reconstructions into one polyline, and every other
+     * detector in this class is handed that blend. A drifted route is not a misshapen route — its
+     * stored shape was correct when written — which is why no shape-based dimension can see it and
+     * why the remedy is to re-route the connection rather than to straighten it.
+     *
+     * <p>What renders is not the blend, either. Archi weights each bendpoint by
+     * {@code (i + 1) / (n + 1)} along the bendpoint list, so a drifted polyline is drawn
+     * <em>sheared</em> — each point displaced by {@code (weight - 0.5) x drift}, most at the two
+     * terminal bendpoints and least in the middle. That is why the terminal segments of a drifted
+     * connection are the part a reader notices.
+     *
+     * @param collectViolatorIds if true, collects the offending connection IDs
+     */
+    AnchorDriftResult detectAnchorDrift(List<AssessmentConnection> connections,
+                                        boolean collectViolatorIds) {
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        Set<String> violatorIds = collectViolatorIds ? new LinkedHashSet<>() : Set.of();
+        for (AssessmentConnection conn : connections) {
+            double driftX = Math.abs(conn.anchorDriftX());
+            double driftY = Math.abs(conn.anchorDriftY());
+            if (driftX <= ANCHOR_DRIFT_NOISE_FLOOR_PX && driftY <= ANCHOR_DRIFT_NOISE_FLOOR_PX) {
+                continue;
+            }
+            count++;
+            if (descriptions.size() < MAX_DESCRIPTIONS) {
+                descriptions.add("Connection '" + conn.id() + "' " + conn.sourceNodeId()
+                        + " → " + conn.targetNodeId()
+                        + ": stored route drifted from its anchors by "
+                        + formatPx(driftX) + "px on x and " + formatPx(driftY) + "px on y"
+                        + " (an endpoint moved or was resized after the route was written)");
+            }
+            if (collectViolatorIds) {
+                violatorIds.add(conn.id());
+            }
+        }
+        return new AnchorDriftResult(count, descriptions, violatorIds);
+    }
+
+    // ---- Lateral-jog reversal: two opposite arms joined by a sidestep too small to be a detour ----
+
+    /** Result of lateral-jog-reversal detection. */
+    record LateralJogReversalResult(int count, List<String> descriptions, Set<String> violatorIds) {}
+
+    /**
+     * Counts connections containing at least one <strong>lateral-jog reversal</strong> — a four-point
+     * window {@code (a,b,c,d)} whose two outer arms run in opposite directions along the same axis,
+     * separated by a perpendicular sidestep no wider than {@link #LATERAL_JOG_MAX_PX}. The route
+     * doubles back through the corridor it just left, having stepped a few px aside first. Binary
+     * per connection, matching {@link #countZigzags}' convention.
+     *
+     * <p>This is a genuinely different shape from a zigzag, not a zigzag under a looser tolerance.
+     * {@link #countZigzags} tests three consecutive points for sharing <em>one</em> axis within
+     * {@link #ZIGZAG_AXIS_TOLERANCE_PX}; the sidestep breaks every such triple, because the two arms
+     * lie on two different parallel lines. Widening that tolerance to cover the jog would not express
+     * this shape either — it would re-label legitimate few-px port offsets as reversals while still
+     * describing a triple, when the pattern needs four points to state at all.
+     *
+     * <p>Classification precedence, applied in this order: a connection already reported by
+     * {@code passThroughs} is skipped (the pass-through label is the visually correct one, as it is
+     * for zigzags), then a connection already reported by {@code zigzags} is skipped, so a route is
+     * never counted under two reversal dimensions. The remaining band is the one nothing else covers.
+     *
+     * @param passThroughViolatorIds pass-through violators, which take precedence
+     * @param zigzagViolatorIds      zigzag violators, which take precedence
+     * @param collectViolatorIds     if true, collects the offending connection IDs
+     * @see #countZigzags(List, Set, boolean)
+     */
+    LateralJogReversalResult countLateralJogReversals(List<AssessmentConnection> connections,
+                                                     Set<String> passThroughViolatorIds,
+                                                     Set<String> zigzagViolatorIds,
+                                                     boolean collectViolatorIds) {
+        Objects.requireNonNull(passThroughViolatorIds, "passThroughViolatorIds must not be null");
+        Objects.requireNonNull(zigzagViolatorIds, "zigzagViolatorIds must not be null");
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        Set<String> violatorIds = collectViolatorIds ? new LinkedHashSet<>() : Set.of();
+        for (AssessmentConnection conn : connections) {
+            if (passThroughViolatorIds.contains(conn.id())) continue;
+            if (zigzagViolatorIds.contains(conn.id())) continue;
+            List<double[]> path = conn.pathPoints();
+            if (path.size() < 4) continue;
+            for (int i = 0; i < path.size() - 3; i++) {
+                double[] a = path.get(i);
+                double[] b = path.get(i + 1);
+                double[] c = path.get(i + 2);
+                double[] d = path.get(i + 3);
+                if (isLateralJogReversal(a, b, c, d)) {
+                    count++;
+                    if (descriptions.size() < MAX_DESCRIPTIONS) {
+                        descriptions.add("Connection '" + conn.id() + "' " + conn.sourceNodeId()
+                                + " → " + conn.targetNodeId()
+                                + ": lateral-jog reversal at index " + i
+                                + " (" + formatExactPoint(a) + " → " + formatExactPoint(b)
+                                + " → " + formatExactPoint(c) + " → " + formatExactPoint(d) + ")");
+                    }
+                    if (collectViolatorIds) {
+                        violatorIds.add(conn.id());
+                    }
+                    break; // binary defect per connection — one window is enough
+                }
+            }
+        }
+        return new LateralJogReversalResult(count, descriptions, violatorIds);
+    }
+
+    /**
+     * True when {@code (a,b,c,d)} is two opposite-direction arms on one axis joined by a
+     * perpendicular sidestep that is real (non-zero — a zero jog is a duplicated point, which is the
+     * redundant-bendpoint dimension's subject, not a reversal) and no wider than
+     * {@link #LATERAL_JOG_MAX_PX}, above which the route is taking a deliberate detour.
+     *
+     * <p><strong>This predicate also consumes two of M3's constants</strong>, and deliberately so:
+     * {@link #ZIGZAG_AXIS_TOLERANCE_PX} decides whether the arms and the jog are axis-aligned, and
+     * {@link #ZIGZAG_MIN_DELTA_PX} is the minimum arm length below which an arm is noise rather than
+     * travel. Both questions are identical to the ones M3 asks, so sharing the answers keeps the two
+     * reversal dimensions calibrated together rather than drifting apart. The consequence is a real
+     * coupling: retuning either constant for M3 retunes this detector too. Only
+     * {@link #LATERAL_JOG_MAX_PX} is this dimension's own.
+     */
+    private static boolean isLateralJogReversal(double[] a, double[] b, double[] c, double[] d) {
+        double tol = ZIGZAG_AXIS_TOLERANCE_PX;
+        double minDelta = ZIGZAG_MIN_DELTA_PX;
+        // Vertical arms joined by a horizontal jog.
+        if (Math.abs(a[0] - b[0]) <= tol && Math.abs(b[1] - c[1]) <= tol
+                && Math.abs(c[0] - d[0]) <= tol) {
+            double jog = Math.abs(c[0] - b[0]);
+            double arm1 = b[1] - a[1];
+            double arm2 = d[1] - c[1];
+            if (jog > 0.0 && jog <= LATERAL_JOG_MAX_PX
+                    && Math.abs(arm1) > minDelta && Math.abs(arm2) > minDelta
+                    && Math.signum(arm1) != Math.signum(arm2)) {
+                return true;
+            }
+        }
+        // Horizontal arms joined by a vertical jog: symmetric.
+        if (Math.abs(a[1] - b[1]) <= tol && Math.abs(b[0] - c[0]) <= tol
+                && Math.abs(c[1] - d[1]) <= tol) {
+            double jog = Math.abs(c[1] - b[1]);
+            double arm1 = b[0] - a[0];
+            double arm2 = d[0] - c[0];
+            if (jog > 0.0 && jog <= LATERAL_JOG_MAX_PX
+                    && Math.abs(arm1) > minDelta && Math.abs(arm2) > minDelta
+                    && Math.signum(arm1) != Math.signum(arm2)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Renders a point without discarding a half-pixel, unlike {@link #formatPoint}, which rounds to
+     * the nearest integer.
+     *
+     * <p>An element centre is {@code x + width / 2}, so a reconstructed coordinate is half-integral
+     * whenever the box dimension is odd — and that half pixel is load-bearing here: it is the same
+     * representable-precision effect {@link #ANCHOR_DRIFT_NOISE_FLOOR_PX} is derived from. Rounding
+     * {@code 467.5} to {@code 468} would report a coordinate the model does not hold, in a field
+     * whose whole purpose is to carry the offending window as fact rather than as a flag.
+     *
+     * <p>{@link #formatPoint} keeps its rounding: it is shared by the older detectors, whose emitted
+     * descriptions are pinned, and widening it would change their output for no gain.
+     */
+    private static String formatExactPoint(double[] p) {
+        return "(" + formatPx(p[0]) + "," + formatPx(p[1]) + ")";
+    }
+
+    /** Renders a px measurement without a trailing {@code .0} on whole values. */
+    private static String formatPx(double v) {
+        return v == Math.rint(v) && !Double.isInfinite(v)
+                ? String.valueOf((long) v)
+                : String.format(java.util.Locale.ROOT, "%.1f", v);
     }
 
     // ---- Redundant (collinear / removable) bendpoint detection ----
@@ -2489,9 +3635,20 @@ class LayoutQualityAssessor {
      * <p>Counting is <b>per connection</b> (mirroring the terminal count, so the two are directly
      * comparable); every offending interior segment contributes one description. The terminal and
      * interior segment sets are disjoint, so a connection may be counted by both detectors
-     * independently. <b>INFORMATIONAL ONLY</b> — never fed into the rating. Distinct from
-     * {@link #countInteriorTerminations} (a bendpoint strictly inside an element rect) and
-     * {@link #countZigzags} (an opposite-sign reversal).
+     * independently.
+     *
+     * <p><b>Rating-bearing</b>, and by the same ratio buckets as
+     * {@link #countNonOrthogonalTerminals} — <em>that</em> is the "terminal sibling" this detector
+     * mirrors, not {@link #countOffFaceParallelTerminals}, which rates on binary presence and
+     * deliberately rejects ratio bucketing. The count enters the breakdown as
+     * {@code nonOrthogonalInteriorSegments} and joins the routing Tier-2 chain, which combines the family with {@code Math.max}, so a connection diagonal at both a
+     * terminal and an interior segment lights both entries and is capped once. An earlier revision of
+     * this javadoc called the count informational only and never fed into the rating; that stopped
+     * being true when the breakdown entry was added, and it is recorded here because the identical
+     * stale sentence sat on {@code countOffFaceParallelTerminals} in this same file.
+     *
+     * <p>Distinct from {@link #countInteriorTerminations} (a bendpoint strictly inside an element
+     * rect) and {@link #countZigzags} (an opposite-sign reversal).
      *
      * @see #countNonOrthogonalTerminals(List, List, boolean)
      */
@@ -2576,7 +3733,7 @@ class LayoutQualityAssessor {
         return new ContainerFillResult(count, descriptions, violatorIds);
     }
 
-    // ---- Assessor.Redesign M4: Connection-vs-Element-Edge Coincidence ----
+    // ---- M4: Connection-vs-Element-Edge Coincidence ----
 
     /**
      * Result of M4 edge-coincidence detection. {@code count} is the rating-bearing per-connection
@@ -2603,7 +3760,7 @@ class LayoutQualityAssessor {
      * Includes the connection's own source/target faces — perpendicular terminal segments
      * are silent by construction (orientation mismatch in classification at lines above), so
      * any flag against source/target is a real parallel-coincident defect. Distinct from
-     * {@code coincidentSegmentCount} (R6) which is connection-vs-connection.
+     * {@code coincidentSegmentCount}, which is connection-vs-connection.
      *
      * <p>Spec live example: connection {@code id-74e3ee1e02a84721a3db682cb1b6fb24} (API Mgmt →
      * Internet Banking) horizontal segment at y=150 vs Internet Banking BOTTOM at y=148 (gap
@@ -2690,7 +3847,7 @@ class LayoutQualityAssessor {
         return overlap >= EDGE_COINCIDENCE_MIN_OVERLAP_PX;
     }
 
-    // ---- Assessor.Redesign M5: Hub-Port Allocation Quality ----
+    // ---- M5: Hub-Port Allocation Quality ----
 
     /** Result of M5 hub-port quality computation. {@code viewAggregate} = min (worst) hub-face quality. */
     record HubPortQualityResult(double viewAggregate,
@@ -2747,7 +3904,14 @@ class LayoutQualityAssessor {
                     details.add(new LayoutAssessmentResult.HubFaceDetail(
                             elemId, faceEntry.getKey().name(), slots.size(), distinct, quality));
                 }
-                if (quality < HUB_PORT_QUALITY_FAIR_THRESHOLD) {
+                // The same band the remedy speaks for. The M5 suggestion tells the caller to
+                // inspect violatorIds.hubPortLowQuality, and that entry is written only when this
+                // set is non-empty — so a set that stopped at the "poor" edge would have sent
+                // every fair-band caller to a field that is not in the response. Because the view
+                // aggregate is the MINIMUM face quality, a face flagged here exists exactly when
+                // the aggregate is below the good band: the two cannot disagree.
+                if (!"pass".equals(hubPortQualityBand(quality))
+                        && !"good".equals(hubPortQualityBand(quality))) {
                     lowQualityIds.add(elemId);
                 }
             }
@@ -2782,7 +3946,7 @@ class LayoutQualityAssessor {
     /**
      * Determines the face + along-face slot for a terminal bendpoint (M5).
      *
-     * <p>Three cases (Assessor.Redesign code-review H3+M2 fix, 2026-04-27):
+     * <p>Three cases:
      * <ul>
      *   <li>BP on the element's perimeter line → use the BP coordinate directly as the slot.</li>
      *   <li>BP strictly inside the element → return null (interior termination is an M2 defect;
@@ -3055,7 +4219,7 @@ class LayoutQualityAssessor {
         return colliding;
     }
 
-    // ---- Assessor.Redesign R8: Corridor-Utilisation (2026-05-03) ----
+    // ---- R8: Corridor-Utilisation ----
 
     /** R8: minimum parallel-segment length (px) to count as a corridor-traversal segment. */
     static final double R8_MIN_PARALLEL_SEGMENT_LENGTH_PX = 30.0;
@@ -3180,7 +4344,7 @@ class LayoutQualityAssessor {
         double lowEdge = Double.NEGATIVE_INFINITY, highEdge = Double.POSITIVE_INFINITY;
         for (AssessmentNode n : layoutNodes) {
             if (n.isNote()) continue;
-            if (groupsOnly && !n.isGroup()) continue;
+            if (groupsOnly && !n.isContainer()) continue;
             double left = n.x(), right = n.x() + n.width();
             double top = n.y(), bottom = n.y() + n.height();
             if (seg.axis() == 0) {
@@ -3264,7 +4428,7 @@ class LayoutQualityAssessor {
 
         double minClearance = NO_HUB_NEIGHBOUR_CLEARANCE;
         for (AssessmentNode hub : layoutNodes) {
-            if (hub.isGroup() || hub.isNote()) continue;
+            if (hub.isContainer() || hub.isNote()) continue;
             if (degree.getOrDefault(hub.id(), 0) < HUB_DETECTION_THRESHOLD) continue;
             double hubClearance = nearestSpokeRowClearance(
                     hub, neighbours.get(hub.id()), byId, containmentPairs);
@@ -3336,8 +4500,7 @@ class LayoutQualityAssessor {
         return clearance;
     }
 
-    // ---- Assessor.Redesign Successor D: parallelConnectionGap ----
-    // (2026-05-12.)
+    // ---- parallelConnectionGap ----
 
     /**
      * Per-axis aggregate of nearest-parallel-overlapping-neighbour gaps for the
@@ -3360,7 +4523,7 @@ class LayoutQualityAssessor {
                                        String connectionId) {}
 
     /**
-     * Computes the parallelConnectionGap metric family (Successor D, 2026-05-12).
+     * Computes the parallelConnectionGap metric family (2026-05-12).
      *
      * <p>For each axis (V primary, H secondary): classify each bendpoint-pair segment
      * as V (Δx &lt; {@link #PARALLEL_GAP_AXIS_TOLERANCE_PX}, Δy ≥ tolerance) or H
@@ -3383,7 +4546,7 @@ class LayoutQualityAssessor {
      * defect class (5th unmeasured class) is
      * a structural-floor problem in the routing pipeline; rating-tying would mark all
      * views below the floor as poor regardless of agent improvements. Rating-tying is
-     * deferred until Successor C (routing-pipeline narrow-corridor floor closure) ships.</p>
+     * deferred until the routing-pipeline narrow-corridor floor closure ships.</p>
      *
      * @see #computeR8CorridorUtilisation closest sibling metric
      */
@@ -3509,8 +4672,15 @@ class LayoutQualityAssessor {
 
     // ---- Boundary Violation Detection ----
 
-    /** Result of boundary violation detection (adds violator IDs). */
-    record BoundaryViolationResult(List<String> descriptions, Set<String> violatorIds) {}
+    /**
+     * Result of boundary violation detection (adds violator IDs).
+     *
+     * <p>{@code violationCount} is the TRUE number of violations and is uncapped.
+     * {@code descriptions} is capped at {@code MAX_DESCRIPTIONS}, so on a badly broken view
+     * {@code descriptions().size()} understates the problem and must not be used as the count.</p>
+     */
+    record BoundaryViolationResult(List<String> descriptions, Set<String> violatorIds,
+                                   int violationCount) {}
 
     BoundaryViolationResult detectBoundaryViolations(List<AssessmentNode> nodes,
                                                       boolean collectViolatorIds) {
@@ -3520,6 +4690,7 @@ class LayoutQualityAssessor {
         }
 
         List<String> violations = new ArrayList<>();
+        int violationCount = 0;
         Set<String> violatorIds = collectViolatorIds ? new HashSet<>() : Set.of();
         for (AssessmentNode child : nodes) {
             if (child.parentId() == null) continue;
@@ -3533,16 +4704,20 @@ class LayoutQualityAssessor {
                     || child.y() < parent.y()
                     || child.x() + child.width() > parent.x() + parent.width()
                     || child.y() + child.height() > parent.y() + parent.height()) {
+                violationCount++;
                 if (violations.size() < MAX_DESCRIPTIONS) {
+                    // Element-to-element nesting has shipped, so a parent here is not always a
+                    // group. Name it by what it is — the reader has to go and find it.
                     violations.add("Element '" + child.id()
-                            + "' extends outside parent group '" + parent.id() + "'");
+                            + "' extends outside parent " + (parent.isGroup() ? "group" : "element")
+                            + " '" + parent.id() + "'");
                 }
                 if (collectViolatorIds) {
                     violatorIds.add(child.id());
                 }
             }
         }
-        return new BoundaryViolationResult(violations, violatorIds);
+        return new BoundaryViolationResult(violations, violatorIds, violationCount);
     }
 
     // ---- Connection Pass-Through Detection (Finding #3: exclude ancestor groups) ----
@@ -3591,16 +4766,18 @@ class LayoutQualityAssessor {
         Set<String> violatorIds = new HashSet<>();
 
         for (AssessmentConnection conn : connections) {
-            boolean descriptionsCapped = descriptions.size() >= MAX_DESCRIPTIONS;
-
-            // Collect IDs to exclude: source, target, ancestors, and ALL descendants of source/target
+            // Collect IDs to exclude: source, target, and the ancestors and ALL descendants of
+            // source/target whose rectangles still overlap that endpoint
             Set<String> excludeIds = new HashSet<>();
             excludeIds.add(conn.sourceNodeId());
             excludeIds.add(conn.targetNodeId());
             excludeIds.addAll(getAncestorIds(conn.sourceNodeId(), nodeMap));
             excludeIds.addAll(getAncestorIds(conn.targetNodeId(), nodeMap));
-            // Exclude all descendants of source/target — connections from a parent element
-            // naturally pass through contained children/grandchildren; not a real pass-through
+            // Exclude the descendants of source/target — connections from a parent element
+            // naturally pass through contained children/grandchildren; not a real pass-through.
+            // A descendant dragged clear of its endpoint is not contained, so that sentence does
+            // not cover it and it counts like any other element — the same node detectBoundaryViolations
+            // already reports as escaped.
             excludeIds.addAll(getDescendantIds(conn.sourceNodeId(), nodes));
             excludeIds.addAll(getDescendantIds(conn.targetNodeId(), nodes));
 
@@ -3612,12 +4789,17 @@ class LayoutQualityAssessor {
 
             for (AssessmentNode node : nodes) {
                 // Skip source, target, ancestors, descendants, and groups (transparent containers)
-                if (excludeIds.contains(node.id()) || node.isGroup()) {
+                if (excludeIds.contains(node.id()) || node.isContainer()) {
                     continue;
                 }
 
                 if (pathPassesThroughNode(clippedPath, node)) {
-                    if (!descriptionsCapped) {
+                    // Re-measured here rather than snapshotted at the top of the connection loop:
+                    // a single connection can reach this add AND the self-element adds below, so a
+                    // value read once per connection lets the list run past the cap. The count and
+                    // the violator id below are deliberately OUTSIDE this gate — the cap governs
+                    // the description list only, never the number the rating charges.
+                    if (descriptions.size() < MAX_DESCRIPTIONS) {
                         descriptions.add("Connection '" + conn.id()
                                 + "' passes through element '" + node.id() + "'");
                     }
@@ -3635,9 +4817,9 @@ class LayoutQualityAssessor {
             //     (stored final/first bendpoints past element center are pathological
             //      and missed by nonTerminalPassesThroughNode, which excludes the
             //      terminal segment from its loop window).
-            if (!descriptionsCapped && clippedPath.size() >= 3) {
+            if (descriptions.size() < MAX_DESCRIPTIONS && clippedPath.size() >= 3) {
                 AssessmentNode tgtNode = nodeMap.get(conn.targetNodeId());
-                if (tgtNode != null && !tgtNode.isGroup()) {
+                if (tgtNode != null && !tgtNode.isContainer()) {
                     boolean tgtNonTermHit = nonTerminalPassesThroughNode(clippedPath, tgtNode, true);
                     boolean tgtOverPenetrate = terminalSegmentOverPenetrates(conn.pathPoints(), tgtNode, true);
                     if (tgtNonTermHit || tgtOverPenetrate) {
@@ -3647,7 +4829,7 @@ class LayoutQualityAssessor {
                 }
 
                 AssessmentNode srcNode = nodeMap.get(conn.sourceNodeId());
-                if (srcNode != null && !srcNode.isGroup()
+                if (srcNode != null && !srcNode.isContainer()
                         && descriptions.size() < MAX_DESCRIPTIONS) {
                     boolean srcNonTermHit = nonTerminalPassesThroughNode(clippedPath, srcNode, false);
                     boolean srcOverPenetrate = terminalSegmentOverPenetrates(conn.pathPoints(), srcNode, false);
@@ -3677,15 +4859,18 @@ class LayoutQualityAssessor {
             int grazeCount, List<String> grazeDescriptions) {}
 
     /**
-     * Detects connections whose route passes through a Note or an Image visual — a class
-     * of clutter invisible to {@link #detectPassThroughs} because Notes are split out of the
-     * scoring node set and an element's rendered image rectangle can overhang its box.
+     * Detects connections whose route passes through a Note or an Image visual — clutter that
+     * {@link #detectPassThroughs} does not report for Notes, which are split out of the scoring
+     * node set. An element's rendered image rectangle is clipped to its element box, so a route
+     * through an element's image also crosses that element's box; the two detectors then report
+     * the same crossing, and the routing tier takes the worse of the two rather than charging
+     * it twice.
      *
      * <p><strong>Notes:</strong> a Note has no source/target, so every connection is tested
      * against every Note's rectangle. <strong>Images:</strong> an image-bearing element's
      * RENDERED image rectangle (from {@link #estimateImageBounds}) is tested; the connection's
-     * own source/target, their ancestors, and their descendants are excluded so an image on a
-     * connection's own endpoint/container is not flagged — mirroring the element carve-out in
+     * own source/target, and the ancestors and descendants that still overlap them, are excluded
+     * so an image on a connection's own endpoint/container is not flagged — mirroring the element carve-out in
      * {@link #detectPassThroughs} (lines that build {@code excludeIds}).</p>
      *
      * <p>Geometry is the SAME predicate used for elements: {@link #clipPathToVisualEdges} +
@@ -3743,7 +4928,7 @@ class LayoutQualityAssessor {
             excludeIds.addAll(getDescendantIds(conn.sourceNodeId(), layoutNodes));
             excludeIds.addAll(getDescendantIds(conn.targetNodeId(), layoutNodes));
             for (AssessmentNode node : layoutNodes) {
-                if (node.imagePath() == null || node.isGroup() || excludeIds.contains(node.id())) {
+                if (node.imagePath() == null || node.isContainer() || excludeIds.contains(node.id())) {
                     continue;
                 }
                 double[] imgBounds = estimateImageBounds(node);
@@ -3888,35 +5073,15 @@ class LayoutQualityAssessor {
      */
     private boolean pathIntersectsRect(List<double[]> path,
                                        double rx, double ry, double rw, double rh) {
-        if (rw <= 0 || rh <= 0) return false;
-        for (int i = 0; i < path.size() - 1; i++) {
-            if (lineSegmentIntersectsRect(
-                    path.get(i)[0], path.get(i)[1],
-                    path.get(i + 1)[0], path.get(i + 1)[1],
-                    rx, ry, rw, rh)) {
-                return true;
-            }
-        }
-        return false;
+        return GeometryUtils.pathIntersectsRect(path, rx, ry, rw, rh);
     }
 
     private boolean pathPassesThroughNode(List<double[]> path, AssessmentNode node) {
-        // Shrink obstacle rect by PASS_THROUGH_INSET to absorb corner-arc imprecision
-        double insetX = node.x() + PASS_THROUGH_INSET;
-        double insetY = node.y() + PASS_THROUGH_INSET;
-        double insetW = node.width() - 2 * PASS_THROUGH_INSET;
-        double insetH = node.height() - 2 * PASS_THROUGH_INSET;
-        if (insetW <= 0 || insetH <= 0) return false; // Element too small after inset
-
-        for (int i = 0; i < path.size() - 1; i++) {
-            if (lineSegmentIntersectsRect(
-                    path.get(i)[0], path.get(i)[1],
-                    path.get(i + 1)[0], path.get(i + 1)[1],
-                    insetX, insetY, insetW, insetH)) {
-                return true;
-            }
-        }
-        return false;
+        // Shrink obstacle rect by PASS_THROUGH_INSET to absorb corner-arc imprecision. The policy
+        // lives in GeometryUtils because the routing side discloses the same crossing on the call
+        // that creates it, and the two must not be able to drift apart.
+        return GeometryUtils.pathPassesThroughRect(path,
+                node.x(), node.y(), node.width(), node.height(), PASS_THROUGH_INSET);
     }
 
     /**
@@ -3931,35 +5096,13 @@ class LayoutQualityAssessor {
     List<double[]> clipPathToVisualEdges(List<double[]> path,
                                           AssessmentNode srcNode,
                                           AssessmentNode tgtNode) {
-        if (path.size() < 2) return path;
+        return GeometryUtils.clipPathToRectEdges(path, rectOf(srcNode), rectOf(tgtNode));
+    }
 
-        List<double[]> clipped = new ArrayList<>(path);
-        int last = path.size() - 1;
-
-        // Reference for source: first bendpoint if exists, else target center
-        double[] srcRef = path.size() > 2 ? path.get(1) : path.get(last);
-        // Reference for target: last bendpoint if exists, else source center
-        double[] tgtRef = path.size() > 2 ? path.get(last - 1) : path.get(0);
-
-        if (srcNode != null) {
-            double[] exit = orthogonalExitPoint(
-                    srcNode.x(), srcNode.y(), srcNode.width(), srcNode.height(),
-                    srcRef[0], srcRef[1]);
-            if (exit != null) {
-                clipped.set(0, exit);
-            }
-        }
-
-        if (tgtNode != null) {
-            double[] entry = orthogonalExitPoint(
-                    tgtNode.x(), tgtNode.y(), tgtNode.width(), tgtNode.height(),
-                    tgtRef[0], tgtRef[1]);
-            if (entry != null) {
-                clipped.set(last, entry);
-            }
-        }
-
-        return clipped;
+    /** {@code [x, y, width, height]} for the shared clip, or null for an unresolved endpoint. */
+    private static double[] rectOf(AssessmentNode node) {
+        return node == null ? null
+                : new double[]{node.x(), node.y(), node.width(), node.height()};
     }
 
     /**
@@ -3973,24 +5116,7 @@ class LayoutQualityAssessor {
      */
     double[] orthogonalExitPoint(double rx, double ry, double rw, double rh,
                                   double refX, double refY) {
-        double left = rx, right = rx + rw, top = ry, bottom = ry + rh;
-        double cx = rx + rw / 2, cy = ry + rh / 2;
-
-        boolean xInside = refX >= left && refX <= right;
-        boolean yInside = refY >= top && refY <= bottom;
-
-        if (xInside && !yInside) {
-            // Reference directly above or below — exit from top/bottom edge at ref.x
-            return new double[]{refX, refY < top ? top : bottom};
-        } else if (!xInside && yInside) {
-            // Reference directly left or right — exit from left/right edge at ref.y
-            return new double[]{refX < left ? left : right, refY};
-        } else if (!xInside) {
-            // Diagonal — use ray intersection from center toward reference (ChopboxAnchor fallback)
-            return rectExitPoint(cx, cy, refX, refY, rx, ry, rw, rh);
-        }
-        // Reference inside element — return center (degenerate case)
-        return new double[]{cx, cy};
+        return GeometryUtils.orthogonalExitPoint(rx, ry, rw, rh, refX, refY);
     }
 
     /**
@@ -4001,43 +5127,7 @@ class LayoutQualityAssessor {
      */
     double[] rectExitPoint(double x1, double y1, double x2, double y2,
                             double rx, double ry, double rw, double rh) {
-        double dx = x2 - x1;
-        double dy = y2 - y1;
-        if (Math.abs(dx) < 1e-10 && Math.abs(dy) < 1e-10) return null;
-
-        double tExit = Double.MAX_VALUE;
-
-        if (Math.abs(dx) > 1e-10) {
-            // Right edge
-            double t = (rx + rw - x1) / dx;
-            if (t > 1e-10) {
-                double yAt = y1 + t * dy;
-                if (yAt >= ry && yAt <= ry + rh && t < tExit) tExit = t;
-            }
-            // Left edge
-            t = (rx - x1) / dx;
-            if (t > 1e-10) {
-                double yAt = y1 + t * dy;
-                if (yAt >= ry && yAt <= ry + rh && t < tExit) tExit = t;
-            }
-        }
-        if (Math.abs(dy) > 1e-10) {
-            // Bottom edge
-            double t = (ry + rh - y1) / dy;
-            if (t > 1e-10) {
-                double xAt = x1 + t * dx;
-                if (xAt >= rx && xAt <= rx + rw && t < tExit) tExit = t;
-            }
-            // Top edge
-            t = (ry - y1) / dy;
-            if (t > 1e-10) {
-                double xAt = x1 + t * dx;
-                if (xAt >= rx && xAt <= rx + rw && t < tExit) tExit = t;
-            }
-        }
-
-        if (tExit == Double.MAX_VALUE) return null;
-        return new double[]{x1 + tExit * dx, y1 + tExit * dy};
+        return GeometryUtils.rectExitPoint(x1, y1, x2, y2, rx, ry, rw, rh);
     }
 
     /**
@@ -4303,7 +5393,7 @@ class LayoutQualityAssessor {
             Set<String> excludeIds = connExcludeMap.getOrDefault(label.connectionId(), Set.of());
             for (AssessmentNode node : nodes) {
                 // Skip source, target, ancestors, descendants, and groups (transparent containers)
-                if (excludeIds.contains(node.id()) || node.isGroup()) {
+                if (excludeIds.contains(node.id()) || node.isContainer()) {
                     continue;
                 }
                 if (insetRectOverlap(label, node.x(), node.y(), node.width(), node.height())) {
@@ -4473,7 +5563,7 @@ class LayoutQualityAssessor {
                         Set<String> excludeIds = connExcludeMap.getOrDefault(label.connectionId(), Set.of());
                         boolean hasOverlap = false;
                         for (AssessmentNode node : nodes) {
-                            if (excludeIds.contains(node.id()) || node.isGroup()) continue;
+                            if (excludeIds.contains(node.id()) || node.isContainer()) continue;
                             if (insetRectOverlap(label, node.x(), node.y(), node.width(), node.height())
                                     || isWithinProximity(label, node.x(), node.y(), node.width(), node.height())) {
                                 hasOverlap = true;
@@ -4556,8 +5646,9 @@ class LayoutQualityAssessor {
      *
      * <p>Geometry reuses the shipped label-overlap primitive verbatim, but against the title band
      * only: for each <em>named</em> group, the band is the top strip
-     * {@code (group.x(), group.y(), group.width(), }{@link #ESTIMATED_LABEL_HEIGHT}{@code )} — the same
-     * title-area model {@link #detectParentLabelObscuredByChild} uses for a parent's label row — and
+     * {@code (group.x(), group.y(), group.width(), }{@link #estimateLabelBandHeight}{@code )} — the
+     * same title-area model {@link #detectParentLabelObscuredByChild} uses for a parent's label row,
+     * from the same helper, so the two agree on both the wrap and the clip by construction — and
      * each connection's render-calibrated {@link LabelBounds} (from {@link #estimateLabelBounds}) is
      * tested for inset overlap ({@link #insetRectOverlap}) against it. A label deep in the group BODY
      * (below the band) does NOT flag — this is precisely why the full-group flood does not occur.
@@ -4565,9 +5656,22 @@ class LayoutQualityAssessor {
      * title to collide with and are skipped. No exclusion set: visual Groups are never a connection's
      * source/target (not connectable), and the band-only restriction already leaves ancestor-group
      * body labels alone, so every named group's title band is a candidate for every label. The band
-     * height is the fixed single-line {@link #ESTIMATED_LABEL_HEIGHT}: groups carry no measured
-     * {@code labelTextWidth} (it is collected only for non-group, non-note elements), so the multi-line
-     * doubling {@code detectParentLabelObscuredByChild} applies to text elements is a no-op here.</p>
+     * height comes from {@link #estimateLabelBandHeight}, so a title that wraps gets the two-line
+     * band it renders — and no more of it than the container itself is tall, since that helper clips
+     * the band to the figure.</p>
+     *
+     * <p><b>Why that is not the fixed single line it used to be.</b> The old rationale — that
+     * containers carry no measured {@code labelTextWidth}, so the multi-line doubling could never
+     * apply — was true only while this detector's guard was {@code isGroup()}. It now admits every
+     * container, and an ArchiMate {@code Grouping} IS measured ({@code AssessmentCollector} collects
+     * label text for every non-group, non-note object), so the doubling is live and the claim went
+     * stale. It also went wrong in the direction that hides defects: an SVG probe of a wrap-titled
+     * {@code Grouping} put the second title row's ink 29 px below the box top, outside the 20 px
+     * band this tested, so a connection label sitting on that second row went unflagged. A native
+     * group still has no measured width and so never reaches the doubling — for that kind the old
+     * reasoning holds on the WRAP. It does not hold on the CLIP: a container of any kind shorter
+     * than its own band now gets a band cut to its own height, because nothing below the bottom edge
+     * of a figure is that figure's title.</p>
      *
      * <p>Informational only — the count never reaches the rating or suggestion calls.</p>
      */
@@ -4583,12 +5687,33 @@ class LayoutQualityAssessor {
                 continue;
             }
             for (AssessmentNode node : layoutNodes) {
-                // Only visual Groups with a title to collide with — a label inside the group body is
-                // normal, so the host rect is the top title strip, NOT the full group rectangle.
-                if (!node.isGroup() || node.name() == null || node.name().isEmpty()) {
+                // Only containers with a title to collide with — a label inside the container body
+                // is normal, so the host rect is the top title strip, NOT the full rectangle.
+                //
+                // The height test is part of "has a title to collide with", not a separate concern:
+                // a box with no positive height draws no figure, so it renders no title strip and
+                // nothing can be on it. It is spelled `!(height > 0)` rather than `height <= 0`
+                // because NaN fails every comparison — `NaN <= 0` is false and would let it through,
+                // `!(NaN > 0)` is true and skips.
+                if (!node.isContainer() || node.name() == null || node.name().isEmpty()
+                        || !(node.height() > 0)) {
                     continue;
                 }
-                if (insetRectOverlap(label, node.x(), node.y(), node.width(), ESTIMATED_LABEL_HEIGHT)) {
+                // The band is clipped to the container by estimateLabelBandHeight, for every
+                // consumer. Do not re-add a local Math.min: a second clip would put two models of
+                // one band back in this file, which is what this detector's own regression pin
+                // exists to catch.
+                //
+                // But note WHY the guard above has to exist alongside that. The helper deliberately
+                // leaves a non-positive or non-finite height UNCLIPPED, because clipping there would
+                // rewrite a rating-bearing band on degenerate geometry. A local Math.min used to
+                // give this detector that clip unconditionally — driving the band to 0, negative or
+                // NaN, each of which makes insetRectOverlap false — so a degenerate container could
+                // never flag. Removing it without the guard would have handed this detector a full
+                // 20/40 px band on a figure that renders nothing, inventing findings in the
+                // false-positive direction. The clip moved; the degenerate case had to move with it.
+                double bandHeight = estimateLabelBandHeight(node);
+                if (insetRectOverlap(label, node.x(), node.y(), node.width(), bandHeight)) {
                     count++;
                     if (descriptions.size() < MAX_DESCRIPTIONS) {
                         descriptions.add("Label on connection '" + label.connectionId()
@@ -4678,7 +5803,7 @@ class LayoutQualityAssessor {
      * the more sensitive inset-overlap rule, not this one (asymmetric by design).
      */
     private double ownEndpointOverlapFraction(LabelBounds label, AssessmentNode node) {
-        if (node == null || node.isGroup()) {
+        if (node == null || node.isContainer()) {
             return 0.0;
         }
         double labelArea = label.width() * label.height();
@@ -4703,7 +5828,7 @@ class LayoutQualityAssessor {
      * {@link #LABEL_OWN_ENDPOINT_BOX_COVERAGE_FRACTION}.
      */
     private double ownEndpointBoxCoverageFraction(LabelBounds label, AssessmentNode node) {
-        if (node == null || node.isGroup()) {
+        if (node == null || node.isContainer()) {
             return 0.0;
         }
         double boxArea = node.width() * node.height();
@@ -4804,14 +5929,21 @@ class LayoutQualityAssessor {
         List<String> descriptions = new ArrayList<>();
         for (AssessmentNode note : noteNodes) {
             for (AssessmentNode element : layoutNodes) {
-                // Skip if note is a child of this group (contained notes are expected)
-                if (element.isGroup() && note.parentId() != null
+                // Skip if note is a child of this container (contained notes are expected)
+                if (element.isContainer() && note.parentId() != null
                         && note.parentId().equals(element.id())) {
                     continue;
                 }
                 if (rectanglesOverlap(note, element)) {
                     count++;
                     if (descriptions.size() < MAX_DESCRIPTIONS) {
+                        // Reads isGroup where the skip above reads isContainer, deliberately — this
+                        // is not a half-finished migration. The skip asks how the object RENDERS
+                        // (transparent, so a note inside it is contained rather than colliding);
+                        // this asks what to CALL it, and "group" is published vocabulary:
+                        // get-view-contents reports a native group under `groups` and an ArchiMate
+                        // Grouping among the elements. Calling a Grouping a "group" here would send
+                        // a reader to a bucket that structurally cannot hold its id.
                         String targetType = element.isGroup() ? "group" : "element";
                         descriptions.add("Note '" + note.id()
                                 + "' overlaps " + targetType + " '" + element.id() + "'");
@@ -4832,9 +5964,10 @@ class LayoutQualityAssessor {
      * <p>The required height is pre-computed in {@link AssessmentCollector} via the same
      * {@code ElementSizer.fitTextBoxHeightToContent} call (and width inset) the note
      * auto-fit path uses, so this fires precisely when an author pinned a {@code height}
-     * smaller than what the server's auto-fit would have produced (the dogfood bug). A note
-     * created without an explicit height is auto-fitted, so {@code noteRequiredHeight ==}
-     * box height and it is not flagged. Real SWT glyph measurement underlies the pre-compute,
+     * smaller than what the server's fit would have produced (the dogfood bug). A note created
+     * without an explicit height is fitted, and so is one whose text or width is later changed
+     * with the height omitted, so in both cases {@code noteRequiredHeight ==} box height and it
+     * is not flagged. Only an explicitly pinned height can reach this detector. Real SWT glyph measurement underlies the pre-compute,
      * so — unlike {@code detectLabelTruncation} — no {@code LABEL_RENDER_WIDTH_FACTOR} is
      * applied here. The {@code MAX_NOTE_HEIGHT} clamp case (content genuinely needs >600px)
      * is out of scope; this flags the box-smaller-than-fitted-height case.
@@ -4852,8 +5985,9 @@ class LayoutQualityAssessor {
                 if (descriptions.size() < MAX_DESCRIPTIONS) {
                     descriptions.add(String.format(
                             "Note '%s' text clips: content needs ~%.0fpx but box is %.0fpx "
-                            + "(%dx%d note at (%.0f,%.0f)). Omit the note height so the server "
-                            + "auto-fits, or increase it.",
+                            + "(%dx%d note at (%.0f,%.0f)). Its height is pinned; re-send the "
+                            + "note's text (or width) through update-view-object with the height "
+                            + "omitted and the server re-fits it, or raise the height.",
                             note.id(), required, note.height(),
                             (int) note.width(), (int) note.height(),
                             note.x(), note.y()));
@@ -4867,6 +6001,18 @@ class LayoutQualityAssessor {
 
     /** Estimated type icon width in pixels (right-aligned in Archi elements). */
     static final double TYPE_ICON_WIDTH = 16.0;
+    /**
+     * Horizontal inset (px) between an element's edge and its title's glyph run.
+     *
+     * <p>This is Archi's own {@code getTextControlMarginWidth()}, which the figure hands to the
+     * {@code GridLayout} that positions the title inside the figure. It is not a fitted number:
+     * an SVG probe measured a LEFT-aligned run starting 4.6-5.1 px inside the box edge, the extra
+     * fraction being the glyph's side bearing. Paired with {@link #TYPE_ICON_WIDTH} it also
+     * reproduces the RIGHT-aligned case, where Archi narrows the text control by
+     * {@code iconOffset - marginWidth} to keep the title clear of the type icon: measured
+     * 21.7 px of clearance against the 20 px these two constants predict.</p>
+     */
+    static final double LABEL_MARGIN_X = 4.0;
     /** Estimated label area height for single-line labels. */
     static final double ESTIMATED_LABEL_HEIGHT = LABEL_CHAR_HEIGHT + LABEL_PADDING_Y; // 20px
     /** Estimated image icon size (width and height) for non-fill positions. */
@@ -4875,9 +6021,217 @@ class LayoutQualityAssessor {
     static final double NOTE_CLIP_TOLERANCE = 1.0;
 
     record LabelTruncationResult(int count, List<String> descriptions) {}
-    record ParentLabelObscuredResult(int count, List<String> descriptions) {}
+    /**
+     * {@code unmeasuredParentBand} is true when the detector examined at least one parent whose
+     * label width was never measured, so the title band it compared against was sized as a single
+     * line regardless of how long the title actually is. Both unmeasured modes count — a visual
+     * GROUP, which is excluded from measurement outright, and an ordinary element whose text
+     * measurement failed — because they reach the detector as the same zero width. The dimension's
+     * coverage downgrades to {@code partial} for that run: unlike a detector that abstains on an
+     * object it cannot measure, this one still returns a verdict for it, so a zero would otherwise
+     * read as certified clean on a parent whose clearance was never really tested.
+     */
+    record ParentLabelObscuredResult(int count, List<String> descriptions,
+                                     boolean unmeasuredParentBand) {}
     record ImageSiblingOverlapResult(int count, List<String> descriptions) {}
+    record OverlayIconCollisionResult(int count, List<String> descriptions) {}
+    /**
+     * {@code unmeasuredTitle} is true when the run held at least one named, icon-bearing object
+     * whose title width could not be MEASURED — so there was no title rectangle to test its icon
+     * against and the object was never actually examined. The dimension's coverage downgrades to
+     * {@code partial} for that run rather than letting a zero read as certified clean.
+     *
+     * <p>The trigger is the missing measurement, not the object's kind. A native group is never
+     * measured at all; a {@code Grouping} or a plain element normally IS measured and arrives here
+     * only when {@code ElementSizer.measureText} failed. Anything else that reaches this state with
+     * a name and an overlay icon is covered too, deliberately — the flag exists so an unexamined
+     * object cannot be certified, and that is true whatever kind it turns out to be.</p>
+     */
+    record OwnIconOverLabelResult(int count, List<String> descriptions,
+                                  boolean unmeasuredTitle) {}
     record NoteClipResult(int count, List<String> descriptions) {}
+
+    /**
+     * One measured metric, the published field that carries its count, and the count it reported.
+     *
+     * <p>{@code metric} is the id the prose prints. It is required to RESOLVE — the caller reading
+     * it has to be able to look it up — but not to come from any one register: most of these ids
+     * are coverage-dimension ids, a few are violator-id keys, and one is the published field name
+     * itself, because that metric has no dimension id of its own. What is forbidden is an id that
+     * resolves on no register at all, which is a token the caller can do nothing with.</p>
+     *
+     * <p>{@code field} is the component of {@link LayoutAssessmentResult} holding this count. It is
+     * carried so the registry can be checked in the direction that actually protects it: every
+     * count-valued component of the published result must be registered here or declared, in
+     * {@link MetricFindings#NOT_MEASURED_AS_A_FINDING}, not to be a finding. Without it the two
+     * sides cannot be matched at all — the id and the field name diverge unrecoverably for several
+     * metrics ({@code redundantBendpoints} publishes as {@code connectionRedundantBendpointCount},
+     * {@code containerFillRecession} as {@code containerFillEqualsChildCount}), so no naming rule
+     * could derive one from the other.</p>
+     */
+    record MetricFinding(String metric, String field, int count) {}
+
+    /**
+     * Every count-valued metric this run measured, paired with the count it reported.
+     *
+     * <p>This exists because {@code suggestions.isEmpty()} is not the same question as "did this run
+     * find anything". The suggestion list is built from the subset of metrics that have remedy prose,
+     * so a run whose only findings are among the metrics without prose produces an empty list, and a
+     * verdict sourced from that emptiness states that nothing was found on dimensions where something
+     * was. Sourcing the verdict from the measured counts instead makes it answerable for every metric
+     * at once, including metrics added later.</p>
+     *
+     * <p>Passed as one type-distinct carrier rather than as a further run of bare {@code int}
+     * parameters, for the reason the detector-result argument beside it already records: a miswired
+     * call site is then a compile error rather than a plausible wrong number.</p>
+     *
+     * <p><b>Counts only.</b> The six score-valued metrics (alignment, average spacing, hub-port
+     * quality, corridor utilisation, hub-neighbour clearance and the parallel-gap 10th percentile)
+     * are deliberately absent: zero is not their clean value — for three of them zero is the WORST
+     * value — so {@code != 0} would invert their meaning. Each is banded by the rating and, where it
+     * indicates a defect, already carries prose; the parallel-gap percentile is a measurement whose
+     * companion narrow-gap COUNT is the finding, and that count is included here.</p>
+     *
+     * <p><b>{@code vAxisParallelGapP10} therefore gets no count-shaped prose either, and that is
+     * permanent rather than pending.</b> It is a 10th percentile in pixels: its clean value is a
+     * LARGE number and its worst is a small one, so a branch firing on {@code > 0} would emit a
+     * remedy on every view that has parallel segments at all and stay silent on the one view where
+     * the corridor has collapsed. The finding it would be reporting is already reported by
+     * {@code vAxisParallelGapNarrow25Count}, which is carried here and does carry a remedy — the
+     * remedy its own served block publishes AGAINST the percentile, since the two share one
+     * coverage dimension. Nothing about this is waiting on a decision.</p>
+     *
+     * <p><b>Containment overlaps are excluded</b> because this file already declares them not to be a
+     * defect: the suggestion it emits for them ends "No action needed." Counting them as a finding
+     * would make the replacement sentence name something the same method calls expected.</p>
+     *
+     * <p><b>Orphaned connections are excluded</b> for a different reason again: this class does not
+     * measure them. It passes a hard zero into its own result and the accessor merges the real
+     * count in afterwards, so the value is not knowable here. It is also not one of the coverage
+     * dimensions, so the verdict — which is scoped to the dimensions this run examined — does not
+     * speak for it either way, and the response names it in its own step regardless.</p>
+     *
+     * <p><b>The H-axis parallel-gap narrow count is now carried</b>, and was excluded before only
+     * because it had no top-level field in the published result — naming a finding the caller
+     * cannot then look up would have repeated, one field along, the defect this prose exists to
+     * stop. It was measured all along, on the same pass and through the same aggregation as its V
+     * sibling, but lived only inside the detail record, which is null unless the caller asks for
+     * violator ids. It is invisible to the reflective parity check for the same reason: that check
+     * partitions top-level {@code int} components, and a value nested three levels down inside a
+     * non-{@code int} component has no field of that type for it to see. Now that
+     * {@code hAxisParallelGapNarrow25Count} exists at the top level, the condition the exclusion
+     * named is discharged and the id resolves on a published register.</p>
+     */
+    record MetricFindings(List<MetricFinding> measured) {
+
+        /**
+         * The count-valued components of {@link LayoutAssessmentResult} deliberately NOT registered
+         * as findings, each for a reason that would survive being read aloud to a caller.
+         *
+         * <p>This exists so the registry is answerable in the reverse direction. The measured list
+         * plus this set must between them account for EVERY {@code int} component of the published
+         * result: a count added to the result and forgotten in the list is then a red test, which
+         * is the guarantee the construction site's comment makes. A count that is genuinely not a
+         * finding is declared here rather than silently omitted, so the omission is reviewable.</p>
+         *
+         * <ul>
+         *   <li>{@code containmentOverlapCount} — this class already declares containment overlaps
+         *       not to be a defect; the suggestion it emits for them ends "No action needed."
+         *       Counting them as a finding would name something the same method calls expected.</li>
+         *   <li>{@code orphanedConnectionCount} — not measured here. This class passes a hard zero
+         *       into its own result and the accessor merges the real count in afterwards, so the
+         *       value is not knowable at this point. It is also not one of the coverage dimensions,
+         *       so the verdict does not speak for it either way, and the response names it in its
+         *       own step regardless.</li>
+         *   <li>{@code connectionCount} — a denominator. It describes the view, not a finding on
+         *       it, and every value of it is legitimate.</li>
+         *   <li>{@code alignmentScore} — a score, not a count. Its clean value is 100 and its worst
+         *       is 0, so {@code != 0} would invert its meaning; the rating bands it and the prose
+         *       above already explains it below its threshold.</li>
+         * </ul>
+         */
+        static final Set<String> NOT_MEASURED_AS_A_FINDING = Set.of(
+                "containmentOverlapCount",
+                "orphanedConnectionCount",
+                "connectionCount",
+                "alignmentScore");
+
+        /** The metrics that reported a nonzero count, in the order they were measured. */
+        List<MetricFinding> found() {
+            List<MetricFinding> nonZero = new ArrayList<>();
+            for (MetricFinding finding : measured) {
+                if (finding.count() > 0) {
+                    nonZero.add(finding);
+                }
+            }
+            return nonZero;
+        }
+    }
+
+    /**
+     * The thirteen informational metrics that reported a count with no remedy of their own.
+     *
+     * <p>Every one of them is measured, published as a count, and declared {@code checked} in the
+     * coverage map (with one permanent {@code partial}) — and until now none of them put a sentence
+     * anywhere. A caller reading the prose as its only ground truth was told a dimension fired, by
+     * the terminal disclosure, and given nothing to do about it; on a view that also carried an
+     * explained defect it was not told even that.</p>
+     *
+     * <p>Bundled as one carrier of detector RESULTS rather than as thirteen more positional counts,
+     * for the reason the two carriers beside it already record: each is a distinct type, so a
+     * miswired call site is a compile error rather than a plausible wrong number. The results are
+     * passed rather than the counts because each remedy names the description list that goes with
+     * it, and the shortfall clause needs the size of that list as well as the count.</p>
+     *
+     * <p>The classification these metrics carry is {@code informational}, which governs the RATING
+     * and not the prose. Two informational metrics — anchor drift and lateral-jog reversals — have
+     * emitted prose all along, and the ruling this file already records for the suppressed-defect
+     * case says why: a defect kept out of the rating AND absent from the prose is invisible, and
+     * carrying the descriptions is what makes the non-rating honest rather than silencing.</p>
+     */
+    record InformationalFindings(OverlapResult overlaps,
+                                 NoteOverlapResult noteOverlap,
+                                 NoteClipResult noteClip,
+                                 ImageSiblingOverlapResult imageSiblingOverlap,
+                                 OverlayIconCollisionResult overlayIconCollision,
+                                 EdgeCoincidenceResult edgeCoincidence,
+                                 ParallelConnectionGapResult parallelGap,
+                                 ConnectionThroughVisualResult throughVisual,
+                                 RedundantBendpointResult redundantBendpoints,
+                                 ContainerFillResult containerFill,
+                                 LabelOnNoteResult labelOnNote,
+                                 LabelOnGroupResult labelOnGroup,
+                                 CoincidentFacePortResult coincidentFacePorts) {}
+
+    /**
+     * The metrics that move a rating while contributing nothing to the prose that explains it:
+     * {@code parentLabelObscured}, {@code labelTruncations}, {@code nonOrthogonalInteriorSegments},
+     * {@code offFaceParallelTerminals}, {@code connectionThroughNote}, {@code passThroughs} and
+     * {@code hubNeighbourCrowding}.
+     *
+     * <p>Bundled into one carrier rather than appended as further positional arguments: each is a
+     * distinct detector result, so a miswire stays a compile error, and the grouping records WHY
+     * they travel together — a caller marked down by any of them was, before this, told nothing
+     * about the cause. The members are NAMED rather than counted: a hand-maintained tally beside
+     * the list it counts is the one claim a reader cannot check without recounting, and correcting
+     * the number is the same defect with a later expiry date.</p>
+     *
+     * <p><b>{@code passThroughs} and {@code hubNeighbourCrowding} are the two that were still
+     * silent after the rest were given prose</b>, and their silences were not the same defect.
+     * A view whose ONLY finding was a pass-through published a downgraded rating beside "No defects
+     * were found on the dimensions this run examined" — a false all-clear, because
+     * {@code passThroughs} was in neither of the two sources that verdict reads. Hub-neighbour
+     * crowding, which caps at {@code fair}, could reach the same all-clear alone and could also sit
+     * unnamed beside a spacing sentence that truthfully called itself "one of" the limiters while
+     * the co-equal limiter went unmentioned.</p>
+     */
+    record RatingBearingFindings(ParentLabelObscuredResult parentLabelObscured,
+                                 LabelTruncationResult labelTruncations,
+                                 NonOrthogonalInteriorSegmentResult nonOrthogonalInteriorSegments,
+                                 OffFaceParallelTerminalResult offFaceParallelTerminals,
+                                 ConnectionThroughVisualResult connectionThroughNote,
+                                 PassThroughResult passThroughs,
+                                 HubNeighbourCrowdingResult hubNeighbourCrowding) {}
 
     /**
      * Detects element labels that are truncated after word wrapping.
@@ -4947,6 +6301,43 @@ class LayoutQualityAssessor {
      * in {@code ArchiModelAccessorImpl}). This is harsher than the sibling {@code labelTruncation} metric,
      * which only caps routing at "fair" (Tier-2R). It is NOT informational-only (the previous Javadoc
      * said so — that was true earlier but has been false since M6).
+     *
+     * <p><b>The question this band answers: does a child start above where the parent's title stops
+     * RENDERING?</b> Not "above where its title would need to reach" — {@link #estimateLabelBandHeight}
+     * clips the band to the parent's own height, because Archi clips a figure's contents to the
+     * figure and nothing below the bottom edge is this parent's title. So on a container shorter
+     * than its own wrapped title, a child at relative y=25 in a 30 px box still flags (25 &lt; 30),
+     * while a child at relative y=35 does not: that child is not inside the parent at all, and
+     * {@link #detectBoundaryViolations} is already reporting it as having escaped. Both metrics are
+     * uncapped Tier 1L and are combined by a max, so releasing that parent here cannot lift the
+     * layout rating — the count moves, the verdict does not.
+     *
+     * <p><b>That hand-off holds for a child of any height, and fails for exactly one shape.</b>
+     * The boundary check is a strict {@code >}, so a child with ZERO height sitting precisely on the
+     * parent's bottom edge satisfies neither detector: the clipped band ends at that same edge and
+     * the escape test needs to exceed it. Such a child draws nothing, which is why it is accepted
+     * rather than chased — but it means a zero from both counts does not certify that no such object
+     * is present, and any prose pairing the two metrics has to say so rather than claim the cover is
+     * total.</p>
+     *
+     * <p>Do not "simplify" this into {@link #ownLabelBounds}, or the reverse. That one tests the
+     * GLYPH RUN — the ink — because the defect it hunts is an icon landing on the letters; this one
+     * tests the full band's DEPTH, because a child anywhere across the parent's width buries the
+     * title. They share a clip, deliberately, and nothing else.</p>
+     *
+     * <p><b>The band is only as good as the parent's measured label width, and says so.</b> Unlike
+     * the truncation detector, which discards a visual group at its entry guard, this one examines
+     * every named parent — including one whose label width was never measured, where
+     * {@link #estimateLabelBandHeight} cannot take its multi-line branch and returns a single-line
+     * band however long the title is. Archi lays a group's title out in a wrapping text flow over
+     * the whole group rectangle rather than confining it to the drawn tab, so a long multi-word
+     * title really can occupy a second row that this band does not cover, and a child under that row
+     * goes unflagged. Widening the band is not available here: the wrapped height is unknowable
+     * without the measured width, and the wrap style is a user preference this code cannot read, so
+     * a computed band would be a guess wearing a measurement's clothing. Such a run therefore sets
+     * {@code unmeasuredParentBand}, which downgrades this dimension's coverage to {@code partial} so
+     * a zero cannot be read as a certified all-clear. The count itself is unaffected — every parent
+     * still gets the same verdict it always did.</p>
      */
     ParentLabelObscuredResult detectParentLabelObscuredByChild(List<AssessmentNode> nodes) {
         // Build parent→children map from parentId back-references
@@ -4960,11 +6351,20 @@ class LayoutQualityAssessor {
         }
 
         int count = 0;
+        boolean unmeasuredParentBand = false;
         List<String> descriptions = new ArrayList<>();
         for (Map.Entry<String, List<AssessmentNode>> entry : childrenByParent.entrySet()) {
             AssessmentNode parent = nodeById.get(entry.getKey());
             if (parent == null || parent.name() == null || parent.name().isEmpty()) {
                 continue;
+            }
+            // This parent IS examined below, but its band can only be sized from a measured label
+            // width. Without one the band silently stays a single line however long the title is,
+            // so the comparison still yields a verdict while never having tested the wrapped rows.
+            // Recorded here — inside the examination — so being handed an unmeasurable object is
+            // not mistaken for having examined it: a childless container never reaches this loop.
+            if (parent.labelTextWidth() <= 0) {
+                unmeasuredParentBand = true;
             }
             // Find child with smallest absolute y
             List<AssessmentNode> children = entry.getValue();
@@ -4974,12 +6374,7 @@ class LayoutQualityAssessor {
                     minChildY = child.y();
                 }
             }
-            // Estimate label height — doubles for multi-line wrapping
-            double labelHeight = ESTIMATED_LABEL_HEIGHT;
-            double availableWidth = parent.width() - TYPE_ICON_WIDTH;
-            if (availableWidth > 0 && parent.labelTextWidth() > availableWidth) {
-                labelHeight *= 2; // multi-line wrap
-            }
+            double labelHeight = estimateLabelBandHeight(parent);
             double labelBottom = parent.y() + labelHeight;
             if (minChildY < labelBottom) {
                 count++;
@@ -4991,7 +6386,7 @@ class LayoutQualityAssessor {
                 }
             }
         }
-        return new ParentLabelObscuredResult(count, descriptions);
+        return new ParentLabelObscuredResult(count, descriptions, unmeasuredParentBand);
     }
 
     /**
@@ -5035,8 +6430,460 @@ class LayoutQualityAssessor {
     }
 
     /**
+     * Detects overlay icons that collide across a containment pair — an element's corner/edge
+     * icon overlapping the icon of an element that contains it.
+     *
+     * <p>{@link #detectImageSiblingOverlap} buckets nodes by parent and compares only within a
+     * bucket, so an ancestor and its descendant are never compared; this covers that axis. The
+     * test is icon rect vs icon rect: ordinary nesting inside an iconed container is normal
+     * layout and is never flagged. {@code fill} images are skipped — they are backgrounds whose
+     * estimated rect is the whole element box, which would otherwise flag every descendant. Each
+     * colliding pair is counted once (the ancestor chain is walked upward only).</p>
+     *
+     * <p>Informational only — does NOT affect rating. Note that icon visibility is not carried on
+     * the assessment node, so an element whose image is set but suppressed is still examined —
+     * the same approximation {@link #detectImageSiblingOverlap} makes.</p>
+     */
+    OverlayIconCollisionResult detectOverlayIconCollision(List<AssessmentNode> nodes) {
+        // Null ids are skipped deliberately: a null key would be resolved as the "parent" of
+        // every top-level node (whose parentId is also null), fabricating pairs between
+        // unrelated elements. Ids are otherwise assumed unique (they are model object ids); a
+        // duplicate would shadow the earlier node and could resolve an ancestor lookup into the
+        // wrong subtree, which is accepted rather than defended against.
+        Map<String, AssessmentNode> byId = new LinkedHashMap<>();
+        for (AssessmentNode node : nodes) {
+            if (node.id() != null) {
+                byId.put(node.id(), node);
+            }
+        }
+
+        int count = 0;
+        List<String> descriptions = new ArrayList<>();
+        for (AssessmentNode node : nodes) {
+            double[] iconBounds = overlayIconBounds(node);
+            if (iconBounds == null) continue;
+
+            // Walk upward only, so each pair is counted once. The visited set bounds the walk
+            // against a malformed model whose parent links form a cycle.
+            Set<String> visited = new HashSet<>();
+            visited.add(node.id());
+            AssessmentNode ancestor = byId.get(node.parentId());
+            while (ancestor != null && visited.add(ancestor.id())) {
+                double[] ancestorBounds = overlayIconBounds(ancestor);
+                if (ancestorBounds != null && rectanglesOverlap(
+                        iconBounds[0], iconBounds[1], iconBounds[2], iconBounds[3],
+                        ancestorBounds[0], ancestorBounds[1], ancestorBounds[2], ancestorBounds[3])) {
+                    count++;
+                    if (descriptions.size() < MAX_DESCRIPTIONS) {
+                        descriptions.add(String.format(
+                                "Element '%s' icon (%s) collides with the icon (%s) of containing element '%s'",
+                                node.name() != null ? node.name() : node.id(), node.imagePosition(),
+                                ancestor.imagePosition(),
+                                ancestor.name() != null ? ancestor.name() : ancestor.id()));
+                    }
+                }
+                ancestor = byId.get(ancestor.parentId());
+            }
+        }
+        return new OverlayIconCollisionResult(count, descriptions);
+    }
+
+    /**
+     * Detects elements whose own overlay icon is drawn on top of their own title label — the
+     * specialization/profile glyph that buries the element name on a narrow box.
+     *
+     * <p>The two sibling image detectors cannot reach this pair. {@link #detectImageSiblingOverlap}
+     * compares an icon against other BOXES in the same parent bucket, {@link #detectOverlayIconCollision}
+     * against an ANCESTOR's icon; and because {@link #estimateImageBounds} clamps the icon rectangle
+     * to its own element box, the icon and the title it covers are both inside that box and are
+     * never compared. Archi draws the title in a band placed from the object's own features on
+     * BOTH axes — horizontally by its {@code textAlignment}, vertically by its
+     * {@code textPosition} ({@link #ownLabelBounds} has the geometry) — so a glyph anchored at the
+     * corner the title happens to occupy lands on the name while both existing counts read
+     * zero.</p>
+     *
+     * <p><b>The title's position is a per-object feature on BOTH axes, so this detector reads it
+     * rather than assuming one.</b> Archi's figure hands the title control a single
+     * {@code GridData} whose horizontal alignment comes from {@code getTextAlignment()} and whose
+     * vertical comes from {@code getTextPosition()}, so the two axes are one mechanism and an
+     * assumption on either invents collisions that do not render and misses ones that do. The
+     * vertical default (TOP) is common enough that modelling it as a constant survived a long
+     * time, but this server publishes a {@code verticalTextAlignment} parameter that sets it on any
+     * object, so a centred or footed title is reachable through this server exactly as a
+     * non-centred alignment is. Horizontally: a {@code Grouping}, group or note is stamped LEFT at creation
+     * by Archi's palette and by this server alike; a plain element is left at CENTRE here while
+     * Archi derives its default from a user preference; one this server created before it stamped
+     * anything keeps CENTRE regardless; and this server's published {@code textAlignment}
+     * parameter can set any value on any object — so the same element type reaches here with the
+     * title in different places depending on who authored it and when. Assuming a fixed centring
+     * both invents collisions that do not render and misses ones that do.</p>
+     *
+     * <p>{@code fill} images are skipped — a background is not an overlay glyph (the same guard
+     * {@link #overlayIconBounds} applies). Counted once per element.</p>
+     *
+     * <p><b>A title this detector could not MEASURE is declared, not certified.</b> An element that
+     * carries an overlay icon and a name but arrives with no measurable label width has no title
+     * rectangle to test that icon against, so it was handed to this detector and never actually
+     * examined. Such a run sets {@code unmeasuredTitle}, which downgrades this dimension's coverage
+     * to {@code partial} so a zero cannot be read as a certified all-clear. The condition is about
+     * MEASUREMENT and not about the object's KIND: a native group is never measured at all (label
+     * text is collected only for non-group, non-note objects), while a {@code Grouping} or a plain
+     * element normally IS measured and reaches this state only when {@code ElementSizer.measureText}
+     * failed — the collector catches and logs that. Those routes leave the same unexamined icon, so
+     * they declare it alike. The list is illustrative rather than exhaustive <b>on purpose</b>: the gate
+     * asks only whether a named object with an icon lacked a measurable title, so any future kind
+     * that reaches that state is covered without another edit here. (A Note is the one kind that can
+     * reach it today without having a "title" concept at all, but it needs both a name — which this
+     * server never sets on a note — and an overlay image, so it is not reachable in practice.)
+     * Abstaining rather than guessing is also why no rectangle is fabricated from a missing width:
+     * a made-up width would manufacture findings.</p>
+     *
+     * <p>Icon visibility is not carried on the assessment node, so an element whose image is set but
+     * suppressed is still examined — the same approximation the two sibling icon detectors make.</p>
+     *
+     * <p>Informational only — does NOT affect rating.</p>
+     */
+    OwnIconOverLabelResult detectOwnIconOverLabel(List<AssessmentNode> nodes) {
+        int count = 0;
+        boolean unmeasuredTitle = false;
+        List<String> descriptions = new ArrayList<>();
+        for (AssessmentNode node : nodes) {
+            double[] iconBounds = overlayIconBounds(node);
+            if (iconBounds == null) continue;
+            double[] labelBounds = ownLabelBounds(node);
+            if (labelBounds == null) {
+                // This node HAS an overlay icon and HAS a title, but no measurable title rectangle
+                // to test that icon against — so it was handed to this detector and never actually
+                // examined. Record the gap so coverage can declare it, rather than returning a
+                // clean zero for a comparison that never happened.
+                //
+                // The predicate is about MEASUREMENT, not about KIND. Asking "is this a native
+                // group?" answered only the case the detector was first written against and left
+                // every other route to an unmeasured title certifying itself: a plain element whose
+                // measureText threw (AssessmentCollector catches and logs it) reaches here with the
+                // same zero width and no group flag. The sibling downgrade in
+                // detectParentLabelObscuredByChild has the right shape and this now matches it.
+                if (node.name() != null && !node.name().isEmpty()) {
+                    unmeasuredTitle = true;
+                }
+                continue;
+            }
+            if (rectanglesOverlap(iconBounds[0], iconBounds[1], iconBounds[2], iconBounds[3],
+                    labelBounds[0], labelBounds[1], labelBounds[2], labelBounds[3])) {
+                count++;
+                if (descriptions.size() < MAX_DESCRIPTIONS) {
+                    descriptions.add(String.format(
+                            "Element '%s' icon (%s) overlaps its own title label — the glyph is "
+                            + "drawn over the element name in the %dx%d element at (%.0f,%.0f). "
+                            + "The title is %s-aligned and sits at the %s of the box, so widen the "
+                            + "element, move the icon clear of that area, or change THIS VIEW "
+                            + "OBJECT's text alignment or vertical text alignment. Alignment is stored "
+                            + "per view object, so correcting it here does not travel to other views "
+                            + "showing the same element.",
+                            node.name() != null ? node.name() : node.id(), node.imagePosition(),
+                            (int) node.width(), (int) node.height(), node.x(), node.y(),
+                            alignmentName(node.textAlignment()),
+                            positionName(node.textPosition())));
+                }
+            }
+        }
+        return new OwnIconOverLabelResult(count, descriptions, unmeasuredTitle);
+    }
+
+    /**
+     * Returns the height of the title band an object actually RENDERS: one label line, doubled when
+     * the name is too wide for the available width and therefore wraps, then clipped to the object's
+     * own height. Shared by {@link #countLabelOnGroup} and {@link #detectParentLabelObscuredByChild}
+     * (which need only the band's depth) and {@link #ownLabelBounds} (which needs the full
+     * rectangle), so the three cannot drift apart.
+     *
+     * <p><b>The clip belongs here and not at a call site.</b> Archi clips a figure's contents to the
+     * figure, so a two-line band computed for a container shorter than two lines describes a region
+     * below the bottom edge that never renders as this object's title — down there it is whatever
+     * sits underneath. Measured at the render: a 250x30 {@code Grouping} swim-lane with a long title
+     * produced a 40 px band reaching 10 px past its own bottom edge, and a foreign connection label
+     * standing in that strip was blamed on this container's title. An earlier fix clamped only the
+     * label-on-group call site, which left two models of one band in one file; this method is now
+     * the one model, which is what the paragraph above has always promised.</p>
+     *
+     * <p><b>Why clipping cannot move the composite rating.</b> The clip narrows
+     * {@link #detectParentLabelObscuredByChild}'s verdict only for a topmost child at or below its
+     * parent's own bottom edge — and being the topmost, that means EVERY child of that parent is.
+     * {@link #detectBoundaryViolations} flags exactly that, over the same node list, and both
+     * metrics sit in the same uncapped critical layout tier, combined by a max. So a parent this
+     * clip releases is still reported, by the metric that describes it correctly. What does move is
+     * the reported count, its descriptions, and the weighted score and retry comparator that read
+     * the count.</p>
+     *
+     * <p>Two guards, both deliberately narrow:</p>
+     * <ul>
+     *   <li>The wrap doubling is guarded on {@code availableWidth > 0}, so an element no wider than
+     *       {@link #TYPE_ICON_WIDTH} always reports the single-line height however long its name is.
+     *       That threshold is inherited verbatim from the rating-bearing parent-label detector and
+     *       is left exactly as it was: at 16 px or less the box is icon-sized and carries no
+     *       readable title, so the residual under-estimate is not worth perturbing a Tier 1L
+     *       predicate to chase.</li>
+     *   <li>The clip applies only to a usable height. A box with zero, negative or non-finite height
+     *       renders no figure and therefore no title, and {@code Math.min} against such a value
+     *       would rewrite the band on degenerate geometry this clip is not about — zero collapses it
+     *       and {@code NaN} propagates, silently defeating every later comparison. {@code NaN > 0}
+     *       is false, so those inputs keep the unclipped estimate they have always had.</li>
+     * </ul>
+     *
+     * <p><b>That last guard is deliberately at odds with the physical model above, and the tension
+     * is real.</b> If nothing below a figure's bottom edge is its title, then a figure of zero height
+     * has no title at all and the honest band would be zero — not the largest band this method can
+     * return. What is being protected is not the physics but the blast radius: a rating-bearing
+     * predicate reads this value, and rewriting it for degenerate inputs would silently widen a
+     * separately-deferred {@code NaN} defect into a new place. The consequence is that a consumer
+     * which cannot tolerate a full band on a figure that renders nothing must say so at its OWN
+     * seam — {@link #countLabelOnGroup} does exactly that, and its comment explains why. Handle the
+     * degenerate case where its meaning is local; do not push it in here.</p>
+     */
+    private double estimateLabelBandHeight(AssessmentNode node) {
+        double availableWidth = node.width() - TYPE_ICON_WIDTH;
+        double band = (availableWidth > 0 && node.labelTextWidth() > availableWidth)
+                ? ESTIMATED_LABEL_HEIGHT * 2  // multi-line wrap
+                : ESTIMATED_LABEL_HEIGHT;
+        return node.height() > 0 ? Math.min(band, node.height()) : band;
+    }
+
+    /**
+     * The object's horizontal title alignment as the word an agent can act on. Uses the same
+     * vocabulary this server's published {@code textAlignment} parameter accepts, so a caller told
+     * the title is "left"-aligned can pass that word straight back to change it. An unrecognised
+     * value reports "centre", matching how {@link #ownLabelBounds} treats it — the prose must never
+     * describe a geometry the rectangle did not use.
+     */
+    private static String alignmentName(int textAlignment) {
+        return switch (textAlignment) {
+            case AssessmentNode.TEXT_ALIGNMENT_LEFT -> "left";
+            case AssessmentNode.TEXT_ALIGNMENT_RIGHT -> "right";
+            default -> "centre";
+        };
+    }
+
+    /**
+     * The object's vertical title position as the word an agent can act on — the counterpart of
+     * {@link #alignmentName}, and for the same reason. Uses the vocabulary this server's published
+     * {@code verticalTextAlignment} parameter accepts, so a caller told the title sits at the
+     * "bottom" can pass that word straight back to change it. An unrecognised value reports "top",
+     * matching how {@link #ownLabelBounds} treats it.
+     *
+     * <p>Naming it is not decoration. On a vertically-caused overlap the horizontal alignment plays
+     * no part in the collision, so a description that named only the alignment would point the
+     * caller at the wrong remedy — and the shipped tool description promises the description names
+     * what it found.</p>
+     */
+    private static String positionName(int textPosition) {
+        return switch (textPosition) {
+            case AssessmentNode.TEXT_POSITION_CENTRE -> "centre";
+            case AssessmentNode.TEXT_POSITION_BOTTOM -> "bottom";
+            default -> "top";
+        };
+    }
+
+    /**
+     * Returns the absolute rectangle of the GLYPH RUN of an element's own title — the ink, not the
+     * text control that holds it — or null when no rectangle can be claimed: the label width was
+     * never measured, or the geometry it was handed is not a finite number. Both are the same
+     * answer for the same reason — nothing was measured, so nothing is asserted — and the caller
+     * reports them alike, as an unexamined title rather than a clean one.
+     *
+     * <p><b>Horizontal placement follows the object's own {@code textAlignment}.</b> Archi does not
+     * centre every title: the figure hands its text control a {@code GridData} whose horizontal
+     * alignment is read from {@code ITextAlignment.getTextAlignment()} per object, so the run sits
+     * against the left inner edge, centred, or against the right inner edge accordingly. Two things
+     * make the non-centred cases ordinary rather than exotic — a {@code Grouping}, group or note is
+     * stamped LEFT at creation, by Archi's palette and by this server alike (a plain element is
+     * not: this server leaves it CENTRE, while Archi reads a user preference for it), and this
+     * server publishes a {@code textAlignment} parameter that sets any value on any object. An unconditional centring is therefore wrong for
+     * the common case, not the rare one: measured on a 400 px box, a LEFT-aligned title's ink began
+     * 4.6 px from the left edge while a centred model would have placed it 169 px away.</p>
+     *
+     * <p>Geometry, with {@link #LABEL_MARGIN_X} and {@link #TYPE_ICON_WIDTH} both taken from Archi's
+     * own figure code rather than fitted (see those constants):</p>
+     * <ul>
+     *   <li>LEFT — run starts at {@code x + LABEL_MARGIN_X}.</li>
+     *   <li>CENTRE — run centred on the element's mid-x (the historical model, unchanged).</li>
+     *   <li>RIGHT — run ENDS at {@code x + width - LABEL_MARGIN_X - TYPE_ICON_WIDTH}: Archi narrows
+     *       the control on this alignment only, to keep the title clear of the type icon.</li>
+     * </ul>
+     * An unrecognised alignment degrades to CENTRE rather than throwing — an informational
+     * rectangle is not worth failing an assessment over.
+     *
+     * <p><b>Vertical placement follows the object's own {@code textPosition}, and it is the SAME
+     * per-object mechanism.</b> Archi's figure hands the title control ONE
+     * {@code GridData(horizontalAlignment, verticalAlignment, true, true)} and reads its two
+     * arguments from {@code ITextAlignment.getTextAlignment()} and
+     * {@code ITextPosition.getTextPosition()} respectively — so a title centred or footed in its
+     * box is exactly as ordinary as a left-aligned one, and this server's published
+     * {@code verticalTextAlignment} parameter sets it on any object. Measured at the render (Archi
+     * 5.10, glyph ink read from the exported path outlines) the band sits in a cell inset by
+     * {@code getTextControlMarginHeight()} = 4 px, anchored per position:</p>
+     * <ul>
+     *   <li>TOP — band starts at the object's own {@code y} (unchanged, and Archi's EMF default).</li>
+     *   <li>CENTRE — band centred on the object's mid-y.</li>
+     *   <li>BOTTOM — band ENDS at the object's own bottom edge.</li>
+     * </ul>
+     * An unrecognised position degrades to TOP, matching the EMF default.
+     *
+     * <p>The anchor is taken from the BOX edge rather than from Archi's 4 px inset cell. That is
+     * the approximation the top-anchored model always made — a band at {@code y} rather than
+     * {@code y + 4} — and it is kept, deliberately, so the change is the ANCHOR alone: the same
+     * ~4 px slack now applies at whichever edge the title renders against instead of at the top
+     * only. The band's height is chosen independently of its anchor, so a wrapped title grows from
+     * its own edge rather than always downwards.</p>
+     *
+     * <p>The run is never wider than the element, and is clamped into the element box so a title
+     * measured wider than its own box cannot produce a rectangle hanging outside it. The same holds
+     * on the vertical axis, and it is inherited rather than written here:
+     * {@link #estimateLabelBandHeight} clips the band it returns to the node's own height, so a band
+     * anchored at ANY of the three positions stays inside the element — at the top it cannot reach
+     * past the bottom edge, at the bottom it cannot reach back above the top one, and a centred
+     * band is inside whenever it fits. This rectangle is therefore inside the element on BOTH axes.
+     * A local {@code Math.min} on the height would be dead arithmetic and would put a second model
+     * of the band in a file that deliberately holds one — but the coupling runs the other way too,
+     * so anyone reverting the helper's clip takes this method's vertical contract with it.</p>
+     *
+     * <p>DEFENSIVE on that axis, exactly as on the horizontal one, and for the same reason: no count
+     * can distinguish a clipped band from an unclipped one here. The only consumer,
+     * {@link #detectOwnIconOverLabel}, tests this rectangle against {@link #estimateImageBounds},
+     * which already clips the icon rect to the same element box — so whatever slice of band a
+     * missing clip would put outside the figure can never intersect anything it is compared with,
+     * and the vertical overlap test gives the same answer at either band height. The clip is here so
+     * the contract stated above holds for a future consumer that REPORTS the rectangle rather than
+     * testing it. A test asserting this changed a count would be green against a clip that never
+     * fired.</p>
+     *
+     * <p><b>This answers a different question from {@link #countLabelOnGroup}, deliberately.</b>
+     * That detector tests the full-width title BAND (the control rectangle) because a foreign
+     * connection label may not sit anywhere in the strip where the container's name renders. This
+     * one tests the GLYPH RUN, because the defect it looks for is an icon landing on the letters
+     * themselves. Both models are correct for their own question and they are not interchangeable:
+     * widening this one to the full band would flag nearly every top-anchored icon on every
+     * container, and narrowing that one to the run would miss a label sitting in the empty half of
+     * the strip. Do not "fix" either into the other.</p>
+     */
+    private double[] ownLabelBounds(AssessmentNode node) {
+        double labelWidth = Math.min(node.labelTextWidth(), node.width());
+        // Geometry that is not a number was not measured, so there is no rectangle to claim.
+        //
+        // The check is EXPLICIT rather than a positivity test, because a positivity test cannot
+        // express it: NaN <= 0 is false, so a NaN width walked past the guard below and this method
+        // returned a rectangle whose own coordinates were NaN. Nothing downstream noticed — every
+        // comparison in rectanglesOverlap is also false against NaN — so the run reported zero
+        // findings AND coverage "checked", certifying an icon that was never compared with
+        // anything. The count was never the symptom; the false all-clear was. An infinity fails the
+        // opposite way: its comparisons DO hold, so it would fabricate an overlap rather than hide
+        // one. isFinite covers both.
+        //
+        // Three of the four numbers need checking, and labelWidth vouches for none of them:
+        //   - x and y never reach the width guard at all. A finite width with a non-finite origin
+        //     clears it outright, and the coordinate then poisons runX, clampedX and the rectangle.
+        //   - width is MASKED by the Math.min above, in one direction only. min(100, NaN) is NaN
+        //     and is caught, but min(100, Infinity) is 100 — finite, positive, and past the guard,
+        //     after which the centring arithmetic sends clampedX to infinity. A guard on labelWidth
+        //     alone therefore covers the NaN box width and misses the infinite one.
+        // The height is NOT checked here, because whether it is needed at all depends on where the
+        // title is anchored — see the second guard, below the alignment switch. It is not needed
+        // for a top-anchored band: estimateLabelBandHeight derives the band from constants and its
+        // comparisons already fall to the finite branch on a degenerate height, so it returns a
+        // finite band whatever it is handed, and a top-anchored rectangle built on a degenerate
+        // height is still entirely finite. Checking it unconditionally here would reject that case
+        // too, changing a pre-existing behaviour this method does not own.
+        //
+        // DEFENSIVE: no production path can deliver a non-finite value here. All four construction
+        // sites are integral at the source — Archi's IBounds is int-valued and degenerate boxes are
+        // dropped before a node is built, ElementSizer's measured text width is an int, and the
+        // nudge-reconstruction pair adds int deltas. The guard is worth having anyway because the
+        // cost of being wrong is silent and unattributable: this method's only consumer reads a
+        // null as "not examined" and reports it, whereas a NaN rectangle is indistinguishable from
+        // a clean one in the response an agent acts on. It is also the shape a future caller is
+        // most likely to break, since nothing in the signature says the doubles must be finite.
+        if (!Double.isFinite(labelWidth) || labelWidth <= 0) return null;
+        if (!Double.isFinite(node.x()) || !Double.isFinite(node.y())
+                || !Double.isFinite(node.width())) {
+            return null;
+        }
+        double runX = switch (node.textAlignment()) {
+            case AssessmentNode.TEXT_ALIGNMENT_LEFT -> node.x() + LABEL_MARGIN_X;
+            case AssessmentNode.TEXT_ALIGNMENT_RIGHT ->
+                    node.x() + node.width() - LABEL_MARGIN_X - TYPE_ICON_WIDTH - labelWidth;
+            default -> node.x() + (node.width() - labelWidth) / 2;
+        };
+        // Clamp into the element box: a run inset by the margins can be pushed outside it when the
+        // measured title is nearly as wide as the box, and a rectangle outside the element is
+        // geometry that never renders (Archi clips the figure's contents to the figure).
+        // DEFENSIVE: no count distinguishes a clamped run from an unclamped one, because a title
+        // that nearly fills its box overlaps a corner glyph either way. It is here so this method's
+        // contract — "a rectangle inside the element" — holds for any future consumer that reports
+        // the rectangle rather than just testing it. The tests say the same, rather than implying
+        // an outcome they cannot observe.
+        double clampedX = Math.max(node.x(), Math.min(runX, node.x() + node.width() - labelWidth));
+        double bandHeight = estimateLabelBandHeight(node);
+        // Vertical placement follows the object's own textPosition, for the same reason and through
+        // the same mechanism as the horizontal one above — Archi builds ONE GridData for the title
+        // control and reads its two alignments from getTextAlignment() and getTextPosition(). The
+        // anchor is the edge the band is measured from; its height is chosen independently, so a
+        // wrapped title grows from whichever edge it is anchored to.
+        //
+        // The two non-TOP anchors measure from the box's FAR edge, so they are the only arithmetic
+        // in this method that reads the height DIRECTLY rather than through
+        // estimateLabelBandHeight — and that makes them the one place the guards above do not
+        // already cover. The height must therefore be usable before either can be computed:
+        //   - non-finite: the band's own origin would go non-finite, handing back a rectangle that
+        //     defeats every later comparison. That is precisely the false all-clear the first guard
+        //     exists to prevent, arriving by a second route.
+        //   - zero or negative: the band would be placed OUTSIDE the box, above its top edge — a
+        //     direction a top-anchored band could never escape in. estimateLabelBandHeight
+        //     deliberately leaves the band unclipped on such a height and says the degenerate case
+        //     belongs at whichever seam its meaning is local to. This is that seam. Measured, this
+        //     arm is defensive depth rather than an observable fix: the only consumer skips such a
+        //     node earlier, because estimateImageBounds collapses the icon rectangle against a box
+        //     with no height and returns no icon at all. It is guarded here so the contract holds
+        //     for a future consumer, and so the two degenerate families are answered in one place.
+        // A box with no usable height renders no figure and therefore no title to locate, so the
+        // honest answer is the same one the guards above give: no rectangle is claimed. The TOP
+        // anchor is untouched by this — it never reads the height, so it keeps the behaviour it has
+        // always had on a degenerate box.
+        int position = node.textPosition();
+        boolean anchoredFromFarEdge = position == AssessmentNode.TEXT_POSITION_CENTRE
+                || position == AssessmentNode.TEXT_POSITION_BOTTOM;
+        if (anchoredFromFarEdge && (!Double.isFinite(node.height()) || node.height() <= 0)) {
+            return null;
+        }
+        double bandY = switch (position) {
+            case AssessmentNode.TEXT_POSITION_CENTRE ->
+                    node.y() + (node.height() - bandHeight) / 2;
+            case AssessmentNode.TEXT_POSITION_BOTTOM ->
+                    node.y() + node.height() - bandHeight;
+            default -> node.y();
+        };
+        return new double[]{clampedX, bandY, labelWidth, bandHeight};
+    }
+
+    /**
+     * Returns the absolute icon rectangle for a node carrying a positioned overlay icon, or null
+     * when the node has no image or the image is a {@code fill} background rather than an icon.
+     */
+    private double[] overlayIconBounds(AssessmentNode node) {
+        if (node.imagePath() == null || "fill".equals(node.imagePosition())) return null;
+        return estimateImageBounds(node);
+    }
+
+    /**
      * Estimates the absolute image bounding box for an element based on imagePosition.
      * Returns {x, y, width, height} in absolute coordinates, or null if position unknown.
+     *
+     * <p>The rectangle is CLAMPED to the element box. Archi clips an element's image to the
+     * element's bounds, so an image whose natural size exceeds its element is cut off at the
+     * box edge rather than drawn outside it — verified by rendering one image at a fixed
+     * anchor against decreasing element heights, where the glyph is progressively cut while
+     * its tile width stays constant (clipping, not scale-to-fit), on both the custom-image
+     * and the specialization/profile icon paths. The rectangle that actually renders is
+     * therefore the intersection of the anchored natural-size rectangle with the element box,
+     * and any claim that an icon reaches outside its element is unreachable geometry.</p>
      */
     private double[] estimateImageBounds(AssessmentNode node) {
         String pos = node.imagePosition();
@@ -5048,7 +6895,7 @@ class LayoutQualityAssessor {
         double iw = node.imageNaturalWidth() > 0 ? node.imageNaturalWidth() : IMAGE_ICON_SIZE;
         double ih = node.imageNaturalHeight() > 0 ? node.imageNaturalHeight() : IMAGE_ICON_SIZE;
 
-        return switch (pos) {
+        double[] anchored = switch (pos) {
             case "fill" -> new double[]{ex, ey, ew, eh};
             case "top-left" -> new double[]{ex, ey, iw, ih};
             case "top-centre" -> new double[]{ex + ew / 2 - iw / 2, ey, iw, ih};
@@ -5061,6 +6908,25 @@ class LayoutQualityAssessor {
             case "bottom-right" -> new double[]{ex + ew - iw, ey + eh - ih, iw, ih};
             default -> null;
         };
+        if (anchored == null) return null;
+
+        // Clamp to the element box. Both the ORIGIN and the extent are clamped: a right- or
+        // centre-anchored oversized image places its origin left of / above the box, so
+        // bounding the extent alone would leave the rectangle outside the element. 'fill' is
+        // unaffected — its rectangle already IS the element box, so this is a no-op for it.
+        double x1 = Math.max(anchored[0], ex);
+        double y1 = Math.max(anchored[1], ey);
+        double x2 = Math.min(anchored[0] + anchored[2], ex + ew);
+        double y2 = Math.min(anchored[1] + anchored[3], ey + eh);
+        // A clamped rectangle with no extent on either axis is not a rectangle — nothing renders,
+        // so report no image rather than a zero-area rectangle collapsed onto a line or a point.
+        // That distinction matters: rectanglesOverlap uses strict inequalities, so a zero-width
+        // rectangle whose pinned coordinate falls inside a sibling's span would otherwise register
+        // as an overlap. This is reachable only for a degenerate element box (zero or negative
+        // width/height) — for any element with a positive box the intersection with a positive-size
+        // image always has positive extent, because the two always share the anchored corner.
+        if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
+        return new double[]{x1, y1, x2 - x1, y2 - y1};
     }
 
     /**
@@ -5073,6 +6939,346 @@ class LayoutQualityAssessor {
 
     // ---- Suggestion Generation (Finding #7: performance warning, #11: named constants) ----
 
+    /**
+     * Names where the affected objects can be read, without over-claiming. The description list is
+     * capped at {@link #MAX_DESCRIPTIONS} and this dimension has no violator-id key, so on a view
+     * carrying more findings than the cap the remainder cannot be recovered from the response at
+     * all — which the caller has to be told, rather than being pointed at a list that silently
+     * stops short.
+     */
+    private static String ownIconDescriptionClause(int named, int total) {
+        return descriptionClause("ownIconOverLabelDescriptions", false, named, total);
+    }
+
+    /**
+     * The same clause for any dimension: which list names the objects, and — when the count exceeds
+     * {@link #MAX_DESCRIPTIONS} — how many are left over and whether anything else can recover them.
+     *
+     * <p>{@code hasViolatorIdKey} decides the shortfall wording, and it is the caller's job to pass
+     * what the violator-id registry actually holds for this dimension. A dimension WITH a key can
+     * point the remainder at it (the key is populated from the detector's own id set, which the
+     * description cap does not bound); a dimension WITHOUT one has to say the remainder is
+     * recoverable from nothing, because it is not.</p>
+     *
+     * <p><b>The field is named as assess-layout's, not as a bare field name, and that is
+     * load-bearing rather than decorative.</b> This suggestion list is republished verbatim by
+     * {@code auto-layout-and-route} and {@code adjust-view-spacing}, whose result types carry no
+     * description lists, no violator-id map and no coverage map at all. A bare "see
+     * noteOverlapDescriptions" therefore sends a caller of those two tools to a field that is not
+     * on the response in front of them, and {@code includeViolatorIds} is a parameter only
+     * assess-layout takes. Naming the tool that publishes the field costs two words and makes the
+     * pointer resolvable from every surface this sentence reaches — the same reason the terminal
+     * disclosure and the coverage verdict below already say "assess-layout's own response" and
+     * "assess-layout's coverage map" rather than naming a bare field.</p>
+     */
+    private static String descriptionClause(String descriptionField, boolean hasViolatorIdKey,
+                                            int named, int total) {
+        if (named == 0) {
+            return "";
+        }
+        if (named < total) {
+            return "; assess-layout's " + descriptionField + " names the first " + named
+                    + " of them, and this"
+                    + (hasViolatorIdKey
+                            ? " dimension's violator-id list holds the rest — call assess-layout"
+                                    + " with includeViolatorIds to recover the remaining "
+                            : " dimension publishes no violator-id list, so the remaining ")
+                    + (total - named)
+                    + (hasViolatorIdKey ? ""
+                            : (total - named == 1 ? " has" : " have")
+                                    + " to be found in the render");
+        }
+        return "; see assess-layout's " + descriptionField + " for the objects affected";
+    }
+
+    /**
+     * The form {@link #detectPassThroughs} writes for a CROSS-element crossing. Matched rather than
+     * re-derived because the description list is the only place the two kinds of pass-through are
+     * distinguishable after the fact, and the count the rating charges is one of them.
+     */
+    private static final String CROSS_ELEMENT_PASS_THROUGH_FORM = "' passes through element '";
+
+    /**
+     * How many of the published pass-through descriptions name a CROSS-element crossing — the only
+     * kind the rating charges and the only kind the registry registers.
+     *
+     * <p><b>The list's SIZE answers a different question and cannot stand in for this.</b>
+     * {@link #detectPassThroughs} writes two kinds of entry into one list: a cross-element crossing,
+     * which is counted into {@code crossElementCount} and drives the rating, and a connection routed
+     * through its own endpoint, which is published for visibility and deliberately unrated. The list
+     * is also capped at {@link #MAX_DESCRIPTIONS}. So on a view carrying both kinds the size
+     * over-states how many of the charged crossings are named, and past the cap it under-states —
+     * and a shortfall clause built on it would tell the caller to look for a number of objects the
+     * field does not hold. Counting the cross-element form is what lets the sentence name a
+     * shortfall the caller can actually reconcile.</p>
+     *
+     * <p>The two strings are single-sourced by a pin rather than by a shared constant, because the
+     * detector's signature and its result record are frozen for fourteen callers:
+     * {@code SuggestionSeverityOrderTest} asserts that a description this detector produced still
+     * matches this form, so a reword that took this count silently to zero is a red test.</p>
+     */
+    private static int namedCrossElementPassThroughs(List<String> descriptions) {
+        if (descriptions == null) {
+            return 0;
+        }
+        int named = 0;
+        for (String description : descriptions) {
+            if (description != null && description.contains(CROSS_ELEMENT_PASS_THROUGH_FORM)) {
+                named++;
+            }
+        }
+        return named;
+    }
+
+    // ---- Suggestion severity: which metric gives a sentence its rank, and what that band caps at ----
+
+    /**
+     * The breakdown entries that are OUTPUTS of the two tier folds rather than inputs to them.
+     *
+     * <p>Neither fold reads either one, so leaving them in a probe would be harmless — they are
+     * excluded anyway, because a probe map that carries a stale headline beside the metric being
+     * driven invites a future reader to believe the headline is what the fold consulted.</p>
+     */
+    private static final Set<String> RATING_FOLD_OUTPUTS =
+            Set.of("overall", "overallExcludingAcceptedCosmetics");
+
+    /** The four ordering groups a suggestion can belong to. Lower sorts earlier. */
+    private static final int SUGGESTION_GROUP_QUALIFIER = 0;
+    private static final int SUGGESTION_GROUP_RATED = 1;
+    private static final int SUGGESTION_GROUP_OTHER = 2;
+    private static final int SUGGESTION_GROUP_TERMINAL = 3;
+
+    /**
+     * One suggestion sentence, the ordering group it belongs to, and — for a rated sentence — the
+     * breakdown key that gives it its severity.
+     *
+     * <p><b>The rank metric is NOT the same thing as the metric a sentence records as explained,
+     * and the two are deliberately written separately.</b> The rank metric answers "which breakdown
+     * key gives this sentence its severity?"; the explained id answers "which registered finding
+     * does this sentence account for?". They coincide for most branches and part company for
+     * several: four rating-bearing metrics ({@code spacing}, {@code alignment}, {@code offCanvas},
+     * {@code hubPortQuality}) are score-valued or unregistered and so rank without ever being
+     * recorded as explained; the diagonal-terminal family emits one or two sentences that all rank
+     * on a single key while recording three ids; and one branch records an id while adding no
+     * sentence at all. Fusing them into one value would either suppress a disclosure or invent a
+     * rank, so they stay two independent writes.</p>
+     */
+    private record RankedSuggestion(int group, String rankMetric, String text) {}
+
+    /**
+     * The suggestion list as it is BUILT — each sentence tagged with the ordering group it belongs
+     * to and, where it has one, the breakdown key that carries its severity.
+     *
+     * <p>Four add methods rather than one with a nullable argument, so every call site states in
+     * one word which group its sentence is in and a miswired site is a name a reader can check
+     * against the branch beside it.</p>
+     */
+    private static final class SuggestionList {
+        private final List<RankedSuggestion> entries = new ArrayList<>();
+
+        /** A sentence that qualifies the whole assessment rather than reporting a defect. */
+        void addQualifier(String text) {
+            entries.add(new RankedSuggestion(SUGGESTION_GROUP_QUALIFIER, null, text));
+        }
+
+        /** A sentence whose severity comes from the named breakdown key. */
+        void addRated(String rankMetric, String text) {
+            entries.add(new RankedSuggestion(SUGGESTION_GROUP_RATED, rankMetric, text));
+        }
+
+        /** A defect or informational sentence that no breakdown key ranks. */
+        void add(String text) {
+            entries.add(new RankedSuggestion(SUGGESTION_GROUP_OTHER, null, text));
+        }
+
+        /** One of the three closing disclosures, which always come last. */
+        void addTerminal(String text) {
+            entries.add(new RankedSuggestion(SUGGESTION_GROUP_TERMINAL, null, text));
+        }
+
+        /**
+         * The number of sentences added so far — read by the coverage verdict, which compares it
+         * against the expected-state note tally. Counts exactly what the plain list counted.
+         */
+        int size() {
+            return entries.size();
+        }
+
+        List<RankedSuggestion> entries() {
+            return entries;
+        }
+    }
+
+    /**
+     * What one metric's severity band is, and what that band costs THIS view.
+     *
+     * <p>{@code capLevel} is the level a probe at {@code poor} survives to — 3 for an uncapped
+     * band, 2 for a cap-fair band, 1 for a cap-good band. {@code contribution} is the level the
+     * metric's LIVE value survives to, which is what the ordering sorts on.</p>
+     */
+    private record MetricSeverity(String band, int capLevel, int contribution) {}
+
+    /**
+     * A breakdown with every key at {@code pass} except {@code metric}, which is set to
+     * {@code value} — the single-metric probe both derivations below drive the live folds with.
+     *
+     * <p>Returns {@code null} when the breakdown does not carry the metric at all, so a sentence
+     * naming something the rating model does not rate publishes no band rather than a guess.</p>
+     */
+    private Map<String, String> singleMetricProbe(String metric, String value,
+                                                  Map<String, String> breakdown) {
+        if (breakdown == null || metric == null || !breakdown.containsKey(metric)
+                || RATING_FOLD_OUTPUTS.contains(metric)) {
+            return null;
+        }
+        Map<String, String> probe = new LinkedHashMap<>();
+        for (String key : breakdown.keySet()) {
+            if (!RATING_FOLD_OUTPUTS.contains(key)) {
+                probe.put(key, "pass");
+            }
+        }
+        probe.put(metric, value);
+        return probe;
+    }
+
+    /**
+     * One metric's band and its capped contribution to this view, MEASURED by driving
+     * {@link #computeLayoutTierLevel} and {@link #computeRoutingTierLevel} one metric at a time.
+     *
+     * <p><b>Derived, never tabulated.</b> A fourth hand-maintained copy of the bands would drift in
+     * step with nothing: the folds are the only place the tiers are decided, so the only band a
+     * sentence can honestly publish is the one the folds hand back. Driving one metric to
+     * {@code poor} against an otherwise-clean probe makes the cap legible in the answer — an
+     * uncapped band survives at 3, a cap-fair band is held at 2, a cap-good band at 1, and a
+     * dimension that never reads the metric returns 0.</p>
+     *
+     * <p><b>A tier CAPS a contribution; it does not PIN it.</b> That is why the band and the
+     * contribution are two probes and not one: a cap-fair metric sitting at {@code good} costs the
+     * view {@code good}, not {@code fair}. Reading the band as the contribution would publish a
+     * metric as the thing holding a view down whenever it was merely present.</p>
+     *
+     * <p><b>The edge-coincidence count is this run's, never a placeholder.</b>
+     * {@code connectionEdgeCoincidence} is a cap-fair band below
+     * {@link #EDGE_COINCIDENCE_EGREGIOUS_MAX} and escalates into the uncapped band at or above it,
+     * so both probes have to be driven at the count the view actually carries; a hardcoded zero
+     * would publish the wrong band on exactly the views where the metric matters most.</p>
+     *
+     * @return the metric's severity, or {@code null} when neither fold reads it
+     */
+    private MetricSeverity severityOf(String metric, Map<String, String> breakdown,
+                                      int edgeCoincidenceCount) {
+        Map<String, String> bandProbe = singleMetricProbe(metric, "poor", breakdown);
+        if (bandProbe == null) {
+            return null;
+        }
+        int bandLayout = computeLayoutTierLevel(bandProbe);
+        int bandRouting = computeRoutingTierLevel(bandProbe, edgeCoincidenceCount);
+        int capLevel = Math.max(bandLayout, bandRouting);
+        if (capLevel == 0) {
+            return null;
+        }
+        String dimension = bandLayout >= bandRouting ? "L" : "R";
+        Map<String, String> liveProbe =
+                singleMetricProbe(metric, breakdown.get(metric), breakdown);
+        int contribution = Math.max(computeLayoutTierLevel(liveProbe),
+                computeRoutingTierLevel(liveProbe, edgeCoincidenceCount));
+        // Level 3 is the first band, level 1 the third: the published spellings run Tier 1 (most
+        // severe) to Tier 3 (least), which is the inverse of the level scale.
+        return new MetricSeverity("Tier " + (4 - capLevel) + dimension, capLevel, contribution);
+    }
+
+    /**
+     * The clause a rated sentence carries: which band its metric sits in, what that band caps its
+     * contribution at, and whether it is one of the metrics holding this view where it is.
+     *
+     * <p><b>It names the metric and the band inline and points at no field.</b> This list is
+     * republished verbatim by {@code auto-layout-and-route} and {@code adjust-view-spacing}, and
+     * one of those responses carries no rating breakdown at all — so "see the breakdown" would be
+     * a pointer to something absent from the response in front of the reader. The same reason the
+     * terminal disclosure and the coverage verdict below already name each metric and its count
+     * inline.</p>
+     *
+     * <p><b>A limiter claim is arithmetic, never an impression.</b> A metric is one of the
+     * limiters exactly when its capped contribution equals the level the view actually sits at.
+     * Where two metrics tie there, both say "one of" — no sentence may claim to be the sole cause.
+     * Where the view sits at the top level there is nothing to hold it down, so no limiter claim is
+     * printed at all. That last arm is a GUARD, not a case reached today: every branch that emits a
+     * rated sentence fires on a condition that also takes its metric off {@code pass}, so a rated
+     * sentence and a top-level view cannot co-occur. It is kept because the cost of a threshold
+     * moving underneath it is a sentence claiming a metric holds a view at "excellent", and an
+     * assertion nothing measured is exactly what this clause must never publish.</p>
+     */
+    private static String severityClause(String metric, MetricSeverity severity, int overallLevel) {
+        String cap = severity.capLevel() >= 3
+                ? "uncapped"
+                : "caps at '" + levelToRating(severity.capLevel()) + "'";
+        String limiter;
+        if (overallLevel == 0) {
+            limiter = "";
+        } else if (severity.contribution() == overallLevel) {
+            limiter = "; one of the metrics holding this view at '"
+                    + levelToRating(overallLevel) + "'";
+        } else if (severity.contribution() == 0) {
+            limiter = "; contributes nothing, so it is not what holds this view at '"
+                    + levelToRating(overallLevel) + "'";
+        } else {
+            limiter = "; contributes '" + levelToRating(severity.contribution())
+                    + "', not the '" + levelToRating(overallLevel) + "' this view sits at";
+        }
+        return " (" + metric + " — " + severity.band() + ", " + cap + limiter + ")";
+    }
+
+    /**
+     * Annotates every rated sentence and returns the list in severity order.
+     *
+     * <p><b>Four stable groups.</b> The assessment qualifier stays first because it qualifies the
+     * whole run rather than reporting a defect; the rated sentences follow, worst capped
+     * contribution first; the sentences no breakdown key ranks keep their emission order; and the
+     * three closing disclosures stay last, where a reader who has worked the list already expects
+     * to find what nothing above accounted for. Within every group the original emission order
+     * survives, so an equal-severity tie reads the way the code that produced it reads.</p>
+     *
+     * <p>The sort key is the CAPPED CONTRIBUTION, not the band. Ranking on the band would put a
+     * cap-fair metric sitting at {@code good} above a cap-good metric sitting at {@code good},
+     * which is the same misdirection this ordering exists to remove, one metric along.</p>
+     *
+     * <p>The view's own level is read from the published headline the rating fold already
+     * committed to, so the limiter claim and the {@code overallRating} the caller sees cannot
+     * disagree about where the view sits.</p>
+     */
+    private List<String> orderAndAnnotate(SuggestionList suggestions,
+                                          Map<String, String> breakdown,
+                                          int edgeCoincidenceCount) {
+        int overallLevel = breakdown == null
+                ? 0 : ratingLevel(breakdown.getOrDefault("overall", "excellent"));
+
+        List<RankedSuggestion> ordered = new ArrayList<>(suggestions.entries().size());
+        Map<String, Integer> severityKeys = new HashMap<>();
+        for (RankedSuggestion entry : suggestions.entries()) {
+            MetricSeverity severity =
+                    severityOf(entry.rankMetric(), breakdown, edgeCoincidenceCount);
+            if (severity == null) {
+                ordered.add(entry);
+                continue;
+            }
+            ordered.add(new RankedSuggestion(entry.group(), entry.rankMetric(),
+                    entry.text() + severityClause(entry.rankMetric(), severity, overallLevel)));
+            severityKeys.put(entry.rankMetric(), severity.contribution());
+        }
+
+        // List.sort is stable, so every group keeps its emission order and so does every tie
+        // inside the rated group. A re-collect through a set or a map would lose exactly that.
+        ordered.sort(Comparator.comparingInt(RankedSuggestion::group)
+                .thenComparingInt(entry -> entry.group() == SUGGESTION_GROUP_RATED
+                        ? -severityKeys.getOrDefault(entry.rankMetric(), 0) : 0));
+
+        List<String> published = new ArrayList<>(ordered.size());
+        for (RankedSuggestion entry : ordered) {
+            published.add(entry.text());
+        }
+        return published;
+    }
+
     private List<String> generateSuggestions(int overlaps, int crossings,
                                               double avgSpacing, int alignmentScore,
                                               int boundaryViolationCount, int offCanvasCount,
@@ -5083,15 +7289,47 @@ class LayoutQualityAssessor {
                                               int shortSegmentCount,
                                               int containmentOverlapCount,
                                               int zeroBendpointNonOrthCount,
+                                              int routedNonOrthCount,
                                               int interiorTerminationCount,
                                               int zigzagCount,
                                               int connectionEdgeCoincidenceCount,
-                                              double hubPortQualityScore) {
-        List<String> suggestions = new ArrayList<>();
+                                              double hubPortQualityScore,
+                                              int anchorDriftCount,
+                                              int lateralJogReversalCount,
+                                              OwnIconOverLabelResult ownIcon,
+                                              CoverageDeclaration coverage,
+                                              MetricFindings metricFindings,
+                                              RatingBearingFindings ratingBearing,
+                                              InformationalFindings informational,
+                                              Map<String, String> ratingBreakdown) {
+        SuggestionList suggestions = new SuggestionList();
+
+        // Suggestions that report something the view is EXPECTED to contain. They are prose, so they
+        // make the list non-empty, but they are not findings — a verdict blocked by one of them
+        // withholds the coverage qualification from a view that has nothing wrong with it.
+        int expectedStateNotes = 0;
+
+        // The metrics this run's prose actually accounted for, recorded as each sentence is added.
+        //
+        // WHY THIS IS RECORDED PER RUN AND NOT READ FROM A TABLE OF WHICH METRICS HAVE PROSE.
+        // Several branches below are threshold-gated, so whether a metric is explained is a fact
+        // about this run and not about the metric. edgeCrossings is the clearest: it is measured,
+        // registered, and has a remedy — but only above CROSSING_SUGGESTION_THRESHOLD, so a view
+        // with three crossings has it in the findings and no sentence about it anywhere. A static
+        // "these metrics carry prose" mapping would mark it explained and the disclosure would stay
+        // silent about a finding nothing named. The spacing, alignment and hub-port branches are
+        // gated the same way.
+        //
+        // The failure mode of forgetting to record a metric here is a redundant sentence naming
+        // something the list already explained — visible, and correctable by the reader. The
+        // failure mode of a table that claims a metric is explained when this run did not explain
+        // it is silence. Only branches explaining a REGISTERED metric need recording; anything
+        // uninstrumented falls through as unexplained, which is the safe direction by construction.
+        Set<String> explained = new LinkedHashSet<>();
 
         // Finding #7: performance warning for large views
         if (nodeCount > LARGE_VIEW_WARNING_THRESHOLD) {
-            suggestions.add("View has " + nodeCount + " elements (>" + LARGE_VIEW_WARNING_THRESHOLD
+            suggestions.addQualifier("View has " + nodeCount + " elements (>" + LARGE_VIEW_WARNING_THRESHOLD
                     + ") — assessment metrics may be slow for very large views.");
         }
 
@@ -5101,21 +7339,23 @@ class LayoutQualityAssessor {
         // compute-layout (formerly layout-view) removed from all suggestion paths.
         if (hasGroups) {
             if (overlaps > 0) {
-                suggestions.add("Found " + overlaps
+                suggestions.addRated("overlaps", "Found " + overlaps
                         + " overlapping element pairs — use layout-within-group"
                         + " with increased spacing to spread elements apart,"
                         + " then re-run auto-route-connections");
+                explained.add("overlaps");
             }
             if (crossings > CROSSING_SUGGESTION_THRESHOLD) {
                 double ratio = connectionCount > 0
                         ? (double) crossings / connectionCount : crossings;
-                suggestions.add("Found " + crossings
+                suggestions.addRated("edgeCrossings", "Found " + crossings
                         + " edge crossings (" + String.format("%.1f", ratio)
                         + " per connection) — increase element spacing within groups"
                         + " using layout-within-group and re-run auto-route-connections");
+                explained.add("edgeCrossings");
             }
             if (avgSpacing < SPACING_SUGGESTION_THRESHOLD && overlaps == 0) {
-                suggestions.add("Average spacing is only " + Math.round(avgSpacing)
+                suggestions.addRated("spacing", "Average spacing is only " + Math.round(avgSpacing)
                         + "px — use adjust-view-spacing to increase gaps and improve"
                         + " routing quality, or manually increase spacing with"
                         + " layout-within-group then re-run auto-route-connections");
@@ -5123,54 +7363,58 @@ class LayoutQualityAssessor {
         } else {
             // Flat or containment view: suggest layout-flat-view / auto-route / auto-layout-and-route
             if (overlaps > 0) {
-                suggestions.add("Found " + overlaps
+                suggestions.addRated("overlaps", "Found " + overlaps
                         + " overlapping element pairs — use layout-flat-view to"
                         + " reposition elements with proper spacing, then"
                         + " auto-route-connections. Or use auto-layout-and-route"
                         + " for fully algorithmic positioning");
+                explained.add("overlaps");
             }
             if (crossings > CROSSING_SUGGESTION_THRESHOLD) {
-                suggestions.add("Found " + crossings
+                suggestions.addRated("edgeCrossings", "Found " + crossings
                         + " edge crossings — try auto-route-connections first"
                         + " (preserves positions). If crossings persist, use"
                         + " layout-flat-view with increased spacing to reposition"
                         + " elements, then re-route. Use auto-layout-and-route"
                         + " with targetRating as a last resort");
+                explained.add("edgeCrossings");
             }
             if (avgSpacing < SPACING_SUGGESTION_THRESHOLD && overlaps == 0) {
-                suggestions.add("Average spacing is only " + Math.round(avgSpacing)
+                suggestions.addRated("spacing", "Average spacing is only " + Math.round(avgSpacing)
                         + "px — use layout-flat-view with increased spacing"
                         + " to reposition elements, then auto-route-connections");
             }
         }
         if (alignmentScore < ALIGNMENT_SUGGESTION_THRESHOLD) {
             if (hasGroups) {
-                suggestions.add("Alignment score is " + alignmentScore
+                suggestions.addRated("alignment", "Alignment score is " + alignmentScore
                         + "/100 — use layout-within-group to improve alignment within each group");
             } else {
-                suggestions.add("Alignment score is " + alignmentScore
+                suggestions.addRated("alignment", "Alignment score is " + alignmentScore
                         + "/100 — use auto-layout-and-route for uniform alignment");
             }
         }
         if (boundaryViolationCount > 0) {
-            suggestions.add("Found " + boundaryViolationCount
-                    + " elements extending outside their parent groups"
-                    + " — resize groups or reposition elements");
+            suggestions.addRated("boundaryViolations", "Found " + boundaryViolationCount
+                    + " elements extending outside their parent containers"
+                    + " — resize the containers or reposition the elements");
+            explained.add("boundaryViolations");
         }
         if (offCanvasCount > 0) {
-            suggestions.add("Found " + offCanvasCount
+            suggestions.addRated("offCanvas", "Found " + offCanvasCount
                     + " elements at negative or extreme coordinates"
                     + " — reposition to visible canvas area");
         }
         if (labelOverlapCount > 0) {
             if (hasGroups) {
-                suggestions.add(labelOverlapCount + " connection labels overlap or are too close to elements or other labels"
+                suggestions.addRated("labelOverlaps", labelOverlapCount + " connection labels overlap or are too close to elements or other labels"
                         + " — increase spacing within groups using layout-within-group"
                         + " and re-run auto-route-connections");
             } else {
-                suggestions.add(labelOverlapCount + " connection labels overlap or are too close to elements or other labels"
+                suggestions.addRated("labelOverlaps", labelOverlapCount + " connection labels overlap or are too close to elements or other labels"
                         + " — use auto-layout-and-route with increased spacing");
             }
+            explained.add("labelOverlaps");
         }
 
         // Short-segment label suggestion (separate from general label overlap)
@@ -5187,36 +7431,59 @@ class LayoutQualityAssessor {
                     + " terminal segments without touching the routed body";
             if (zeroBendpointNonOrthCount == nonOrthogonalTerminalCount) {
                 // All non-orth connections are zero-bendpoint (ELK straight-line signature)
-                suggestions.add(nonOrthogonalTerminalCount + " connections have diagonal terminal segments"
+                suggestions.addRated("nonOrthogonalTerminals", nonOrthogonalTerminalCount + " connections have diagonal terminal segments"
                         + elkSuffix);
             } else if (zeroBendpointNonOrthCount > 0) {
-                // Mixed: some zero-BP (ELK), some routed
-                int routedCount = nonOrthogonalTerminalCount - zeroBendpointNonOrthCount;
-                suggestions.add(zeroBendpointNonOrthCount + " connections have diagonal terminal segments"
-                        + elkSuffix);
-                suggestions.add(routedCount + " connections have diagonal terminal segments"
-                        + " — re-run auto-route-connections (or use mode='terminals-only'"
-                        + " to preserve the routed body) to improve orthogonality");
+                // Mixed: the flagged population splits into two halves whose remedies are
+                // OPPOSITE, so each entry states which half it is and the total it is a half of.
+                // Two entries opening with the same clause and no shared denominator read as two
+                // unrelated findings, and an agent cannot then tell one partition from two
+                // populations. Each entry also names the violator key carrying exactly its own
+                // ids, and the precondition for receiving them, because the ids are what make the
+                // remedy scopeable — an unscoped call is view-wide and would reach the other half.
+                suggestions.addRated("nonOrthogonalTerminals", zeroBendpointNonOrthCount + " of " + nonOrthogonalTerminalCount
+                        + " connections with diagonal terminal segments carry no bendpoints"
+                        + elkSuffix
+                        + ". Their connection IDs are listed under the violatorIds key"
+                        + " nonOrthogonalTerminalsZeroBendpoint, returned when"
+                        + " includeViolatorIds is true");
+                suggestions.addRated("nonOrthogonalTerminals", routedNonOrthCount + " of " + nonOrthogonalTerminalCount
+                        + " connections with diagonal terminal segments carry a routed body"
+                        + " — pass exactly these connection IDs to auto-route-connections as"
+                        + " connectionIds, so the re-route is confined to this half and every"
+                        + " other connection on the view keeps its existing bendpoints;"
+                        + " mode='terminals-only' additionally preserves each routed body."
+                        + " Their connection IDs are listed under the violatorIds key"
+                        + " nonOrthogonalTerminalsRouted, returned when includeViolatorIds is"
+                        + " true");
             } else {
                 // No zero-BP: all are routed connections
-                suggestions.add(nonOrthogonalTerminalCount + " connections have diagonal terminal segments"
+                suggestions.addRated("nonOrthogonalTerminals", nonOrthogonalTerminalCount + " connections have diagonal terminal segments"
                         + " — re-run auto-route-connections (or use mode='terminals-only'"
                         + " to preserve the routed body) to improve orthogonality");
             }
+            // All three registered metrics of this family are accounted for by the branch taken:
+            // the two halves are disjoint and sum to the total, so whichever of them is nonzero is
+            // either named outright (the mixed case names both, with the total each is a half of)
+            // or is the whole population the single sentence describes.
+            explained.add("nonOrthogonalTerminals");
+            explained.add("nonOrthogonalTerminalsZeroBendpoint");
+            explained.add("nonOrthogonalTerminalsRouted");
         }
 
         // Coincident segment suggestion
         if (coincidentSegmentCount > 0) {
             if (hasGroups) {
-                suggestions.add(coincidentSegmentCount + " overlapping connection segments detected"
+                suggestions.addRated("coincidentSegments", coincidentSegmentCount + " overlapping connection segments detected"
                         + " — use adjust-view-spacing to increase element spacing and re-route"
                         + " in a single call, or manually increase spacing with"
                         + " layout-within-group then re-run auto-route-connections");
             } else {
-                suggestions.add(coincidentSegmentCount + " overlapping connection segments detected"
+                suggestions.addRated("coincidentSegments", coincidentSegmentCount + " overlapping connection segments detected"
                         + " — increase element spacing or use auto-layout-and-route"
                         + " to separate coincident paths");
             }
+            explained.add("coincidentSegments");
         }
 
         // §10.4: Informational containment overlap note — clarifies that these are expected
@@ -5225,45 +7492,709 @@ class LayoutQualityAssessor {
             suggestions.add(containmentOverlapCount
                     + " containment overlaps detected (expected — ancestor-descendant"
                     + " overlaps from elements inside groups, not layout problems). No action needed.");
+            // Counted, not just added. This sentence says the view is behaving as intended, so it
+            // must not be what stops the coverage qualification below from reaching the caller.
+            expectedStateNotes++;
         }
 
-        // Assessor.Redesign M2: interior terminations.
+        // M2: interior terminations.
         if (interiorTerminationCount > 0) {
-            suggestions.add(interiorTerminationCount
+            suggestions.addRated("interiorTerminations", interiorTerminationCount
                     + " connections terminate inside element bounds — check ChopboxAnchor"
                     + " face selection and re-run auto-route-connections");
+            explained.add("interiorTerminations");
         }
 
-        // Assessor.Redesign M3: zigzag/reversal patterns.
+        // M3: zigzag/reversal patterns.
         if (zigzagCount > 0) {
-            suggestions.add(zigzagCount
+            suggestions.addRated("zigzags", zigzagCount
                     + " connections have zigzag/reversal patterns — re-run"
                     + " auto-route-connections; PathStraightener.eliminateReversals or"
                     + " removeCollinearPoints may need investigation");
+            explained.add("zigzags");
         }
 
-        // Assessor.Redesign M4: connection-vs-element-edge coincidence.
+        // Anchor drift: the stored route no longer matches the geometry it was computed for.
+        // Deliberately does NOT name the straightener — the stored shape is not the problem, so a
+        // straightening pass cannot repair it. Re-routing recomputes against the current geometry.
+        if (anchorDriftCount > 0) {
+            suggestions.add(anchorDriftCount
+                    + " connections have anchor drift — an endpoint moved or was resized after the"
+                    + " route was written, so the drawn path no longer relates to the elements it"
+                    + " was routed around; re-route the named connections to recompute them against"
+                    + " the current geometry");
+            explained.add("anchorDrift");
+        }
+
+        // Lateral-jog reversals: a route doubling back through a narrow sidestep.
+        if (lateralJogReversalCount > 0) {
+            suggestions.add(lateralJogReversalCount
+                    + " connections double back through a sidestep narrower than "
+                    + (int) LATERAL_JOG_MAX_PX
+                    + "px — the route leaves a corridor and immediately re-enters it; re-run"
+                    + " auto-route-connections");
+            explained.add("lateralJogReversals");
+        }
+
+        // M4: connection-vs-element-edge coincidence.
         if (connectionEdgeCoincidenceCount > 0) {
-            suggestions.add(connectionEdgeCoincidenceCount
-                    + " connection segments hug element edges within "
+            // The grazed-element companion is reported HERE rather than in a sentence of its own,
+            // because it has no reachable standalone case: countConnectionEdgeCoincidence records a
+            // graze and increments this tally inside the same block, so the companion is nonzero
+            // only on a run where this count is nonzero too. A separate branch for it would be dead
+            // code, and a second sentence on the runs where it did fire would report one connection
+            // hugging one element twice. What the companion adds that this count cannot is the
+            // number of DISTINCT element edges involved, so that number is stated only when the two
+            // differ — where they agree it would repeat the count already in the sentence.
+            int grazedElements = informational == null || informational.edgeCoincidence() == null
+                    ? 0 : informational.edgeCoincidence().grazedElementCount();
+            suggestions.addRated("connectionEdgeCoincidence", connectionEdgeCoincidenceCount
+                    + (connectionEdgeCoincidenceCount == 1
+                            ? " connection segment hugs an element edge within "
+                            : " connection segments hug element edges within ")
                     + (int) EDGE_COINCIDENCE_TOLERANCE_PX
-                    + "px — consider channel offset or increased element spacing");
+                    + "px — consider channel offset or increased element spacing"
+                    + (grazedElements > connectionEdgeCoincidenceCount
+                            ? ", which reaches " + grazedElements + " distinct element edges in"
+                                    + " total, since one connection can hug several. Those element"
+                                    + " IDs are under assess-layout's violatorIds key"
+                                    + " edgeCoincidenceGrazedElements, returned when it is called"
+                                    + " with includeViolatorIds, and that set is deduplicated"
+                                    + " view-wide, so it can be smaller than the total"
+                            : "")
+                    + ". This dimension is declared partial by assess-layout: its detector examines"
+                    + " only"
+                    + " axis-aligned segments, so neither number speaks for diagonal segments at"
+                    + " all — render-verify those");
+            explained.add("connectionEdgeCoincidence");
+            explained.add("edgeCoincidenceGrazedElements");
         }
 
-        // Assessor.Redesign M5: hub-port allocation quality.
-        if (hubPortQualityScore < HUB_PORT_QUALITY_FAIR_THRESHOLD) {
-            suggestions.add("Hub-port allocation quality is "
+        // M5: hub-port allocation quality. Both the "fair" and the "poor" band take a routing
+        // tier off the view, so both are explained. Firing only on "poor" left the whole
+        // quarter-wide "fair" interval capped and unexplained.
+        String hubPortBand = hubPortQualityBand(hubPortQualityScore);
+        if ("fair".equals(hubPortBand) || "poor".equals(hubPortBand)) {
+            suggestions.addRated("hubPortQuality", "Hub-port allocation quality is "
                     + String.format("%.2f", hubPortQualityScore)
-                    + " (below " + HUB_PORT_QUALITY_FAIR_THRESHOLD
+                    + " (rated " + hubPortBand + " — below the good band at "
+                    + HUB_PORT_QUALITY_GOOD_THRESHOLD
                     + ") — terminal allocator failing to distribute connections across face slots;"
                     + " inspect violatorIds.hubPortLowQuality for affected elements");
         }
 
-        if (suggestions.isEmpty()) {
-            suggestions.add("Layout quality is good — no immediate improvements needed.");
+        // An element's own icon drawn over its own title. The count moves no rating, and that is
+        // precisely why the prose has to carry it: a defect suppressed from the rating AND absent
+        // from the prose is invisible. The degenerate single-object path already applies this
+        // reasoning; this is the same rule on the path that actually runs. The detector RESULT is
+        // passed rather than a bare count, so the argument stays type-distinct from the twenty-two
+        // numeric parameters above and a miswired call site is a compile error rather than a
+        // plausible wrong number.
+        if (ownIcon != null && ownIcon.count() > 0) {
+            // The description list is CAPPED, and this dimension publishes no violator-id key, so
+            // on a view carrying more findings than the cap the remainder is recoverable by no
+            // route at all. Pointing at the list as though it named them all would be the same
+            // unverified claim this suggestion exists to stop making, one field along.
+            int named = ownIcon.descriptions() == null ? 0 : ownIcon.descriptions().size();
+            suggestions.add((ownIcon.count() == 1
+                            ? "1 element has its own icon drawn over its own title label"
+                            : ownIcon.count() + " elements have their own icon drawn over their"
+                                    + " own title label")
+                    + " — the element name is buried under the glyph. Widen the element, move the"
+                    + " icon to a corner the title does not reach, or change the object's text"
+                    + " alignment. Text alignment is a property of the VIEW OBJECT, not of the"
+                    + " model element, so the correction must be repeated on every view that shows"
+                    + " the element"
+                    + ownIconDescriptionClause(named, ownIcon.count()));
+            explained.add("ownIconOverLabel");
         }
 
-        return suggestions;
+        // The metrics that CAP OR VETO a rating while contributing nothing to the prose that
+        // explains it. A caller marked down by one of them was, until now, told only what the rating
+        // was — and, from the rating switch, to run a tool that cannot move the cause. Each remedy
+        // below is the lever already published in this tool's own served description block; a remedy
+        // invented here that disagreed with that block would fork the two surfaces.
+        //
+        // Named, never counted: a tally here would go stale the moment the block grew, which is
+        // exactly what happened when the last two silent metrics were given the sentences below.
+        //
+        // Their informational siblings are deliberately NOT named here. That silence is the same
+        // defect one step down in severity and it is tracked separately; what makes the metrics
+        // below different is that the tool acts on them.
+        if (ratingBearing != null) {
+            ParentLabelObscuredResult parentLabel = ratingBearing.parentLabelObscured();
+            if (parentLabel != null && parentLabel.count() > 0) {
+                int named = parentLabel.descriptions() == null ? 0 : parentLabel.descriptions().size();
+                suggestions.addRated("parentLabelObscured", (parentLabel.count() == 1
+                                ? "1 parent's title label is overlapped by its topmost child"
+                                : parentLabel.count() + " parents have their title label overlapped"
+                                        + " by their topmost child")
+                        + " — this drops the layout tier to 'poor' and vetoes the overall rating, so"
+                        + " no view carrying it can rate 'good'. Move children down or increase parent"
+                        + " top padding. Automated layout cannot clear it: the child is where its"
+                        + " parent's title renders, which is a padding decision, not a routing one"
+                        + descriptionClause("parentLabelObscuredDescriptions", false,
+                                named, parentLabel.count()));
+                explained.add("parentLabelObscured");
+            }
+
+            LabelTruncationResult truncations = ratingBearing.labelTruncations();
+            if (truncations != null && truncations.count() > 0) {
+                int named = truncations.descriptions() == null ? 0 : truncations.descriptions().size();
+                suggestions.addRated("labelTruncations", (truncations.count() == 1
+                                ? "1 element's label is truncated"
+                                : truncations.count() + " element labels are truncated")
+                        + " — the text exceeds the width available beside the type icon, so the name"
+                        + " the reader sees is not the name the model holds. This caps the routing"
+                        + " tier at 'fair'. Use resize-elements-to-fit or increase element width"
+                        + descriptionClause("labelTruncations", false, named, truncations.count()));
+                explained.add("labelTruncations");
+            }
+
+            NonOrthogonalInteriorSegmentResult interiorSegments =
+                    ratingBearing.nonOrthogonalInteriorSegments();
+            if (interiorSegments != null && interiorSegments.count() > 0) {
+                int named = interiorSegments.descriptions() == null
+                        ? 0 : interiorSegments.descriptions().size();
+                suggestions.addRated("nonOrthogonalInteriorSegments", interiorSegments.count()
+                        + (interiorSegments.count() == 1
+                                ? " connection has an off-cardinal segment in the interior of its"
+                                        + " route"
+                                : " connections have an off-cardinal segment in the interior of"
+                                        + " their routes")
+                        + ", between the two terminal segments — a"
+                        + " mid-route diagonal is as visible as one at an endpoint, and this caps the"
+                        + " routing tier at 'fair'. Re-run auto-route-connections for clean orthogonal"
+                        + " paths"
+                        + descriptionClause("nonOrthogonalInteriorSegmentDescriptions", true,
+                                named, interiorSegments.count()));
+                explained.add("nonOrthogonalInteriorSegments");
+            }
+
+            OffFaceParallelTerminalResult offFace = ratingBearing.offFaceParallelTerminals();
+            if (offFace != null && offFace.count() > 0) {
+                int named = offFace.descriptions() == null ? 0 : offFace.descriptions().size();
+                suggestions.addRated("offFaceParallelTerminals", offFace.count()
+                        + (offFace.count() == 1
+                                ? " connection departs an element face and then runs parallel to it,"
+                                : " connections depart an element face and then run parallel to it,")
+                        + " hugging it — any nonzero count caps the routing tier at 'fair', because a"
+                        + " hug is visible however few there are. Push the first segment perpendicular"
+                        + " off the face before turning; if auto-route-connections reports"
+                        + " EGRESS_LIFT_LAYOUT_BOUND the hug cannot be routed away and the remedy is to"
+                        + " spread the elements"
+                        + descriptionClause("offFaceParallelTerminalDescriptions", true,
+                                named, offFace.count()));
+                explained.add("offFaceParallelTerminals");
+            }
+
+            ConnectionThroughVisualResult throughNote = ratingBearing.connectionThroughNote();
+            if (throughNote != null && throughNote.count() > 0) {
+                int named = throughNote.descriptions() == null ? 0 : throughNote.descriptions().size();
+                suggestions.addRated("connectionThroughNote", throughNote.count()
+                        + (throughNote.count() == 1
+                                ? " connection runs straight through a note box or an element's"
+                                        + " rendered image"
+                                : " connections run straight through a note box or an element's"
+                                        + " rendered image")
+                        + " — this caps the routing tier at 'good' on presence alone. Reroute the"
+                        + " connection or move the note/image clear"
+                        + descriptionClause("connectionThroughNoteDescriptions", false,
+                                named, throughNote.count()));
+                explained.add("connectionThroughNote");
+            }
+
+            // Cross-element pass-throughs. Until this branch existed a view whose ONLY finding was
+            // one of these published a downgraded rating beside "No defects were found on the
+            // dimensions this run examined": the metric was in neither source the verdict reads —
+            // no registry entry, so nothing in `found`, and no sentence, so nothing in the list.
+            // Both sides are closed now, the sentence here and the registry entry at the top of
+            // assess(), and either alone would have closed the verdict; both are needed because
+            // they answer different questions, the sentence "what do I do about it" and the
+            // registry "what did this run find".
+            PassThroughResult passThroughs = ratingBearing.passThroughs();
+            if (passThroughs != null && passThroughs.crossElementCount() > 0) {
+                int crossedElements = passThroughs.crossElementCount();
+                int named = namedCrossElementPassThroughs(passThroughs.descriptions());
+                suggestions.addRated("passThroughs", (crossedElements == 1
+                                ? "1 connection is drawn straight across an element it does not"
+                                        + " connect to"
+                                : crossedElements + " connections are drawn straight across elements"
+                                        + " they"
+                                        + " do not connect to")
+                        + " — a line over an unrelated box reads as a relationship the model does"
+                        + " not hold, and more than " + FAIR_MAX_PASS_THROUGHS + " such crossings"
+                        + " rate this metric 'poor'. Re-run auto-route-connections, whose visibility-graph"
+                        + " A* treats elements as obstacles; where the crossed element sits in the"
+                        + " only corridor between the two endpoints no route can clear it, and the"
+                        + " lever is room rather than routing — re-place the elements with"
+                        + " auto-layout-and-route. Do NOT reach for a spacing tool here: inflation"
+                        + " past the narrow-corridor floor INTRODUCES pass-throughs faster than it"
+                        + " removes them, which is why the spacing tools carry an inflation-knee"
+                        + " guard. This count is CROSS-element crossings only: assess-layout's"
+                        + " connectionPassThroughs also names connections routed through their own"
+                        + " endpoint, which are reported for visibility and excluded from the rating"
+                        // The pointer is emitted on EVERY path, including the one where the
+                        // description list names NONE of the charged crossings. That case is
+                        // real: the list is shared with the unrated self-element pass-throughs
+                        // and capped, so enough self-element entries early in connection order
+                        // fill it before any cross-element crossing is described. Falling through
+                        // to descriptionClause there would return an empty string and publish a
+                        // count with nowhere to look it up — the same silently-incomplete defect
+                        // this whole branch exists to close, one field along.
+                        + (named == 0
+                                ? "; assess-layout's connectionPassThroughs names none of them,"
+                                        + " because that capped list is shared with the unrated"
+                                        + " self-element pass-throughs — call assess-layout with"
+                                        + " includeViolatorIds and read this dimension's"
+                                        + " violator-id list instead: uncapped, cross-element"
+                                        + " only, and the complete register of the "
+                                        + crossedElements + " charged here"
+                                : descriptionClause("connectionPassThroughs", true, named,
+                                        crossedElements)));
+                explained.add("passThroughs");
+            }
+
+            // Hub-to-neighbour crowding. NO explained.add and NO registry entry, and neither is an
+            // oversight: the metric is score-valued, its clean value is a LARGE clearance or the
+            // no-hub sentinel, so a registry entry keyed on "count != 0" would invert its meaning —
+            // the same ruling MetricFindings already records for the other five score-valued
+            // metrics. Recording an id that is registered nowhere would put a name into the
+            // explained set that nothing can ever match it against.
+            //
+            // Gated on the BREAKDOWN rather than on a second reading of the clearance floor: the
+            // fold has already decided whether this view is crowded, and a second copy of
+            // CROWDING_FLOOR_PX here could come to disagree with the entry the rating published.
+            // Only the DENSE arm of the handler's diagnostic prose can be reached from here — the
+            // sparse arm is the case where the clearance is at or above the floor, which is
+            // precisely the case this branch does not fire on — so the sparse lever is not written
+            // out as an unreachable alternative.
+            HubNeighbourCrowdingResult crowding = ratingBearing.hubNeighbourCrowding();
+            if (crowding != null && ratingBreakdown != null
+                    && ratingBreakdown.containsKey("hubNeighbourCrowding")
+                    && !"pass".equals(ratingBreakdown.get("hubNeighbourCrowding"))) {
+                // FLOOR, not round. The branch guarantees the clearance is below the floor as a
+                // real number, but rounding to nearest can carry a 59.6 up to 60 and publish
+                // "only 60px ... below the 60px clearance floor" — a sentence asserting that a
+                // number is below itself. Rounding DOWN also never overstates a clearance the
+                // sentence calls "only".
+                suggestions.addRated("hubNeighbourCrowding", "A hub's edge is only "
+                        + (long) Math.floor(crowding.minClearance())
+                        + "px from the row of spokes facing it, below the "
+                        + Math.round(CROWDING_FLOOR_PX) + "px clearance floor, so the corridor"
+                        + " those neighbours route through has collapsed and enlarging the hub"
+                        + " would crowd them further. Revert the hub to its normal size first — an"
+                        + " oversized hub before ELK causes interior terminations — then run"
+                        + " auto-layout-and-route to re-place the elements, then a FULL"
+                        + " auto-route-connections, NOT terminals-only, which vetoes terminations"
+                        + " landing inside the re-placed elements. Acceptance is"
+                        + " render-authoritative: confirm with export-view and look, because the"
+                        + " rating alone can score a crowded layout 'good'. The measured clearance"
+                        + " is assess-layout's hubNeighbourClearanceMin");
+            }
+        }
+
+        // The thirteen metrics that move NO rating and, until now, put no sentence anywhere. Each
+        // remedy below is the lever already published in this tool's own served description block,
+        // read from that block rather than inferred from the field name; a remedy invented here
+        // that disagreed with the block would fork the two surfaces, and one naming the wrong tool
+        // would be worse than the silence it replaces.
+        //
+        // One branch per metric rather than one sentence driven by a metric-to-lever lookup. The
+        // remedy then sits beside the detector a reader can check it against, and the terminal
+        // disclosure below stays a pure backstop for what nothing explained rather than becoming a
+        // second prose surface for everything.
+        if (informational != null) {
+            OverlapResult overlapFindings = informational.overlaps();
+            if (overlapFindings != null && overlapFindings.cousinCount() > 0) {
+                // The informational COMPANION of overlaps, which is rated and has its own sentence
+                // above. Its own served block says one visible collision between two nested objects
+                // usually yields several pairs here, because each object also overlaps the other's
+                // container — so on a view whose overlap sentence has already fired, a second
+                // sentence reports one collision twice with a larger number. Suppressed there, and
+                // counted as accounted for: the principal's prose is what explains the collision.
+                if (overlaps > 0) {
+                    explained.add("cousinOverlaps");
+                } else {
+                    int named = overlapFindings.cousinDescriptions() == null
+                            ? 0 : overlapFindings.cousinDescriptions().size();
+                    suggestions.add((overlapFindings.cousinCount() == 1
+                                    ? "1 cross-branch overlapping pair"
+                                    : overlapFindings.cousinCount()
+                                            + " cross-branch overlapping pairs")
+                            + (overlapFindings.cousinCount() == 1
+                                    ? " — two objects in different containers with no ancestor"
+                                    : " — objects in different containers with no ancestor")
+                            + " relationship between them, which overlapCount reports under their"
+                            + " containers' names rather than their own. Read this as a list of"
+                            + " pairs to inspect, not as a count of distinct visible"
+                            + " collisions: one"
+                            + " collision between two nested objects usually yields several pairs,"
+                            + " because each object also overlaps the other's container."
+                            + " Reposition one object of each pair to separate them; where the two"
+                            + " belong under one parent, nesting them there also brings the overlap"
+                            + " under overlapCount, which IS rated"
+                            + descriptionClause("cousinOverlaps", true,
+                                    named, overlapFindings.cousinCount()));
+                    explained.add("cousinOverlaps");
+                }
+            }
+
+            NoteOverlapResult noteOverlap = informational.noteOverlap();
+            if (noteOverlap != null && noteOverlap.count() > 0) {
+                int named = noteOverlap.descriptions() == null
+                        ? 0 : noteOverlap.descriptions().size();
+                suggestions.add((noteOverlap.count() == 1
+                                ? "1 note-over-object overlap was measured"
+                                : noteOverlap.count() + " note-over-object overlaps were measured")
+                        + " — a sticky note dropped on top of the diagram. The count is per (note,"
+                        + " object) PAIR, not per note: one note lying across three elements"
+                        + " reports 3 rather than 1, so this number can exceed the number of notes"
+                        + " on the view. Move"
+                        + " the note clear with update-view-object, or nest it inside the container"
+                        + " it belongs to; a note whose parent is the container it sits in is"
+                        + " deliberate placement and is not flagged"
+                        + descriptionClause("noteOverlapDescriptions", false,
+                                named, noteOverlap.count()));
+                explained.add("noteOverlap");
+            }
+
+            NoteClipResult noteClip = informational.noteClip();
+            if (noteClip != null && noteClip.count() > 0) {
+                int named = noteClip.descriptions() == null ? 0 : noteClip.descriptions().size();
+                suggestions.add((noteClip.count() == 1
+                                ? "1 note has text needing more height than its box provides"
+                                : noteClip.count() + " notes have text needing more height than"
+                                        + " their boxes provide")
+                        + ", so the content is clipped and the reader sees less than the note"
+                        + " holds. Re-send the note's text (or its width) through update-view-object"
+                        + " with height omitted and the server re-fits the height to the wrapped"
+                        + " content; or raise the height, or reduce the font size. A clip can only"
+                        + " arise from an explicitly pinned height, since an auto-fitted note is by"
+                        + " construction tall enough"
+                        + descriptionClause("noteClipDescriptions", false, named, noteClip.count()));
+                explained.add("noteClip");
+            }
+
+            ImageSiblingOverlapResult imageSibling = informational.imageSiblingOverlap();
+            if (imageSibling != null && imageSibling.count() > 0) {
+                int named = imageSibling.descriptions() == null
+                        ? 0 : imageSibling.descriptions().size();
+                suggestions.add((imageSibling.count() == 1
+                                ? "1 element has its image area overlapped by a sibling element"
+                                : imageSibling.count() + " elements have their image area"
+                                        + " overlapped by a sibling element")
+                        + " — the custom image or specialization icon, sized from its true rendered"
+                        + " dimensions, is covered by a neighbour. Increase element spacing,"
+                        + " reposition the image, or shrink the icon"
+                        + descriptionClause("imageSiblingOverlapDescriptions", false,
+                                named, imageSibling.count()));
+                explained.add("imageSiblingOverlap");
+            }
+
+            OverlayIconCollisionResult overlayIcon = informational.overlayIconCollision();
+            if (overlayIcon != null && overlayIcon.count() > 0) {
+                int named = overlayIcon.descriptions() == null
+                        ? 0 : overlayIcon.descriptions().size();
+                suggestions.add((overlayIcon.count() == 1
+                                ? "1 element's overlay icon collides with the icon of an element"
+                                        + " that contains it"
+                                : overlayIcon.count() + " elements have an overlay icon colliding"
+                                        + " with the icon of an element that contains them")
+                        + " — a nested object and its zone both carrying an icon in the same"
+                        + " corner. Ordinary nesting is not flagged, only icon-on-icon. Move the"
+                        + " nested element, put one icon in a different corner, or shrink it"
+                        + descriptionClause("overlayIconCollisionDescriptions", false,
+                                named, overlayIcon.count()));
+                explained.add("overlayIconCollision");
+            }
+
+            ParallelConnectionGapResult parallelGap = informational.parallelGap();
+            if (parallelGap != null && parallelGap.vAxis() != null
+                    && parallelGap.vAxis().narrowGapCount25() > 0) {
+                int narrow = parallelGap.vAxis().narrowGapCount25();
+                // The lever comes from this metric's own served block, which states outright that
+                // convenience spacing tools cannot move a narrow-corridor floor. Naming
+                // adjust-view-spacing here would be the wrong-lever failure that is worse than
+                // silence. The block publishes its remedy against the percentile rather than
+                // against this count, and the two share one dimension, so it applies to both.
+                suggestions.add(narrow
+                        + (narrow == 1
+                                ? " vertical connection segment runs"
+                                : " vertical connection segments run")
+                        + " within 25px of the nearest parallel segment sharing its span — the"
+                        + " narrow-corridor tail of the parallel-gap distribution, where routes"
+                        + " read as one thick line rather than as separate edges. Convenience"
+                        + " spacing tools cannot mitigate a narrow-corridor floor: redesign the"
+                        + " topology (reduce hub fan-out, or split the view) or apply manual"
+                        + " bendpoint surgery via update-view-connection. This dimension publishes"
+                        + " no description list; the connection IDs are under assess-layout's"
+                        + " violatorIds key parallelConnectionGapV, and the full per-axis detail is"
+                        + " in its parallelConnectionGapDetail — both returned only when"
+                        + " assess-layout is called with includeViolatorIds");
+                explained.add("vAxisParallelGapNarrow25Count");
+            }
+
+            if (parallelGap != null && parallelGap.hAxis() != null
+                    && parallelGap.hAxis().narrowGapCount25() > 0) {
+                int narrow = parallelGap.hAxis().narrowGapCount25();
+                // Same lever as the V arm above, and for the same published reason: the two axes
+                // share one coverage dimension, so the block's ruling that convenience spacing
+                // cannot move a narrow-corridor floor applies to both. Written as its own arm
+                // rather than folded into the V branch because either axis can be narrow while the
+                // other is clear, and a shared branch would report one count under both names.
+                suggestions.add(narrow
+                        + (narrow == 1
+                                ? " horizontal connection segment runs"
+                                : " horizontal connection segments run")
+                        + " within 25px of the nearest parallel segment sharing its span — the"
+                        + " narrow-corridor tail of the parallel-gap distribution, where routes"
+                        + " read as one thick line rather than as separate edges. Convenience"
+                        + " spacing tools cannot mitigate a narrow-corridor floor: redesign the"
+                        + " topology (reduce hub fan-out, or split the view) or apply manual"
+                        + " bendpoint surgery via update-view-connection. This dimension publishes"
+                        + " no description list; the connection IDs are under assess-layout's"
+                        + " violatorIds key parallelConnectionGapH, and the full per-axis detail is"
+                        + " in its parallelConnectionGapDetail — both returned only when"
+                        + " assess-layout is called with includeViolatorIds");
+                explained.add("hAxisParallelGapNarrow25Count");
+            }
+
+            ConnectionThroughVisualResult grazesVisual = informational.throughVisual();
+            if (grazesVisual != null && grazesVisual.grazeCount() > 0) {
+                int named = grazesVisual.grazeDescriptions() == null
+                        ? 0 : grazesVisual.grazeDescriptions().size();
+                suggestions.add(grazesVisual.grazeCount()
+                        + (grazesVisual.grazeCount() == 1
+                                ? " connection touches or clips the BORDER of a note or an"
+                                        + " element's rendered image"
+                                : " connections touch or clip the BORDER of a note or an element's"
+                                        + " rendered image")
+                        + " — the outer band the interior pass-through test discards. Counted per"
+                        + " connection and visual, and disjoint from connectionThroughNoteCount:"
+                        + " one crossing is classified as exactly one of through or graze. Reroute"
+                        + " the connection or move the note/image clear"
+                        + descriptionClause("connectionGrazesVisualDescriptions", false,
+                                named, grazesVisual.grazeCount()));
+                explained.add("connectionGrazesVisual");
+            }
+
+            RedundantBendpointResult redundant = informational.redundantBendpoints();
+            if (redundant != null && redundant.count() > 0) {
+                int named = redundant.descriptions() == null ? 0 : redundant.descriptions().size();
+                suggestions.add(redundant.count()
+                        + (redundant.count() == 1
+                                ? " bendpoint is collinear along a horizontal or vertical segment"
+                                        + " and lies between its neighbours, so removing it would"
+                                        + " not change the orthogonal route. The reported point is"
+                                : " bendpoints are collinear along a horizontal or vertical segment"
+                                        + " and lie between their neighbours, so removing them"
+                                        + " would not change the orthogonal route. The reported"
+                                        + " points are")
+                        + " genuinely removable: near-collinear diagonal micro-jogs are"
+                        + " excluded, because removing those would diagonalise an orthogonal"
+                        + " segment, and so are terminal egress stubs, which the router pins for"
+                        + " anchoring. Straighten the route or re-run auto-route-connections"
+                        + descriptionClause("connectionRedundantBendpointDescriptions", true,
+                                named, redundant.count()));
+                explained.add("redundantBendpoints");
+            }
+
+            ContainerFillResult containerFill = informational.containerFill();
+            if (containerFill != null && containerFill.count() > 0) {
+                int named = containerFill.descriptions() == null
+                        ? 0 : containerFill.descriptions().size();
+                suggestions.add(containerFill.count()
+                        + (containerFill.count() == 1
+                                ? " container has an authored fill colour equal to a nested child's,"
+                                        + " so the parent and its children merge into one flat"
+                                        + " single-colour block. Give that container a distinct"
+                                        + " (lighter) fill."
+                                : " containers have an authored fill colour equal to a nested"
+                                        + " child's, so each of them merges with its children into"
+                                        + " one flat single-colour block. Give each a distinct"
+                                        + " (lighter) fill.")
+                        + " Only an explicit same-colour fill is flagged: placing a child inside a"
+                        + " container whose fill is unauthored already recedes the parent to a"
+                        + " backdrop"
+                        + descriptionClause("containerFillEqualsChildDescriptions", true,
+                                named, containerFill.count()));
+                explained.add("containerFillRecession");
+            }
+
+            LabelOnNoteResult labelOnNote = informational.labelOnNote();
+            if (labelOnNote != null && labelOnNote.count() > 0) {
+                int named = labelOnNote.descriptions() == null
+                        ? 0 : labelOnNote.descriptions().size();
+                suggestions.add(labelOnNote.count()
+                        + (labelOnNote.count() == 1
+                                ? " connection label is rendered on a note's rectangle"
+                                : " connection labels are rendered on a note's rectangle")
+                        + " — the caption collision the route detectors cannot see, since a label"
+                        + " is positioned independently of the line it belongs to. Reposition the"
+                        + " label (apply a Label Offset, or run auto-route-connections) or move the"
+                        + " note clear"
+                        + descriptionClause("labelOnNoteDescriptions", true,
+                                named, labelOnNote.count()));
+                explained.add("labelOnNote");
+            }
+
+            LabelOnGroupResult labelOnGroup = informational.labelOnGroup();
+            if (labelOnGroup != null && labelOnGroup.count() > 0) {
+                int named = labelOnGroup.descriptions() == null
+                        ? 0 : labelOnGroup.descriptions().size();
+                suggestions.add(labelOnGroup.count()
+                        + (labelOnGroup.count() == 1
+                                ? " connection label is rendered on a container's title band"
+                                : " connection labels are rendered on a container's title band")
+                        + " — a native group or an ArchiMate Grouping alike, which the"
+                        + " label-overlap detector cannot see because it skips containers wholesale"
+                        + " as transparent. Only the top title strip is tested, so a label sitting"
+                        + " in the container body is normal and is not flagged. Reposition the label"
+                        + " or reroute the connection clear of the container title"
+                        + descriptionClause("labelOnGroupDescriptions", true,
+                                named, labelOnGroup.count()));
+                explained.add("labelOnGroup");
+            }
+
+            CoincidentFacePortResult coincidentPorts = informational.coincidentFacePorts();
+            if (coincidentPorts != null && coincidentPorts.count() > 0) {
+                int named = coincidentPorts.descriptions() == null
+                        ? 0 : coincidentPorts.descriptions().size();
+                suggestions.add(coincidentPorts.count()
+                        + (coincidentPorts.count() == 1
+                                ? " element face carries two or more connection terminals colliding"
+                                        + " onto one perimeter port"
+                                : " element faces carry two or more connection terminals colliding"
+                                        + " onto one perimeter port")
+                        + ", so two or more edges appear to leave a single point. This is the"
+                        + " blind spot"
+                        + " in hubPortQualityScore, whose per-face guard only scores a face carrying"
+                        + " four or more connections, so a face with two or three coincident"
+                        + " terminals reads a vacuous 1.00 despite the collision. Spread the"
+                        + " terminals across the face with auto-route-connections, which dissolves a"
+                        + " coincident same-face pair on a low-degree element"
+                        + descriptionClause("coincidentFacePortDescriptions", true,
+                                named, coincidentPorts.count()));
+                explained.add("coincidentFacePorts");
+            }
+        }
+
+        // Whether any DEFECT was reported. Read before the coverage prose is appended, because
+        // that prose is not a defect: a run that found nothing still gets the scoped verdict below,
+        // and a run that found something must not.
+        //
+        // TWO independent sources, because the list alone answers a narrower question than the
+        // verdict asks. Only the metrics with remedy prose can put anything in the list, so a run
+        // whose findings are all among the metrics without prose leaves it empty — and a verdict
+        // sourced from that emptiness told the caller nothing was found on dimensions that were
+        // examined and did find something. The measured counts close that. The list is still read
+        // as well, because a defect can be named by prose without any count moving: the score-valued
+        // metrics (spacing, alignment, hub-port quality) and the view-size warning are all
+        // threshold-driven, and none of them is a count the carrier could hold.
+        //
+        // The list is compared against the expected-state notes rather than against empty, so a
+        // sentence that reports the view behaving as intended cannot suppress the qualification.
+        List<MetricFinding> found = metricFindings.found();
+        boolean noDefectsFound = found.isEmpty() && suggestions.size() == expectedStateNotes;
+
+        // What this run measured MINUS what this run's prose accounted for. Sourced from the
+        // recorded set rather than from the shape of the suggestion list, which is the change that
+        // makes the disclosure reach a busy view: gating it on "no other prose exists at all" left
+        // a finding with no remedy named nowhere the moment any explained defect fired beside it,
+        // and an overlap co-occurring with a note overlap is the ordinary case, not a corner.
+        List<MetricFinding> unexplained = new ArrayList<>();
+        for (MetricFinding finding : found) {
+            if (!explained.contains(finding.metric())) {
+                unexplained.add(finding);
+            }
+        }
+
+        if (!unexplained.isEmpty()) {
+            // Something WAS found and no prose above accounted for it. Naming the metric and its
+            // count inline is deliberate — the sentence has to stand on its own, because
+            // auto-layout-and-route and adjust-view-spacing republish this list beside a response
+            // that carries none of these fields, so a pointer to a field would be a pointer to
+            // something the reader cannot see on three of the four surfaces it reaches.
+            StringBuilder named = new StringBuilder();
+            for (MetricFinding finding : unexplained) {
+                if (named.length() > 0) {
+                    named.append(", ");
+                }
+                named.append(finding.metric()).append(" (").append(finding.count()).append(")");
+            }
+            suggestions.addTerminal((unexplained.size() == 1
+                            ? "1 dimension this run examined reported a finding that carries no"
+                                    + " specific remedy above: "
+                            : unexplained.size() + " dimensions this run examined reported findings"
+                                    + " that carry no specific remedy above: ")
+                    + named
+                    + ". The count beside each name is what was found. Read the matching count and"
+                    + " description fields in assess-layout's own response, and render-verify the"
+                    + " objects behind them before treating this view as clean.");
+        }
+
+        if (noDefectsFound) {
+            // NOT an all-clear. The claim is scoped to the dimensions this run actually examined,
+            // and the number it could not certify is stated rather than left for the caller to
+            // discover by opening `coverage` unprompted. An unqualified "layout quality is good"
+            // asserted a clean whole view on every run — including one where a detector had
+            // skipped an object and honestly reported zero — which is the false all-clear this
+            // project forbids a detector from emitting, reached through the prose instead of
+            // through a count.
+            // The pointer names the TOOL that publishes the map, not just "the coverage map".
+            // This list is republished by auto-layout-and-route and adjust-view-spacing, whose
+            // responses carry no coverage map at all, so an unqualified "read the coverage map"
+            // sends the caller to a field that is not in front of them on three of the four
+            // surfaces this sentence reaches.
+            suggestions.addTerminal("No defects were found on the dimensions this run examined. That is"
+                    + " not a clean bill of health for the whole view: "
+                    + coverage.notFullyExaminedCount() + " of " + coverage.dimensionCount()
+                    + " coverage dimensions were not fully examined on this run, so a zero on"
+                    + " those is not evidence of absence. The per-dimension detail is in"
+                    + " assess-layout's coverage map; render-verify every dimension it does not"
+                    + " mark \"checked\".");
+        }
+
+        // Emitted whether or not a defect was found, and deliberately NOT inside the branch above.
+        // A contextual downgrade is this run's news — the dimension is declared fully covered and
+        // was not certifiable only because something on THIS view could not be measured — and it
+        // has to reach the caller even when the list already carries defects. It would otherwise
+        // be unreportable for labelOverlaps in particular: that dimension downgrades on exactly
+        // the condition that also emits the short-segment suggestion above, so its list is never
+        // empty and a disclosure confined to the empty case could never name it.
+        for (CoverageDimension dimension : coverage.contextualPartials()) {
+            suggestions.addTerminal(contextualPartialSuggestion(dimension));
+        }
+
+        // ORDERING IS THE LAST THING THIS METHOD DOES, and that placement is load-bearing rather
+        // than stylistic. Everything above reads the list in EMISSION order: noDefectsFound
+        // compares its SIZE against the expected-state note tally, and the three terminal families
+        // are appended on the strength of that comparison. Sorting earlier would change what
+        // size() is being compared to at the moment the coverage verdict is decided, which can
+        // flip the verdict on a view whose defects are unchanged.
+        return orderAndAnnotate(suggestions, ratingBreakdown, connectionEdgeCoincidenceCount);
+    }
+
+    /**
+     * The prose for one contextually-downgraded dimension: what could not be certified, why, and
+     * what the caller must do instead of reading its count as a clean result.
+     *
+     * <p>The reason is read from the dimension's own {@link ContextualTrigger}, so the sentence and
+     * the downgrade that produced it come from one declaration and cannot describe different
+     * things.</p>
+     */
+    private static String contextualPartialSuggestion(CoverageDimension dimension) {
+        // Takes the dimension, not its id. The id form needed a lookup that silently produced a
+        // truncated sentence when nothing matched — a soft failure that reads as a complete
+        // result. Reading the trigger off the dimension removes the lookup entirely, so the
+        // reason clause cannot go missing.
+        return "The " + dimension.id + " dimension could not be fully examined on this run, because "
+                + dimension.contextualTrigger.reason
+                + ". That dimension is declared \"partial\" rather than \"checked\" in"
+                + " assess-layout's coverage map, so its count is honestly zero yet certifies"
+                + " nothing — render-verify it before treating this view as clean on that"
+                + " dimension.";
     }
 
     /**
@@ -5279,7 +8210,7 @@ class LayoutQualityAssessor {
         for (AssessmentNode n : layoutNodes) {
             rectById.put(n.id(), new CoincidentSegmentDiagnostic.ElementRect(
                     n.id(), n.x(), n.y(), n.width(), n.height()));
-            if (n.isGroup() && n.parentId() == null) {
+            if (n.isContainer() && n.parentId() == null) {
                 topLevelGroups.add(new CoincidentSegmentDiagnostic.GroupRect(
                         n.id(), n.x(), n.y(), n.width(), n.height()));
             }

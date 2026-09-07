@@ -51,6 +51,28 @@ public class ApprovalHandlerTest {
         handler.registerTools();
     }
 
+    // ---- Response-envelope documentation pins ----
+
+    @Test
+    public void listPendingApprovals_descriptionShouldDocumentApprovalEnvelopeReshape() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(s -> "list-pending-approvals".equals(s.tool().name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Tool not found"))
+                .tool().description();
+        assertTrue("must state where the result moves under the gate",
+                desc.contains("result.preview"));
+        assertTrue("must name the proposal sibling", desc.contains("result.proposal"));
+        // The proposal holds a deferred rebuild handle, so approving creates a different object.
+        assertTrue("must mark a previewed created id as provisional",
+                desc.contains("provisional"));
+        assertTrue("must give the reason the id changes",
+                desc.contains("rebuilt when the human approves"));
+        // Three tools do not follow this shape; stating it unconditionally would be false.
+        assertTrue("must route the divergent tools to their own descriptions",
+                desc.contains("shape this differently"));
+    }
+
     // ---- Surface shape: only the read-only observation tool remains ----
 
     @Test
@@ -60,8 +82,8 @@ public class ApprovalHandlerTest {
                 .toList();
         assertEquals(1, names.size());
         assertTrue("list-pending-approvals must remain", names.contains("list-pending-approvals"));
-        assertFalse("set-approval-mode must be removed (AC-1)", names.contains("set-approval-mode"));
-        assertFalse("decide-mutation must be removed (AC-2)", names.contains("decide-mutation"));
+        assertFalse("set-approval-mode must be removed", names.contains("set-approval-mode"));
+        assertFalse("decide-mutation must be removed", names.contains("decide-mutation"));
     }
 
     // ---- list-pending-approvals tests (retained + truthful) ----

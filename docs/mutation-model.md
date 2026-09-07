@@ -6,6 +6,7 @@ This document describes how the ArchiMate MCP Server handles model mutations, in
 
 - [Mutation Flow Overview](#mutation-flow-overview)
 - [PreparedMutation Pattern](#preparedmutation-pattern)
+- [Effective-State Reporting](#effective-state-reporting)
 - [MutationDispatcher](#mutationdispatcher)
 - [Operational Modes](#operational-modes)
 - [Undo and Redo](#undo-and-redo)
@@ -15,6 +16,7 @@ This document describes how the ArchiMate MCP Server handles model mutations, in
 - [Inline Specialization Parameter](#inline-specialization-parameter)
 - [Specialization Icons](#specialization-icons)
 - [Relationship Semantic Attributes](#relationship-semantic-attributes)
+- [Empty-String Field Semantics](#empty-string-field-semantics)
 - [Model Metadata Mutation](#model-metadata-mutation)
 - [Container Fill Recession (auto-backdrop)](#container-fill-recession-auto-backdrop)
 - [Error Handling](#error-handling)
@@ -78,6 +80,8 @@ record PreparedMutation<T>(
 
 Bulk operations pre-validate **all** mutations before executing **any**. If any operation fails validation, the entire bulk operation is rejected (all-or-nothing). This prevents partial model corruption from mid-batch failures.
 
+That sentence is about `bulk-mutate` and about `apply-positions`, and about nothing else in this pattern: every other tool here prepares one mutation, so it has no set of siblings to pre-validate against. The two multi-entry tools behave the same way and report the same way — see [Failure Semantics](#failure-semantics) for `bulk-mutate` and [apply-positions failure semantics](#apply-positions-failure-semantics) for the other. Neither stops at its first bad entry.
+
 ### Generic Type Parameter
 
 The type parameter `<T>` constrains to the appropriate DTO type:
@@ -99,6 +103,66 @@ Two paths enforce it:
 - **`move-to-folder`** — now validated for the first time, reusing the identical check and payload, so create and move are symmetric.
 
 > Never re-encode the platform's type→folder map in MCP code; delegate to `getDefaultFolderForObject` so the rule cannot drift from Archi's.
+
+## Effective-State Reporting
+
+A mutating tool's success response reports **what the model holds after the write**, never the values the caller passed in. This is a cross-tool invariant, not a per-tool nicety.
+
+### Why the request is not the answer
+
+Archi silently auto-fits a container to its children, and the parent-fit cascade can carry that fit several levels up the containment chain. A requested `width` / `height` / `x` / `y` therefore may not survive the write. The client is an LLM agent that cannot see the canvas, so the response *is* its only ground truth: a `success` that echoes the request while the model diverged is a **correctness defect, not a cosmetic one**. The agent builds its next call on the wrong number, and the failure surfaces far downstream where it can no longer be attributed.
+
+The rule follows directly: after the command runs, **re-read the object from the model** and return the persisted geometry.
+
+### Two rulings that decide the ambiguous cases
+
+**A count or a flag is not effective state.** A field that reports *that* something changed, without reporting *what it changed to*, does not discharge the invariant when the changed value is agent-actionable. `resizedCount: 3` tells the agent something moved and leaves it unable to say where — a flag is an index into missing data, not a report of state. Equally, **a field named as an outcome must not be sourced from the request that asked for it**: a `groupResized` populated from the caller's `autoResize` parameter is an echo wearing an outcome's name.
+
+**Batched and proposal modes discharge the invariant by labelling, not by value.** Nothing is effective in those modes by construction (`MutationResult.isBatched()` / `isProposal()`), so a projection is the only thing a response there *can* honestly contain. The obligation becomes structural: the entity is nested under `preview`, beside a `batch` or `proposal` sibling naming the deferred state, and never appears at the top level of `result` where an agent would read it as state the model holds. Do **not** "fix" a queued projection by duplicating the executor's resolution at prepare time — that re-creates the prepare/execute divergence the label exists to declare.
+
+### The collateral fields
+
+An operation frequently changes objects the caller never named. Those changes are reported by name and geometry, not by count:
+
+| Field | Carried by | What it reports |
+|---|---|---|
+| `effectiveBounds` | `bulk-mutate` per-operation | The rectangle the model holds after the write, when the operation targeted a view object |
+| `parentViewObjectId` | `add-to-view`, `add-group-to-view`, `add-note-to-view`, `update-view-object`, `bulk-mutate` per-operation | The container the object sits in after the write, or absent when it sits on the view itself — the same key `get-view-contents` publishes, so the read and write surfaces spell one concept one way. It is what makes the geometry beside it readable: a nested object's `x`/`y` are relative to its immediate parent's top-left corner, so a rectangle reported without its origin cannot be placed. Taken from the resolved container, never from the request's `parentViewObjectId` — a request names a parent as a reference still to be resolved, and one that resolved to a container the caller did not intend is exactly the case this exists to expose |
+| `effectiveConnection` | `bulk-mutate` per-operation | The state a view connection holds after the write — line colour and width, typography, label position, bendpoints, and the view objects and anchor points it joins. The same report the single-tool caller gets. Its anchors are absolute canvas centres derived from the endpoints' live geometry, so an operation **later** in the same call that moves an endpoint is reflected here — a change no field on that later operation would report |
+| `effectiveRelationship` / `effectiveElement` | `bulk-mutate` per-operation | The state an ArchiMate relationship or element holds after the write — for a relationship the semantic attributes (`accessType`, `associationDirected`, `influenceStrength`), for an element its `documentation`, each alongside the concept's own identity. The same report the single-tool caller gets, composed from the same readers, so a relationship subtype that cannot hold an attribute omits it here exactly as it does there. Read after dispatch, so an operation **later** in the same call that changes the same concept again is reflected in the earlier operation's entry. Attached only where the entry already says what its entity is, which every operation on a concept now does — a `move-to-folder` whose subject is an element or a relationship carries one too, and it agrees with that operation's `entityType` rather than refining it: a move reports the same exact eClass every other operation does |
+| `resizedAncestors` | `add-to-view`, `update-view-object`, `layout-within-group`, `adjust-view-spacing`, `bulk-mutate` | Containers the call **grew** that it was not asked to touch — icon-band reservation, parent-fit cascade — each with the rectangle it ended at |
+| `ancestorPropagation` | `layout-within-group` | How the upward pass ended, as `code: phrase`. **The one field here that is never omitted** — it ships on every response, including the common one where nothing was asked for, because a zero `ancestorsResized` is true in four different situations that ask for different actions, and because the pass can stop early *having already re-fitted* ancestors. See [Layout Engine — layout-within-group](layout-engine.md#layout-within-group) for the code table |
+| `resizedGroups` | `resize-elements-to-fit`, `auto-route-connections` | Groups the parent-fit cascade grew, accumulated across the whole pass so a group is reported once at its final size |
+| `movedObjects` | `update-view-object`, `resize-elements-to-fit`, `bulk-mutate` | Objects **anchored** to something the call moved or grew, each with where it landed |
+
+The list-valued fields are omitted when empty, so a call that changed nothing collateral serializes as it did before they existed. All report **observations**: an ancestor recomputed to an unchanged rectangle appears in neither the count nor the list.
+
+`ancestorPropagation` is the deliberate exception to the omit-when-empty rule, and the reason is worth stating because it looks like an inconsistency. The other fields answer *what changed*, and having nothing to say is itself the answer — an absent `resizedAncestors` means no ancestor grew, unambiguously. `ancestorPropagation` answers *why nothing changed*, and there an absent field is indistinguishable from a build that does not report it. A field defaulted to absent beside a published list of the values it can take is a false all-clear.
+
+### The operation's own name
+
+`entityName` is not a collateral field — it names the entity the operation was aimed at — but it is read the same way and for the same reason. On a call that was applied it is re-read from the model **after every operation has run**, so an operation that renames reports the new name, an operation whose entity a *later* operation in the same call renames again reports the final name, and a name cleared to `""` is reported as `""` rather than as the name the entity used to have. Reporting the pre-write name here was the sharper form of the echo defect: the value matched neither the request nor the result, so an agent reading it as confirmation would conclude the rename had not taken.
+
+The re-read only ever **replaces a name that is already reported**; it never introduces one. Operations that name nothing — a placed connection or note, and a removal — still carry no `entityName`. A folder operation, a model update and a `move-to-folder` each name their subject and report its type, so the re-read reaches them: a folder and the model are both nameable and both resolve by id. In batch and approval mode the value is the name as prepared, for the same reason the collateral fields are absent there: nothing has executed — and for a model rename "as prepared" is the name the update **will** write, not the one the model still holds, which is the value a live read at prepare time would have supplied.
+
+A **deletion** is the one case the re-read cannot reach, because the entity's id stops resolving the moment the delete applies — so it is not served by the re-read at all. The deleting command records what its subject was called inside its own `execute()`, and the post-dispatch pass reads that back off the dispatched compound. Both `entityName` and `deletion.name` therefore report the name the entity was destroyed under, including when an earlier operation in the same call renamed it first. The capture is taken at execution rather than read off the removed object afterwards, because an EMF object removed from its container is detached rather than destroyed and can still be written to: in `[delete X, rename X]` the rename lands on the detached object, and a read afterwards would report the deletion as having destroyed a name the entity never carried while it existed.
+
+A deletion records a name **only if it actually destroyed something**, and the gate covers two cases. A deletion that **declined** returned before touching the model. A **redundant** deletion — the same subject deleted twice in one call, which prepares cleanly because nothing has executed while both are being prepared — runs in full but removes nothing, because the earlier one already took the subject out. Both leave `deletion.name` as prepared; without the gate the second would report the name the rename in `[delete X, rename X, delete X]` wrote onto the detached object, which is the same lie one ordering over.
+
+Beside the name, `entityType` says **what** the operation touched, and it says it in one vocabulary: the **EMF eClass name**, whichever tool produced the row. A view is `ArchimateDiagramModel` whether it was created, cleared, label-stamped, deleted or moved; a group removed from a view is `DiagramModelGroup` exactly as one added to it is; a moved relationship is `AssociationRelationship`, not a coarse `Relationship`. That is what makes the field safe to key dedup, filtering or branching off — and the approval card renders this same field as the row type to a human, so a second spelling would be a second name for one thing on both surfaces at once. There is **one** deliberate exception: a specialization reports `Specialization:<conceptType>`, because an Archi specialization's identity is the concept type it binds and the bare eClass would say less rather than more. Where a tool's own payload carries a coarser noun of its own — `move-to-folder`'s `objectType`, `remove-from-view`'s `removedObjectType`, both of which a human reads and callers branch on — that noun is unchanged and the translation happens in the projection.
+
+A **declined** operation keeps whatever the re-read found for `entityName`, unlike `resizedAncestors` / `movedObjects`, which are retracted: those describe a placement that did not happen, whereas the name is a live read of an entity that still exists — a folder whose delete declined is still there, so its `entityName` is the name it holds now, which may differ from both the prepared name and its `deletion.name`. `skippedOperations` remains the authority on whether an operation ran.
+
+### Enforcement
+
+The rule is checked like the size ratchet, not left to review.
+
+- **`EffectiveStateContractTest`** walks every registered tool — registration runs through `HandlerRegistrar`, so a tool behind a brand-new handler class is still forced through the check.
+- Each tool must classify **exactly once** as read-only, covered by an oracle, or listed in **`tools/effective-state-gaps.txt`** with a stated reason. **A tool classified nowhere fails the build.**
+- The registry's entry count is a **lower-only ceiling** (`GAP_ENTRY_CEILING`), clicked down in the same commit that closes a gap. Adding a tool that cannot report effective state therefore requires a deliberate, reviewable admission rather than silence.
+- A **path-parity axis** compares each oracle-covered tool's leaf field names standalone versus through `bulk-mutate`, with the subject set derived at runtime from the bulk operation table. Nothing may be lost undeclared on the bulk path, and a newly bulk-reachable tool must register or fail.
+
+> Serializing the DTO proves a value was **computed**, not **sent**. Handlers hand-build each response map key by key, so a field can be populated on the record and never leave the JVM. Oracles assert through the registered tool, not against the DTO.
 
 ## MutationDispatcher
 
@@ -218,6 +282,22 @@ byte-identical to the old behaviour; membership and connection integrity are alw
 documented residual remains only for 3+ co-deleted siblings supplied in non-monotonic order, where
 rare paint-order drift can survive.)
 
+The same hazard reaches the **model tree**, not just a view's children, through any prepare that
+captures a sibling index for undo. `DeleteRelationshipCommand`, `DeleteViewCommand`,
+`DeleteFolderCommand` and `MoveToFolderCommand` share the successor anchor via `SiblingUndoAnchor`:
+any co-queued operation that inserts or removes a sibling in the same folder invalidates a captured
+absolute index, so a multi-delete batch used to undo to `[F1, F3, F2]`. A fifth suspected site — the
+cascaded-placeholder path in `DeleteViewCommand` — was **measured and found not vulnerable**: it
+captures relatively at execute time and is self-consistent under reverse undo.
+
+A related failure is **redundancy**, not ordering. Two delete commands targeting the same object each
+captured their own re-insertion anchor at construction, so reverse-order undo re-added the target
+twice into an EMF unique containment list and raised `IllegalArgumentException("no duplicates")`.
+Undo is now idempotent per target, fixed at the command layer (`SiblingUndoAnchor.restore`,
+`DeleteElementCommand`'s safe-add helpers, and `DeleteProfileCommand`'s removed flag) rather than in
+the shared batch queue — that queue is a semantics-agnostic `List<Command>` every mutation passes
+through, and pushing operation identity into it would put target semantics on a critical spine.
+
 ### Experimental Workflow
 
 Undo/redo enables speculative layout workflows:
@@ -247,6 +327,16 @@ The approval workflow provides human-in-the-loop control for high-risk mutations
 - Each proposal includes: proposalId, tool name, description, parameters.
 - Its `nextSteps` direct the agent to tell the human to approve/reject in Archi — never to call a removed tool.
 - The agent can also read `approvalMode` from `get-model-info`.
+
+### What a deferred response may say (batched and awaiting-approval arms)
+
+A tool measures the same things whichever arm it is on. The router computes the routes a queued call will lay down; the quality loop ranks the attempt a human has not yet approved; the layout walk reaches the same ancestor either way. So a deferred arm **keeps the measurement and rescopes the remedy**: it publishes every id, count and rating it genuinely established, it **never asserts applied state**, and its guidance names only **a recovery that exists** on that arm — `undo` once applied, `end-batch` (or `end-batch rollback:true`) while queued, and **no tool at all** while awaiting approval, where the agent can neither approve nor reject its own change and the human decides in Archi. Naming a tool that cannot perform the recovery is worse than naming none.
+
+Two corollaries. Rescoping is not withdrawing: suppressing a measurement because the remedy changed deletes a fact that was legitimately established, and a silent omission reads as an all-clear. And the reverse — where the comparison genuinely never ran, because the control loop reset the model before snapshotting, the honest disclosure is an **abstention** that says so, not silence and not a fabricated verdict. Compose the evidence once and vary only the remedy clause; editing a tail inside a finished sentence is how a shared constant acquires a second, wrong meaning.
+
+A third clause, and it is the limit on the first. A deferred arm may state as measured only what the command it queued will actually do. Where the command **re-derives at execute** — `clear-view` re-walks the view inside `execute()` and empties whatever it then finds, so its prepare-time counts describe a different model — or where the value is an **id the approval rebuild will re-mint** — a stored proposal keeps a rebuild handle, so `add-to-view`'s previewed view-object id is not the id the approved placement receives — the disclosure **omits it rather than restating it in the future tense**. A future-tense restatement of a value the write will not produce is not a rescoped remedy but a fabricated measurement, and a confident wrong value is worse for a caller that cannot see the canvas than no value at all. This does not license withdrawing a count whose command is frozen at prepare: `remove-from-view` hands its cascade list to the command at construction and disconnects exactly that list, so the future tense is true of it.
+
+Mechanically, the deferred-arm guidance is supplied on its own parameter (`HandlerUtils.formatMutationResponse`'s `approvalDisclosures` overload, appended after the three fixed approval lines). The immediate arm's `nextSteps` are **never forwarded** to the approval arm: they are present tense by construction, so forwarding them would tell an unapproved caller their change was applied and offer `undo` for it.
 
 ### Approve / reject (human side, via `ApprovalService`)
 
@@ -278,15 +368,33 @@ The card icon encodes the concept **kind** so the four are distinguishable at a 
 
 The card prefers `effectDescription` over the mechanical `description` for its row/headline, falling back to `description` then to a raw id (the honesty ladder). Intent renders as a quiet, italic `agent's note:` line **below** the effect and never outranks it; **hollow intent** (empty/whitespace, generic phrases like "Updating the model", or text that merely restates the tool) is **suppressed** by a pure `ApprovalCardModel.isHollowIntent` predicate so vagueness never occupies the trust slot. Both fields are `@JsonInclude(NON_NULL)`, so when absent they cost nothing on the wire (`list-pending-approvals` is byte-identical when both fields are absent).
 
+### The disclosure contract
+
+`proposedChanges` is not a debugging aid. It is the **only** description of a pending write that anybody gets, and it is consumed twice: verbatim onto the wire as `ProposalDto.proposedChanges` (which any agent reads back through `list-pending-approvals`), and verbatim into the card's `Technical details` / Copy-JSON disclosure. `ui/ApprovalCardModel` also derives the rollup, the rows and the headline sentence from it. A parameter the accessor accepts and applies but never puts into that map is therefore **applied on approval and named nowhere**: the approval is real, the disclosure is not.
+
+Two obligations follow, and both are keyed on the map rather than on the parameter list:
+
+- **Completeness — every parameter the write will apply is disclosed.** Including the ones that change *what* gets applied rather than how it was computed (`force` on the `auto-route-connections` sites, `wrapFit` on `resize-elements-to-fit`), which sit on the frozen-compound family where Approve applies the reviewed compound rather than re-deriving it.
+- **No over-disclosure.** A parameter read by a command that this prepare does not wrap must **not** appear, or the card announces a change the write never makes. `recede` is the worked example: `StylingParams.hasAnyValue()` checks sixteen of its seventeen fields and deliberately excludes it, so gating a disclosure on that method would hide a `recede`-only call — while disclosing it outside the one command that reads it would invent a styling change. It is disclosed by the container-visuals path alone. Under-disclosing hides a write; over-disclosing invents one.
+
+The card's **prose** is bound to the same map. `model/UpdateViewObjectCardText` and `model/UpdateViewConnectionCardText` compute the aspect list from `proposedChanges`' own keys — not from the parameter names — so a field that reaches the map is named and one the map omits cannot be. A collaborator keyed on parameter names would compile, pass its own unit tests and silently never fire, because the connection card discloses `bendpointCount` / `absoluteBendpointCount` rather than the parameter spellings. Both the `description` and the `validationSummary` read **one** aspect computation, so a call cannot be described one way and validated another; `bendpointCount` and `absoluteBendpointCount` fold to a single `bendpoints` aspect exactly as the four anchor keys fold to `anchoring` (a polyline is one decision); and a call disclosing nothing degrades to neutral wording rather than claiming a change.
+
+**Enforced, not maintained.** This family had been closed once before, tool by tool, with nothing holding it — and the next omission surfaced thirty days later by accident. `ApprovalCardContractTest` parses every proposal site in the accessor and requires each to be **COMPLETE** or to carry a line in `tools/approval-card-gaps.txt` naming the exact parameters it exempts and why; a site registered for one reason does **not** blanket-exempt the rest of its card, and a site classified in neither — or in both — fails the build. The registry's `ENTRY_CEILING` is lowered, never raised, by the commit that closes a gap, exactly as `CEILING_LOC` and the effective-state registry work. The test asserts it found all **42** sites before asserting anything about their contents, because a parser that matches nothing reads exactly like a clean scan. It parses **source** only, so unlike its effective-state sibling it needs no runtime and guards every commit in the headless lane.
+
+Disclosing more must not cost the size-ratcheted facade a line per key: runs of guarded `if (x != null) proposedChanges.put(…)` fold onto `ProposalBuilder.putIfPresent` in the un-ratcheted `model/` collaborator, for the same reason `putBounds` lives there.
+
 ### Store-the-request, staleness guard, and version counter
 
 The review window is **human-paced** — minutes can pass between an agent proposing a change and the human approving it. A proposal therefore **stores the request, not a pre-built `Command`**: it no longer holds a frozen GEF `Command` closed over propose-time `EObject`s (which could NPE, misapply, or clobber the human's hand-edits if they touched a targeted object in the meantime). Instead `model/PendingProposal` holds a **deferred rebuild handle** (`Supplier<PreparedMutation<?>>`, closing over param primitives / id-strings — never live objects) plus a `StalenessCapture`. The propose-time card fields (`entity`, `effectDescription`, `intent`, `proposedChanges`, …) are unchanged (the propose-time card enrichment runs verbatim).
 
 - **Re-resolve, re-check, rebuild fresh (approve path).** `MutationDispatcher.approveProposal` first vets staleness, then asks `model/ProposalBuilder` to re-invoke the **same** per-tool `prepareXxx(...)` the immediate path runs — against the **current** model — producing a fresh command + re-resolved entity. The fresh command dispatches through the same `dispatchImmediate` seam, so it is still **one** agent-authored stack entry (the agent-origin tag holds). The two paths share the `prepareXxx` family, so they cannot drift. A target that no longer resolves makes `prepareXxx` throw, which `ProposalBuilder` translates into a clean stale `MutationException` — never an NPE or raw exception.
 - **Staleness guard (`model/ProposalStalenessGuard`).** Registers **exactly one** `CommandStackEventListener` on the active model's `CommandStack` (re-registered on model switch, removed on close — no leak). Every post-change stack event advances a monotonic sequence; a non-`AgentAuthoredCommand` (human) event also advances `lastHumanSequence`. At propose it captures `{sequence, per-target fingerprint, per-target name}` for the proposal's `targetIds`. At approve it re-resolves each target: a target that **no longer resolves** ⇒ stale (named), a target whose **attribute fingerprint changed while a human command intervened** ⇒ stale (named, *"…edited…"*), and — for a diagram-object target — a target whose **bounds fingerprint changed** (a pure drag/move) **while a human intervened** ⇒ stale (named, *"…moved…"*; tracked orthogonally to the attribute fingerprint so an edit and a drag stay distinguishable). Unrelated human edits never touch the proposal's targets, so they never trip staleness — the reviewed change still applies. The reject-stale reason is plain-language and **names what the human touched** (e.g. *"This proposal is stale because you edited 'Payment Gateway' after the agent proposed it. Reject it and ask the agent to retry."*), surfaced on the Pending Approvals card's inline strip.
-- **Single-op vs. compound proposals.** Single create/update/delete/folder proposals carry a true re-resolving handle (`() -> prepareXxx(args)`) — rebuild is cheap and deterministic-equivalent, fully retiring the frozen-command hazard. Layout/route/spacing compounds (`apply-positions`, `auto-route-connections`, `auto-layout-and-route`, `auto-connect-view`, `layout-within-group`, `layout-flat-view`, `optimize-group-order`, `arrange-groups`, `resize-elements-to-fit`) and `bulk-mutate` are **reviewed-or-reject**: the handle returns the already-reviewed compound rather than re-running the algorithm (which could differ from what was reviewed — that would violate the approved-or-nothing contract). Their tracked set is **broadened**: the guard walks the already-built compound's typed child commands at propose-time and tracks the id of every pre-existing view-object / connection the compound touches (plus the `viewId`), so it rejects-stale if a human **deletes**, **edits**, or **drags** any of those children during review — without ever re-running the layout/route algorithm.
-  - **What is caught.** For a compound proposal the guard now tracks the affected child view-objects/connections (extracted from the compound's `UpdateViewObjectCommand` / `UpdateViewConnectionCommand` / `SetTextPositionCommand` / `AddConnectionToViewCommand` children via their typed accessors — this project never uses Archi's accessor-less `SetConstraintCommand`), and for `bulk-mutate` it tracks each op's pre-existing entity id **plus** the resolvable source/target endpoint ids of create-relationship ops. So a human deleting a child node on the targeted view, editing it, dragging it, or removing a relationship endpoint between propose and approve now reject-stales the compound (the frozen child command can no longer no-op/misapply on a detached object). Bounds are fingerprinted orthogonally to attributes, so a drag is reported as *moved* and a rename as *edited*.
-    - **Remaining residual (deliberate).** Ids that name a **not-yet-created** object — a being-created connection (`auto-connect-view`) or a `bulk-mutate` `$N.id` back-reference / created relationship — are not resolvable at propose-time (`getSource()`/`getTarget()` are null until the command executes), so they are skipped by capture and fall through to the `ProposalBuilder` rebuild-throw safety net (which still surfaces a clean stale message, never an NPE). `bulk-mutate` secondary-dependency tracking is **scoped to create-relationship endpoint ids**; a pre-existing dependency named only by another op type (e.g. the `elementId` placed by a bulk `add-to-view`, or a bulk view-connection's diagram endpoints) is **not** added to the tracked set and likewise relies on that rebuild-throw safety net if the human removes it. A human edit to a view object the compound does **not** touch (e.g. `auto-route-connections` rectifies only connections; a human moves an unrelated node) does **not** reject — that is correct, the frozen route does not depend on it. Single-op proposals never had this gap (they rebuild fresh and re-resolve every target; a drag of a single-op's own diagram-object target also reject-stales it, which is the intended behaviour — the human touched the exact target).
+- **Single-op vs. compound proposals.** Single create/update/delete/folder proposals carry a true re-resolving handle (`() -> prepareXxx(args)`) — rebuild is cheap and deterministic-equivalent, fully retiring the frozen-command hazard. Layout/route/spacing compounds (`apply-positions`, `auto-route-connections`, `auto-layout-and-route`, `auto-connect-view`, `layout-within-group`, `layout-flat-view`, `optimize-group-order`, `arrange-groups`, `resize-elements-to-fit`) and `bulk-mutate` are **reviewed-or-reject**: the handle returns the already-reviewed compound rather than re-running the algorithm (which could differ from what was reviewed — that would violate the approved-or-nothing contract). Their tracked set is **broadened**: the guard walks the already-built compound's typed child commands at propose-time and tracks the id of every pre-existing view-object / connection the compound touches (plus the `viewId`), so it rejects-stale if a human **deletes**, **edits**, or **drags** any of those children during review — without ever re-running the layout/route algorithm. All fourteen build that set the same way. `bulk-mutate` did not until v1.9: it fingerprinted each operation's own new entity id, which resolves nowhere at propose-time, so a bulk of creates vetted an **empty** set and the guard passed without checking anything.
+  - **What is caught.** For a compound proposal the guard now tracks the affected child view-objects/connections (extracted from the compound's `UpdateViewObjectCommand` / `UpdateViewConnectionCommand` / `SetTextPositionCommand` / `SetTextRelativePositionCommand` / `AddConnectionToViewCommand` / `AddToViewCommand` / `AddGroupToViewCommand` / `AddNoteToViewCommand` children via their typed accessors, recursing into nested compounds — this project never uses Archi's accessor-less `SetConstraintCommand`), and for `bulk-mutate` it tracks that same walked set **plus** each op's own entity id and the resolvable source/target endpoint ids of create-relationship ops. For the three placement commands what is tracked is the **container being placed into**, not the object being placed: the object does not exist until the command executes, while the container is the thing an approval can outlive. The nested-compound recursion widened one further tool, which is worth stating because it is easy to miss: `auto-connect-view` wraps every connection it creates in a placement guard that is itself a compound, so before the recursion its `AddConnectionToViewCommand` children were never reached and its tracked set was the view id alone. It now tracks both endpoints of every connection it draws — the same set the single-tool `add-connection-to-view` has always tracked. So a human deleting a child node on the targeted view, editing it, dragging it, or removing a relationship endpoint between propose and approve now reject-stales the compound (the frozen child command can no longer no-op/misapply on a detached object). Bounds are fingerprinted orthogonally to attributes, so a drag is reported as *moved* and a rename as *edited*.
+    - **Remaining residual (deliberate).** Ids that name a **not-yet-created** object — a being-created connection (`auto-connect-view`) or a `bulk-mutate` back-reference / created relationship — are not resolvable at propose-time (`getSource()`/`getTarget()` are null until the command executes), so they are skipped by capture. For a **re-preparing** proposal they then fall through to the `ProposalBuilder` rebuild-throw safety net, which surfaces a clean stale message rather than an NPE. ⚠ **That safety net cannot fire for a frozen compound** — there is no rebuild to throw, so the tracked set is the only thing standing between an approval and a command applied against objects that are gone. Measured before v1.9 closed it: a `bulk-mutate` proposal referencing a container an enclosing batch had queued and then rolled back approved cleanly and reported `action: "placed"` for a view that gained nothing. What remains deliberate for `bulk-mutate` is narrower: an id naming a not-yet-created object (a back-reference of either form, a created relationship) is still skipped, since nothing resolvable exists to fingerprint. A human edit to a view object the compound does **not** touch (e.g. `auto-route-connections` rectifies only connections; a human moves an unrelated node) does **not** reject — that is correct, the frozen route does not depend on it. Single-op proposals never had this gap (they rebuild fresh and re-resolve every target; a drag of a single-op's own diagram-object target also reject-stales it, which is the intended behaviour — the human touched the exact target).
+- **Cascade-drift refusal (what the staleness guard structurally cannot see).** The card is built from the propose-time DTO; the command that runs is rebuilt against the current model at approve. Those are two measurements of the same blast radius taken minutes apart, and only the first is ever shown to a human. The staleness guard does **not** close that gap: it fingerprints a target's own *attributes*, and a folder gaining contents changes none of them — containment is an `EReference`, and a folder has no bounds. So a folder proposed for a force-delete while holding two elements vets as perfectly fresh after three more are dragged in, the rebuild re-prepares a cascade over five, and five are deleted against a card that said two; the same shape is reachable on `delete-element`, whose tracked ids are the element alone while its card names the relationship and view-reference counts. `approveProposal` therefore compares the cascade counts the card was reviewed with against the counts the rebuilt command would actually remove, and **refuses when they disagree, naming both numbers**. The refusal is thrown before anything is dispatched.
+- **A domain refusal keeps its own reason.** `ProposalBuilder.rebuild` caught `RuntimeException` and replaced every message with the generic stale sentence. `ModelAccessException` extends `RuntimeException`, so a structured domain refusal raised by the re-invoked `prepareXxx` was swallowed and the human was told the wrong reason with the actionable remedy destroyed — the clearest case being content arriving in a folder with a pending non-force delete, where `prepareDeleteFolder` correctly refuses with `FOLDER_NOT_EMPTY` and a message already carrying *"Use `force: true` to cascade-delete all contents."*, and the dock rendered *"a targeted object was changed or removed"* instead. A `ModelAccessException` arm now sits above the `RuntimeException` arm and surfaces the message verbatim, keeping the original as the cause. **Approve All** reports the same reason when it halts, rather than the sentence it used to invent from an exception it never read; counts are stated before the reason so the reason is what truncates on a one-row status line.
+- **The card says which kind of gate it is.** Most proposals re-invoke their `prepareXxx` at approve, so what runs is recomputed when the human clicks. Fourteen — `apply-positions`, `resize-elements-to-fit`, `layout-within-group`, `layout-flat-view`, `optimize-group-order`, `arrange-groups`, both `auto-route-connections` passes, all four `auto-layout-and-route` arms, `auto-connect-view` and `bulk-mutate` — apply the compound that was already built and already reviewed. That freeze is the reviewed-or-reject position above, not an oversight: re-running a layout, routing or bulk pass can legitimately produce a different result from the one on the card, and handing the human an outcome they never reviewed is worse than refusing. What was missing is that the human was never told *which* gate they were looking at — whether Approve means "do this" or "work out what to do now". All fourteen cards now say so, through one shared constant.
 - **TTL / expiry sweep.** Abandoned proposals are swept after `MutationDispatcher.PROPOSAL_TTL` (30 min) on both `list-pending-approvals` and on propose, so the per-session queue never silently fills to the `MutationContext.MAX_PENDING_PROPOSALS` (100) hard cap. Expiry is **surfaced** (logged + the proposal drops out of the live list), never a destructive model change, and the proposal under approval is never swept (approve removes it from the map before rebuilding).
 - **Version counter.** `getModelVersion()` already advances on **every** model change — human edits included — because `ArchiModelAccessorImpl.handleModelContentChanged` bumps the counter on Archi's `PROPERTY_ECORE_EVENT`, which fires for all EMF notifications on the active model. The staleness work therefore adds **no** version-counter logic (the listener it adds serves the staleness guard only). **Contract:** the counter is a **monotonic change-token** — it advances strictly on every change; the **exact delta is unspecified and not consumed**. In practice a single agent op advances it by **+2** (the inline/callback bump *plus* the `PROPERTY_ECORE_EVENT` bump on the same `CommandStack.execute`). That multi-count is a **benign, long-standing** property of a change-token — consumers compare for equality only (see "Version Tracking" above) — not a defect.
 
@@ -322,9 +430,47 @@ Batch mode groups multiple mutations into a single atomic, undoable operation.
 
 ### get-batch-status
 
-- Returns current mode (GUI_ATTACHED or BATCH) and queued count
+- Returns current mode (GUI_ATTACHED or BATCH) and queued count. `approvalRequired` is `true` or absent (never `false`), `pendingApprovalCount` is absent rather than `0` on an empty queue, and queue fields are absent outside batch mode
 
 **Source:** `handlers/MutationHandler.java`
+
+### Prepare-time reads versus execute-time state
+
+The two-phase pattern has one recurring hazard, and it is the root cause of an entire family of batch defects: **a `prepare` reads the live model, while commands queued earlier in the same batch have not executed yet.** The prepare therefore sees a world that no longer matches what the batch will produce. Symptoms all look different — an anchor silently not applied, a cascade measured against a stale size, an id reported as not found — but the mechanism is one.
+
+Two mitigations, applied according to when the correct value can first be known:
+
+- **Resolve against the queue.** `MutationContext` walks the queued commands (recursing into compounds) so a prepare can find the command that created an id, and so the parent-fit cascade reads a **queue-derived bounds map** rather than live geometry. This is what lets a batch create a view and add to it, create an element and place it, use a container it just created as a `parentId`, or update an object it created a moment earlier. The mode check is taken **inside the session lock** — a check-then-act outside it is a TOCTOU window between two sessions.
+- **Resolve at execute time.** Where the correct value cannot exist at any prepare time, the command resolves it when it runs. Anchor targets work this way: a prepare-time snapshot is defeated by *any* other queued writer, so `UpdateViewObjectCommand.execute()` re-resolves the anchor against post-batch bounds.
+
+Because every cascade in a batch reads the same queue-derived geometry, two independently-queued cascades over a shared ancestor no longer emit competing absolute resizes where the second discards the first. A size queued earlier in the batch survives a later pass over the same view.
+
+> When adding a mutation path, check **every** prepare→execute route for order-dependence: immediate, folder-cascade, batch, approval, and bulk. A fix applied to one route does not protect the others.
+
+### Execute-time integrity guards
+
+A precondition validated when a command is *built* is worthless on a deferred path, because a sibling operation queued in the same batch can invalidate it before the command *runs*. Guards that protect model integrity therefore re-check inside `execute()`.
+
+This placement is deliberate and makes the guard **path-agnostic**: one implementation covers batch, bulk-immediate and bulk-approval (whose frozen compound cannot be re-prepared) uniformly. Single-tool approval was already safe, because it re-runs its prepare at approve time.
+
+`CommitSkippableCommand` is the mechanism. A guard that trips **declines that one operation** and records a skip reason rather than proceeding:
+
+- The reason surfaces in the batch summary (`MutationContext.collectSkippedOperations`, which recurses into compounds) and in `bulk-mutate`'s `skippedOperations`, which also flips `allSucceeded` — a skipped destructive operation must never be reported as done.
+- `undo()` is inert on a decline, and `redo()` re-checks.
+- Sub-command declines **aggregate upward**. A flat cascade otherwise defeats its own protection: an inner folder that declined stayed attached, and the outer command then removed the parent unconditionally, taking the protected subtree out by containment.
+
+Guards enforced this way: folder circular reference, view-hierarchy placement and folder-layer match (`move-to-folder`), and specialization usage plus unauthorised-profile protection (`delete-specialization`). `delete-folder` re-reads its contents at execute, so a queued delete cannot destroy content that arrived after it was prepared.
+
+**Resolvability guards — the container the operation creates into.** The same shape covers every command that resolves a *container* at prepare and writes into it later. `create-view`, `create-folder` and `clone-view` resolve a target folder; `add-to-view` resolves a parent view object. If an earlier operation in the same request removed that container, the new object was still created — really written, unreachable from the model root, gone on reload, and reported as a success. Each now declines with a named reason instead. Two adjacent cases ship with them, both reachable only through an open batch:
+
+- A view-nesting `parentId` that belongs to a **different** view is rejected rather than producing a cross-view containment.
+- The connections a placement draws **for itself**: `add-to-view` with `autoConnect` and `auto-connect-view` both scan the view when the request is prepared and build connections to *other*, pre-existing view objects. Guarding the new object's own parent says nothing about those endpoints, so a preceding `remove-from-view` left a connection joined to a detached object.
+
+Because those two passes do the same work, they now decline the same pair. Neither draws a connection between an object and something it is nested inside: on a view, nesting already expresses containment, so the line would leave a box and re-enter the same box — the self-pass-through `assess-layout` reports as a connection-edge coincidence. `auto-connect-view` has declined it since it learned to see it; `add-to-view` with `autoConnect` drew it, on exactly the nested shape this server's own layout guidance prescribes, so placing a function inside its owning component created the defect the assessor exists to catch. Both now report what they declined as **pairs, never a count** — `skippedDueToNesting` on each, carrying both view-object ids and the relationship, which is preserved either way. `add-to-view` reports the ones its fifty-connection cap dropped the same way, under `skippedByCap`; `skippedAutoConnections` still counts them and is no longer the only account of them. This is disclosure, not validation: both nestings the live run produced are legal ArchiMate, so nothing here refuses anything, and an agent that wants the line has everything it needs to draw it with `add-connection-to-view`.
+
+A hazard qualifies for this treatment when it has **both** properties: containment (the object ends up owned by something that is leaving) *and* an inability to decline (nothing on the path throws). Either alone is not enough.
+
+> A veto is worthless if an ancestor can do the same damage. When adding an execute-time guard on a cascading command, check what the *parent* command does when the child declines.
 
 ## Bulk Mutate
 
@@ -345,6 +491,12 @@ The `bulk-mutate` tool executes multiple mutations in a single request.
 
 > Note: these are `bulk-mutate` *operations*, not top-level MCP tools. `set-view-label-expression` runs only inside a bulk-mutate batch, so the server's top-level tool count is unchanged.
 
+**`add-image-to-model` is deliberately excluded, and both descriptions say why.** An archive write has no inverse — `IArchiveManager` exposes `addImageFromFile` / `addByteContentEntry` / `copyImageBytes` and no removal of any kind — so no honest `undo()` exists, and the ordering traps both ways: writing at prepare time lands the images *before* the approval gate, so a declined proposal still writes them, while writing inside a `Command` leaves the archive empty when a same-call `add-image-to-view` validates its path, which is the very use case batching would be for. Batching is solved on the tool instead: `add-image-to-model` takes an `images` array capped at `BulkOperation.MAX_OPERATIONS`, so the two limits cannot drift apart, and reports every entry that landed with its archive path *and the caller's request index* — with failures removed, result position and request index diverge, and only the index maps a path back to the file asked for. The write was never transactional, so a partial batch leaves exactly what the same imports issued one at a time would have left.
+
+For the same reason the tool sits **outside the batching contract entirely**: it holds no command and never consults batch state, so inside an open batch it writes immediately and returns plain success for a write `end-batch --rollback` cannot reverse. That is stated in its description rather than declared in the response, and the distinction matters. The structural-declaration rule governs responses whose *values are deferred* — nothing is effective yet, so the entity nests under `preview`. This case is the exact inverse: the write is already real and always will be, so the response is truthful as it stands and there is no per-call divergence to declare. What was missing is a fact about the tool, not about any one call.
+
+**A queued or parked call reports no verdict.** A `bulk-mutate` inside an open batch, or awaiting approval, executes nothing — the compound is collected for later — so its skip reasons are necessarily empty and `allSucceeded` computed `true` for operations that may still decline at commit, after which the enclosing batch reported the very decline the bulk response had already called a success. `allSucceeded` is therefore **omitted** in both modes rather than guessed at, which is the gate every other outcome field in the same response map already uses (`modelChanged` is false there, `effectiveBounds` appears only for dispatched operations, and the resized-ancestor and displaced-object lists are gated identically). The approval arm is gated with the batch arm deliberately: it fabricates the same way, passing a *validation* verdict where an *execution* verdict is read.
+
 ### View-Scoped Label Expressions
 
 `set-view-label-expression` stamps one `labelExpression` template onto every eligible diagram object on a single view in one atomic command — collapsing what used to be one `update-view-object` call per object into one operation per view. It is the common case when an agent retro-fits an evidence-mark or status glyph onto an existing diagram (e.g. `${name} ${property:evidenceMark}`).
@@ -364,7 +516,9 @@ Semantics:
 
 ### Back-Reference Syntax
 
-Operations can reference results from earlier operations using `$N.id`:
+An operation can reference the result of an earlier operation in the same call, naming that
+operation **either by its position or by a name it declares**. The two forms are interchangeable,
+may be mixed in one call, and are governed by the same rules throughout this section.
 
 ```json
 {
@@ -380,21 +534,119 @@ Operations can reference results from earlier operations using `$N.id`:
 }
 ```
 
-Back-references are **0-indexed**: `$0.id` is the result of the first operation. A reference may only point *backward* — to an operation that has already produced a result.
+By position, back-references are **0-indexed**: `$0.id` is the result of the first operation.
+
+By name, an operation carries `as` — a **sibling of `tool` and `params`, not a key inside `params`**
+— and a later operation writes `$name.id`:
+
+```json
+{
+  "operations": [
+    {"tool": "add-group-to-view", "as": "coreBanking", "params": {"viewId": "…", "label": "Core Banking"}},
+    {"tool": "update-view", "params": {"viewId": "…", "name": "Integration"}},
+    {"tool": "add-to-view", "params": {"viewId": "…", "elementId": "…", "parentViewObjectId": "$coreBanking.id"}}
+  ]
+}
+```
+
+A name must start with a letter or underscore, continue with letters, digits or underscores, and be
+unique within the call. It may not begin with a digit, so a name can never be mistaken for a
+position. It is scoped to the call it appears in: it does not address an enclosing batch's queue and
+does not survive the call. Declaring a name does not suppress the positional form — the same
+operation can still be referenced as `$N.id`.
+
+**Either way, a reference must be the whole value of a top-level `params` entry.** Resolution walks
+the top-level string entries of `params` and matches the reference pattern against the *entire*
+string, so `"$0.id"` is substituted while `"grp-$0.id"` is not, and neither is a reference sitting
+inside a nested array or object. This is deliberate, and the cascade check that turns a failed
+reference into a stated `BACK_REFERENCE_FAILED` has exactly the same blind spots — that symmetry is
+the safety property: a reference the cascade check cannot see is one resolution never substitutes
+either, so it stays the literal text and fails honestly rather than being half-handled. What reaches
+the tool is the text as written, which is not an id, so the operation fails naming the literal
+`$0.id` it was handed — the signal that a reference was never substituted, as distinct from one that
+resolved to the wrong object.
+
+Either way, a reference may only point *backward* — to an operation that has already produced a
+result.
+
+**Why the choice matters, and when to prefer the name.** The two namespaces have opposite failure
+modes. A position is **dense**: every integer below the current index names some legal earlier
+operation, so `$5.id` mistyped as `$4.id` resolves — into a different container, which nothing can
+reject because nesting one `ApplicationComponent` inside another is legal ArchiMate. A name is
+**sparse**: `coreBankng` matches no declaration, so the only thing a mistyped name can do is refuse.
+That difference is worth most in exactly the calls where a position is easiest to miscount: long
+ones, and ones whose operations were reordered after they were written.
+
+The per-operation `parentViewObjectId` on the write response discloses where a placement actually
+landed, but it discloses it **only on a call that was applied** — a call queued into an open batch
+or parked awaiting approval has written nothing, so that field is absent from every operation. A
+name is checked in the prepare pass, upstream of the mode branch, so it refuses in **all four**
+arms.
+
+An operation carrying a top-level key that is none of `tool`, `params` or `as` is **refused, naming
+the key**. Unknown keys were once dropped in silence, which meant a name written under a misspelt
+key left the operation looking unnamed and pushed the failure onto whichever later operation
+referenced it.
 
 **Reference validation** distinguishes two failure modes with separate, actionable messages:
 
-- **Self-reference** — `$N.id` inside operation N. A create tool cannot reference its own not-yet-created result. When a previous operation exists, the error includes a `Did you mean $(N-1).id?` suggestion.
-- **Forward-reference** — `$N.id` where N is a *later* operation. The referenced result does not exist yet.
+- **Self-reference** — a reference inside the operation it names. A create tool cannot reference its own not-yet-created result. For a *positional* reference above index 0 the error includes a `Did you mean $(N-1).id?` suggestion; a *named* one does not get it, because a caller who wrote a name never counted operations and `$(N-1).id` would point them at a form they deliberately did not use.
+- **Forward-reference** — naming an operation that comes *later*. The referenced result does not exist yet. A name declared later in the array is a forward reference exactly as a higher index is.
+- **Unknown name** — `$name.id` where no operation declared that name. This has no positional counterpart: it is the failure mode the named form exists to create. It **refuses**; it never resolves to `null`, which on an optional parameter such as `parentViewObjectId` would be dropped in silence and land the object at the view root.
+- **Repeated name** — two operations declaring the same `as`. **Both** declarations are refused, naming both positions, so a reference to the name cascades loudly rather than being answered by position after all.
+- **Malformed name** — an `as` value the grammar does not accept. Refused where it is *declared*, not where it is used.
 
-Both reject with `INVALID_PARAMETER`; the distinct diagnostics let a caller tell an operator off-by-one apart from a forward-reference mistake on the first response.
+All reject with `INVALID_PARAMETER`; the distinct diagnostics let a caller tell an operator off-by-one apart from a forward-reference mistake on the first response. Every message names the reference the way the caller wrote it — an index-shaped message about a named reference tells its reader nothing they can act on.
+
+**A back-reference is not only a parent reference.** A reference to an `add-group-to-view` resolves both as a `parentViewObjectId` (nest into the new group) **and** as the `viewObjectId` of a later `update-view-object` in the same call, so a group can be created and then re-sized or renamed without ending the call. These were once two separate finders answering the same question — *did this call already create the object this id names?* — and only one of them consulted the map groups are tracked in, so the identical id resolved on one path and reported "not found" on the other. They are now one lookup; whether a hit may serve as a *parent* is decided downstream, where parents are resolved and notes and connections are rejected, so unifying the lookup did not widen what can be nested.
+
+**A note is a target and never a parent, and that is why it gets its own lookup.** `add-note-to-view` is on the back-referenceable create-tool list, so a reference naming a note passes validation — but a note is not an `IDiagramModelContainer`, so the container lookup above cannot hold one and could not return one if it did. A second, note-typed lookup answers for it, consulted only when the container lookup misses. That is a split of exactly the kind the paragraph above records as a mistake, and it is admissible here for one reason: the parent answer for a note is a **permanent no** — `resolveParentContainer` admits groups and elements only — so the "works as a parent, fails as a target" asymmetry a split once opened for groups has no shape to take for a note. The two questions genuinely differ for a note where for a group they must not. Nothing that *can* be nested was widened: the container lookup still returns a container, so the five parent call sites keep a compile-time guarantee rather than trading it for five runtime checks.
+
+The residual, deliberately left: a reference naming something with **no view object yet** — a `create-element` or `create-relationship` result used as a `viewObjectId` — is a legal back-reference that still reports not found, and reports it against the *resolved* id rather than the `$N.id` the caller typed. Recovering the token would mean carrying the pre-resolution value into the prepare or indexing token→id, a new mechanism for a message. The advice on that not-found instead names the distinction that actually resolves it: a back-reference addresses something **on a view**, so back-reference the `add-to-view` that places the concept, not the create that made it.
+
+**A nested `bulk-mutate` addresses the enclosing batch's queue, on the tools that resolve it.** Nesting is a supported composition rather than a misuse: the nested call is queued into the open batch like any other operation, and an id that batch has queued resolves on **every tool that places something on a view** — `add-to-view`, `add-group-to-view`, `add-note-to-view`, `add-image-to-view` and `add-view-reference-to-view` — in the `viewId` it is placed on, the `parentViewObjectId` it nests into, and the element or referenced view being placed; and as the target of `update-view-object` and `update-view-connection`. The rule governs **addressability** — naming a queued id as a target — not visibility; `add-to-view` has always *read* the queue for parent-fit without being able to address it, and still does.
+
+The placement arms reach that state through the two helpers they already share rather than arm by arm: `resolveParentContainer` coalesces a queued container **above** its destined-view check, so a queued parent belonging to another view is still rejected with the same cross-view message a committed one would get, and the `viewId` slot coalesces to a queued view through one helper called from each arm. Because the single-tool entries already passed those queued values, closing the bulk arms made the two paths agree rather than introducing a new semantic.
+
+`add-connection-to-view` resolves a queued id in **all four** of its ids — `relationshipId`, `viewId`, `sourceViewObjectId` and `targetViewObjectId` — whether or not the operation also carries a back-reference of its own. The bulk pass routes a connection operation to a second, back-reference-aware prepare as soon as *any* of those four names something this call created — the routing reads the **resolved** id out of this call's own maps, so it cannot tell a `$N.id` from a `$name.id` and does not need to; that prepare once resolved endpoints against committed containment only, so a nested call that created a relationship and connected it in one go reported the enclosing batch's endpoint ids as **not found** while the identical operation without a back-reference resolved them. Both prepares now consult the queue, and the endpoint fallback stays view-scoped: an object the batch is placing on a *different* view still takes the ordinary not-found path rather than joining two diagrams together.
+
+Resolving the relationship out of the queue does not weaken what is checked. The skip that lets a relationship *this call* created through — its ends are null and it is not yet in containment, so there is nothing to validate against — tests conditions that a relationship pulled from an **enclosing** batch's queue also satisfies, while that one's ends *are* knowable. The two are told apart by whether the call itself created the relationship, and the ends are read off the queued create that will connect them, so a mismatched outer-queued relationship is rejected exactly as a committed one is.
+
+What still reports such an id as not found is the set of tools that **update, delete or re-file** a concept rather than place it: `update-element`, `update-relationship`, `update-view`, `remove-from-view`, `clear-view`, `set-view-label-expression`, the `delete-*` family, `move-to-folder`, and `create-relationship`'s endpoints. That is a gap rather than a deliberate boundary, and it is not only a nesting gap — on those arms the **single-tool** call inside the same batch is blind too, because both callers share one `prepare*` that takes no session. Closing them means putting the lookup inside that prepare, and the delete family needs a rule for what deleting a not-yet-created object should mean before any of it is written. Until then, prefer queueing those operations in the batch directly. An id that genuinely exists nowhere gets the same not-found message inside a batch and outside one.
+
+**A back-reference still wins over the queue.** A reference naming an object the same bulk call created is resolved from that call's own maps before the enclosing batch's queue is consulted, so call-scoped state always shadows batch-scoped state rather than the other way round.
 
 ### Failure Semantics
 
 **All-or-nothing** (`continueOnError=false`, default):
 - Pre-validate all operations before executing any
-- First failure rejects the entire bulk operation
+- Any failure rejects the entire bulk operation, and **every** operation that failed is reported in that one refusal — the rejection is total, the report is not first-only
 - No model changes if any operation fails
+
+The refusal always leads with the first failure in `message`, `details` and `suggestedCorrection`. When exactly one operation failed those three fields are byte-for-byte what they have always been. From two failures upward `message` gains a clause naming how many failed, `details` gains a `failedOperationCount`, and the error also carries a `failed` array inside the `error` object, whose rows are the same shape the `continueOnError=true` response publishes: `index` (the caller's request index, not the position in the list), `tool`, that operation's **own** `errorCode`, `message`, and `suggestedCorrection` when it has one — subject to the one-copy rule below. `nextSteps` names the first ten and then states how many are not listed.
+
+**What every row says, the refusal says once.** A refusal is largest exactly when many entries are wrong in the same way, and entries wrong in the same way carry the same remedy: a hundred and fifty operations naming an unsupported tool used to republish the whole supported-tools list once per row. So a long ending that every row of one error code shares is published once, beside the `failed` array, and the rows name it:
+
+- `corrections` and `messages` are objects keyed by error code, each holding one shared string. They sit next to `failed` — inside the `error` object on a refusal, inside `result` on a `continueOnError=true` response — so a row is never a reference into something the caller did not receive.
+- A row that shares a string names it with `correctionRef` or `messageRef`, whose value is the key to look up.
+- **Nothing is lost.** A split row keeps its own head under the field's own name, and the head followed by the shared string is byte-for-byte what the row used to carry. A row that shares the *whole* of a `suggestedCorrection` carries `correctionRef` and no `suggestedCorrection` at all — absent rather than shortened, so a client that ignores the reference finds a gap rather than a fragment it would read as complete. A `message` is never taken away whole: it is the row's own account of what went wrong, and only a trailing clause shared with its siblings is ever split off it.
+- **Every row remains self-describing.** Whether a key is present on a row depends only on that row's own content, never on what the row before it carried, so rows can be read independently and in any order.
+- The rule pays for itself or does not apply: a string shorter than the keys that would replace it, or one only a single row carries, stays on the row. A one-failure refusal publishes no `failed` array and therefore no dictionary either.
+
+Operations that cannot be read at all — an entry that is not an object, a missing or misspelled `tool`, a missing `params` — are refused the same way one layer earlier, under `INVALID_PARAMETER` rather than `BULK_VALIDATION_FAILED`, and `continueOnError` does not apply to them: an operation whose shape cannot be parsed cannot be executed under any flag.
+
+### apply-positions Failure Semantics
+
+`apply-positions` is all-or-nothing and has no `continueOnError`: either every entry is applied or none is. It reads its payload in two stages, and **both** stages now report every entry that failed rather than the first.
+
+- **Shape stage** (in the handler). Entries that cannot be read — an entry that is not an object, a missing or blank `viewObjectId`/`viewConnectionId`, a malformed bendpoint — are refused under `INVALID_PARAMETER`. Both arrays are read before either is judged, so a bad `positions` entry no longer hides the `connections` array.
+- **Resolution stage** (in the accessor). Entries whose ids do not resolve are refused with each entry's own code, typically `VIEW_OBJECT_NOT_FOUND`. Both walks run to completion; nothing is dispatched, the compound is never built and the approval gate is never reached.
+
+**The two stages are separate refusals.** A payload carrying a malformed entry *and* an unresolvable id reports the malformed shapes first, because the accessor never runs on a payload the handler could not read. A single refusal therefore lists everything wrong at one stage, not everything wrong with the payload.
+
+The refusal leads with the first failure in `message` and keeps that entry's own error code. When exactly one entry failed there is no count clause and no `failed` array, and the `error` object is what it has always been — with one deliberate exception: a failure that names something **inside** a readable entry, which is the bendpoint family. Those are raised by helpers shared with the single-connection tools and report a bendpoint index alone, so read from inside an array they told a caller a bendpoint was malformed but never which connection carried it; they now gain the entry, e.g. `connections[1]: Bendpoint[0] is missing required integer field 'endY'`. Everything else is unchanged for a single failure — an unresolvable id keeps its existing wrapper, an unreadable entry already named its own index, and a missing or blank id is republished verbatim. From two upward, `message` gains a clause naming how many failed and how many are listed, and the error carries a `failed` array whose rows are the same shape `bulk-mutate` publishes, extended with the array each entry came from: `index` (the caller's index **within that array**), `array` (`positions` or `connections`), `id` when the entry named one, that entry's **own** `errorCode`, `message`, and `suggestedCorrection` when it has one. The per-row codes are the authority; the single code on the error describes the first failure alone. The one-copy rule above applies here unchanged, and for the same reason it is stated once: both tools build their rows with the same projection, so `corrections`, `messages`, `correctionRef` and `messageRef` mean here exactly what they mean there. This is the tool where it matters most — replaying a stale layout makes every id fail the same way, and the advice those failures share was most of the refusal.
+
+**The rows are capped at 50 and `nextSteps` at 10.** This tool accepts 10,000 entries and the all-fail case is ordinary rather than pathological — replaying a saved layout onto a view that was cleared and rebuilt makes every id stale — so an uncapped array would be a response-size defect of its own. Every count the refusal publishes is derived from the true failure total, never from the length of the capped list: past the cap the message says how many are listed rather than promising every one is.
 
 **Partial failure** (`continueOnError=true`):
 - Execute all valid operations, report failures
@@ -499,7 +751,7 @@ A concept can technically carry more than one specialization in the underlying E
 
 `update-specialization` relaxed `newName` from required to optional in v1.5 — at least one of `newName`, `imagePath`, or `clearImagePath` must be supplied. Supplying `imagePath` and `clearImagePath` together is rejected with `INVALID_PARAMETER`.
 
-The `imagePath` value is the archive path returned by `add-image-to-model` (e.g. `images/<sha1>.png`) or surfaced by `list-model-images`. A typo'd path is rejected with `IMAGE_NOT_FOUND` — a deliberate deviation from the validation-sync principle, since Archi's GUI silently renders a broken-image placeholder rather than surfacing the failure.
+The `imagePath` value is the archive path returned by `add-image-to-model` or surfaced by `list-model-images`. It is **opaque**: Archi mints it as `images/` + a generated identifier + the source file's extension, lower-cased (`ArchiveManager.createArchiveImagePathname`), so neither half is predictable from the caller's side — the identifier is not a content hash, and the extension is not always `.png`. Pass the value back exactly as received; never construct one or parse it. A typo'd path is rejected with `IMAGE_NOT_FOUND` — a deliberate deviation from the validation-sync principle, since Archi's GUI silently renders a broken-image placeholder rather than surfacing the failure.
 
 Under the hood, `UpdateProfileCommand` snapshots `oldName` and `oldImagePath` on execute and restores both on undo. The image-path apply is idempotence-guarded (same-value sets are no-ops) to avoid spurious model-dirty notifications.
 
@@ -522,6 +774,50 @@ Under the hood, `UpdateProfileCommand` snapshots `oldName` and `oldImagePath` on
 `UpdateRelationshipCommand` snapshots the previous values of all three fields on execute and restores them on undo for full Cmd+Z fidelity. The apply path is idempotence-guarded to avoid spurious change notifications when a value matches the existing one.
 
 **Source:** `model/UpdateRelationshipCommand.java`, `response/dto/RelationshipSemanticAttributes.java`, `response/dto/RelationshipDto.java`, `handlers/ElementCreationHandler.java`, `handlers/ElementUpdateHandler.java`
+
+## Empty-String Field Semantics
+
+Across the mutation tools, `null` (or an omitted key) always means **leave unchanged**. What an *empty string* means is decided per field, and the rules are not uniform — so they are collected here rather than left to be inferred from one tool's schema.
+
+| Tool | Field | `""` means |
+|---|---|---|
+| `update-relationship` | `name` | **Clears the name.** ArchiMate relationships may be unnamed |
+| `update-relationship` | `documentation` | **Clears the documentation** |
+| `update-relationship` | `influenceStrength` | **Clears the field** (see [Relationship Semantic Attributes](#relationship-semantic-attributes)) |
+| `update-relationship` | `accessType` | **Rejected** — the enum is closed; use `"access"` for unspecified |
+| `update-element` / `update-relationship` | `specialization` | **Clears all specializations** (see [Update Semantics](#update-semantics)) |
+| `update-element` | `name`, `documentation` | **Ignored** — treated as "leave unchanged", the same as omitting the key |
+| `update-model` | `purpose` | **Clears the field** |
+| `update-model` | `name` | **Rejected** — a model must have a name |
+| `add-group-to-view` | `label` | **Creates an untitled group.** `""` is the canonical stored value for untitled — never `null`. The key itself stays required; omitting it is an error |
+| `add-note-to-view` | `content` | **Creates an empty note** |
+| `update-view-object` | `text` | **Clears the text**, leaving a group untitled or a note empty. **Rejected** for element view objects — use `update-element` to change an element's name |
+
+Two consequences worth stating outright:
+
+- **`update-element` and `update-relationship` deliberately differ** on `name` and `documentation`. The relationship tool clears; the element tool ignores. This is not an oversight to be tidied up later — an ArchiMate element with an empty name is a modelling error worth refusing to create silently, while an unnamed relationship is ordinary and common. Each tool's own parameter descriptions state its policy, and that description is the contract.
+- **A clear is a real update.** `{"id": R, "documentation": ""}` on its own is a complete, valid `update-relationship` call — it does not trip the "provide at least one of…" guard, because a supplied empty string is a supplied value.
+- **The three view-composition rows are the same rule read on the way in.** `add-group-to-view` and `add-note-to-view` accept `""` on all four paths — immediate, `bulk-mutate`, inside an open batch, and awaiting approval — because the tool surface should not be stricter than the model it wraps: Archi holds and renders an untitled group correctly, and the GUI's `"Group"` is a palette default for a shape a user drew, not a model constraint. A server-side refusal there does not prevent the case; it relocates the decision to every caller, and callers answer it by inventing placeholders.
+
+`bulk-mutate` applies exactly the same rules: each supported tool's bulk case reads its parameters with the same empty-string policy as the standalone tool, so a clear that works on one path works identically on the other.
+
+### The same rule on the way out
+
+A clear is only half-reported if the response then omits the field it cleared. On a mutation response an omitted key and a key holding `""` are indistinguishable to a caller that cannot see the model, and the omission reads as *"unchanged"* — the opposite of what happened. So `update-relationship` and the `effectiveRelationship` that `bulk-mutate` carries **preserve the empty string** for `documentation`, exactly as they already do for `name`, and both also resolve `sourceName` / `targetName` so a caller is not handed back two opaque ids.
+
+The read tools keep the opposite convention: `get-relationships`, `get-view-contents` and `search-relationships` normalise empty to `null` so `@JsonInclude(NON_NULL)` omits it. That asymmetry is deliberate and it is why one mapper takes a flag rather than being split in two — a concept's documentation defaults to `""` and is never `null`, so without the normalisation every row of every list would carry an empty `documentation`.
+
+What decides whether a read caller sees those fields at all is the **field preset**, not the mapper. `documentation`, `properties`, `sourceName` and `targetName` are named by the relationship `full` preset only, so they are absent from a default response and arrive when a caller asks for `fields:"full"` — on `get-relationships` at `depth: 0`, on `get-view-contents`, and on `search-relationships`. At `depth: 1+` the `fields` preset governs the expanded *element* data instead, which is what that parameter's description has always described.
+
+**Source:** `model/DtoMapper.convertToRelationshipDto`, `model/BulkResultProjection.withLiveEntityState`
+
+### Whitespace-only strings
+
+The readers that preserve `""` test for *is a string*, not for *is non-blank*. A whitespace-only value such as `"   "` is therefore stored verbatim wherever `""` clears — Archi permits such names, and the caller asked for it explicitly. There is no third sentinel between "clear" and "set": `""` clears, any other string sets, `null` leaves alone.
+
+One place does test for blank rather than empty, and deliberately: the **human-readable effect descriptions** on the approval card and in the response text. `isBlank()` and `isEmpty()` are not complements, so a description written against `isEmpty()` renders a whitespace-only label as `Add group '   ' to view X`. The descriptions test blank; the stored value stays verbatim.
+
+**Source:** `handlers/HandlerUtils.optionalStringParamAllowEmpty`, `model/ArchiModelAccessorImpl.optionalAllowEmptyParam`
 
 ## Model Metadata Mutation
 

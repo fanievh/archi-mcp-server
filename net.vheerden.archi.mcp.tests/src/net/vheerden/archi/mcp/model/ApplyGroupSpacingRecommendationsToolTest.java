@@ -142,11 +142,14 @@ public class ApplyGroupSpacingRecommendationsToolTest {
     }
 
     // ---- connected-vs-unconnected determination semantics ----
-    //         The accessor's countInterGroupConnections walk produces an
+    //         TopLevelGroupTargets.countInterGroupConnections produces an
     //         interGroupConnectionCount; isConnected = (count > 0).
     //         This block pins the heuristic-column-selection branch on
-    //         that boolean (the walk itself is exercised by live smoke,
-    //         since spy-pattern over EMF is brittle).
+    //         that boolean. The walk that produces the count is pinned
+    //         separately by InterGroupConnectionCountTest, which builds the
+    //         containment graph in EMF rather than spying on it — it had no
+    //         coverage here, and a defect that made it blind to one of the
+    //         two container kinds shipped through this gap.
 
     @Test
     public void columnSelection_isConnected_true_picks_connected_column() {
@@ -359,7 +362,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 100, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ false,
                 /*isConnected=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interGroupDelta());
         assertTrue("no-groups branch must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -377,14 +380,14 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ false,
                 /*isConnected=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interGroupDelta());
         assertTrue(!d.shouldCallAdjustViewSpacing());
     }
 
     @Test
     public void decide_unconnected_view_with_2plus_groups_proceeds_or_short_circuits_by_delta() {
-        // Per HALT 1.5 Q4 default: the unconnected-column heuristic STILL
+        // By default: the unconnected-column heuristic STILL
         // applies (target lookup uses unconnected column). The short-circuit
         // happens on delta-zero math, NOT on isConnected==false. Pin that
         // an unconnected view with TIGHT current spacing still triggers a
@@ -397,7 +400,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(20, d.interGroupDelta());
         assertTrue("unconnected-but-tight must call adjustViewSpacing",
                 d.shouldCallAdjustViewSpacing());
@@ -414,7 +417,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 100, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interGroupDelta());
         assertTrue("delta=0 (equal target) must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -435,7 +438,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interGroupDelta());
         assertTrue("negative-delta clamped to 0 must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -454,7 +457,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ true);
+                /*hasTargetSpacingOverride=*/ true, null);
         assertEquals(0, d.interGroupDelta());
         assertTrue(!d.shouldCallAdjustViewSpacing());
         assertNotNull(d.noChangeReason());
@@ -475,7 +478,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 100, /*dryRun=*/ true,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(60, d.interGroupDelta());
         assertTrue("dryRun=true must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -493,7 +496,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 100, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(60, d.interGroupDelta());
         assertTrue("happy path must call adjustViewSpacing",
                 d.shouldCallAdjustViewSpacing());
@@ -512,7 +515,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 40, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ false,
                 /*isConnected=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertTrue(d.noChangeReason().contains("fewer than 2 top-level"));
         assertTrue("no-groups branch must NOT mention 'meets or exceeds'",
                 !d.noChangeReason().contains("meets or exceeds"));
@@ -530,7 +533,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 40, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         ApplyGroupSpacingDecision d1 = ApplyGroupSpacingDecision.decide(
                 /*connectionCount=*/ 5,
                 /*interGroupConnectionCount=*/ 1,
@@ -538,7 +541,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasAtLeast2TopLevelGroups=*/ true,
                 /*isConnected=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertTrue(d0.noChangeReason().contains("0 inter-group connections"));
         assertTrue(d1.noChangeReason().contains("1 inter-group connection"));
         // 1-connection wording must NOT pluralize.
@@ -559,7 +562,7 @@ public class ApplyGroupSpacingRecommendationsToolTest {
     @Test
     public void hubAware_connectedTier2_returns140_whenHasLargeHubsTrue() {
         // N=20 + connected + has hubs → hub-aware tier 2 = 140px (vs no-hubs
-        // 100px; matches the H1 textbook F4 case from 2026-05-06 paired
+        // 100px; matches the H1 textbook case from 2026-05-06 paired
         // empirical — cumulative +100 group from currentSpacing=40 lands AT
         // the inflation knee).
         assertEquals(140,

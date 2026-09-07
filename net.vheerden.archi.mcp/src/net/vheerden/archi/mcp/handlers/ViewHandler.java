@@ -33,6 +33,7 @@ import net.vheerden.archi.mcp.response.PaginationCursor;
 import net.vheerden.archi.mcp.response.ResponseFormat;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.SummaryFormatter;
+import net.vheerden.archi.mcp.response.ViewContainers;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
@@ -57,6 +58,7 @@ public class ViewHandler {
     private static final Logger logger = LoggerFactory.getLogger(ViewHandler.class);
     private static final TypeReference<Map<String, Object>> MAP_TYPE_REF = new TypeReference<>() {};
     private static final String TREE_ROOT_KEY = "__root__";
+
 
     /**
      * Default page size for view results when no limit parameter is provided.
@@ -226,9 +228,7 @@ public class ViewHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata, connections, "
-                                        + "groups, notes",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -413,7 +413,9 @@ public class ViewHandler {
                 int tokensAtStandard = CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.STANDARD,
                         CostEstimator.ItemType.VIEW);
                 String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
-                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset);
+                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset,
+                        CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.MINIMAL,
+                                CostEstimator.ItemType.VIEW));
                 logger.debug("DryRun estimate: {} views, ~{} tokens at {} preset", totalCount, estimatedTokens, preset);
 
                 List<String> dryRunNextSteps = new ArrayList<>();
@@ -602,7 +604,13 @@ public class ViewHandler {
         fieldsProp.put("description", "Field verbosity preset for element/view data. "
                 + "'minimal' returns only id and name. "
                 + "'standard' (default) returns standard fields. "
-                + "'full' returns all available fields.");
+                + "'full' returns all available fields. "
+                + "In the default json response the preset reaches the element and relationship rows "
+                + "only. The visualMetadata, connections, groups, notes and images arrays are returned "
+                + "in full at every preset, so narrowing the preset leaves them untouched. Use exclude "
+                + "to drop those arrays by name, or dryRun to size the response before you fetch it. "
+                + "This parameter and exclude apply to format=json and format=graph; format=summary "
+                + "and format=tree ignore both.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
 
@@ -613,8 +621,7 @@ public class ViewHandler {
         excludeProp.put("items", excludeItemsDef);
         excludeProp.put("description", "Fields to exclude from element/view data. "
                 + "Applied after fields preset. "
-                + "Valid values: documentation, properties, layer, type, visualMetadata, connections, "
-                + "groups, notes. "
+                + "Valid values: " + FieldSelector.validExcludeFieldsAsProse() + ". "
                 + "Note: id and name cannot be excluded. "
                 + "Use exclude=['visualMetadata','connections'] to omit position and routing data.");
         properties.put("exclude", excludeProp);
@@ -632,6 +639,20 @@ public class ViewHandler {
                 + "'summary' returns condensed natural language overview with element/relationship distributions. "
                 + "'tree' returns compact containment hierarchy showing groups and their children — "
                 + "ideal for discovering group viewObjectIds before calling layout-within-group, arrange-groups, or optimize-group-order. "
+                + "Its group stats count BOTH kinds of container the group-layout family arranges — a native view group "
+                + "and an ArchiMate Grouping element — and each such node carries isGroup: true. topLevelGroups "
+                + "counts DEPTH, not just kind: a container is top-level here only when it is a direct child of the "
+                + "view, and one drawn inside another container is counted in nestedGroups instead. So topLevelGroups "
+                + "equals the groupsPositioned that arrange-groups will report for the same view when groupIds is "
+                + "omitted AND no container is drawn inside a plain element acting as a container. Where one is, "
+                + "arrange-groups arranges it too — inside its host, reported in nestedContainersArranged rather than "
+                + "in groupsPositioned — so this number is the lower of the two and the difference is exactly those "
+                + "nested containers. "
+                + "A plain element acting as a container is not counted here, and arrange-groups does not position it "
+                + "by default — but naming its viewObjectId in groupIds does arrange it. On any call that passes "
+                + "groupIds the two numbers part company and no fixed relation holds between them, because groupIds "
+                + "REPLACES the default set rather than adding to it: groupsPositioned then counts exactly the ids "
+                + "you named, which may be more, fewer or none of the containers counted here. "
                 + "Much more token-efficient than json for grouped view workflows.");
         formatProp.put("enum", List.of("json", "graph", "summary", "tree"));
         properties.put("format", formatProp);
@@ -646,14 +667,70 @@ public class ViewHandler {
                         + "Shows which elements appear together and how they connect in a diagram. "
                         + "Connections include sourceAnchor/targetAnchor (element center reference points "
                         + "used by the bendpoint formula — NOT visual edge attachment points; Archi computes "
-                        + "perimeter intersections at render time), relative bendpoints (offsets from "
-                        + "source/target centers), and absoluteBendpoints (canvas coordinates). "
+                        + "the attachment at render time), relative bendpoints (offsets from "
+                        + "source/target centers), absoluteBendpoints, and sourceRenderFace/targetRenderFace. "
+                        + "sourceRenderFace/targetRenderFace name the element FACE the line is actually drawn "
+                        + "leaving and entering — top, bottom, left or right — which is the attachment those "
+                        + "anchors are not: the server derives it from the element's untruncated bounds and the "
+                        + "anchor algorithm Archi installs, neither of which the payload otherwise carries "
+                        + "(rebuilding a box from the published center lands a pixel short on the far edge of "
+                        + "any odd dimension). The reference is the outermost stored bendpoint when the "
+                        + "connection has one and the other element's center when it does not — and always the "
+                        + "other element's center on a manhattan-routed view, which ignores stored bendpoints. "
+                        + "That reference is the absoluteBendpoints value published here, whose single division "
+                        + "truncates toward zero, while the renderer blends in floating point and floors; the "
+                        + "two agree on every non-negative coordinate and can differ by one pixel on a negative "
+                        + "one, which at a band boundary is enough to change the face. The field takes the "
+                        + "published value, so on those coordinates it under-claims rather than guesses. "
+                        + "EITHER FIELD IS OMITTED WHEN NO SINGLE FACE IS TRUE, WHICH NEVER MEANS 'no face': the "
+                        + "line attaches at a corner (on two face lines at once), the reference lands inside the "
+                        + "box, a rounded figure puts the attachment on its corner arc, the endpoint is a "
+                        + "Junction (ellipse anchor), or the two anchor algorithms Archi's orthogonalAnchor "
+                        + "preference selects between would name different faces — that preference is not "
+                        + "carried in the model file, so the face is published only where both agree and is "
+                        + "therefore true whichever way it is set. While assess-layout reports a non-zero "
+                        + "anchorDriftCount an endpoint has moved since the route was written, so the reference "
+                        + "the renderer uses has moved with it and the face can differ from the one the stored "
+                        + "bendpoints suggest. "
+                        + "absoluteBendpoints is DERIVED, not stored: Archi holds every bendpoint twice, "
+                        + "once as an offset from the source centre and once from the target centre, and "
+                        + "the reported point interpolates between those two reconstructions at the weight "
+                        + "Archi draws with — bendpoint i of n sits (i+1)/(n+1) of the way from the "
+                        + "source-anchored reconstruction to the target-anchored one — in integer canvas "
+                        + "pixels against whole-pixel element centres — the rendered point, rounded "
+                        + "once to the whole pixel this field carries, never a whole pixel away from "
+                        + "where the line is drawn. When the two reconstructions disagree — which "
+                        + "happens whenever an "
+                        + "endpoint moved or was resized after the route was written, and is what "
+                        + "assess-layout reports as anchorDriftCount — the drawn polyline is sheared, most "
+                        + "at its first and last bendpoints, and no reported coordinate is then a value "
+                        + "the model holds on either axis. Use the relative bendpoints when you need the "
+                        + "values the model actually stores; and note that assess-layout builds its own "
+                        + "geometry in a different frame, so the same bendpoint can read differently "
+                        + "there. "
                         + "Use 'fields' to control response verbosity and 'exclude' to omit specific fields. "
+                        + "The two are not interchangeable levers on one axis: 'fields' narrows the element "
+                        + "and relationship rows only, while the visualMetadata, connections, groups, notes "
+                        + "and images arrays come back whole at every preset. On a view carrying connections "
+                        + "those five are usually the larger half of the payload, so 'exclude' is usually the "
+                        + "parameter that moves the response size and narrowing the preset alone will not. "
+                        + "Both parameters are ignored by format=summary and format=tree. "
                         + "Use exclude=['visualMetadata','connections'] to omit position and routing data. "
                         + "Set dryRun=true to get a cost estimate without returning results. "
                         + "Set format=tree for a compact containment hierarchy showing groups and their children — "
                         + "ideal first step for grouped view workflows (discover viewObjectIds for "
                         + "layout-within-group, arrange-groups, optimize-group-order, adjust-view-spacing). "
+                        + "A container node in that tree is marked isGroup: true whether it is a native view group or an "
+                        + "ArchiMate Grouping element, and the group stats count both, so the discovery step reports the "
+                        + "same number of top-level containers that those four tools will act on — with one exception "
+                        + "worth knowing before you plan a layout: a container drawn INSIDE a plain element acting as "
+                        + "a container is counted in nestedGroups here, and arrange-groups arranges it anyway, in that "
+                        + "host's own coordinate space, reporting it in nestedContainersArranged. totalElements still "
+                        + "counts a Grouping as the element it is; ungroupedElements counts only elements sitting loose "
+                        + "on the canvas, so a top-level container is excluded from it. "
+                        + "The other formats agree on what a container is: format=summary counts both kinds under "
+                        + "'Containers: N groups', and in format=graph every container node carries isGroup: true — "
+                        + "the Grouping element nodes as well as the nodes tagged _nodeType: 'group'. "
                         + "Set format=graph for deduplicated node/edge structure — edges carry viewConnectionId and nodes carry "
                         + "viewObjectId (the visual ids to pass to remove-from-view / update-view-object; the edge/node id "
                         + "are model ids those tools reject), format=summary for condensed text overview. "
@@ -661,6 +738,9 @@ public class ViewHandler {
                         + "On Archi 5.10, a connection also carries relativePosition — the \"Label Offset\" anchor set by "
                         + "auto-route-connections to lift a Middle label off its own box — which is the only programmatic read-back "
                         + "for the offset (omitted on Archi 5.7 and for the un-offset default; export-view does not render it). "
+                        + "An element reports documentation and properties only when it has "
+                        + "them, so an absent field means the element carries nothing there "
+                        + "rather than that it was left out. "
                         + "Related: get-element (full element details), "
                         + "get-relationships (connections beyond this view), "
                         + "export-view (visual verification of connection routing).")
@@ -743,9 +823,7 @@ public class ViewHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata, connections, "
-                                        + "groups, notes",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -819,12 +897,30 @@ public class ViewHandler {
                     logger.info("Handling get-view-contents with dryRun=true");
                     int elementCount = contents.elements().size();
                     int relationshipCount = contents.relationships().size();
-                    int estimatedTokens = CostEstimator.estimateTokensMixed(elementCount, relationshipCount, preset);
-                    int tokensAtStandard = CostEstimator.estimateTokensMixed(elementCount, relationshipCount,
+                    // Priced on all seven arrays the response carries, not just the two the
+                    // caller asked about. The five visual arrays do not follow the preset and are
+                    // usually the larger half of the payload, so an estimate that omitted them
+                    // under-reported every view and under-reported hardest at fields=minimal,
+                    // where the two preset-aware terms shrink and the other five do not.
+                    CostEstimator.ViewContentsCounts counts = new CostEstimator.ViewContentsCounts(
+                            elementCount,
+                            relationshipCount,
+                            chargedRowCount(contents.visualMetadata(), effectiveExclude, "visualMetadata"),
+                            chargedRowCount(contents.connections(), effectiveExclude, "connections"),
+                            chargedRowCount(contents.groups(), effectiveExclude, "groups"),
+                            chargedRowCount(contents.notes(), effectiveExclude, "notes"),
+                            chargedRowCount(contents.images(), effectiveExclude, "images"));
+                    int estimatedTokens = CostEstimator.estimateTokensForViewContents(counts, preset);
+                    int tokensAtStandard = CostEstimator.estimateTokensForViewContents(counts,
                             FieldSelector.FieldPreset.STANDARD);
                     String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
+                    // The saving is projected with the same estimator that produced
+                    // estimatedTokens, so it accounts for all seven arrays rather than
+                    // approximating the whole result as elements.
                     String recommendation = CostEstimator.buildRecommendation(
-                            elementCount + relationshipCount, estimatedTokens, preset);
+                            elementCount + relationshipCount, estimatedTokens, preset,
+                            CostEstimator.estimateTokensForViewContents(counts,
+                                    FieldSelector.FieldPreset.MINIMAL));
                     logger.debug("DryRun estimate: {} elements + {} relationships, ~{} tokens at {} preset",
                             elementCount, relationshipCount, estimatedTokens, preset);
 
@@ -833,6 +929,14 @@ public class ViewHandler {
                     if (estimatedTokens > CostEstimator.THRESHOLD_COMFORTABLE) {
                         dryRunNextSteps.add("Use fields=minimal to reduce token usage");
                     }
+                    // Offered while EITHER array is still being returned, deliberately, not only
+                    // while both are. The two are not one unit: a connection row is the widest row
+                    // this family emits, about three times a node row, so a caller who has already
+                    // dropped visualMetadata still has the larger of the two savings in front of
+                    // them and withdrawing the suggestion would withhold it. The exclude parameter
+                    // is a whole list rather than an increment, so a caller acting on this
+                    // re-sends both names and the one they already had is not a contradiction.
+                    // Suppressed only once both are gone, when there is nothing left to suggest.
                     if (effectiveExclude == null
                             || !effectiveExclude.contains("visualMetadata")
                             || !effectiveExclude.contains("connections")) {
@@ -891,15 +995,42 @@ public class ViewHandler {
                     @SuppressWarnings("unchecked")
                     Map<String, Object> treeStats = (Map<String, Object>) treeResult.get("stats");
                     int totalGroups = (int) treeStats.get("totalGroups");
-                    if (totalGroups > 0) {
+                    // Keyed on TOP-LEVEL containers, not the total. arrange-groups and
+                    // optimize-group-order collect the view's own children, so a view whose only
+                    // containers sit nested inside a host element has nothing for them to position
+                    // — recommending them there is the same confident wrong steer as calling a
+                    // view of containers flat, just pointing the other way.
+                    int topLevelGroups = (int) treeStats.get("topLevelGroups");
+                    if (topLevelGroups > 0) {
                         treeNextSteps = List.of(
                                 "Use layout-within-group with a group's viewObjectId to layout its children",
                                 "Use arrange-groups to position groups relative to each other",
                                 "Use optimize-group-order to minimize inter-group edge crossings",
                                 "Use get-view-contents format=json for full element and relationship detail");
+                    } else if (totalGroups > 0) {
+                        // Containers exist, but every one of them is nested. layout-within-group
+                        // still applies to each; the top-level family arranges nothing BY DEFAULT.
+                        // It is not empty-handed, though: whatever those nested containers sit
+                        // inside is itself a top-level container, and arrange-groups positions one
+                        // the caller names in groupIds whatever its element type.
+                        treeNextSteps = List.of(
+                                "Use layout-within-group with a nested container's viewObjectId to layout its children",
+                                "This view has no top-level group or Grouping, so optimize-group-order "
+                                        + "positions nothing by default. arrange-groups is not empty-handed: it "
+                                        + "arranges a container drawn inside a host in that host's own coordinate "
+                                        + "space, reported in nestedContainersArranged, and it will position the "
+                                        + "host itself if you name its viewObjectId in groupIds",
+                                "Use get-view-contents format=json for full element and relationship detail");
                     } else {
+                        // No container of either kind. That does NOT make the view flat: a top-level
+                        // element holding children is container-shaped on the canvas and is not
+                        // counted above, so the flat-layout advice is offered beside the opt-in that
+                        // handles it rather than as the only answer.
                         treeNextSteps = List.of(
                                 "Use layout-flat-view for flat views (no groups) — recommended default layout tool",
+                                "If a top-level element holds children (a Node typing a region, say), it is a "
+                                        + "container this listing does not count: arrange-groups will position it "
+                                        + "if you name its viewObjectId in groupIds",
                                 "Use auto-layout-and-route for graph-aware ELK layout + routing",
                                 "Use get-view-contents format=json for full element and relationship detail");
                     }
@@ -998,12 +1129,22 @@ public class ViewHandler {
                     // Enrich the element nodes BEFORE the group/note nodes are appended below, so the
                     // group/note nodes (which carry their OWN viewObjectId from their DTO) are never
                     // touched.
+                    // Marked from the RAW contents by element id, for the same reason the id join
+                    // above is: a caller asking for a minimal field set gets nodes with no type to
+                    // test, and the marker has to survive that. Without it an agent scanning
+                    // _nodeType == "group" sees only native groups and reads a view built from
+                    // Grouping containers as having none — the tree format's old blind spot,
+                    // reachable by changing one parameter.
+                    Set<String> containerElementIds = ViewContainers.containerElementIds(contents);
                     for (Map<String, Object> node : graphNodes) {
                         List<String> ids = elemToViewObjIds.get(node.get("id"));
                         if (ids != null && ids.size() == 1) {
                             node.put("viewObjectId", ids.get(0));
                         } else if (ids != null && ids.size() > 1) {
                             node.put("viewObjectIds", List.copyOf(ids));
+                        }
+                        if (containerElementIds.contains(node.get("id"))) {
+                            node.put("isGroup", true);
                         }
                     }
 
@@ -1017,6 +1158,9 @@ public class ViewHandler {
                         for (Object group : groups) {
                             Map<String, Object> node = new LinkedHashMap<>(formatter.toMap(group));
                             node.put("_nodeType", "group");
+                            // Same marker the Grouping element nodes carry above, so one predicate
+                            // finds every container regardless of which bucket it arrived in.
+                            node.put("isGroup", true);
                             graphNodes.add(node);
                         }
                     }
@@ -1108,6 +1252,22 @@ public class ViewHandler {
     }
 
     /**
+     * How many rows of one view-contents array the estimate should charge for.
+     *
+     * <p>Zero in the two cases where the client receives nothing: the array is absent from the
+     * response because the caller excluded it by name, or the accessor left it null because the
+     * view contains none of that kind of object. The groups, notes and images arrays are the ones
+     * that arrive null when empty, and calling {@code size()} on them unguarded would fail the
+     * dry-run branch on every view that has no groups.</p>
+     */
+    private static int chargedRowCount(List<?> rows, Set<String> excludeFields, String excludeKey) {
+        if (rows == null || (excludeFields != null && excludeFields.contains(excludeKey))) {
+            return 0;
+        }
+        return rows.size();
+    }
+
+    /**
      * Builds nextSteps for empty view results, with name-filter-aware messaging.
      */
     private List<String> buildEmptyViewsNextSteps(String effectiveName) {
@@ -1152,6 +1312,16 @@ public class ViewHandler {
         int totalNotes = 0;
         int ungroupedElements = 0;
 
+        // Container counters. Two different Archi objects render as an arrangeable labelled box,
+        // and the group-layout family positions both: a native view group, and an ArchiMate
+        // Grouping element. This format is that family's documented discovery step, so the counts
+        // report what the family will act on rather than one of the two concrete types — a
+        // discovery step that disagrees with the tools it exists to feed has failed at its job.
+        // Accumulated across both loops below, which is why they are declared here.
+        int totalGroups = 0;
+        int topLevelGroups = 0;
+        int nestedGroups = 0;
+
         // Process elements (visualMetadata)
         if (contents.visualMetadata() != null) {
             for (ViewNodeDto node : contents.visualMetadata()) {
@@ -1161,9 +1331,18 @@ public class ViewHandler {
 
                 // Resolve name and elementType from elements list
                 ElementDto element = elementById.get(node.elementId());
+                boolean isContainer = ViewContainers.isContainer(element);
                 if (element != null) {
                     treeNode.put("name", element.name());
                     treeNode.put("elementType", element.type());
+                    // Marking the node keeps the stats and the tree from contradicting each other
+                    // inside one response: an agent counting marked nodes arrives at the same
+                    // number the stats report, without having to know which type names arrange.
+                    // Emitted only when true, so leaf element nodes stay byte-identical — the same
+                    // asymmetry the children/childCount pass below already relies on.
+                    if (isContainer) {
+                        treeNode.put("isGroup", true);
+                    }
                 }
 
                 // Index every element node (including orphans) for the element-container
@@ -1174,8 +1353,20 @@ public class ViewHandler {
                 childrenByParent.computeIfAbsent(
                         parent != null ? parent : TREE_ROOT_KEY, k -> new ArrayList<>()).add(treeNode);
 
+                // A Grouping IS an ArchiMate element, so it stays in totalElements — that counter
+                // remains one-for-one with the view's visual metadata. It is removed only from
+                // ungroupedElements, which answers "what is still sitting loose on the canvas":
+                // a container is not loose, it is what the loose things get placed into. An EMPTY
+                // top-level container counts here too, because the arrangement family positions it.
                 totalElements++;
-                if (parent == null) {
+                if (isContainer) {
+                    totalGroups++;
+                    if (parent == null) {
+                        topLevelGroups++;
+                    } else {
+                        nestedGroups++;
+                    }
+                } else if (parent == null) {
                     ungroupedElements++;
                 }
             }
@@ -1198,10 +1389,6 @@ public class ViewHandler {
         }
 
         // Process groups — build group nodes with children
-        int totalGroups = 0;
-        int topLevelGroups = 0;
-        int nestedGroups = 0;
-
         if (contents.groups() != null) {
             // First pass: create group nodes
             for (ViewGroupDto group : contents.groups()) {
@@ -1209,6 +1396,10 @@ public class ViewHandler {
                 groupNode.put("viewObjectId", group.viewObjectId());
                 groupNode.put("type", "group");
                 groupNode.put("label", group.label());
+                // type says what kind of object this is; isGroup says whether the group-layout
+                // family treats it as a group. Both kinds carry the marker so the agent has one
+                // predicate rather than a rule spanning two fields.
+                groupNode.put("isGroup", true);
                 groupNodes.put(group.viewObjectId(), groupNode);
                 totalGroups++;
             }
@@ -1241,9 +1432,16 @@ public class ViewHandler {
                 } else {
                     nestedGroups++;
                 }
-                // Only add top-level groups to root; nested groups are added via childViewObjectIds
+                // Top-level groups go to root. A group nested under another GROUP is attached by
+                // that parent's childViewObjectIds loop above — but a group nested under an
+                // ELEMENT container has no such loop to carry it, so without this it would be
+                // counted in the stats while being unreachable by walking the tree. Routing it
+                // through childrenByParent lets the element pass below pick it up, and the
+                // groupNodes test keeps a group-parented group from being attached twice.
                 if (parent == null) {
                     childrenByParent.computeIfAbsent(TREE_ROOT_KEY, k -> new ArrayList<>()).add(groupNode);
+                } else if (!groupNodes.containsKey(parent)) {
+                    childrenByParent.computeIfAbsent(parent, k -> new ArrayList<>()).add(groupNode);
                 }
             }
         }
@@ -1259,10 +1457,19 @@ public class ViewHandler {
         // group nodes, which always emit).
         for (Map.Entry<String, Map<String, Object>> entry : elementNodes.entrySet()) {
             List<Map<String, Object>> elementChildren = childrenByParent.get(entry.getKey());
+            Map<String, Object> elemNode = entry.getValue();
+            // A marked container emits these even when empty, so the two container kinds have the
+            // same node shape. Without that, isGroup would not be the single predicate it is sold
+            // as: an agent filtering on it and then reading children would find the key present on
+            // an empty native group and absent on an empty Grouping. Genuine leaves are still
+            // omitted, so their node shape is unchanged.
+            boolean markedContainer = Boolean.TRUE.equals(elemNode.get("isGroup"));
             if (elementChildren != null && !elementChildren.isEmpty()) {
-                Map<String, Object> elemNode = entry.getValue();
                 elemNode.put("childCount", elementChildren.size());
                 elemNode.put("children", elementChildren);
+            } else if (markedContainer) {
+                elemNode.put("childCount", 0);
+                elemNode.put("children", new ArrayList<Map<String, Object>>());
             }
         }
 

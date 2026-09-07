@@ -20,11 +20,11 @@ import org.junit.Test;
  *
  * <p>Test coverage:</p>
  * <ul>
- *   <li><b>Q5 option C (2-element minimal synthetic, cheapest unit-test):</b>
+ *   <li><b>Fixture C (2-element minimal synthetic, cheapest unit-test):</b>
  *       9 tests covering no-overflow / right-overflow / bottom-overflow /
  *       negative-X / negative-Y / both-axes / exact-boundary / one-pixel-past /
  *       zero-padding cases.</li>
- *   <li><b>Q5 option B (V4 H2 hub-heavy synthetic, mimics actual failure
+ *   <li><b>Fixture B (V4 H2 hub-heavy synthetic, mimics actual failure
  *       mode):</b> 1 hub + 17 fan-out spokes fixture; baseline-fits +
  *       Row-B-inflation-causes-overflow scenarios.</li>
  *   <li><b>Mechanism #2b regression pin:</b> exercises the autoNudge gate-
@@ -44,7 +44,7 @@ public class AutoNudgeGroupBoundsFollowupTest {
 
 	private static final int PADDING = 10;
 
-	// --- Q5 option C: 2-element minimal synthetic fixture ---
+	// --- Fixture C: 2-element minimal synthetic ---
 
 	@Test
 	public void shouldNotDetectOverflow_whenChildFitsWithinParent() {
@@ -116,7 +116,7 @@ public class AutoNudgeGroupBoundsFollowupTest {
 		// DEFAULT_GROUP_PADDING (10). Behaviour with padding < 0 is undefined.
 	}
 
-	// --- Q5 option B: V4 H2 hub-heavy synthetic fixture (1 hub + 17 fan-out spokes) ---
+	// --- Fixture B: V4 H2 hub-heavy synthetic (1 hub + 17 fan-out spokes) ---
 	//
 	// Mimics view `id-ddb84fbd57d24caaa15b0da62b75f531` "PartyTest H2" (17-fan-out
 	// API Mgmt) — Successor D V_p10 calibration

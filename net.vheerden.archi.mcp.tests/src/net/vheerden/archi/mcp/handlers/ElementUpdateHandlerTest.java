@@ -79,6 +79,48 @@ public class ElementUpdateHandlerTest {
     }
 
     @Test
+    public void updateElement_descriptionShouldDocumentResponseFields() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(spec -> "update-element".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        // NOTE: bare `documentation` is NOT a valid pin — it is already an optional
+        // request parameter here. Pin the response sentence.
+        assertTrue("must state specialization is returned only when set",
+                desc.contains("specialization only when set"));
+        // The DTO is re-read post-execution ONLY when batchSeq == null. In a batch or
+        // under approval gating the caller gets the PRE-update snapshot, so an agent
+        // verifying its own write from this response would wrongly conclude it failed.
+        assertTrue("must warn the batch/approval response is pre-update",
+                desc.contains("pre-update"));
+    }
+
+    @Test
+    public void updateRelationship_descriptionShouldDocumentResponseFields() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(spec -> "update-relationship".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must name sourceId", desc.contains("sourceId"));
+        // specialization is NON_NULL and convertToRelationshipDto leaves it null when the
+        // relationship has no primary profile — the common case. The update-element
+        // clause already scopes this correctly; this one must match.
+        assertTrue("specialization must be scoped to when one is set",
+                desc.contains("specialization only when set"));
+        // The response field list is a NEGATIVE enumeration: it claims by omission, so a field
+        // the sentence does not name is a field the agent is told it will not get. It must
+        // therefore name the full returned set, and it must not keep the retired claim that
+        // documentation and properties are withheld — the mapper reports both on this path now.
+        assertFalse("the retired claim that documentation/properties are withheld must be gone",
+                desc.contains("NOT echoed"));
+        for (String field : List.of("documentation", "properties", "sourceName", "targetName")) {
+            assertTrue("the returned field set must name " + field, desc.contains(field));
+        }
+        assertTrue("must state that a cleared documentation comes back as an empty string",
+                desc.contains("empty string rather than omitting"));
+        assertTrue("must warn the batch/approval response is pre-update",
+                desc.contains("pre-update"));
+    }
+
+    @Test
     public void shouldHaveMutationPrefix_inToolDescription() {
         registry.getToolSpecifications().forEach(spec -> {
             assertTrue(spec.tool().name() + " description should start with [Mutation]",
@@ -91,6 +133,27 @@ public class ElementUpdateHandlerTest {
         McpSchema.Tool tool = registry.getToolSpecifications().get(0).tool();
         assertTrue("id should be required",
                 tool.inputSchema().required().contains("id"));
+    }
+
+    /**
+     * {@code create-element}'s description tells agents that provenance is a create-time parameter
+     * and that no update tool accepts a {@code source} map — so later provenance must be written as
+     * ordinary {@code mcp.source.}-prefixed property keys. That is an absolute claim in a shipped
+     * string, and this is what stops it going stale: adding a {@code source} parameter to either
+     * update tool makes the published sentence false, and fails here rather than in the field.
+     *
+     * <p>Asserted over both registered tools by reading their schemas, not by naming one of them,
+     * so a third update tool registered by this handler is covered the day it appears.</p>
+     */
+    @Test
+    public void shouldDeclareNoSourceParameter_onAnyUpdateTool() {
+        assertEquals("both update tools must be registered for this guard to mean anything",
+                2, registry.getToolSpecifications().size());
+        registry.getToolSpecifications().forEach(spec -> {
+            assertFalse(spec.tool().name() + " must not declare a source map: create-element's "
+                    + "description tells agents no update tool takes one",
+                    spec.tool().inputSchema().properties().containsKey("source"));
+        });
     }
 
     // ---- update-element success tests ----
@@ -505,11 +568,11 @@ public class ElementUpdateHandlerTest {
         assertEquals("INVALID_PARAMETER", error.get("code"));
     }
 
-    // ---- G1 tests ----
+    // ---- relationship semantic-attribute tests ----
 
     @Test
     @SuppressWarnings("unchecked")
-    public void shouldAdvertiseG1ParamsInUpdateRelationshipSchema_AC3() {
+    public void shouldAdvertiseSemanticAttributeParamsInUpdateRelationshipSchema() {
         Map<String, Object> properties = registry.getToolSpecifications().stream()
                 .filter(spec -> "update-relationship".equals(spec.tool().name()))
                 .findFirst()
@@ -531,7 +594,7 @@ public class ElementUpdateHandlerTest {
     }
 
     @Test
-    public void shouldPassInfluenceStrengthThroughHandler_AC3() throws Exception {
+    public void shouldPassInfluenceStrengthThroughHandler() throws Exception {
         Map<String, Object> args = new HashMap<>();
         args.put("id", "rel-1");
         args.put("influenceStrength", "+");
@@ -543,7 +606,7 @@ public class ElementUpdateHandlerTest {
     }
 
     @Test
-    public void shouldRejectInfluenceStrengthOnNonInfluence_atHandler_AC7() throws Exception {
+    public void shouldRejectInfluenceStrengthOnNonInfluence_atHandler() throws Exception {
         accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
             throw new ModelAccessException(
                     "influenceStrength only applies to InfluenceRelationship; got CompositionRelationship.",
@@ -567,8 +630,8 @@ public class ElementUpdateHandlerTest {
     }
 
     @Test
-    public void shouldExtendNoFieldsToUpdateGuard_withG1Fields_AC3() throws Exception {
-        // When only G1 fields are supplied (no name/documentation/properties/specialization),
+    public void shouldExtendNoFieldsToUpdateGuard_withSemanticAttributeFields() throws Exception {
+        // When only semantic-attribute fields are supplied (no name/documentation/properties/specialization),
         // the handler should still pass the bundle through (no "no fields" error at handler).
         // The "at least one of" guard moved to the prepare boundary handles enforcement.
         Map<String, Object> args = new HashMap<>();
@@ -577,6 +640,132 @@ public class ElementUpdateHandlerTest {
         callRelTool(args);
         assertNotNull(accessor.capturedRelationshipSemanticAttributes);
         assertEquals("read", accessor.capturedRelationshipSemanticAttributes.accessType());
+    }
+
+    // ---- relationship empty-string clear (the schema's own promise) ----
+    //
+    // update-relationship's schema says "Empty string clears the name" and "Empty string clears
+    // documentation". The command layer honours that. These pin the wire, which sits between the
+    // two: the handler must hand the accessor the empty string it was given, because null is this
+    // signature's sentinel for "leave unchanged" and a stripped "" is indistinguishable from an
+    // omitted key by the time the command sees it.
+
+    @Test
+    public void shouldPassEmptyDocumentationToAccessor_whenClearRequested() throws Exception {
+        String[] captured = new String[1];
+        captured[0] = "<never called>";
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            captured[0] = doc;
+            return new MutationResult<>(new RelationshipDto(
+                    id, "Test Relationship", "AssociationRelationship", "src-1", "tgt-1"), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("documentation", "");
+
+        callRelTool(args);
+        assertEquals("an empty documentation must reach the accessor as \"\", not as the "
+                + "leave-unchanged null", "", captured[0]);
+    }
+
+    @Test
+    public void shouldPassEmptyNameToAccessor_whenClearRequested() throws Exception {
+        String[] captured = new String[1];
+        captured[0] = "<never called>";
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            captured[0] = name;
+            return new MutationResult<>(new RelationshipDto(
+                    id, "Test Relationship", "AssociationRelationship", "src-1", "tgt-1"), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("name", "");
+
+        callRelTool(args);
+        assertEquals("an empty name must reach the accessor as \"\", not as the leave-unchanged "
+                + "null", "", captured[0]);
+    }
+
+    /**
+     * The mixed set-and-clear shape. Pinned separately because a fix that only relaxed the
+     * downstream "no fields to update" guard would satisfy a lone clear while leaving this one a
+     * silent no-op — the caller sets the name, gets success, and keeps the old documentation.
+     */
+    @Test
+    public void shouldPassNewNameAndEmptyDocumentation_whenSettingOneAndClearingTheOther()
+            throws Exception {
+        String[] captured = new String[2];
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            captured[0] = name;
+            captured[1] = doc;
+            return new MutationResult<>(new RelationshipDto(
+                    id, name, "AssociationRelationship", "src-1", "tgt-1"), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "rel-1");
+        args.put("name", "Serves");
+        args.put("documentation", "");
+
+        callRelTool(args);
+        assertEquals("the supplied name must survive the wire", "Serves", captured[0]);
+        assertEquals("the clear must survive the wire alongside it", "", captured[1]);
+    }
+
+    /**
+     * The negative control for the two above: preserving "" must not turn "absent" into "clear".
+     * An omitted key and an explicit JSON null both still mean leave-unchanged.
+     */
+    @Test
+    public void shouldPassNullDocumentation_whenTheKeyIsAbsentOrExplicitlyNull() throws Exception {
+        String[] captured = new String[1];
+        captured[0] = "<never called>";
+        accessor.setUpdateRelationshipBehavior((sessionId, id, name, doc, properties) -> {
+            captured[0] = doc;
+            return new MutationResult<>(new RelationshipDto(
+                    id, name, "AssociationRelationship", "src-1", "tgt-1"), null);
+        });
+
+        Map<String, Object> absent = new HashMap<>();
+        absent.put("id", "rel-1");
+        absent.put("name", "X");
+        callRelTool(absent);
+        assertNull("an omitted documentation key must stay the leave-unchanged null", captured[0]);
+
+        captured[0] = "<never called>";
+        Map<String, Object> explicitNull = new HashMap<>();
+        explicitNull.put("id", "rel-1");
+        explicitNull.put("name", "X");
+        explicitNull.put("documentation", null);
+        callRelTool(explicitNull);
+        assertNull("an explicit JSON null must stay the leave-unchanged null", captured[0]);
+    }
+
+    /**
+     * update-element makes no empty-clear promise in its schema, so it must keep stripping. Pinned
+     * here so a future widening of the shared reader cannot silently give it clear semantics its
+     * own description never advertised.
+     */
+    @Test
+    public void shouldStillStripEmptyDocumentation_forUpdateElement() throws Exception {
+        String[] captured = new String[1];
+        captured[0] = "<never called>";
+        accessor.setUpdateElementBehavior((sessionId, id, name, doc, properties) -> {
+            captured[0] = doc;
+            return new MutationResult<>(ElementDto.standard(
+                    id, "Test Element", "BusinessActor", null, "Business", doc, null), null);
+        });
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("id", "elem-1");
+        args.put("name", "X");
+        args.put("documentation", "");
+
+        callTool(args);
+        assertNull("update-element advertises no empty-clear, so \"\" must keep arriving as null",
+                captured[0]);
     }
 
     // ---- Helper methods ----

@@ -45,11 +45,11 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * substrate that surfaced the monotonicity violation H5 had to fix
  * (V_p10 6.4 → 5.8 regression under the placeholder verifier) — the pin name
  * preserves the substrate identity for traceability even though the test
- * itself runs pure-JUnit per Option α (see substrate-parity-strategy.md).
+ * itself runs pure-JUnit (see substrate-parity-strategy.md).
  *
  * <p><b>Calibration provenance.</b> Per the pin-calibration
  * substrate-parity discipline the floor/ceiling values are
- * anchored at the PURE-JUNIT (Option α) substrate's pre-H5 empirical actuals,
+ * anchored at the PURE-JUNIT substrate's pre-H5 empirical actuals,
  * NOT the live-MCP Task 8 measurements. The live-MCP HH actuals (HPQ=0.82,
  * M4=5, V_p10=6.4, M5=1) are a DIFFERENT substrate and DO NOT transfer to
  * pure-JUnit anchoring — the Task 7 precedent surfaced exactly this

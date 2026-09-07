@@ -40,8 +40,44 @@ public record EmbeddedViewDto(
     String lineStyle,
     String textAlignment,
     String verticalTextAlignment,
-    String note
+    String note,
+    /**
+     * Placement-time disclosures for THIS call — currently the one that says the rectangle just
+     * placed lands on a route already drawn on the view.
+     *
+     * <p>Present only on the response to a placement call, and on every arm of one: the entity is
+     * built once in the prepare and is the same object the immediate response returns, the
+     * proposal carries under {@code preview}, and the batched response projects — so approval
+     * mode, which discards {@code nextSteps} wholesale, cannot lose it.</p>
+     *
+     * <p>A route crossing a view-reference is a RATED {@code connectionPassThroughs}, not the
+     * informational note metric: the assessor splits view objects on "is it a note" alone, so a
+     * view-reference is an ordinary layout node and a crossing can drive the view to poor.</p>
+     */
+    java.util.List<StructuredWarningDto> structuredWarnings
 ) {
+
+    /**
+     * The shape without a placement disclosure — every field a stored view-reference has, and no
+     * warning about the call that put it there. Read paths and fixtures build this one; the
+     * placement prepare builds the canonical form, because only a call that places can measure
+     * what it landed on.
+     */
+    public EmbeddedViewDto(
+            String viewObjectId, String referencedViewId,
+            int x, int y, int width, int height,
+            String parentViewObjectId,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String fontName, Integer fontSize, String fontStyle, String gradient,
+            Boolean deriveLineColor, Integer outlineOpacity, String lineStyle,
+            String textAlignment, String verticalTextAlignment, String note) {
+        this(viewObjectId, referencedViewId, x, y, width, height, parentViewObjectId,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                fontName, fontSize, fontStyle, gradient,
+                deriveLineColor, outlineOpacity, lineStyle,
+                textAlignment, verticalTextAlignment, note, null);
+    }
 
     /**
      * Convenience constructor without styling (back-compat with the bounds-only
@@ -56,6 +92,6 @@ public record EmbeddedViewDto(
                 parentViewObjectId,
                 null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
-                null);
+                null, null);
     }
 }

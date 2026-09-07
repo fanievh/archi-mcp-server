@@ -7,11 +7,11 @@ package net.vheerden.archi.mcp.model;
  * or to call {@code adjustViewSpacing}.
  *
  * <p>Extracted from {@link ArchiModelAccessorImpl#applyElementSpacingRecommendations}
- * specifically so the short-circuit guards (no groups / no groups with 2+
- * children / no connections / delta=0 / dryRun) can be exercised by JUnit
- * without an OSGi context. The production method calls
- * {@link #decide(int, int, int, boolean, boolean, boolean, boolean)} once and
- * dispatches on {@link #shouldCallAdjustViewSpacing()}.</p>
+ * specifically so the short-circuit guards (a container set this tool does not
+ * position / no groups / no groups with 2+ children / no connections / delta=0 /
+ * dryRun) can be exercised by JUnit without an OSGi context. The production method
+ * calls {@link #decide(int, int, int, boolean, boolean, boolean, boolean, String)}
+ * once and dispatches on {@link #shouldCallAdjustViewSpacing()}.</p>
  *
  * <p>This pattern is the test-burden response to Sonnet 4.6 cross-model code
  * review action item [HIGH] 2026-05-04 — "Add accessor-level behavioral
@@ -23,7 +23,8 @@ package net.vheerden.archi.mcp.model;
  *                           {@code adjustViewSpacing}; 0 on every short-circuit
  *                           branch
  * @param shouldCallAdjustViewSpacing true on the apply path, false on every
- *                           short-circuit (no-groups, no-groups-with-2+-children,
+ *                           short-circuit (a-container-set-this-tool-does-not-
+ *                           position, no-groups, no-groups-with-2+-children,
  *                           no-connections, delta=0, dryRun)
  * @param noChangeReason     populated on every short-circuit branch except
  *                           dryRun (dryRun is a deliberate preview, not a
@@ -57,6 +58,12 @@ public record ApplyElementSpacingDecision(
      *                                    explicit {@code targetSpacing}
      *                                    parameter (changes the wording of
      *                                    the delta=0 short-circuit reason)
+     * @param containersNotPositionedReason the refusal built by
+     *                                    {@code SpacingEntryGuardTermination}
+     *                                    when every container on this view is
+     *                                    drawn inside a host, so the step this
+     *                                    tool applies has none of the view's
+     *                                    own to space inside; null otherwise
      * @return decision describing the chosen branch + computed delta
      */
     public static ApplyElementSpacingDecision decide(
@@ -66,7 +73,19 @@ public record ApplyElementSpacingDecision(
             boolean dryRun,
             boolean hasNonEmptyGroups,
             boolean hasGroupWithMultipleChildren,
-            boolean hasTargetSpacingOverride) {
+            boolean hasTargetSpacingOverride,
+            String containersNotPositionedReason) {
+
+        // First, and this is the one place in the family where the order inverts. This tool's
+        // hasNonEmptyGroups is computed from the view's own populated children, so on a view whose
+        // zones all sit inside a host it is already false and the branch below would fire with
+        // "view has no groups … on flat views" — a confident false statement about a canvas
+        // holding populated zones. A genuinely flat view has no nested containers either, so this
+        // reason is absent there and the existing wording still wins.
+        if (containersNotPositionedReason != null) {
+            return new ApplyElementSpacingDecision(0, false,
+                    containersNotPositionedReason);
+        }
 
         if (!hasNonEmptyGroups) {
             return new ApplyElementSpacingDecision(0, false,

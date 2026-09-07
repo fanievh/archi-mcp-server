@@ -60,7 +60,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldRenderPng_byteIdenticalHeader_AC8() throws Exception {
+    public void shouldRenderPng_byteIdenticalHeader() throws Exception {
         ExportResult result = invokeRender("renderPng", fixture, 1.0, true,
                 null);
         byte[] bytes = result.imageBytes();
@@ -74,7 +74,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldRenderJpg_validJpegHeader_AC3() throws Exception {
+    public void shouldRenderJpg_validJpegHeader() throws Exception {
         ExportResult result = invokeRenderJpg(fixture, 1.0, 90, true, null);
         byte[] bytes = result.imageBytes();
         assertNotNull("JPG bytes should be non-null in inline mode", bytes);
@@ -94,10 +94,10 @@ public class ViewExportServiceTest {
      * table. On a real complex diagram the delta would be greater than 50%.
      * This test validates that the {@code loader.compression} field is wired
      * end-to-end — not that the JPEG quality difference is measurable on sparse
-     * fixtures. Cross-LLM review (Sonnet 4.6, 2026-05-27) L1 acknowledgement.
+     * fixtures. Acknowledged limitation of the sparse fixture.
      */
     @Test
-    public void shouldRenderJpgAtQuality10_smallerThanQuality100_AC4() throws Exception {
+    public void shouldRenderJpgAtQuality10_smallerThanQuality100() throws Exception {
         ExportResult low = invokeRenderJpg(fixture, 1.0, 10, true, null);
         ExportResult high = invokeRenderJpg(fixture, 1.0, 100, true, null);
         assertTrue("JPG@quality=10 should be smaller (or equal — sparse fixture) "
@@ -106,7 +106,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldRenderSvg_validXmlHeader_AC7() throws Exception {
+    public void shouldRenderSvg_validXmlHeader() throws Exception {
         Assume.assumeTrue("Requires com.archimatetool.export.svg bundle",
                 Platform.getBundle("com.archimatetool.export.svg") != null);
         ExportResult result = invokeRender("renderSvg", fixture, 1.0, true, null);
@@ -123,7 +123,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldRenderPdf_validPdfHeader_AC2() throws Exception {
+    public void shouldRenderPdf_validPdfHeader() throws Exception {
         Assume.assumeTrue("Requires com.archimatetool.export.svg bundle",
                 Platform.getBundle("com.archimatetool.export.svg") != null);
         ExportResult result = invokeRender("renderPdf", fixture, 1.0, true, null);
@@ -142,7 +142,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldWriteJpgFile_withJpgExtension_whenInlineFalse_AC6() throws Exception {
+    public void shouldWriteJpgFile_withJpgExtension_whenInlineFalse() throws Exception {
         ExportResult result = invokeRenderJpg(fixture, 1.0, 90, false,
                 tempDir.toString());
         String filePath = result.metadata().filePath();
@@ -152,7 +152,7 @@ public class ViewExportServiceTest {
     }
 
     @Test
-    public void shouldWritePdfFile_withPdfExtension_whenInlineFalse_AC6() throws Exception {
+    public void shouldWritePdfFile_withPdfExtension_whenInlineFalse() throws Exception {
         Assume.assumeTrue("Requires com.archimatetool.export.svg bundle",
                 Platform.getBundle("com.archimatetool.export.svg") != null);
         ExportResult result = invokeRender("renderPdf", fixture, 1.0, false,

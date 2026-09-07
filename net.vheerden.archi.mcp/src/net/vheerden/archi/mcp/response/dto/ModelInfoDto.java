@@ -86,4 +86,31 @@ public record ModelInfoDto(
                 viewCount, specializationCount, elementTypeDistribution,
                 relationshipTypeDistribution, layerDistribution, mode);
     }
+
+    /**
+     * A copy carrying the name an update is about to write, or this DTO unchanged when the update
+     * does not touch the name.
+     *
+     * <p>Exists because a model update is prepared from a live read taken <em>before</em> its
+     * command runs, so the name in that read is the one the operation is about to replace. Where
+     * nothing has executed — a queued batch or a proposal awaiting approval — that read is the only
+     * value the response can carry, and reporting it there would describe the pre-change state as
+     * if it were the queued one. Handing the requested name instead makes the preview say what the
+     * operation asked for, which is what the sibling folder prepare already does.</p>
+     *
+     * <p>{@code null} means the update leaves the name alone, so the live read is already correct
+     * and is kept.</p>
+     *
+     * <p>NOTE: hand-rolled copy (records have no generated {@code with}-er) — when a future story
+     * adds a record component, thread it through here too or it will be dropped on this copy.</p>
+     *
+     * @param requested the name the update will write, or null when it changes no name
+     * @return a copy of this DTO carrying {@code requested}, or this DTO when it is null
+     */
+    public ModelInfoDto withName(String requested) {
+        return (requested == null) ? this
+                : new ModelInfoDto(requested, purpose, properties, elementCount, relationshipCount,
+                        viewCount, specializationCount, elementTypeDistribution,
+                        relationshipTypeDistribution, layerDistribution, approvalMode);
+    }
 }

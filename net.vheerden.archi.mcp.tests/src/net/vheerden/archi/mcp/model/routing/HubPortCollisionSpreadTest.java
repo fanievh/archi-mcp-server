@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.model.routing;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -326,5 +327,87 @@ public class HubPortCollisionSpreadTest {
         List<AbsoluteBendpointDto> a = List.of(bp(0, 50), bp(100, 50));
         List<AbsoluteBendpointDto> b = List.of(bp(0, 70), bp(100, 70));
         assertEquals(0, RoutingPipeline.countOrthogonalCrossings(a, b));
+    }
+
+    // =====================================================================
+    // The predicate the pass describes but never calls
+    // =====================================================================
+
+    /**
+     * Runs the predicate against the TARGET end of a path. The reversal mirrors
+     * {@code TerminalAnchoring.preservesEndpoints}, which checks the target end by reusing the
+     * source-side predicate on a reversed view — {@code preservesTerminalAnchoring} always reads
+     * {@code afterPath.get(0)}. Both connections in these tests enter the hub, so the terminal
+     * under test is the last bendpoint.
+     */
+    private static boolean predicateHolds(List<AbsoluteBendpointDto> path,
+            TerminalAnchoring anchoring, RoutingRect element) {
+        List<AbsoluteBendpointDto> reversed = new ArrayList<>(path);
+        java.util.Collections.reverse(reversed);
+        return TerminalAnchoring.preservesTerminalAnchoring(anchoring, element, reversed);
+    }
+
+    /**
+     * The id of whichever of the two candidates the pass actually relocated.
+     *
+     * <p>At most one of a two-member cluster can move: {@code resolveCluster} keeps the first member
+     * as the anchor and only relocates the others, moving the anchor itself solely when a member
+     * proves immovable. So checking the two in turn cannot mask a double move. Returns null when
+     * neither moved, which the callers assert against rather than passing over.
+     */
+    private static String relocatedId(Map<String, List<AbsoluteBendpointDto>> routed, int startSlot) {
+        if (hubLeftTerminalY(routed, "b") != startSlot) {
+            return "b";
+        }
+        return hubLeftTerminalY(routed, "a") != startSlot ? "a" : null;
+    }
+
+    /**
+     * The pass's javadoc describes what {@code TerminalAnchoring.preservesTerminalAnchoring} does
+     * across a relocation, and never calls it. This drives the real pass and calls it, on the
+     * terminal the pass actually moved, whose recorded face is the one it sits on: the relocation
+     * runs along that face line, so the predicate holds before and after.
+     */
+    @Test
+    public void shouldKeepThePredicateTrue_whenTheRecordedFaceIsTheFaceTheTerminalSitsOn() {
+        Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
+        routed.put("a", movableToHubLeft(P1, 200));
+        routed.put("b", movableToHubLeft(P2, 200));
+        TerminalAnchoring recorded = new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT);
+        assertTrue("precondition: both terminals start on the recorded face line",
+                predicateHolds(routed.get("a"), recorded, HUB)
+                        && predicateHolds(routed.get("b"), recorded, HUB));
+
+        pipeline.spreadCoincidentFacePorts(routed, List.of(conn("a", P1, HUB), conn("b", P2, HUB)));
+
+        String moved = relocatedId(routed, 200);
+        assertNotNull("the pass must have relocated one of the two, or this proves nothing", moved);
+        assertTrue("the relocated terminal moved along the face line, so the predicate still holds",
+                predicateHolds(routed.get(moved), recorded, HUB));
+    }
+
+    /**
+     * The other half of the same property, and the half the earlier javadoc got wrong: the pass
+     * <em>preserves</em> the predicate's answer rather than establishing it. Here the recorded face
+     * disagrees with the face the terminal actually sits on, so the predicate is false on arrival —
+     * and it is still false after the relocation, because the pass moves the terminal along the face
+     * it reads from the terminal's own position, never onto the recorded one.
+     */
+    @Test
+    public void shouldLeaveThePredicateFalse_whenTheRecordedFaceIsNotTheFaceTheTerminalSitsOn() {
+        Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
+        routed.put("a", movableToHubLeft(P1, 200));
+        routed.put("b", movableToHubLeft(P2, 200));
+        TerminalAnchoring stale = new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT);
+        assertFalse("precondition: the recorded face is not the one the terminals are on",
+                predicateHolds(routed.get("a"), stale, HUB)
+                        || predicateHolds(routed.get("b"), stale, HUB));
+
+        pipeline.spreadCoincidentFacePorts(routed, List.of(conn("a", P1, HUB), conn("b", P2, HUB)));
+
+        String moved = relocatedId(routed, 200);
+        assertNotNull("the pass must have relocated one of the two, or this proves nothing", moved);
+        assertFalse("the pass neither repairs the disagreement nor is stopped by it",
+                predicateHolds(routed.get(moved), stale, HUB));
     }
 }

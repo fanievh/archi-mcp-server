@@ -27,7 +27,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * re-routing the V4 oracle fixture on each test run via the routing pipeline
  * (stages 4.7h applyOffsets + 4.7p+1 applyOffsets + 4.7q
  * applyTerminalAnchoredReconciliation + 4.7r final interior-BP safety net
- * + 4.7m H5 HubPerimeterRoutingStage):
+ * + 4.7o+1 H5 HubPerimeterRoutingStage):
  *
  * <ol>
  *   <li>{@code hubPortQualityScore} &ge; {@link #HPQ_FLOOR}
@@ -63,7 +63,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * oracle pure-JUnit pipeline-routed M4/V_p10 ≤ HH source clone live-MCP
  * M4/V_p10. That assumption was never tested before the pin was written.
  * A diagnostic spike on the V4 oracle pure-JUnit substrate (RoutingPipeline.java
- * stage 4.7m disabled vs enabled — pre/post-H5 comparison) revealed
+ * stage 4.7o+1 disabled vs enabled — pre/post-H5 comparison) revealed
  * byte-identical metric values across both states: H5 is a complete no-op on
  * this fixture because 25 of 30 routed paths are size-3 L-shapes whose
  * terminal-incident segments are outside H5's operative scope per the
@@ -187,7 +187,7 @@ public class V4OracleQualityRegressionTest {
      * the EXACT substrate the pin will run on, not an implicit "B ≤ A"
      * assumption between substrates.
      *
-     * <p><b>Diagnostic finding.</b> H5 stage 4.7m is byte-identical no-op on
+     * <p><b>Diagnostic finding.</b> H5 stage 4.7o+1 is byte-identical no-op on
      * V4 oracle pure-JUnit re-routing: 25 of 30 routed paths are size-3
      * L-shapes whose both segments are terminal-incident. The partitioner
      * correctly skips these per the {@code preservesEndpoints} exemption (Task
@@ -206,12 +206,12 @@ public class V4OracleQualityRegressionTest {
      * is the agent-in-loop strict-PASS > 0/18, NOT this pin — this pin is a
      * regression sentinel, not an algorithmic-improvement assertion.
      *
-     * <p><b>HPRPS Track-A update (2026-05-16).</b>
-     * The HPRPS Track-A {@code TerminalSegmentCorridorMigrator} (Axis-3) is now
-     * composed into {@code HubPerimeterRoutingStage} at pipeline stage 4.7m — it
+     * <p><b>Axis-3 update (2026-05-16).</b>
+     * The {@code TerminalSegmentCorridorMigrator} (Axis-3) is now
+     * composed into {@code HubPerimeterRoutingStage} at pipeline stage 4.7o+1 — it
      * DOES reach the terminal-incident size-3 L-shapes H5 excludes. Measured on
      * THIS V4-oracle pure-JUnit substrate with Axis-3 active (Task-5 measurement,
-     * 2026-05-16): M4 = <b>5</b> (byte-identical to the pre-HPRPS anchor) and
+     * 2026-05-16): M4 = <b>5</b> (byte-identical to the pre-Axis-3 anchor) and
      * V_p10 = 4.0 (see {@link #VP10_FLOOR}). Axis-3 is therefore <em>also</em>
      * byte-neutral on this fixture: after the full pipeline routes V4, its
      * remaining 5 M4 contributors are not SAFE size-3 terminal-incident
@@ -238,7 +238,7 @@ public class V4OracleQualityRegressionTest {
      * tied {@code fair} so the never-worse aggregate objective correctly trades
      * M4/V_p10 for the higher HPQ/coincSeg composite). best-of-K therefore
      * delivers <b>no M4 uplift on this substrate</b> — per CLAUDE.md "no lying"
-     * + the pin-calibration substrate-parity discipline + the HPRPS {@code 3&rarr;5}
+     * + the pin-calibration substrate-parity discipline + the Axis-3 {@code 3&rarr;5}
      * lesson, this ceiling is <b>NOT</b> re-raised (there is no honest
      * V4-substrate M4 improvement to claim; switching the pin to route via
      * best-of-K would regress it 5&rarr;6 and is explicitly out of scope —
@@ -271,11 +271,11 @@ public class V4OracleQualityRegressionTest {
      * routed view), NOT the algorithmic floor on V4 oracle pipeline-routed.
      * This constant is the algorithmic no-regression floor for the latter.
      *
-     * <p><b>HPRPS Track-A update (2026-05-16).</b> With Axis-3
-     * ({@code TerminalSegmentCorridorMigrator}) composed at stage 4.7m, the
+     * <p><b>Axis-3 update (2026-05-16).</b> With Axis-3
+     * ({@code TerminalSegmentCorridorMigrator}) composed at stage 4.7o+1, the
      * Task-5 measurement on this V4-oracle pure-JUnit substrate gives V_p10 =
      * <b>4.0</b> — byte-identical to this anchor. Per the
-     * {@link #M4_CEILING} HPRPS narrative, this floor is therefore NOT re-raised
+     * {@link #M4_CEILING} Axis-3 narrative, this floor is therefore NOT re-raised
      * toward the row-722 conservative target (9.0): no measured V4-substrate
      * uplift exists to honestly claim. The floor stays a regression sentinel;
      * Axis-3's uplift is proven on the GATE substrate (Task 7/8), not here.
@@ -386,23 +386,23 @@ public class V4OracleQualityRegressionTest {
      * fixture (25 of 30 routed paths are size-3 L-shapes; terminal-incident
      * segments outside H5's operative scope). Investigation
      * starting points: terminal-segment routing changes (EdgeAttachmentCalculator,
-     * TerminalAnchoring), the HPRPS Track-A {@code TerminalSegmentCorridorMigrator}
-     * (Axis-3, composed at 4.7m 2026-05-16 — measured byte-neutral on this V4
-     * substrate; see {@link #M4_CEILING} HPRPS narrative), or upstream stages
-     * that introduce new face-hugging before stage 4.7m.
+     * TerminalAnchoring), the Axis-3 {@code TerminalSegmentCorridorMigrator}
+     * (Axis-3, composed at 4.7o+1 2026-05-16 — measured byte-neutral on this V4
+     * substrate; see {@link #M4_CEILING} Axis-3 narrative), or upstream stages
+     * that introduce new face-hugging before stage 4.7o+1.
      */
     @Test
-    public void v4OracleConnectionEdgeCoincidence_atOrBelowH5Ceiling() {
+    public void v4OracleConnectionEdgeCoincidence_atOrBelowHubPerimeterCeiling() {
         LayoutAssessmentResult result = routeAndAssess();
         int actual = result.connectionEdgeCoincidenceCount();
-        assertTrue("V4 oracle connectionEdgeCoincidence (M4) regressed above H5 "
+        assertTrue("V4 oracle connectionEdgeCoincidence (M4) regressed above the hub-perimeter "
                 + "no-regression floor " + M4_CEILING
                 + ": actual=" + actual + " (V4-oracle-JUnit pre-H5 empirical "
-                + "anchor; per AC-12.3 diagnostic 2026-05-13 PM late H5 is a "
+                + "anchor; per the diagnostic of 2026-05-13 PM late H5 is a "
                 + "structural no-op on this fixture — terminal-incident segments "
                 + "are outside H5 scope. Investigate terminal-segment routing "
                 + "changes: EdgeAttachmentCalculator, TerminalAnchoring, or "
-                + "upstream stages introducing new face-hugging before stage 4.7m).",
+                + "upstream stages introducing new face-hugging before stage 4.7o+1).",
                 actual <= M4_CEILING);
     }
 
@@ -428,7 +428,7 @@ public class V4OracleQualityRegressionTest {
      * the null-guard is preserved.
      */
     @Test
-    public void v4OracleVAxisParallelGapP10_atOrAboveH5Floor() {
+    public void v4OracleVAxisParallelGapP10_atOrAboveHubPerimeterFloor() {
         LayoutAssessmentResult result = routeAndAssess();
         Double actual = result.vAxisParallelGapP10();
         assertNotNull("V4 oracle vAxisParallelGapP10 (V_p10) is null — pipeline "
@@ -440,9 +440,9 @@ public class V4OracleQualityRegressionTest {
                 + VP10_FLOOR + ": actual=" + actual + " (V4-oracle-JUnit pre-H5 "
                 + "empirical anchor; V4 manual gold = 13.30 ± 0.5 pinned "
                 + "separately in ParallelConnectionGapMetricTest line 206. Per "
-                + "AC-12.3 diagnostic 2026-05-13 PM late H5 is a structural "
+                + "the diagnostic of 2026-05-13 PM late H5 is a structural "
                 + "no-op on this fixture — investigate upstream routing changes "
-                + "that collapsed intra-corridor spread before stage 4.7m).",
+                + "that collapsed intra-corridor spread before stage 4.7o+1).",
                 actual >= VP10_FLOOR);
     }
 
@@ -572,7 +572,7 @@ public class V4OracleQualityRegressionTest {
         // some connections failed entirely and the test can't represent
         // them — investigate before trusting the metrics. Fires once per
         // @Test method (4× per full class run; Sonnet 4.6 cross-model
-        // code-review L2 2026-04-29 — the 4 identical lines are expected,
+        // The 4 identical lines are expected,
         // one per @Test method, since each routes from scratch).
         System.out.println("[V4OracleQualityRegressionTest] routing yield: "
                 + routingResult.routed().size() + " routed + "
@@ -616,7 +616,7 @@ public class V4OracleQualityRegressionTest {
             }
             ViewFixture.FixtureElement src = fixture.getElementById(c.sourceId());
             ViewFixture.FixtureElement tgt = fixture.getElementById(c.targetId());
-            // Sonnet 4.6 cross-model code-review M1 (2026-04-29): a fixture
+            // A fixture
             // sourceId/targetId mismatch (orphaned connection) would NPE on
             // the next line and surface as a stack trace, not a useful
             // assertion failure. Guard with explicit messages so future

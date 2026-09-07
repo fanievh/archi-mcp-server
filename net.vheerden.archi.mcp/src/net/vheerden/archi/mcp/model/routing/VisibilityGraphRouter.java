@@ -7,6 +7,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.PriorityQueue;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.model.routing.VisEdge.Direction;
 
@@ -20,6 +23,8 @@ import net.vheerden.archi.mcp.model.routing.VisEdge.Direction;
  */
 public class VisibilityGraphRouter {
 
+    private static final Logger logger = LoggerFactory.getLogger(VisibilityGraphRouter.class);
+
     /** Default bend penalty in pixels — penalizes direction changes. */
     public static final int DEFAULT_BEND_PENALTY = 30;
 
@@ -30,38 +35,38 @@ public class VisibilityGraphRouter {
     static final double DEFAULT_CONGESTION_WEIGHT = 0.0;
 
     /**
-     * R2 Task 0.3 spike-branch JVM-property keys for weight override (Option A2).
-     * When set at JVM startup (e.g. {@code -Darchi.mcp.weights.b41=150}), the
-     * corresponding DEFAULT_* constant below reads from the property; absence
-     * preserves shipping defaults. Cleanup audit after R2 closes:
-     * {@code grep "archi.mcp.weights" src/} must return zero hits.
+     * JVM-property keys for overriding the A* cost weights during calibration.
+     * When set at JVM startup (e.g. {@code -Darchi.mcp.weights.clearance=150}),
+     * the corresponding DEFAULT_* constant below reads from the property; absence
+     * preserves shipping defaults, so an unset JVM behaves exactly as if these
+     * did not exist.
      */
-    static final String B41_WEIGHT_PROP = "archi.mcp.weights.b41";
-    static final String B43_WEIGHT_PROP = "archi.mcp.weights.b43";
-    static final String B47_WEIGHT_PROP = "archi.mcp.weights.b47";
+    static final String CLEARANCE_WEIGHT_PROP = "archi.mcp.weights.clearance";
+    static final String DIRECTIONALITY_WEIGHT_PROP = "archi.mcp.weights.directionality";
+    static final String OCCUPANCY_WEIGHT_PROP = "archi.mcp.weights.occupancy";
 
     /** Default clearance weight — penalizes edges close to obstacle boundaries. */
     static final double DEFAULT_CLEARANCE_WEIGHT =
-            Double.parseDouble(System.getProperty(B41_WEIGHT_PROP, "75.0"));
+            Double.parseDouble(System.getProperty(CLEARANCE_WEIGHT_PROP, "75.0"));
 
     /** Default directionality weight — penalizes edges moving away from target. */
     static final double DEFAULT_DIRECTIONALITY_WEIGHT =
-            Double.parseDouble(System.getProperty(B43_WEIGHT_PROP, "30.0"));
+            Double.parseDouble(System.getProperty(DIRECTIONALITY_WEIGHT_PROP, "30.0"));
 
     /** Maximum effective clearance — corridors wider than this get no additional benefit. */
     static final double MAX_EFFECTIVE_CLEARANCE = 60.0;
 
     /** Default occupancy weight — multiplicative penalty for occupied corridors. */
     public static final double DEFAULT_OCCUPANCY_WEIGHT =
-            Double.parseDouble(System.getProperty(B47_WEIGHT_PROP, "0.75"));
+            Double.parseDouble(System.getProperty(OCCUPANCY_WEIGHT_PROP, "0.75"));
 
     /**
-     * R2 Task 0.2c diagnostic flag. When {@code -Darchi.mcp.diag.r2oracle=true}
+     * Diagnostic flag. When {@code -Darchi.mcp.diag.routingcost=true}
      * is set, {@link #findPath} emits a per-route cost breakdown summary to stdout
      * after computing the chosen path. Zero cost when unset (short-circuits before
      * any log assembly).
      */
-    static final String R2_DIAG_FLAG = "archi.mcp.diag.r2oracle";
+    static final String COST_DIAG_FLAG = "archi.mcp.diag.routingcost";
 
     private final int bendPenalty;
     private final double congestionWeight;
@@ -209,8 +214,8 @@ public class VisibilityGraphRouter {
 
             if (current.node.equals(target)) {
                 List<VisNode> path = reconstructPath(current);
-                if (Boolean.getBoolean(R2_DIAG_FLAG)) {
-                    emitR2Diagnostic(path, graph, occupancyTracker, source, target);
+                if (Boolean.getBoolean(COST_DIAG_FLAG)) {
+                    emitRoutingCostDiagnostic(path, graph, occupancyTracker, source, target);
                 }
                 return path;
             }
@@ -245,14 +250,14 @@ public class VisibilityGraphRouter {
     /**
      * Computes the per-edge cost breakdown for A* expansion.
      *
-     * <p>R2 Task 0.2b refactor: previously the cost terms
+     * <p>Cost-decomposition refactor: previously the cost terms
      * ({@code base + bend + direction + congestion + clearance + directionality
      * + groupWall + occupancyExtra}) were inlined inside {@link #findPath}'s main
      * loop. Extraction is behavior-preserving — the returned
      * {@link CostBreakdown#total()} equals the former {@code newGCost - current.gCost}
      * increment per edge, bit-for-bit.</p>
      *
-     * <p>Package-private so tests and the R2 (b1) path-evaluation entry point
+     * <p>Package-private so tests and the path-evaluation entry point
      * ({@link #evaluatePathCost}) can call it directly.</p>
      *
      * @param from             source node of the edge
@@ -302,7 +307,7 @@ public class VisibilityGraphRouter {
     }
 
     /**
-     * R2 Task 0.2c (b1) path-evaluation mode: sum the A* cost breakdown
+     * Path-evaluation mode: sum the A* cost breakdown
      * for a pre-built canonical path, without running A*.
      *
      * <p>For each consecutive pair {@code (path[i], path[i+1])}, synthesises a
@@ -311,11 +316,11 @@ public class VisibilityGraphRouter {
      * segment (null for the first segment, matching {@link #findPath}'s initial
      * state behaviour).</p>
      *
-     * <p>Used by R2 Task 0.2 to evaluate oracle canonical paths under live weight
-     * configuration, and by Task 0.3 weight-sweep Metric A scoring.</p>
+     * <p>Used to evaluate oracle canonical paths under live weight
+     * configuration, and by weight-sweep Metric A scoring.</p>
      *
      * <p><b>Requires orthogonal path:</b> canonicalisation guarantees Δx=0 or
-     * Δy=0 per segment (R2 design note §1.1). Diagonal segments produce
+     * Δy=0 per segment (routing-cost design note §1.1). Diagonal segments produce
      * undefined direction; caller must canonicalise before invocation.</p>
      *
      * @param graph         visibility graph (used for density + clearance lookups)
@@ -364,25 +369,25 @@ public class VisibilityGraphRouter {
     }
 
     /**
-     * R2 Task 0.2c diagnostic emission — flag-gated per-route cost breakdown.
+     * Diagnostic emission — flag-gated per-route cost breakdown.
      * Called from {@link #findPath} at target-reached exit when
-     * {@code -Darchi.mcp.diag.r2oracle=true}.
+     * {@code -Darchi.mcp.diag.routingcost=true}.
      *
      * <p>Emits a single line matching design note §2.2 runtime-cost format.
      * Oracle-cost comparison + corridor/port-match + final-class fields are
-     * added in Task 0.2d when the oracle map is wired in.</p>
+     * added when the oracle map is wired in.</p>
      */
-    private void emitR2Diagnostic(
+    private void emitRoutingCostDiagnostic(
             List<VisNode> path,
             OrthogonalVisibilityGraph graph,
             CorridorOccupancyTracker tracker,
             VisNode source, VisNode target) {
         CostBreakdown cb = evaluatePathCost(graph, path, tracker);
-        System.out.println(String.format(
-                "=== R2-diag: findPath src=(%d,%d) tgt=(%d,%d) bp=%d"
+        logger.debug(String.format(
+                "routing-cost diagnostic: findPath src=(%d,%d) tgt=(%d,%d) bp=%d"
                         + " runtime-cost {base=%.1f, occExtra=%.1f, bend=%.1f,"
                         + " direction=%.1f, congestion=%.1f, clearance=%.1f,"
-                        + " directionality=%.1f, groupWall=%.1f} total=%.1f ===",
+                        + " directionality=%.1f, groupWall=%.1f} total=%.1f",
                 source.x(), source.y(), target.x(), target.y(), path.size(),
                 cb.base(), cb.occupancyExtra(), cb.bend(), cb.direction(),
                 cb.congestion(), cb.clearance(), cb.directionality(), cb.groupWall(),
@@ -567,12 +572,12 @@ public class VisibilityGraphRouter {
     private record StateKey(VisNode node, Direction dir) {}
 
     /**
-     * Per-edge cost breakdown produced by {@link #computeEdgeCost} (R2 Task 0.2b).
+     * Per-edge cost breakdown produced by {@link #computeEdgeCost}.
      *
      * <p>Each field is in A* cost units (pixels-equivalent). {@link #total()} is
      * the summed cost contribution the A* main loop adds to {@code newGCost}.</p>
      *
-     * <p>Fields align with the R2 design note §2.2 per-route diagnostic format:
+     * <p>Fields align with the routing-cost design note §2.2 per-route diagnostic format:
      * {@code {base, occupancyExtra, bend, direction, congestion, clearance,
      * directionality, groupWall}}.</p>
      *

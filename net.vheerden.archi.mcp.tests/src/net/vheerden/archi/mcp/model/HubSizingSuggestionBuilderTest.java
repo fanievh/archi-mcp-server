@@ -197,4 +197,39 @@ public class HubSizingSuggestionBuilderTest {
         assertTrue("Should cite the longest label width",
                 result.get(0).contains("longest label: 180px"));
     }
+
+    // ---- Served sentence, asserted whole ----
+
+    /**
+     * Pins the emitted sentence character for character, including the
+     * threshold the builder interpolates into it.
+     *
+     * <p>Every other assertion in this class — and every assertion reached
+     * through the handler — tests a <em>fragment</em>:
+     * {@code contains("for vertical layouts")},
+     * {@code contains("260px")}. A fragment cannot see the part of the sentence
+     * it does not name, so the boundary the sentence quotes could move to any
+     * other number, or stop rendering altogether, with the whole suite green.
+     * The handler-level cases that quote this sentence in full do not close
+     * that gap either: they hand the finished strings to a stubbed accessor as
+     * fixture input, so they assert that the handler passes a list through, not
+     * that the builder ever produced it.</p>
+     *
+     * <p>The expected text is the eight-connection case, chosen because it is
+     * the shape the handler fixtures use, so the two stay legible against each
+     * other.</p>
+     */
+    @Test
+    public void buildSuggestions_atEightConns_shouldEmitTheServedSentenceVerbatim() {
+        List<String> result = HubSizingSuggestionBuilder.buildSuggestions(
+                List.of(entry("API Gateway", 8, 120, 55, 0)));
+        assertEquals("Eight connections should yield exactly one suggestion",
+                1, result.size());
+        assertEquals("The served sentence must render whole, with the large-hub "
+                + "boundary interpolated as the number the shared constant holds",
+                "Element 'API Gateway' has 8 connections (large hub: > 6). "
+                + "Consider increasing height to 85px (55 + 15 × 2) for horizontal layouts, "
+                + "or width to 150px (120 + 15 × 2) for vertical layouts.",
+                result.get(0));
+    }
 }

@@ -8,7 +8,11 @@ import java.util.Set;
  * Result of layout quality assessment containing all metrics,
  * issue descriptions, and improvement suggestions.
  *
- * <p>{@code overlapCount} contains only sibling overlaps (genuine layout problems).
+ * <p>{@code overlapCount} contains only SAME-PARENT overlaps — two children of one container,
+ * or two top-level objects, which are siblings of each other because both carry a null parent.
+ * A cross-branch pair (different parents, neither inside the other) is NOT counted there under
+ * its own names: it is reported by {@code cousinOverlapCount}, and it reaches the rating either
+ * through the overlap of that pair's containers or through {@code boundaryViolationCount}.
  * {@code containmentOverlapCount} tracks expected ancestor-descendant overlaps separately.
  * {@code orphanedConnectionCount} tracks connections whose source/target view objects
  * are missing from the view hierarchy.
@@ -18,15 +22,20 @@ import java.util.Set;
  * {@code coincidentSegmentCount} tracks overlapping connection route segments.
  * {@code nonOrthogonalTerminalCount} tracks connections with diagonal terminal segments
  * (corrected definition: post-clip visible segment, ignores Archi-clipped diagonals when
- * the bendpoint lies on or inside the source/target element).
+ * the bendpoint lies on or inside the source/target element). It is partitioned by
+ * {@code zeroBendpointNonOrthogonalTerminalCount} and {@code routedNonOrthogonalTerminalCount},
+ * which sum to it.
  * {@code contentBounds} is the axis-aligned bounding box of all visual content.
- * {@code labelTruncationCount}, {@code parentLabelObscuredCount}, {@code imageSiblingOverlapCount}
- * are informational detections. {@code parentLabelObscuredCount} is
+ * {@code labelTruncationCount}, {@code parentLabelObscuredCount}, {@code imageSiblingOverlapCount},
+ * {@code overlayIconCollisionCount} are informational detections. {@code imageSiblingOverlapCount}
+ * covers the sibling axis, {@code overlayIconCollisionCount} the containment axis (an element's
+ * overlay icon colliding with the icon of an element that contains it).
+ * {@code parentLabelObscuredCount} is
  * promoted to layout Tier 1L; {@code labelTruncationCount} is promoted to routing Tier 2R.
  * {@code violatorIds} maps metric names to sets of visual object IDs that violate each metric.
  * Null when not requested (includeViolatorIds=false). Crossings excluded (emergent property).
  *
- * <p>Assessor.Redesign (M2-M6, 2026-04-26):
+ * <p>Perception-aligned metrics (M2-M6):
  * <ul>
  *   <li>{@code interiorTerminationCount} — connections whose first/last bendpoint is strictly
  *       inside the source/target element bounds (M2). Routing Tier 1R.</li>
@@ -50,7 +59,7 @@ import java.util.Set;
  *   <li>{@code corridorUtilisationChannels} — per-channel R8 details when
  *       {@code includeViolatorIds=true}, else empty.</li>
  *   <li>{@code vAxisParallelGapP10} / {@code vAxisParallelGapNarrow25Count} /
- *       {@code parallelConnectionGapDetail} — Successor D parallelConnectionGap family
+ *       {@code parallelConnectionGapDetail} — the parallelConnectionGap family
  *       (V primary, H secondary; perception-anchor against V4 manual gold V_p10 = 13.30
  *       at PARALLEL_GAP_AXIS_TOLERANCE_PX = 2). Informational only (no rating impact in
  *       v1.4 — sibling work tied to routing-pipeline narrow-corridor floor closure).
@@ -90,9 +99,11 @@ record LayoutAssessmentResult(
         List<String> parentLabelObscuredDescriptions,
         int imageSiblingOverlapCount,
         List<String> imageSiblingOverlapDescriptions,
+        int overlayIconCollisionCount,
+        List<String> overlayIconCollisionDescriptions,
         Map<String, Set<String>> violatorIds,
         List<String> suggestions,
-        // Assessor.Redesign M2-M6 (appended; backwards-compat)
+        // M2-M6 (appended; backwards-compat)
         int interiorTerminationCount,
         List<String> interiorTerminationDescriptions,
         int zigzagCount,
@@ -106,9 +117,13 @@ record LayoutAssessmentResult(
         // R8 (appended)
         double corridorUtilisationScore,
         List<CorridorUtilisationDetail> corridorUtilisationChannels,
-        // Successor D parallelConnectionGap (appended; backwards-compat)
+        // parallelConnectionGap (appended; backwards-compat)
         Double vAxisParallelGapP10,
         int vAxisParallelGapNarrow25Count,
+        // The H-axis sibling of the count above. Measured on the same pass, through the same
+        // computeAxisAggregates, and published nowhere until now — it lived only inside the detail
+        // record, which is null unless the caller asks for violator ids.
+        int hAxisParallelGapNarrow25Count,
         ParallelConnectionGapDetail parallelConnectionGapDetail,
         // Hub-to-neighbour crowding (appended; 2026-06-25). Min px clearance from a detected
         // hub's edge to its nearest spoke row; -1.0 sentinel when no hub face qualifies.
@@ -182,7 +197,64 @@ record LayoutAssessmentResult(
         // collision M5 misses on any face below its four-connection guard (a 2–3-connection coincident
         // face reads a vacuous hubPortQualityScore of 1.0).
         int coincidentFacePortCount,
-        List<String> coincidentFacePortDescriptions) {
+        List<String> coincidentFacePortDescriptions,
+        // An element's own overlay icon drawn over its own title label (appended), wherever the
+        // object's own textAlignment and verticalTextAlignment place that title. Count of
+        // elements whose clamped icon rectangle intersects their own title band, and their
+        // descriptions. Informational only — no rating impact. Distinct from both icon counts above:
+        // imageSiblingOverlapCount compares an icon against sibling BOXES and overlayIconCollisionCount
+        // against an ANCESTOR's icon, and since the icon rectangle is clamped to its own element box,
+        // neither can ever see an icon sitting on the title inside that same box.
+        int ownIconOverLabelCount,
+        List<String> ownIconOverLabelDescriptions,
+        // Cross-branch ("cousin") overlaps: EVERY pair of objects with different parents, neither
+        // inside the other, whose rectangles intersect. Informational only — never rated, never
+        // tiered. The two objects a reader sees colliding are named among these pairs, which
+        // overlapCount cannot do because it reports their containers instead. It is a count of
+        // pairs to inspect, not of distinct visible collisions: one collision between two nested
+        // objects normally yields several pairs, since each object also overlaps the other's
+        // container.
+        int cousinOverlapCount,
+        List<String> cousinOverlaps,
+        // TRUE, uncapped number of boundary violations. boundaryViolations (the description list)
+        // is capped, so its size understates a badly broken view and is not the count.
+        int boundaryViolationCount,
+        // Anchor drift (appended). Count of connections whose two stored bendpoint reconstructions
+        // — one relative to the source centre, one relative to the target centre — disagree by more
+        // than ANCHOR_DRIFT_NOISE_FLOOR_PX on either axis, and their descriptions carrying the
+        // measured drift per axis. Informational only — no rating impact. The stored shape of such a
+        // route was correct when written; an endpoint moved afterwards, so no shape-based dimension
+        // can see it and the remedy is to re-route rather than to straighten.
+        int anchorDriftCount,
+        List<String> anchorDriftDescriptions,
+        // Lateral-jog reversals (appended). Count of connections containing a four-point window whose
+        // two outer arms run in opposite directions on one axis, separated by a perpendicular
+        // sidestep no wider than LATERAL_JOG_MAX_PX, and their descriptions carrying the four
+        // coordinates. Informational only — no rating impact. Distinct from the zigzagCount reversal
+        // above, which needs three points sharing ONE axis: the sidestep puts the two arms on two
+        // parallel lines, so no triple in the window shares an axis.
+        int lateralJogReversalCount,
+        List<String> lateralJogReversalDescriptions,
+        // The two disjoint halves of nonOrthogonalTerminalCount (appended), each MEASURED at the
+        // moment its connection was flagged rather than derived by subtracting the other from the
+        // total. zeroBendpoint counts connections whose path is a straight line between two element
+        // centres — the ELK auto-layout signature, with no routed body to preserve — and routed
+        // counts those carrying stored bendpoints. They sum to nonOrthogonalTerminalCount, whose
+        // name, meaning and value are unchanged. Published because the two halves have opposite
+        // remedies, so an agent that cannot tell them apart cannot act on either safely. Their
+        // connection ids ride in the violatorIds map under nonOrthogonalTerminalsZeroBendpoint and
+        // nonOrthogonalTerminalsRouted rather than being duplicated here.
+        int zeroBendpointNonOrthogonalTerminalCount,
+        int routedNonOrthogonalTerminalCount,
+        // The number of pass-through crossings the RATING charges (appended). Sourced from the
+        // detector's cross-element tally, which is the quantity the passThroughs band is computed
+        // over. It is deliberately NOT the size of connectionPassThroughs above: that list is a
+        // capped description list carrying the unrated self-element pass-throughs alongside the
+        // charged ones, so its size can both overstate this count (self-element entries) and
+        // understate it (the cap). Published because every consumer that wants "how many crossings
+        // was this view marked down for" previously had to read that list's size and get a
+        // different number.
+        int crossElementPassThroughCount) {
 
     /**
      * Per-face hub-port allocation detail (M5).
@@ -204,7 +276,7 @@ record LayoutAssessmentResult(
                                       double span, double available, double spreadRatio) {}
 
     /**
-     * Per-axis aggregate of nearest-parallel-overlapping-neighbour gaps (Successor D).
+     * Per-axis aggregate of nearest-parallel-overlapping-neighbour gaps.
      * {@code mean / min / p10} are boxed because they are {@code null} when
      * {@code qualifyingSegmentCount == 0}. {@code violatorIds} are surfaced in the
      * result's top-level {@code violatorIds} map (under keys
@@ -216,7 +288,7 @@ record LayoutAssessmentResult(
                                             int narrowGapCount40) {}
 
     /**
-     * Full per-axis Successor D parallelConnectionGap detail. Lazy-populated: only
+     * Full per-axis parallelConnectionGap detail. Lazy-populated: only
      * present in the result when {@code includeViolatorIds=true}; null otherwise (matches
      * {@code hubPortQualityFaces} lazy pattern). The top-level convenience fields
      * {@code vAxisParallelGapP10} and {@code vAxisParallelGapNarrow25Count} carry the

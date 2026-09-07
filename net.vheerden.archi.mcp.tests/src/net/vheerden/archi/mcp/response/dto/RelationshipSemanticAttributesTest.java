@@ -9,7 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.Test;
 
 /**
- * Unit tests for {@link RelationshipSemanticAttributes} (G1).
+ * Unit tests for {@link RelationshipSemanticAttributes}.
  *
  * <p>Pure JUnit (no OSGi/EMF) — exercises the record + Jackson serialisation.</p>
  */
@@ -18,7 +18,7 @@ public class RelationshipSemanticAttributesTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    public void shouldDefaultAllFieldsToNull_AC5() {
+    public void shouldDefaultAllFieldsToNull() {
         RelationshipSemanticAttributes none = RelationshipSemanticAttributes.NONE;
         assertNull(none.accessType());
         assertNull(none.associationDirected());
@@ -26,13 +26,13 @@ public class RelationshipSemanticAttributesTest {
     }
 
     @Test
-    public void shouldHasAnyReturnFalseForNone_AC5() {
+    public void shouldHasAnyReturnFalseForNone() {
         assertFalse(RelationshipSemanticAttributes.NONE.hasAny());
         assertFalse(new RelationshipSemanticAttributes(null, null, null).hasAny());
     }
 
     @Test
-    public void shouldHasAnyReturnTrueWhenAnyFieldSet_AC5() {
+    public void shouldHasAnyReturnTrueWhenAnyFieldSet() {
         assertTrue(new RelationshipSemanticAttributes("read", null, null).hasAny());
         assertTrue(new RelationshipSemanticAttributes(null, Boolean.TRUE, null).hasAny());
         assertTrue(new RelationshipSemanticAttributes(null, null, "+").hasAny());
@@ -40,7 +40,7 @@ public class RelationshipSemanticAttributesTest {
     }
 
     @Test
-    public void shouldSerialiseAccessTypeOnly_omittingOthers_AC5() throws Exception {
+    public void shouldSerialiseAccessTypeOnly_omittingOthers() throws Exception {
         RelationshipSemanticAttributes attrs =
                 new RelationshipSemanticAttributes("read", null, null);
         String json = mapper.writeValueAsString(attrs);
@@ -53,7 +53,7 @@ public class RelationshipSemanticAttributesTest {
     }
 
     @Test
-    public void shouldRoundTripJson_AC5() throws Exception {
+    public void shouldRoundTripJson() throws Exception {
         RelationshipSemanticAttributes original =
                 new RelationshipSemanticAttributes("write", Boolean.TRUE, "+/-");
         String json = mapper.writeValueAsString(original);

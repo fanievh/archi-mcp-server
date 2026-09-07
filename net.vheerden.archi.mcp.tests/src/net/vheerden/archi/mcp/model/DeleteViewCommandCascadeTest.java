@@ -12,7 +12,9 @@ import com.archimatetool.model.FolderType;
 import com.archimatetool.model.IArchimateDiagramModel;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelReference;
 import com.archimatetool.model.IFolder;
 
@@ -245,6 +247,123 @@ public class DeleteViewCommandCascadeTest {
         assertSame("Index 2 preserved", refAt2, viewB.getChildren().get(2));
         assertSame("Index 3 preserved", refAt3, viewB.getChildren().get(3));
         assertSame("Index 4 preserved (non-cascaded)", regularAt4, viewB.getChildren().get(4));
+    }
+
+    // ---- Connections attached to cascaded placeholders in a SURVIVING view ----
+    //
+    // A cascaded placeholder lives in another view that SURVIVES the delete. A diagram
+    // connection can be attached to it (an IDiagramModelReference is an IConnectable).
+    // Because the connection is EMF-contained by its SOURCE, a connection FROM a surviving
+    // object INTO the placeholder stays in the surviving view while its target placeholder
+    // is removed — a dangling cross-reference that breaks .archimate save/reload. The
+    // cascade must therefore disconnect the placeholder's connections, exactly as
+    // DeleteElementCommand disconnects the connections on its cascaded view objects.
+
+    /** Builds a surviving view A (kept) holding a placeholder → the deleted view B, plus two
+     *  survivor notes with a connection INTO the placeholder and one OUT of it. Returns the
+     *  three connectables and two connections wired and ready; view B is the delete target. */
+    private IDiagramModelReference placeholderInSurvivingViewWithConnections(
+            IDiagramModelNote[] outNotes, IDiagramModelConnection[] outConns) {
+        IDiagramModelReference placeholder = newRefTo(viewB); // in A, points at the doomed B
+        viewA.getChildren().add(placeholder);
+
+        IDiagramModelNote noteInto = factory.createDiagramModelNote();
+        noteInto.setBounds(0, 0, 120, 55);
+        viewA.getChildren().add(noteInto);
+        IDiagramModelNote noteOut = factory.createDiagramModelNote();
+        noteOut.setBounds(0, 200, 120, 55);
+        viewA.getChildren().add(noteOut);
+
+        // Connection INTO the placeholder: survivor note -> placeholder (the dangerous shape).
+        IDiagramModelConnection connInto = factory.createDiagramModelConnection();
+        connInto.connect(noteInto, placeholder);
+        // Connection OUT of the placeholder: placeholder -> survivor note.
+        IDiagramModelConnection connOut = factory.createDiagramModelConnection();
+        connOut.connect(placeholder, noteOut);
+
+        outNotes[0] = noteInto;
+        outNotes[1] = noteOut;
+        outConns[0] = connInto;
+        outConns[1] = connOut;
+        return placeholder;
+    }
+
+    /** execute() must disconnect both directions of connection on a cascaded placeholder,
+     *  so the surviving view keeps no dangling reference to the removed placeholder. */
+    @Test
+    public void shouldDisconnectConnectionsOnCascadedPlaceholder_whenReferencedViewDeleted() {
+        IDiagramModelNote[] notes = new IDiagramModelNote[2];
+        IDiagramModelConnection[] conns = new IDiagramModelConnection[2];
+        IDiagramModelReference placeholder = placeholderInSurvivingViewWithConnections(notes, conns);
+        IDiagramModelNote noteInto = notes[0];
+        IDiagramModelNote noteOut = notes[1];
+        IDiagramModelConnection connInto = conns[0];
+        IDiagramModelConnection connOut = conns[1];
+
+        // Fixture-shape sanity: the connections really are on the placeholder.
+        assertTrue("connInto must be a target-connection of the placeholder",
+                placeholder.getTargetConnections().contains(connInto));
+        assertTrue("connOut must be a source-connection of the placeholder",
+                placeholder.getSourceConnections().contains(connOut));
+
+        DeleteViewCommand cmd = newDeleteCommand(viewB);
+        cmd.execute();
+
+        assertFalse("Placeholder cascade-removed from the surviving view",
+                viewA.getChildren().contains(placeholder));
+        // The survivor notes must retain NO connection to the removed placeholder — otherwise
+        // the surviving view serializes a dangling cross-reference.
+        assertTrue("Survivor note's connection INTO the removed placeholder must be disconnected",
+                noteInto.getSourceConnections().isEmpty());
+        assertTrue("Survivor note's connection OUT of the removed placeholder must be disconnected",
+                noteOut.getTargetConnections().isEmpty());
+        assertTrue("Removed placeholder must hold no live connections",
+                placeholder.getSourceConnections().isEmpty()
+                        && placeholder.getTargetConnections().isEmpty());
+    }
+
+    /** undo() must restore the placeholder AND reconnect its connections in both directions. */
+    @Test
+    public void shouldReconnectPlaceholderConnections_onUndo() {
+        IDiagramModelNote[] notes = new IDiagramModelNote[2];
+        IDiagramModelConnection[] conns = new IDiagramModelConnection[2];
+        IDiagramModelReference placeholder = placeholderInSurvivingViewWithConnections(notes, conns);
+        IDiagramModelNote noteInto = notes[0];
+        IDiagramModelNote noteOut = notes[1];
+        IDiagramModelConnection connInto = conns[0];
+        IDiagramModelConnection connOut = conns[1];
+
+        DeleteViewCommand cmd = newDeleteCommand(viewB);
+        cmd.execute();
+        cmd.undo();
+
+        assertTrue("Placeholder restored to the surviving view on undo",
+                viewA.getChildren().contains(placeholder));
+        assertTrue("Connection INTO the placeholder reconnected on undo",
+                noteInto.getSourceConnections().contains(connInto)
+                        && placeholder.getTargetConnections().contains(connInto));
+        assertTrue("Connection OUT of the placeholder reconnected on undo",
+                placeholder.getSourceConnections().contains(connOut)
+                        && noteOut.getTargetConnections().contains(connOut));
+    }
+
+    /** redo() must re-disconnect the placeholder connections (lazy capture survives undo→redo). */
+    @Test
+    public void shouldReDisconnectPlaceholderConnections_onRedo() {
+        IDiagramModelNote[] notes = new IDiagramModelNote[2];
+        IDiagramModelConnection[] conns = new IDiagramModelConnection[2];
+        IDiagramModelReference placeholder = placeholderInSurvivingViewWithConnections(notes, conns);
+        IDiagramModelNote noteInto = notes[0];
+
+        DeleteViewCommand cmd = newDeleteCommand(viewB);
+        cmd.execute();
+        cmd.undo();
+        cmd.redo();
+
+        assertFalse("Placeholder again removed from the surviving view on redo",
+                viewA.getChildren().contains(placeholder));
+        assertTrue("Survivor's connection again disconnected on redo",
+                noteInto.getSourceConnections().isEmpty());
     }
 
     /** Self-reference inside deleted view must NOT be cascaded. */

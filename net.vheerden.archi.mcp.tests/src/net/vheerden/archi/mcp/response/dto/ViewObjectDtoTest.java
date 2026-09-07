@@ -67,7 +67,7 @@ public class ViewObjectDtoTest {
     }
 
     @Test
-    public void shouldOmitLabelExpressionFromJson_whenNull_AC6() throws Exception {
+    public void shouldOmitLabelExpressionFromJson_whenNull() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         ViewObjectDto dto = new ViewObjectDto(
                 "vo-1", "e-1", "Name", "Type", 0, 0, 120, 55);
@@ -79,7 +79,7 @@ public class ViewObjectDtoTest {
     }
 
     @Test
-    public void shouldIncludeLabelExpressionInJson_whenPopulated_AC6() throws Exception {
+    public void shouldIncludeLabelExpressionInJson_whenPopulated() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         ViewObjectDto dto = new ViewObjectDto(
                 "vo-1", "e-1", "Name", "Type", 0, 0, 120, 55,

@@ -31,7 +31,7 @@ import org.junit.Test;
  * parent-resize commands execute as a single atomic
  * {@code NonNotifyingCompoundCommand} (one undo step).</p>
  *
- * <p>Test coverage (Q5 option A: V4 H2 hub-heavy synthetic fixture):
+ * <p>Test coverage (Fixture A: V4 H2 hub-heavy synthetic):
  * 5 predicate-level tests on the update-view-object-specific overflow geometries
  * (hub 2D-resize / hub move past parent bounds) + 1 named compliance
  * aggregate test asserting post-resize parent dims satisfy non-overflow for the
@@ -61,7 +61,7 @@ public class UpdateViewObjectParentBoundsTest {
 
 	private static final int PADDING = 10;
 
-	// --- Q5 option A: V4 H2 hub-heavy synthetic fixture ---
+	// --- Fixture A: V4 H2 hub-heavy synthetic ---
 	//
 	// Mimics the C1 RE-RUN 2026-05-14 ST + HH hub-resize bifurcation triggers:
 	//   * ST: API Mgmt hub 214x68 → 304x143 inside parent group ~300x200.

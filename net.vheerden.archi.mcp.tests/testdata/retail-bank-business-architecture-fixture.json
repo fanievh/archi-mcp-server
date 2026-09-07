@@ -1,0 +1,730 @@
+{
+  "viewName": "Retail bank \u2014 business architecture (ELK, terminals-only baseline)",
+  "elements": [
+    {
+      "id": "id-85a5f57d9cf248beb46c860983ff19e4",
+      "name": "NovaBank Retail Bank",
+      "x": 938,
+      "y": 25,
+      "w": 122,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-51bbf43b499e4822864ada2ff358735b",
+      "name": "Retail Customer",
+      "x": 1696,
+      "y": 366,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-4f80dbc5fdb84da1b569d048d9620748",
+      "name": "Relationship Manager",
+      "x": 1426,
+      "y": 25,
+      "w": 121,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-98d437b8823e4e3a8766c919461fa00b",
+      "name": "Loan Officer",
+      "x": 768,
+      "y": 25,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-0566029040604dd3b08f730277500ecc",
+      "name": "KYC / AML Analyst",
+      "x": 1597,
+      "y": 25,
+      "w": 123,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-f6cf9e747d6d47ddaaa5bf20e415febc",
+      "name": "Fraud Operations Analyst",
+      "x": 1942,
+      "y": 12,
+      "w": 124,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-d4c4857c42c1402b9fd562ee0cf6082e",
+      "name": "Contact Centre Agent",
+      "x": 1254,
+      "y": 25,
+      "w": 122,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-421b48ac27364115bf1ca1ddce9292b0",
+      "name": "Branch Teller",
+      "x": 361,
+      "y": 25,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-e4dd44aced5741fb8930a9907a0c938c",
+      "name": "Compliance Officer",
+      "x": 1770,
+      "y": 25,
+      "w": 122,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "name": "Retail Banking Operations",
+      "x": 381,
+      "y": 139,
+      "w": 122,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "name": "Risk & Compliance Management",
+      "x": 1907,
+      "y": 130,
+      "w": 121,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "name": "Customer Relationship Management",
+      "x": 1397,
+      "y": 130,
+      "w": 120,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-378429d791ea4b3891631d87c5c6af36",
+      "name": "Product & Proposition Management",
+      "x": 906,
+      "y": 130,
+      "w": 121,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-527a45c15cf24172b2ffc93d726499a0",
+      "name": "Current Account Servicing",
+      "x": 202,
+      "y": 248,
+      "w": 120,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-9e635d40a43647299865b6f1b004185a",
+      "name": "Savings & Deposit Services",
+      "x": 545,
+      "y": 248,
+      "w": 121,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-3de872ba5aa4467aaf928f25b923e7fe",
+      "name": "Personal Lending Services",
+      "x": 1057,
+      "y": 248,
+      "w": 120,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-9e86c2ee8b5d4781bcdf1630020974b2",
+      "name": "Mortgage Lending Services",
+      "x": 865,
+      "y": 248,
+      "w": 121,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-bde81c28c1264de2a75fbab3639c075a",
+      "name": "Card Services",
+      "x": 32,
+      "y": 252,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-8985b1ca7cad45f8b4a408c4abb8af70",
+      "name": "Payments & Transfers",
+      "x": 372,
+      "y": 252,
+      "w": 123,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-0e7630e98c824e6a84c14ac5352357c9",
+      "name": "Digital Banking Services",
+      "x": 1735,
+      "y": 255,
+      "w": 122,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-2354ac26286c4088b0861cd2c0d34f60",
+      "name": "Customer Onboarding Services",
+      "x": 1227,
+      "y": 248,
+      "w": 120,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-9e45f4fa1ecf437288b9a4a014137c24",
+      "name": "Financial Advisory Services",
+      "x": 1397,
+      "y": 248,
+      "w": 120,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-38e73841d8a54c1baa1c96730b047c82",
+      "name": "Fraud & Dispute Management",
+      "x": 1907,
+      "y": 248,
+      "w": 121,
+      "h": 68,
+      "isChild": false
+    },
+    {
+      "id": "id-4e6f28201a114c5599464fc74caeb784",
+      "name": "Current Account",
+      "x": 202,
+      "y": 143,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-8c0678f9a1e9415e96524a18fb318f9a",
+      "name": "Savings Account",
+      "x": 566,
+      "y": 143,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-4c96830636f048e7ad63548b2105927a",
+      "name": "Personal Loan",
+      "x": 1077,
+      "y": 143,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-54ad7eb8fffd47fbad6e92d2c7718a37",
+      "name": "Mortgage",
+      "x": 736,
+      "y": 143,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    },
+    {
+      "id": "id-bdd725dc88934a1087cc070db50286c4",
+      "name": "Credit Card",
+      "x": 12,
+      "y": 143,
+      "w": 120,
+      "h": 55,
+      "isChild": false
+    }
+  ],
+  "connections": [
+    {
+      "id": "id-ba47e9f11786484c875d8603b17d7ab5",
+      "sourceId": "id-85a5f57d9cf248beb46c860983ff19e4",
+      "targetId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": -37,
+          "startY": 38,
+          "endX": 520,
+          "endY": -76
+        },
+        {
+          "startX": -537,
+          "startY": 38,
+          "endX": 20,
+          "endY": -76
+        }
+      ]
+    },
+    {
+      "id": "id-a71718b6fcb4498a83fe8de6e01981fc",
+      "sourceId": "id-85a5f57d9cf248beb46c860983ff19e4",
+      "targetId": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 36,
+          "startY": 58,
+          "endX": -932,
+          "endY": -54
+        },
+        {
+          "startX": 933,
+          "startY": 58,
+          "endX": -35,
+          "endY": -54
+        }
+      ]
+    },
+    {
+      "id": "id-64aa1daf1b774d0fac63273d1e8edb5e",
+      "sourceId": "id-85a5f57d9cf248beb46c860983ff19e4",
+      "targetId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 68,
+          "endX": -458,
+          "endY": -44
+        },
+        {
+          "startX": 458,
+          "startY": 68,
+          "endX": 0,
+          "endY": -44
+        }
+      ]
+    },
+    {
+      "id": "id-e9213fb44f6f4d6694b36a3549bb92bf",
+      "sourceId": "id-85a5f57d9cf248beb46c860983ff19e4",
+      "targetId": "id-378429d791ea4b3891631d87c5c6af36",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-55c3a04820a942abacc3681030972ff3",
+      "sourceId": "id-4f80dbc5fdb84da1b569d048d9620748",
+      "targetId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-363e60ab5e8c41d38d59ecea0776fa1b",
+      "sourceId": "id-98d437b8823e4e3a8766c919461fa00b",
+      "targetId": "id-378429d791ea4b3891631d87c5c6af36",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 48,
+          "endX": -138,
+          "endY": -64
+        },
+        {
+          "startX": 138,
+          "startY": 48,
+          "endX": 0,
+          "endY": -64
+        }
+      ]
+    },
+    {
+      "id": "id-86783e5399264c43a4ed42cd41c839e2",
+      "sourceId": "id-0566029040604dd3b08f730277500ecc",
+      "targetId": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 1,
+          "startY": 48,
+          "endX": -308,
+          "endY": -64
+        },
+        {
+          "startX": 298,
+          "startY": 48,
+          "endX": -11,
+          "endY": -64
+        }
+      ]
+    },
+    {
+      "id": "id-bb01ba637c1a4beeb57d424ae3e058cf",
+      "sourceId": "id-f6cf9e747d6d47ddaaa5bf20e415febc",
+      "targetId": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-ab261386add8476f90012c690fde47d8",
+      "sourceId": "id-d4c4857c42c1402b9fd562ee0cf6082e",
+      "targetId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 38,
+          "endX": -142,
+          "endY": -74
+        },
+        {
+          "startX": 142,
+          "startY": 38,
+          "endX": 0,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-762087b93fc64b06b3a0e2e37a58f287",
+      "sourceId": "id-421b48ac27364115bf1ca1ddce9292b0",
+      "targetId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-47d1683ed7ad461fa365884663eb40da",
+      "sourceId": "id-e4dd44aced5741fb8930a9907a0c938c",
+      "targetId": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 38,
+          "endX": -136,
+          "endY": -74
+        },
+        {
+          "startX": 149,
+          "startY": 38,
+          "endX": 13,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-cbac0808385f43219ac384831730a1bd",
+      "sourceId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "targetId": "id-527a45c15cf24172b2ffc93d726499a0",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": -12,
+          "startY": 62,
+          "endX": 168,
+          "endY": -54
+        },
+        {
+          "startX": -160,
+          "startY": 62,
+          "endX": 20,
+          "endY": -54
+        }
+      ]
+    },
+    {
+      "id": "id-a6f02abe9c3d49ef859867f1dc5e6464",
+      "sourceId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "targetId": "id-9e635d40a43647299865b6f1b004185a",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 42,
+          "endX": -163,
+          "endY": -74
+        },
+        {
+          "startX": 163,
+          "startY": 42,
+          "endX": 0,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-8f8ca3dcc0e848d3a0a4ffb5120f966a",
+      "sourceId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "targetId": "id-8985b1ca7cad45f8b4a408c4abb8af70",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-84cd9a7fb583426e890bcdd1386a6725",
+      "sourceId": "id-d7402dd234524a34b7e9ed8417e9d27b",
+      "targetId": "id-bde81c28c1264de2a75fbab3639c075a",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": -37,
+          "startY": 52,
+          "endX": 313,
+          "endY": -61
+        },
+        {
+          "startX": -330,
+          "startY": 52,
+          "endX": 20,
+          "endY": -61
+        }
+      ]
+    },
+    {
+      "id": "id-ef9ee84f978642228eeb21bb94f3155d",
+      "sourceId": "id-19af7ef04bf54de9aae5f0438c39968c",
+      "targetId": "id-38e73841d8a54c1baa1c96730b047c82",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-f278490c5196443d99bb8c199058da28",
+      "sourceId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "targetId": "id-0e7630e98c824e6a84c14ac5352357c9",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 44,
+          "endX": -339,
+          "endY": -74
+        },
+        {
+          "startX": 339,
+          "startY": 44,
+          "endX": 0,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-c3c9152d16d14455919f193312c94ce6",
+      "sourceId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "targetId": "id-2354ac26286c4088b0861cd2c0d34f60",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 44,
+          "endX": 170,
+          "endY": -74
+        },
+        {
+          "startX": -170,
+          "startY": 44,
+          "endX": 0,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-2e23178071ab4c8190eae4ed479697e4",
+      "sourceId": "id-28dbb1fa05c5406b8018e145f2e047de",
+      "targetId": "id-9e45f4fa1ecf437288b9a4a014137c24",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-3a511bcc412e4ffca6503b8a92129296",
+      "sourceId": "id-378429d791ea4b3891631d87c5c6af36",
+      "targetId": "id-3de872ba5aa4467aaf928f25b923e7fe",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 20,
+          "startY": 44,
+          "endX": -131,
+          "endY": -74
+        },
+        {
+          "startX": 131,
+          "startY": 44,
+          "endX": -20,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-1b7d9dc2f16c40439e42f325821c6151",
+      "sourceId": "id-378429d791ea4b3891631d87c5c6af36",
+      "targetId": "id-9e86c2ee8b5d4781bcdf1630020974b2",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-37b264bb172e4f4b8eaa7e06ca8f3ee9",
+      "sourceId": "id-527a45c15cf24172b2ffc93d726499a0",
+      "targetId": "id-51bbf43b499e4822864ada2ff358735b",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 64,
+          "endX": -1494,
+          "endY": -47
+        },
+        {
+          "startX": 1494,
+          "startY": 64,
+          "endX": 0,
+          "endY": -47
+        }
+      ]
+    },
+    {
+      "id": "id-1ff266074bd2405c81f65b75b93e129d",
+      "sourceId": "id-3de872ba5aa4467aaf928f25b923e7fe",
+      "targetId": "id-51bbf43b499e4822864ada2ff358735b",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 44,
+          "endX": -639,
+          "endY": -67
+        },
+        {
+          "startX": 659,
+          "startY": 44,
+          "endX": 20,
+          "endY": -67
+        }
+      ]
+    },
+    {
+      "id": "id-83959ecbe6a04ae5a2a600ebc6c88bec",
+      "sourceId": "id-bde81c28c1264de2a75fbab3639c075a",
+      "targetId": "id-51bbf43b499e4822864ada2ff358735b",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 77,
+          "endX": -1664,
+          "endY": -37
+        },
+        {
+          "startX": 1624,
+          "startY": 77,
+          "endX": -40,
+          "endY": -37
+        }
+      ]
+    },
+    {
+      "id": "id-2677592478e440e3b30d0348bd1b8619",
+      "sourceId": "id-8985b1ca7cad45f8b4a408c4abb8af70",
+      "targetId": "id-51bbf43b499e4822864ada2ff358735b",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 1,
+          "startY": 57,
+          "endX": -1322,
+          "endY": -57
+        },
+        {
+          "startX": 1323,
+          "startY": 57,
+          "endX": 0,
+          "endY": -57
+        }
+      ]
+    },
+    {
+      "id": "id-9fea03b540a8486591a84be388451268",
+      "sourceId": "id-0e7630e98c824e6a84c14ac5352357c9",
+      "targetId": "id-51bbf43b499e4822864ada2ff358735b",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-87d0afb6a7c046808afa42daf90f6bb3",
+      "sourceId": "id-4e6f28201a114c5599464fc74caeb784",
+      "targetId": "id-527a45c15cf24172b2ffc93d726499a0",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-9040350ed08d4fda87063b1afef1a211",
+      "sourceId": "id-4e6f28201a114c5599464fc74caeb784",
+      "targetId": "id-8985b1ca7cad45f8b4a408c4abb8af70",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 38,
+          "endX": -171,
+          "endY": -71
+        },
+        {
+          "startX": 171,
+          "startY": 38,
+          "endX": 0,
+          "endY": -71
+        }
+      ]
+    },
+    {
+      "id": "id-88955fff4aec4b4d84b8d49cb77ddb47",
+      "sourceId": "id-8c0678f9a1e9415e96524a18fb318f9a",
+      "targetId": "id-9e635d40a43647299865b6f1b004185a",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-ac53e5f1d59d4c8399f2126097370f5d",
+      "sourceId": "id-4c96830636f048e7ad63548b2105927a",
+      "targetId": "id-3de872ba5aa4467aaf928f25b923e7fe",
+      "label": "",
+      "bendpoints": []
+    },
+    {
+      "id": "id-cd8f7f0d2c5947d9a3a2ad99bf95beba",
+      "sourceId": "id-54ad7eb8fffd47fbad6e92d2c7718a37",
+      "targetId": "id-9e86c2ee8b5d4781bcdf1630020974b2",
+      "label": "",
+      "bendpoints": [
+        {
+          "startX": 0,
+          "startY": 38,
+          "endX": -129,
+          "endY": -74
+        },
+        {
+          "startX": 129,
+          "startY": 38,
+          "endX": 0,
+          "endY": -74
+        }
+      ]
+    },
+    {
+      "id": "id-c573a38e4d0641eb93683289833b7c8b",
+      "sourceId": "id-bdd725dc88934a1087cc070db50286c4",
+      "targetId": "id-bde81c28c1264de2a75fbab3639c075a",
+      "label": "",
+      "bendpoints": []
+    }
+  ]
+}

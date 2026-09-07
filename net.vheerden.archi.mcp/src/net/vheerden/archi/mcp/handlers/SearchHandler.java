@@ -88,7 +88,7 @@ public class SearchHandler {
 
     /**
      * Valid ArchiMate layer names for the optional layer filter.
-     * These match exactly the strings returned by {@code ArchiModelAccessorImpl.resolveLayer()}.
+     * These match exactly the strings returned by {@code DtoMapper.resolveLayer()}.
      */
     public static final Set<String> VALID_LAYERS = Set.of(
             "Business", "Application", "Technology", "Physical",
@@ -167,6 +167,9 @@ public class SearchHandler {
         fieldsProp.put("description", "Field verbosity preset for element data. "
                 + "'minimal' returns only id and name. "
                 + "'standard' (default) returns id, name, type, specialization, layer, documentation, properties. "
+                + "An element reports documentation and properties only when it has "
+                + "them, so an absent field means the element carries nothing there "
+                + "rather than that it was left out. "
                 + "'full' returns all available fields.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
@@ -335,8 +338,7 @@ public class SearchHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "specialization, viewpointType, folderPath, visualMetadata",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -523,7 +525,9 @@ public class SearchHandler {
                 int tokensAtStandard = CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.STANDARD,
                         CostEstimator.ItemType.ELEMENT);
                 String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
-                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset);
+                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset,
+                        CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.MINIMAL,
+                                CostEstimator.ItemType.ELEMENT));
                 logger.debug("DryRun estimate: {} items, ~{} tokens at {} preset", totalCount, estimatedTokens, preset);
 
                 List<String> dryRunNextSteps = new ArrayList<>();
@@ -821,6 +825,9 @@ public class SearchHandler {
                         + "(e.g., sourceLayer='Business', targetLayer='Application'). "
                         + "Results are paginated if they exceed the limit. "
                         + "Use fields='full' to include documentation, properties, and resolved source/target names. "
+                        + "Even under fields='full' a relationship reports properties only when "
+                        + "the relationship has any, so an absent properties field means it "
+                        + "carries none rather than that the field was excluded. "
                         + "WHEN TO USE: Find relationships by text/type/layer across the entire model. "
                         + "Supports optional specialization filter for exact-match filtering by specialization name. "
                         + "USE INSTEAD: get-relationships when you have a specific element ID and want its connections.")
@@ -949,7 +956,7 @@ public class SearchHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, type, specialization",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -1142,7 +1149,9 @@ public class SearchHandler {
                 int tokensAtStandard = CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.STANDARD,
                         CostEstimator.ItemType.RELATIONSHIP);
                 String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
-                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset);
+                String recommendation = CostEstimator.buildRecommendation(totalCount, estimatedTokens, preset,
+                        CostEstimator.estimateTokens(totalCount, FieldSelector.FieldPreset.MINIMAL,
+                                CostEstimator.ItemType.RELATIONSHIP));
 
                 List<String> dryRunNextSteps = new ArrayList<>();
                 if (totalCount > 50) {

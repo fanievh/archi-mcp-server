@@ -7,7 +7,7 @@ import com.archimatetool.model.IProfile;
 
 /**
  * GEF Command that adds a specialization (profile) definition to the model's
- * profile catalog (Story C3c).
+ * profile catalog.
  *
  * <p>Used by the dedicated {@code create-specialization} tool. For inline
  * profile creation triggered by {@code create-element}/{@code create-relationship},

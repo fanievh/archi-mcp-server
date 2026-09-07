@@ -33,7 +33,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * &mdash; <em>byte-identical to current {@code main}</em>. Selection is
  * {@code argmax} with a strictly-greater replacement rule, so run&nbsp;0 wins
  * every tie. Therefore {@code objective(emitted) &ge; objective(run0) =
- * objective(current main)} for every input, BY CONSTRUCTION. Unlike HPRPS's
+ * objective(current main)} for every input, BY CONSTRUCTION. Unlike the hub-perimeter stage's
  * {@code verifyMetricMonotonicity} rollback model there is nothing to roll back:
  * the current-{@code main} result is permanently in the candidate set and always
  * wins ties. These tests assert that construction on the real substrate.
@@ -309,7 +309,7 @@ public class BestOfKRoutingStrategyV4FixtureTest {
      * Task 5.1 MEASUREMENT probe (not a pin) — captures the emitted best-of-K
      * M4 / V_p10 / coincSeg / rating vs run-0 on the V4 pure-JUnit substrate so
      * the Pin-1/Pin-2 re-raise decision is data-driven, never assumed (per
-     * anti-disaster #6 + the HPRPS no-aspirational-lying discipline). Prints the
+     * anti-disaster #6 + the no-aspirational-lying discipline). Prints the
      * actuals; asserts only never-worse (already guaranteed) so it is a probe,
      * not a brittle value pin.
      */
@@ -356,7 +356,7 @@ public class BestOfKRoutingStrategyV4FixtureTest {
                 runner(), scorer(), 12, 42L, 1000, 60_000L).selectBest(endpoints);
         long elapsedMs = (System.nanoTime() - startNanos) / 1_000_000L;
         assertNotNull(best);
-        assertTrue("AC-15 perf-sentinel: K=12 best-of-K on the 30-connection V4 "
+        assertTrue("perf-sentinel: K=12 best-of-K on the 30-connection V4 "
                 + "oracle took " + elapsedMs + "ms — exceeds the 45000ms "
                 + "wall-clock sentinel bound (investigate a pipeline-cost or "
                 + "scorer-cost regression; K-multiplier blow-up)",

@@ -452,6 +452,10 @@ public interface ArchiModelAccessor {
      *                           for AssociationRelationship, {@code influenceStrength} for
      *                           InfluenceRelationship. Pass
      *                           {@link RelationshipSemanticAttributes#NONE} or {@code null} for none.
+     * @param documentation      optional documentation text; a blank string is not stored
+     * @param properties         optional key-value properties map
+     * @param source             optional source traceability map (keys auto-prefixed with
+     *                           "mcp.source.") merged into {@code properties}
      * @return MutationResult containing the created RelationshipDto and optional batch sequence
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if type invalid, elements not found, spec violation,
@@ -459,7 +463,19 @@ public interface ArchiModelAccessor {
      */
     MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
             String sourceId, String targetId, String name, String specialization,
-            RelationshipSemanticAttributes semanticAttributes);
+            RelationshipSemanticAttributes semanticAttributes,
+            String documentation, Map<String, String> properties, Map<String, String> source);
+
+    /**
+     * Back-compat overload for callers that supply semantic attributes but no metadata.
+     * Delegates with no documentation, properties or source.
+     */
+    default MutationResult<RelationshipDto> createRelationship(String sessionId, String type,
+            String sourceId, String targetId, String name, String specialization,
+            RelationshipSemanticAttributes semanticAttributes) {
+        return createRelationship(sessionId, type, sourceId, targetId, name, specialization,
+                semanticAttributes, null, null, null);
+    }
 
     /**
      * Back-compat overload preserving the 6-arg signature for callers that don't
@@ -655,7 +671,8 @@ public interface ArchiModelAccessor {
      *
      * @param sessionId          the session identifier for mode detection
      * @param viewId             the view's unique identifier (required)
-     * @param label              the group display label (required, must not be blank)
+     * @param label              the group display label (required, must not be null; an empty
+     *                           string creates an untitled group, which Archi holds and renders)
      * @param x                  x coordinate (null for auto-placement)
      * @param y                  y coordinate (null for auto-placement)
      * @param width              width (null for default 300)
@@ -663,7 +680,7 @@ public interface ArchiModelAccessor {
      * @param parentViewObjectId optional group viewObjectId to nest inside (null for top-level)
      * @return MutationResult containing the ViewGroupDto
      * @throws NoModelLoadedException if no model is loaded
-     * @throws ModelAccessException if view not found, label is blank, or parent is not a group
+     * @throws ModelAccessException if view not found, label is null, or parent is not a group
      */
     MutationResult<ViewGroupDto> addGroupToView(String sessionId, String viewId,
             String label, Integer x, Integer y, Integer width, Integer height,
@@ -1011,12 +1028,15 @@ public interface ArchiModelAccessor {
      * a channel-global ordered nudging pass that centres single-occupant routes in their
      * corridors and fans out parallel runs sharing a corridor. Set false to A/B compare or
      * to opt out.</p>
+     *
+     * <p>{@code labelPolicy} selects what the pass may do to a label it cannot place anywhere.
+     * Null or omitted keeps every label exactly as it is — hiding is opt-in, never a default.</p>
      */
     MutationResult<AutoRouteResultDto> autoRouteConnections(
             String sessionId, String viewId,
             List<String> connectionIds, String strategy, boolean force,
             boolean autoNudge, int snapThreshold, int perimeterMargin, String mode,
-            boolean enableChannelNudging);
+            boolean enableChannelNudging, String labelPolicy);
 
     // ---- Auto-layout-and-route ----
 
@@ -1034,16 +1054,18 @@ public interface ArchiModelAccessor {
      * @param mode         layout mode: "auto" (ELK, default) or "grouped" (Branch 2 orchestration)
      * @param direction    layout direction: DOWN, RIGHT, UP, LEFT (default DOWN)
      * @param spacing      inter-element spacing in pixels (default 50)
-     * @param targetRating optional quality target ("excellent", "good", "fair");
-     *                     when non-null, iterates with increasing spacing until
-     *                     assess-layout reaches the target rating or max iterations (5)
+     * @param targetRating optional quality target ("excellent", "good", "fair"); when non-null,
+     *                     runs an assess-and-adjust loop (at most 5 attempts) that tunes whichever
+     *                     lever the worst metric calls for, and stops on any of: target reached,
+     *                     all metrics passing, a limiting factor no iteration can move, or the
+     *                     budget being spent. The result's {@code terminationReason} says which.
      * @return MutationResult containing AutoLayoutAndRouteResultDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found or invalid parameters
      */
     MutationResult<AutoLayoutAndRouteResultDto> autoLayoutAndRoute(
             String sessionId, String viewId, String mode,
-            String direction, int spacing, String targetRating);
+            String direction, int spacing, String targetRating, String labelPolicy);
 
     // ---- Adjust view spacing ----
 
@@ -1184,13 +1206,21 @@ public interface ArchiModelAccessor {
      *
      * <p>The {@code isConnected} column-selection determination is computed
      * by walking the same connection enumeration and counting connections
-     * whose source and target resolve to DIFFERENT top-level groups (where
-     * "top-level group" means an {@code IDiagramModelGroup} whose immediate
-     * container is the {@code IArchimateDiagramModel} itself, not a nested
-     * group). One-side-grouped pairings (one endpoint in a group, the other
-     * ungrouped) are NOT counted as inter-group — the heuristic's
-     * connected/unconnected distinction is about <em>between-group</em>
-     * routing-corridor demand, which requires two groups.</p>
+     * whose source and target resolve to DIFFERENT top-level containers.
+     * "Container" here means either of the two objects Archi renders as a
+     * labelled box holding others — a native view group or an ArchiMate
+     * {@code Grouping} element — resolved by the one predicate the
+     * arrangement family shares, {@code TopLevelGroupTargets.isTarget}.
+     * That predicate is the arrangement family's, not the whole layout
+     * family's: the upward ancestor re-fit is narrower, the downward
+     * {@code layout-within-group} recursion is wider, and
+     * {@code resize-elements-to-fit} does not use it at all. A view
+     * whose zones are {@code Grouping} elements is counted exactly as one
+     * built from native groups. One-side-grouped pairings (one endpoint in a
+     * container, the other outside every container) are NOT counted — the
+     * heuristic's connected/unconnected distinction is about
+     * <em>between-container</em> routing-corridor demand, which requires
+     * two containers.</p>
      *
      * <p><strong>Composition strategy:</strong> this tool composes
      * {@link #adjustViewSpacing(String, String, Integer, Integer, Integer, boolean)}
@@ -1385,26 +1415,37 @@ public interface ArchiModelAccessor {
      * @param viewId            the view's unique identifier (required)
      * @param elementIds        optional filter: only consider relationships involving these elements
      * @param relationshipTypes optional filter: only connect relationships of these types
+     * @param relationshipIds   optional allow-list: only connect relationships whose model ID is
+     *                          in this list. Composed as an intersection (AND) with the type and
+     *                          element filters. Each ID must resolve to an existing relationship
+     *                          or the call fails before any connection is created; an allow-listed
+     *                          ID that is simply not drawable on this view is skipped, not an error.
      * @param showLabel         optional: set to false to suppress labels on all created connections,
      *                          true to show labels explicitly, or null to use Archi default (shown)
      * @return MutationResult containing AutoConnectResultDto with connection counts
      * @throws NoModelLoadedException if no model is loaded
-     * @throws ModelAccessException if view not found, element not on view, or invalid type
+     * @throws ModelAccessException if view not found, element/relationship not found, or invalid type
      */
     MutationResult<AutoConnectResultDto> autoConnectView(
             String sessionId, String viewId,
             List<String> elementIds, List<String> relationshipTypes,
+            List<String> relationshipIds,
             Boolean showLabel, StylingParams styling);
 
     // ---- Layout within group ----
 
     /**
-     * Arranges child elements within a visual group using row, column, or grid
-     * patterns. Computes positions server-side so the LLM doesn't need to
-     * calculate coordinates.
+     * Arranges child elements within a container using row, column, or grid patterns. Computes
+     * positions server-side so the LLM doesn't need to calculate coordinates.
      *
-     * <p>Only repositions direct children of the specified group (not recursive
-     * into sub-groups). Sub-groups are treated as single elements for positioning.</p>
+     * <p>The container is a native view group <em>or</em> an ArchiMate-element view object holding
+     * children — a Node, an ApplicationComponent, a Grouping. Both are accepted here; the two are
+     * <em>not</em> interchangeable for {@code recursive}, which is the one place the distinction
+     * still bites and is stated on that parameter.</p>
+     *
+     * <p>By default repositions direct children only, treating sub-containers as single fixed
+     * boxes. Set {@code recursiveChildren} to arrange the whole nesting hierarchy bottom-up
+     * instead.</p>
      *
      * @param sessionId          the session identifier for mode detection
      * @param viewId             the view's unique identifier (required)
@@ -1418,7 +1459,15 @@ public interface ArchiModelAccessor {
      * @param autoWidth          compute each element's width from its label text (default: false);
      *                           ignored when elementWidth is set (explicit override wins)
      * @param columns           optional: number of columns for grid arrangement (auto-detected if null)
-     * @param recursive         if true and autoResize is true, recursively resize ancestor groups
+     * @param recursive         if true and autoResize is true, recursively resize ancestor groups.
+     *                          NATIVE view groups only, at both ends: the walk starts only from a
+     *                          native group — naming an ArchiMate-element container makes it a
+     *                          no-op — and it stops at the first non-native ancestor rather than
+     *                          skipping past it. The result's {@code ancestorPropagation} says
+     *                          which of those, or neither, actually happened
+     * @param recursiveChildren if true, recursively arrange DESCENDANTS bottom-up (innermost
+     *                          containers arranged and sized first, then each level up); inner
+     *                          containers are always resized to fit, the root honours autoResize
      * @return MutationResult containing LayoutWithinGroupResultDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view/group not found or invalid arrangement
@@ -1427,21 +1476,36 @@ public interface ArchiModelAccessor {
             String sessionId, String viewId, String groupViewObjectId,
             String arrangement, Integer spacing, Integer padding,
             Integer elementWidth, Integer elementHeight, boolean autoResize,
-            boolean autoWidth, Integer columns, boolean recursive);
+            boolean autoWidth, Integer columns, boolean recursive,
+            boolean recursiveChildren);
 
     /**
      * Arranges top-level groups in a view using a specified arrangement pattern.
      *
-     * <p>Groups are positioned relative to each other in a grid, row, or column layout.
-     * Only top-level groups (direct children of the view that are IDiagramModelGroup)
-     * are repositioned. Optionally, a subset of groups can be targeted via groupIds.</p>
+     * <p>Groups are positioned relative to each other in a grid, row, or column layout. The view's
+     * direct children are repositioned in canvas coordinates: by default the containers
+     * {@code TopLevelGroupTargets.isTarget} admits — a native view group or an ArchiMate
+     * {@code Grouping} element, treated alike — and, when {@code groupIds} names them, any direct
+     * child that is a container, including a host such as a {@code Node} that the default
+     * predicate declines.</p>
+     *
+     * <p>A container drawn INSIDE such a host is repositioned too, but not on the canvas: its
+     * coordinates are stored relative to the host, so it is arranged in the host's own space and
+     * reported in {@code nestedContainersArranged} rather than in {@code groupsPositioned}. That
+     * keeps the four-bucket identity over the view's direct children exactly as it was. A host too
+     * small to hold the arrangement is declined whole — this call never grows an ArchiMate element
+     * to make room. A container that is a member of another arrangement target is not repositioned
+     * at all; it moves with the target holding it.</p>
      *
      * @param sessionId   the session identifier for mode detection
      * @param viewId      the view containing the groups (required)
      * @param arrangement layout pattern: "grid", "row", or "column" (required)
      * @param columns     optional: number of columns for grid arrangement (auto-detected if null)
      * @param spacing     optional: gap in pixels between groups (default: 40)
-     * @param groupIds    optional: list of specific group IDs to arrange (all top-level groups if null/empty)
+     * @param groupIds    optional: view-object ids of specific top-level containers to arrange —
+     *                    a direct child of the view, or a container drawn inside a host, which
+     *                    restricts the arrangement inside that host to the ids named (every
+     *                    container isTarget admits, at any depth, if null/empty)
      * @return MutationResult containing ArrangeGroupsResultDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found or invalid parameters
@@ -1689,11 +1753,15 @@ public interface ArchiModelAccessor {
      * validation in Phase 1, no mutations are applied (all-or-nothing). When
      * {@code continueOnError} is true, failed operations are skipped and successful
      * operations are executed together. Operations referencing a failed operation
-     * via back-references ($N.id) also fail with a cascade error.</p>
+     * via a back-reference also fail with a cascade error.</p>
      *
-     * <p>Supports back-references: {@code $N.id} in parameter values resolves to the
-     * entity ID created by operation at index N. For {@code create-relationship},
-     * direct EMF element references are used for source/target wiring.</p>
+     * <p>Supports back-references in two interchangeable forms. {@code $N.id} resolves to the
+     * entity created by the operation at index N; {@code $name.id} resolves to the entity created
+     * by the operation carrying {@code as: "name"}. They differ only in what a typo does — every
+     * position below the current one is a legal earlier operation, so a mistyped position resolves
+     * to the wrong one in silence, while a mistyped name matches nothing and is refused. For
+     * {@code create-relationship}, direct EMF element references are used for source/target
+     * wiring.</p>
      *
      * @param sessionId       the session identifier for mode detection
      * @param operations      the list of operations to execute (max {@value BulkOperation#MAX_OPERATIONS})

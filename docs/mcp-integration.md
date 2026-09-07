@@ -197,6 +197,8 @@ flowchart LR
 
 **Precedence:** Per-query parameters override session filters. Session filters apply when the query omits the parameter.
 
+**Reach on `get-view-contents`.** `fields` routes only the element and relationship rows through its verbosity filter. The other five arrays a view response carries — `visualMetadata`, `connections`, `groups`, `notes` and `images` — go in whole at every preset, so `exclude` is the parameter that drops a whole visual array and is normally the one that moves the response size. Both are inert on `format: "summary"` and `format: "tree"`, which return before the field selector runs.
+
 ### Session Caching
 
 - Query results are cached per-session with keys encoding command name + effective filters
@@ -256,12 +258,57 @@ The plugin serves static reference materials as MCP Resources via the `ResourceH
 
 Total resource count: 14.
 
+### Resource Templates
+
+The same URIs are also advertised as MCP resource templates, one per namespace:
+
+| Template | Expands to |
+|----------|-----------|
+| `archimate://prompts/{name}` | the 4 prompt resources |
+| `archimate://reference/{name}` | the 4 reference resources |
+| `archimate://recipes/{name}` | the 6 recipe resources |
+
+A URI-template variable matches exactly one path segment, and every resource URI is exactly two
+segments, so these templates expand to the URIs listed above **verbatim** — no URI is renamed and no
+placeholder parameter is introduced. This matters: the guidance pointers embedded in tool
+descriptions and tool responses name the concrete two-segment form, so a template that did not match
+them would leave those pointers unreachable.
+
+Templates are additive. Clients that read static resources are unaffected; clients that implement
+only `resources/templates/list` gain a route to the same bodies.
+
+### The `get-guidance` Tool
+
+Not every MCP client exposes resource reads to the model. Because this server points agents at
+`archimate://` URIs from inside tool descriptions and tool responses, the same content is also
+reachable through a tool — the one MCP surface every client implements.
+
+| Call | Returns |
+|------|---------|
+| `get-guidance` (no arguments) | the catalogue: every available uri with its name and description, no bodies |
+| `get-guidance` with `uri` | that resource's full markdown body |
+
+An unknown `uri` returns a structured `INVALID_PARAMETER` error naming the URI and listing the valid
+ones — never an empty success.
+
+`get-guidance` is read-only and touches no model state. The catalogue, the MCP resource
+registrations and the resource templates are all derived from one declaration in `ResourceHandler`,
+so the two delivery routes cannot drift apart.
+
+**Interim workaround, no rebuild required.** On a client that supports neither resource reads nor
+this tool, dump the 14 resource bodies to local files and reference them as `file://` entries in the
+client's own agent configuration.
+
 ### Loading and Serving
 
-1. Resources load from the classpath at server startup
-2. Content is cached in memory (HashMap)
-3. LLM clients request resources via URI
-4. Handler returns content as `TextResourceContents` with MIME type `text/markdown`
+1. Resource bodies load from the classpath on first use and are cached in memory
+2. LLM clients request resources via URI, via an expanded template URI, or via `get-guidance`
+3. The resource routes return `TextResourceContents` with MIME type `text/markdown`;
+   `get-guidance` returns the same body inside the standard response envelope
+
+A contract test (`GuidancePointerReachabilityTest`) scans the shipped source for every
+`archimate://` URI and asserts each one resolves in the catalogue, so a pointer that names a
+non-existent resource fails the build rather than surfacing as an agent that cannot follow it.
 
 **Source:** `handlers/ResourceHandler.java`, `net.vheerden.archi.mcp/resources/`
 

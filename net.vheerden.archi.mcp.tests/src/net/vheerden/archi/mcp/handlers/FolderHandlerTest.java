@@ -48,7 +48,7 @@ public class FolderHandlerTest {
         handler.registerTools();
     }
 
-    // ---- Tool registration tests (AC 10) ----
+    // ---- Tool registration tests ----
 
     @Test
     public void shouldRegisterGetFoldersTool_whenHandlerRegistered() {
@@ -64,7 +64,7 @@ public class FolderHandlerTest {
         assertTrue("get-folder-tree tool should be registered", found);
     }
 
-    // ---- get-folders: no params → root folders (AC 1) ----
+    // ---- get-folders: no params → root folders ----
 
     @Test
     public void shouldReturnRootFolders_whenNoParams() throws Exception {
@@ -110,7 +110,7 @@ public class FolderHandlerTest {
         assertEquals("Should not be truncated", false, meta.get("isTruncated"));
     }
 
-    // ---- get-folders: with parentId → children (AC 2) ----
+    // ---- get-folders: with parentId → children ----
 
     @Test
     public void shouldReturnChildren_whenParentIdProvided() throws Exception {
@@ -137,7 +137,7 @@ public class FolderHandlerTest {
         assertEquals("Technology folder has no children", 0, folders.size());
     }
 
-    // ---- get-folders: with name filter (AC 3) ----
+    // ---- get-folders: with name filter ----
 
     @Test
     public void shouldReturnMatchingFolders_whenNameFilterProvided() throws Exception {
@@ -178,7 +178,7 @@ public class FolderHandlerTest {
         assertEquals("Processes", folders.get(0).get("name"));
     }
 
-    // ---- get-folders: invalid parentId → FOLDER_NOT_FOUND (AC 4) ----
+    // ---- get-folders: invalid parentId → FOLDER_NOT_FOUND ----
 
     @Test
     public void shouldReturnFolderNotFound_whenInvalidParentId() throws Exception {
@@ -194,7 +194,7 @@ public class FolderHandlerTest {
         assertNotNull("Should have suggestedCorrection", error.get("suggestedCorrection"));
     }
 
-    // ---- get-folders: no model loaded → MODEL_NOT_LOADED (AC 8) ----
+    // ---- get-folders: no model loaded → MODEL_NOT_LOADED ----
 
     @Test
     public void shouldReturnModelNotLoaded_whenNoModel() throws Exception {
@@ -214,7 +214,7 @@ public class FolderHandlerTest {
         assertEquals("MODEL_NOT_LOADED", error.get("code"));
     }
 
-    // ---- get-folder-tree: no params → full tree (AC 5) ----
+    // ---- get-folder-tree: no params → full tree ----
 
     @Test
     public void shouldReturnFullTree_whenNoParams() throws Exception {
@@ -236,7 +236,7 @@ public class FolderHandlerTest {
         assertEquals("Business has 2 children", 2, children.size());
     }
 
-    // ---- get-folder-tree: with rootId → subtree (AC 6) ----
+    // ---- get-folder-tree: with rootId → subtree ----
 
     @Test
     public void shouldReturnSubtree_whenRootIdProvided() throws Exception {
@@ -251,7 +251,7 @@ public class FolderHandlerTest {
         assertEquals("Business", tree.get(0).get("name"));
     }
 
-    // ---- get-folder-tree: with depth limit (AC 7) ----
+    // ---- get-folder-tree: with depth limit ----
 
     @Test
     public void shouldLimitDepth_whenDepthProvided() throws Exception {
@@ -303,7 +303,7 @@ public class FolderHandlerTest {
         assertEquals("FOLDER_NOT_FOUND", error.get("code"));
     }
 
-    // ---- get-folder-tree: no model loaded → MODEL_NOT_LOADED (AC 8) ----
+    // ---- get-folder-tree: no model loaded → MODEL_NOT_LOADED ----
 
     @Test
     public void shouldReturnModelNotLoaded_whenNoModelForTree() throws Exception {
@@ -323,7 +323,7 @@ public class FolderHandlerTest {
         assertEquals("MODEL_NOT_LOADED", error.get("code"));
     }
 
-    // ---- get-folder-tree: with name filter → pruned tree (AC 3 analogue) ----
+    // ---- get-folder-tree: with name filter → pruned tree (the get-folders name-filter analogue) ----
 
     @Test
     public void shouldPruneTree_whenNameFilterProvided() throws Exception {
@@ -338,7 +338,7 @@ public class FolderHandlerTest {
         assertEquals("Business", tree.get(0).get("name"));
     }
 
-    // ---- Field selection (AC 1, Task 6.16) ----
+    // ---- Field selection ----
 
     @Test
     public void shouldReturnMinimalFields_whenFieldsMinimal() throws Exception {

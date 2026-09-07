@@ -24,6 +24,7 @@ import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ParamNameDiagnostics;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
@@ -102,6 +103,15 @@ public class ModelQueryHandler {
                         + "This is the FIRST tool to call when exploring a new model — "
                         + "it provides the statistics needed to plan an efficient exploration strategy. "
                         + "The response includes model-size-aware nextSteps suggestions. "
+                        + "The result also carries approvalMode — the human-owned approval gate in "
+                        + "Archi. While it is true, a mutation is NOT applied when you call it: the "
+                        + "response returns the tool's normal result under result.preview with a "
+                        + "result.proposal sibling (proposalId, status, createdAt), pending the "
+                        + "human's decision in Archi. In that preview the id of a newly created "
+                        + "object is provisional and will never resolve — the object is rebuilt on "
+                        + "approval and gets a different id — whereas ids of existing objects being "
+                        + "updated or deleted are stable. bulk-mutate and the two discovery create "
+                        + "tools shape this differently — see their own descriptions. "
                         + "Related: get-views (browse diagrams), search-elements (find elements), "
                         + "set-session-filter (scope queries).")
                 .inputSchema(inputSchema)
@@ -243,6 +253,9 @@ public class ModelQueryHandler {
         fieldsProp.put("description", "Field verbosity preset for element data. "
                 + "'minimal' returns only id and name. "
                 + "'standard' (default) returns id, name, type, layer, documentation, properties. "
+                + "An element reports documentation and properties only when it has "
+                + "them, so an absent field means the element carries nothing there "
+                + "rather than that it was left out. "
                 + "'full' returns all available fields.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
@@ -325,8 +338,7 @@ public class ModelQueryHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "specialization, viewpointType, folderPath, visualMetadata",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -785,6 +797,13 @@ public class ModelQueryHandler {
             Map<String, Object> args = request.arguments();
             Object idObj = (args != null) ? args.get("conceptId") : null;
             if (!(idObj instanceof String conceptId) || conceptId.isBlank()) {
+                if (ParamNameDiagnostics.suppliedInsteadOf(args, "conceptId") != null) {
+                    // This tool reads its identifier itself rather than through the shared helper,
+                    // so it would otherwise be the one place a sibling tool's spelling is met with
+                    // silence — and 'conceptId' is precisely one of the colliding spellings.
+                    return HandlerUtils.buildModelAccessError(formatter,
+                            ParamNameDiagnostics.missingHandlerParameter(args, "conceptId"));
+                }
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
                         "The 'conceptId' parameter is required and must be a non-empty string",

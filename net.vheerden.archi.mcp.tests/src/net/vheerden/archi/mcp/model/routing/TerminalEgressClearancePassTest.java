@@ -17,13 +17,13 @@ import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass.Snapshot
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * Unit tests for {@link TerminalEgressClearancePass} (W3 Lever-B successor).
+ * Unit tests for {@link TerminalEgressClearancePass} (the egress-lift successor).
  *
  * <p>Pure-geometry tests, mirroring {@code TerminalSegmentCorridorMigratorTest}. The first
  * three are the validated v1 core transform (push-off-face, no-room-no-op,
- * already-perpendicular). The remaining tests pin the two successor fixes: Fix-2a
- * (connection-gap-aware room search), Fix-2b (cheap view-level pre-gate), and Fix-1
- * (final-state net-improve rollback). The end-to-end M4 drop on D/G is verified by
+ * already-perpendicular). The remaining tests pin the three successor behaviours:
+ * the connection-gap-aware room search, the cheap view-level pre-gate, and the
+ * final-state net-improve rollback. The end-to-end M4 drop on D/G is verified by
  * live integration testing; these pins lock the geometry.
  */
 public class TerminalEgressClearancePassTest {
@@ -50,8 +50,8 @@ public class TerminalEgressClearancePassTest {
     }
 
     /**
-     * G-successor overload: supply the per-connection ANCESTOR-EXCLUDED obstacle set
-     * ({@code conn.obstacles()}) distinct from the {@code allObstacles} run-param, so the Fix-1
+     * G-successor overload: supply the per-connection HIERARCHY-EXCLUDED obstacle set
+     * ({@code conn.obstacles()}) distinct from the {@code allObstacles} run-param, so the
      * separation (Tier-1 passthrough uses {@code conn.obstacles()}; own-face hug detection uses
      * {@code allObstacles}) can be exercised.
      */
@@ -138,7 +138,7 @@ public class TerminalEgressClearancePassTest {
     }
 
     // ===================================================================
-    // Fix-2a — connection-gap-aware room search
+    // Connection-gap-aware room search
     // ===================================================================
 
     /**
@@ -199,7 +199,7 @@ public class TerminalEgressClearancePassTest {
     }
 
     // ===================================================================
-    // Fix-2b — cheap view-level pre-gate
+    // Cheap view-level pre-gate
     // ===================================================================
 
     /**
@@ -227,7 +227,7 @@ public class TerminalEgressClearancePassTest {
 
     /**
      * Pre-gate boundary: the gate is strict {@code prePassVp10 < PRE_GATE_VP10_PX}. At EXACTLY
-     * 8.0 (two vertical runs 8px apart) the pass is NOT skipped (it runs, protected by Fix-2a);
+     * 8.0 (two vertical runs 8px apart) the pass is NOT skipped (it runs, gap-protected);
      * just below 8 (7px apart) it IS skipped. Pins the off-by-one boundary.
      */
     @Test
@@ -298,7 +298,7 @@ public class TerminalEgressClearancePassTest {
     }
 
     // ===================================================================
-    // Fix-1 — final-state net-improve rollback
+    // Final-state net-improve rollback
     // ===================================================================
 
     /**
@@ -389,7 +389,7 @@ public class TerminalEgressClearancePassTest {
     // ===================================================================
 
     /**
-     * AC-1/AC-2 unit anchor: a SHORT (7px) parallel run on the source's OWN BOTTOM face. The run is
+     * Unit anchor: a SHORT (7px) parallel run on the source's OWN BOTTOM face. The run is
      * below the 10px overlap floor, so {@code collectOverlappingEdges} surfaces no edge and M4 never
      * counts it — pre-story this produced NO proposal at all. The own-face detection short-circuit
      * now detects it (terminal on the face line), and the sub-M4 stub-count drop (1&rarr;0) keeps the
@@ -412,7 +412,7 @@ public class TerminalEgressClearancePassTest {
     }
 
     /**
-     * AC-7 guard: a short (7px) co-axial parallel run that is NOT terminal-incident (it is an
+     * Guard: a short (7px) co-axial parallel run that is NOT terminal-incident (it is an
      * interior segment between two clean perpendicular terminals) is never a candidate — the
      * own-face relaxation is strictly terminal-on-own-face, so no proposal is emitted and nothing is
      * pushed. Proves the short-run detection did not loosen into arbitrary short parallel runs.
@@ -473,11 +473,12 @@ public class TerminalEgressClearancePassTest {
     }
 
     // ===================================================================
-    // G successor — Fix-1 (ancestor-aware Tier-1) + Fix-2 (retry past tier1-rejected)
+    // G successor — hierarchy-aware Tier-1 + retry past tier1-rejected
     //
     // Geometry mirrors pin #1 (S BOTTOM face, source-side, push DOWN y=160+k). The container /
     // foreign elements live in `allObstacles`; `conn.obstacles()` is supplied DISTINCTLY (the
-    // ancestor-excluded set) so the Fix-1 separation is exercised. The cleared coordinate (y=168,
+    // ancestor- and descendant-excluded set) so the obstacle-set separation is exercised. The
+    // cleared coordinate (y=168,
     // 8px off S's bottom edge) lies INSIDE the ancestor container's band — the predecessor's
     // dominant blocker.
     // ===================================================================
@@ -521,7 +522,7 @@ public class TerminalEgressClearancePassTest {
     }
 
     /**
-     * G-Fix-2 retry. A GENUINE foreign element F (y 162..186) sits between the face and the
+     * Tier-1 retry. A GENUINE foreign element F (y 162..186) sits between the face and the
      * corridor: the naive candidate y=168 (8px off the S BOTTOM face at y=160) clears element edges +
      * connection gaps but is Tier-1-rejected (pierces F's interior). The search advances past F to the
      * smallest clean coordinate within the 64px cap: y=191, which clears F's bottom edge (y=186) by
@@ -555,7 +556,7 @@ public class TerminalEgressClearancePassTest {
 
     /**
      * Over-exclusion negative guard. A GENUINE foreign element (y 162..230) spans the whole
-     * [8,64] push range and is present in conn.obstacles() (it is NOT an ancestor). Fix-1 must NOT
+     * [8,64] push range and is present in conn.obstacles() (it is NOT an ancestor). It must NOT
      * exclude it: every candidate pierces its interior → sound no-op (a real passthrough is still
      * rejected). Proves the ancestor-exclusion does not leak into genuine foreign elements.
      */

@@ -3,7 +3,7 @@ package net.vheerden.archi.mcp.response.dto;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * Data Transfer Object for the add-image-to-model response (Story C4).
+ * Data Transfer Object for the add-image-to-model response.
  *
  * <p>Returns the archive path where the image is stored (for use with
  * imagePath on view objects), the detected image dimensions, and the

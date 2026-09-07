@@ -174,9 +174,12 @@ class OverlapResolver {
 	}
 
 	/**
-	 * Checks if any non-group, non-note sibling elements have overlapping bounding boxes.
+	 * Checks if any non-container, non-note sibling elements have overlapping bounding boxes.
 	 * Used to skip autoNudge when degenerate geometry would crash the routing pipeline.
 	 * Excludes containment overlaps (parent-child nesting) which are intentional, not degenerate.
+	 * Containers are excluded for both kinds: two zones whose rectangles overlap is a normal
+	 * authoring outcome, not the degenerate element geometry this gate exists to avoid, and
+	 * counting one kind and not the other suppressed the nudge on Grouping-built views alone.
 	 * Pure geometry — no EMF dependencies.
 	 */
 	static boolean hasOverlappingElements(List<AssessmentNode> nodes) {
@@ -184,10 +187,10 @@ class OverlapResolver {
 		int size = nodes.size();
 		for (int i = 0; i < size; i++) {
 			AssessmentNode a = nodes.get(i);
-			if (a.isGroup() || a.isNote()) continue;
+			if (a.isContainer() || a.isNote()) continue;
 			for (int j = i + 1; j < size; j++) {
 				AssessmentNode b = nodes.get(j);
-				if (b.isGroup() || b.isNote()) continue;
+				if (b.isContainer() || b.isNote()) continue;
 				if (isContainmentPair(a, b, containmentPairs)) continue;
 				if (rectsOverlap(a.x(), a.y(), a.width(), a.height(),
 						b.x(), b.y(), b.width(), b.height())) {
@@ -200,10 +203,10 @@ class OverlapResolver {
 
 	/**
 	 * Returns the IDs of the first-detected sibling overlap pair, or an empty list when no
-	 * overlapping pair exists (Story RoutingPreconditions.AutoRouteStructuredWarning, Row E).
+	 * overlapping pair exists.
 	 *
 	 * <p>Mirrors the {@link #hasOverlappingElements(List)} pair-comparison loop — same
-	 * group/note exclusions, same containment-pair exclusions, same short-circuit on
+	 * container/note exclusions, same containment-pair exclusions, same short-circuit on
 	 * first-detected overlap. Returns the {@code [a.id(), b.id()]} pair so callers can
 	 * surface the offending element pair without an extra assessor round-trip.</p>
 	 *
@@ -215,10 +218,10 @@ class OverlapResolver {
 		int size = nodes.size();
 		for (int i = 0; i < size; i++) {
 			AssessmentNode a = nodes.get(i);
-			if (a.isGroup() || a.isNote()) continue;
+			if (a.isContainer() || a.isNote()) continue;
 			for (int j = i + 1; j < size; j++) {
 				AssessmentNode b = nodes.get(j);
-				if (b.isGroup() || b.isNote()) continue;
+				if (b.isContainer() || b.isNote()) continue;
 				if (isContainmentPair(a, b, containmentPairs)) continue;
 				if (rectsOverlap(a.x(), a.y(), a.width(), a.height(),
 						b.x(), b.y(), b.width(), b.height())) {

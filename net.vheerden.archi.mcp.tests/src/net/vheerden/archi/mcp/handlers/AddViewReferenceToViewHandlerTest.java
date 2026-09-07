@@ -56,7 +56,7 @@ public class AddViewReferenceToViewHandlerTest {
     // ---- Tool registration ----
 
     @Test
-    public void shouldRegisterAddViewReferenceToViewTool_AC2() {
+    public void shouldRegisterAddViewReferenceToViewTool() {
         boolean found = registry.getToolSpecifications().stream()
                 .anyMatch(spec -> "add-view-reference-to-view".equals(spec.tool().name()));
         assertTrue("add-view-reference-to-view tool should be registered", found);
@@ -65,7 +65,7 @@ public class AddViewReferenceToViewHandlerTest {
     // ---- Validation ----
 
     @Test
-    public void shouldRejectMissingViewId_AC6() throws Exception {
+    public void shouldRejectMissingViewId() throws Exception {
         McpSchema.CallToolResult result = call(Map.of("referencedViewId", "v-ref"));
 
         assertTrue(result.isError());
@@ -74,7 +74,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectMissingReferencedViewId_AC6() throws Exception {
+    public void shouldRejectMissingReferencedViewId() throws Exception {
         McpSchema.CallToolResult result = call(Map.of("viewId", "v-target"));
 
         assertTrue(result.isError());
@@ -84,7 +84,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectViewIdNotFound_AC3() throws Exception {
+    public void shouldRejectViewIdNotFound() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             throw new ModelAccessException("View not found: " + vId,
                     ErrorCode.VIEW_NOT_FOUND, null,
@@ -101,7 +101,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectReferencedViewIdNotFound_AC3() throws Exception {
+    public void shouldRejectReferencedViewIdNotFound() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             throw new ModelAccessException(
                     "Referenced view not found or is not an ArchiMate view: " + refVId,
@@ -121,7 +121,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectReferencedViewIdResolvingToFolder_AC3() throws Exception {
+    public void shouldRejectReferencedViewIdResolvingToFolder() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             throw new ModelAccessException(
                     "Referenced view not found or is not an ArchiMate view: " + refVId,
@@ -137,7 +137,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectXWithoutY_AC6() throws Exception {
+    public void shouldRejectXWithoutY() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             throw new ModelAccessException(
                     "Both x and y must be specified together, or both omitted for auto-placement",
@@ -159,7 +159,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldRejectNonPositiveDimensions_AC6() throws Exception {
+    public void shouldRejectNonPositiveDimensions() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             throw new ModelAccessException(
                     "width must be positive (was: " + w + ")",
@@ -181,7 +181,7 @@ public class AddViewReferenceToViewHandlerTest {
     // ---- Successful placements ----
 
     @Test
-    public void shouldPlaceTopLevelViewReference_withAutoPlacement_AC3() throws Exception {
+    public void shouldPlaceTopLevelViewReference_withAutoPlacement() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             EmbeddedViewDto dto = new EmbeddedViewDto(
                     "vo-new", refVId, 50, 50, 185, 80, null);
@@ -202,7 +202,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldPlaceTopLevelViewReference_withExplicitBounds_AC3() throws Exception {
+    public void shouldPlaceTopLevelViewReference_withExplicitBounds() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             EmbeddedViewDto dto = new EmbeddedViewDto(
                     "vo-new", refVId, x, y, w, h, null);
@@ -225,7 +225,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldPlaceNestedViewReference_inParentGroup_AC3() throws Exception {
+    public void shouldPlaceNestedViewReference_inParentGroup() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             // EmbeddedViewDto's x/y/width/height are primitive int. The real accessor defaults
             // omitted width/height (120x55 per the tool schema) before building the DTO; the stub
@@ -251,7 +251,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldApplyStyling_atCreationTime_AC3() throws Exception {
+    public void shouldApplyStyling_atCreationTime() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             // Echo the styling fields back through the DTO
             EmbeddedViewDto dto = new EmbeddedViewDto(
@@ -286,7 +286,7 @@ public class AddViewReferenceToViewHandlerTest {
     }
 
     @Test
-    public void shouldAcceptSelfReference_perTask0Disposition_AC3() throws Exception {
+    public void shouldAcceptSelfReference_perTask0Disposition() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             // Mirror Task 0.6: Archi accepts self-reference; we accept too.
             EmbeddedViewDto dto = new EmbeddedViewDto(
@@ -305,7 +305,7 @@ public class AddViewReferenceToViewHandlerTest {
     // ---- Next-steps ----
 
     @Test
-    public void shouldEmitStandardNextSteps_AC9() throws Exception {
+    public void shouldEmitStandardNextSteps() throws Exception {
         accessor.setBehavior((sid, vId, refVId, x, y, w, h, pvoId, st) -> {
             EmbeddedViewDto dto = new EmbeddedViewDto(
                     "vo-new", refVId, 50, 50, 185, 80, null);

@@ -554,7 +554,7 @@ public class LabelPositionOptimizerTest {
 
     @Test
     public void offset_middleLabelLightlyOnNormalBox_isNotOffset() {
-        // AC-3 mirror: a normal 100x50 target box lightly overlapped (label-area fraction ~0.16, box-coverage
+        // Mirror case: a normal 100x50 target box lightly overlapped (label-area fraction ~0.16, box-coverage
         // ~0.05) trips neither rule → no offset. The box-coverage rule must not over-trigger ordinary boxes.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
                 conn("c1", 0, 0, 40, 50, 135, 0, 100, 50, "Accesses", 1));
@@ -770,5 +770,230 @@ public class LabelPositionOptimizerTest {
                 result.allPositions().get("c1"));
         assertEquals("Offset finisher should lift the Middle landing clear (NORTH off obsB)",
                 Integer.valueOf(NORTH), result.offsets().get("c1"));
+    }
+
+    // --- Per-connection residual: labels with NO collision-free position anywhere ---
+    //
+    // The greedy pass evaluates all three candidate positions and previously discarded every score:
+    // bestScore was a local double, and in the all-equal case the tie-break re-picks the CURRENT
+    // position, so an unplaceable label emitted no changedPositions entry and was downstream
+    // indistinguishable from a label that was already perfect. These tests pin the retained residual.
+    //
+    // "Unresolvable" deliberately means an UNRESCUABLE HARD collision at every position, not
+    // "bestScore > 0": scorePosition weights a mere proximity near-miss at 0.5, so two harmless
+    // near-misses total 1.0 and would otherwise be indistinguishable from one genuine overlap.
+    // Hiding a label for passing near two boxes would be exactly the over-suppression this must avoid.
+
+    /** Source box, target box, and a middle blocker wide enough that no offset direction escapes it. */
+    private List<RoutingRect> allThreePositionsBlockedHorizontal() {
+        return List.of(
+                new RoutingRect(90, 10, 50, 30, "obsSrcPos"),      // blocks Source (15% → x≈107)
+                new RoutingRect(200, -100, 200, 300, "obsMidPos"), // blocks Middle (50% → x=300) at every offset
+                new RoutingRect(470, 10, 50, 30, "obsTgtPos"));    // blocks Target (85% → x≈492)
+    }
+
+    @Test
+    public void shouldReportUnresolvable_whenEveryPositionCollides_onHorizontalSegment() {
+        // Orientation-blind. The assessor's nearest detector is gated on a vertical-segment check, so a
+        // label with no valid position on a HORIZONTAL hosting segment is exactly the case it never flags.
+        // This pass consults no orientation predicate at all, so both orientations behave identically.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, allThreePositionsBlockedHorizontal(), Map.of());
+
+        assertTrue("A label blocked at all 3 positions must be reported as unresolvable",
+                result.unresolvableLabels().contains("c1"));
+    }
+
+    @Test
+    public void shouldReportUnresolvable_whenAllPositionsTie_andNoPositionChangeIsEmitted() {
+        // The honesty case the tie-break hides: all three positions score equally, so the tie-break at
+        // runGreedyPass re-picks the CURRENT position and changedPositions stays EMPTY. Without the
+        // residual this connection is indistinguishable from a label that needed no change at all.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, allThreePositionsBlockedHorizontal(), Map.of());
+
+        assertTrue("All three positions tie → the optimizer emits no position change",
+                result.changedPositions().isEmpty());
+        assertTrue("…yet the label is still unplaceable and MUST be reported",
+                result.unresolvableLabels().contains("c1"));
+    }
+
+    @Test
+    public void shouldReportUnresolvable_whenEveryPositionCollides_onVerticalSegment() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 0, 550, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightVerticalPath(25, 50, 550));
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(5, 90, 60, 30, "obsSrcPos"),
+                new RoutingRect(-100, 200, 300, 200, "obsMidPos"),
+                new RoutingRect(5, 475, 60, 30, "obsTgtPos"));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, obstacles, Map.of());
+
+        assertTrue("Vertical hosting segment must behave identically to horizontal",
+                result.unresolvableLabels().contains("c1"));
+    }
+
+    @Test
+    public void shouldReportUnresolvable_whenLabelBleedsOnOwnEndpointsAtEveryPosition() {
+        // Reuses the shipped all-bleed fixture: two big overlapping endpoint boxes, label on an own
+        // endpoint at every candidate position, and no offset direction clears the Middle bleed.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 300, 200, 200, 0, 300, 200, "Lbl", 0));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(150, 100, 350));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, List.of(), Map.of());
+
+        assertTrue("Own-endpoint bleed at every position is also 'no valid position'",
+                result.unresolvableLabels().contains("c1"));
+    }
+
+    @Test
+    public void shouldNotReportUnresolvable_whenLabelHasAClearPosition() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 100, 50, 500, 0, 100, 50, "Uses", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(100, 25, 500));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, List.of(), Map.of());
+
+        assertTrue("A label with a clear position is never unresolvable",
+                result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void shouldNotReportUnresolvable_whenEveryPositionIsOnlyANearMiss() {
+        // THE OVER-SUPPRESSION GUARD. Each position sits within the proximity threshold of a box but
+        // inset-overlaps nothing. Scored, every position is non-zero (0.5), so a naive "bestScore > 0"
+        // rule would hide this label. It is perfectly readable and must NOT be hidden.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+        List<RoutingRect> nearMisses = List.of(
+                new RoutingRect(83, 38, 50, 20, "nearSrcPos"),
+                new RoutingRect(275, 38, 50, 20, "nearMidPos"),
+                new RoutingRect(468, 38, 50, 20, "nearTgtPos"));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, nearMisses, Map.of());
+
+        assertTrue("A proximity near-miss is not a collision — the label must not be reported",
+                result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void shouldNotReportUnresolvable_whenOffsetFinisherRescuesTheMiddleLabel() {
+        // A Middle label that overlaps a small third-party box which a perpendicular offset lifts it
+        // clear of is PLACEABLE — the engine has not proven it cannot be placed, so it must not be hidden.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(90, 10, 50, 30, "obsSrcPos"),
+                new RoutingRect(280, 10, 50, 30, "obsMidPosSmall"), // small → an offset direction clears it
+                new RoutingRect(470, 10, 50, 30, "obsTgtPos"));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, obstacles, Map.of());
+
+        assertTrue("An offset-rescuable Middle label still has a valid position",
+                result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void shouldReportOnlyTheUnplaceableConnection_whenViewMixesBoth() {
+        // WHICH, not how many: a mixed view must name exactly the blocked connection and leave the
+        // clear one alone. c2 is placed far from c1's blockers so the two do not interact.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1),
+                conn("c2", 0, 900, 100, 50, 500, 900, 100, 50, "Uses", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550),
+                straightHorizontalPath(100, 925, 500));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, allThreePositionsBlockedHorizontal(), Map.of());
+
+        assertTrue("The blocked connection is named", result.unresolvableLabels().contains("c1"));
+        assertFalse("The clear connection is NOT named", result.unresolvableLabels().contains("c2"));
+        assertEquals("Exactly one connection is unplaceable", 1, result.unresolvableLabels().size());
+    }
+
+    @Test
+    public void shouldReportNoResidual_whenNoConnectionCarriesALabel() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, allThreePositionsBlockedHorizontal(), Map.of());
+
+        assertTrue("An unlabeled connection has no label to place",
+                result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void multiTrial_shouldCarryTheResidualOfTheWinningTrial() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, allThreePositionsBlockedHorizontal(), Map.of(), 5, new Random(7));
+
+        assertTrue("The multi-trial entry point must carry the residual too",
+                result.unresolvableLabels().contains("c1"));
+    }
+
+    @Test
+    public void multiTrial_shouldReportEmptyResidual_whenNoLabelsExist() {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, paths, List.of(), Map.of(), 3, new Random(7));
+
+        assertNotNull("The residual is never null", result.unresolvableLabels());
+        assertTrue(result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void optimize_shouldSurfaceTheChangedPositionsTheResidualPassComputes() {
+        // Deliberately NOT a comparison of optimize() against optimizeWithResidual(): optimize() is
+        // implemented as a thin delegate to it, so asserting the two agree is true by construction
+        // and could never fail. What is worth pinning is that the delegate still returns the CHANGES
+        // — a refactor handing back the wrong map (allPositions, or the residual set) breaks this.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Accesses", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+        List<RoutingRect> obstacles = List.of(new RoutingRect(270, 5, 60, 40, "obs1"));
+
+        Map<String, Integer> changed = optimizer.optimize(connections, paths, obstacles, Map.of());
+
+        assertTrue("the obstructed Middle label must be re-picked", changed.containsKey("c1"));
+        assertNotEquals("a reported change must differ from the input position",
+                Integer.valueOf(1), changed.get("c1"));
     }
 }

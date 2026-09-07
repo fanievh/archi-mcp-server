@@ -102,6 +102,8 @@ public class FolderMutationHandler {
                         + "Top-level ArchiMate layer folders are model-managed and cannot be "
                         + "created manually. Fully undoable via Ctrl+Z in Archi. "
                         + "Respects approval mode (human-gated in Archi). "
+                        + "Returns the new folder's id (use as parentId), name and path. "
+                        + "elementCount and subfolderCount are always 0 here, not measured. "
                         + "Related: get-folders (find parent folder IDs), get-folder-tree "
                         + "(view hierarchy), update-folder (rename/annotate), "
                         + "move-to-folder (reorganize).")
@@ -203,6 +205,8 @@ public class FolderMutationHandler {
                         + "Only provided fields are modified; omitted fields remain unchanged. "
                         + "Fully undoable via Ctrl+Z in Archi. "
                         + "Respects approval mode (human-gated in Archi). "
+                        + "Returns id, effective name and path (recomputed on rename), plus "
+                        + "live elementCount and subfolderCount. "
                         + "Related: get-folders (inspect folder), create-folder (create new), "
                         + "move-to-folder (reorganize).")
                 .inputSchema(inputSchema)
@@ -291,6 +295,11 @@ public class FolderMutationHandler {
                         + "FOLDER_LAYER_MISMATCH — the same fail-fast check create-element applies. "
                         + "Fully undoable via Ctrl+Z in Archi. "
                         + "Respects approval mode (human-gated in Archi). "
+                        + "Returns id, name, objectType (Folder/Element/Relationship/View), "
+                        + "sourceFolderPath and targetFolderPath, plus elementType — the exact "
+                        + "Archi type of whatever moved (BusinessActor, AssociationRelationship, "
+                        + "ArchimateDiagramModel, SketchModel, Folder), which the coarse "
+                        + "objectType cannot distinguish. "
                         + "Related: get-folders (find target folder IDs), get-folder-tree "
                         + "(view hierarchy), create-folder (create destination folders first).")
                 .inputSchema(inputSchema)

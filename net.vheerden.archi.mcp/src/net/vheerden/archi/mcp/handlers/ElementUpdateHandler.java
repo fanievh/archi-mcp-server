@@ -127,6 +127,17 @@ public class ElementUpdateHandler {
                         + "Specialization semantics: providing a name REPLACES any existing "
                         + "specialization (auto-creating the profile if needed); empty string "
                         + "removes all specializations; omitting leaves them unchanged. "
+                        + "Provenance: this tool takes no source map — create-element and "
+                        + "create-relationship accept one at create time only. To add or correct "
+                        + "source traceability afterwards, put the keys in properties with the "
+                        + "'mcp.source.' prefix spelled out (e.g. 'mcp.source.tool'); that is the "
+                        + "same storage a create-time source map produces. "
+                        + "Returns the updated id, name, type, layer, documentation, "
+                        + "properties; specialization only when set. "
+                        + "An element reports documentation and properties only when it has "
+                        + "them, so an absent field means the element carries nothing there "
+                        + "rather than that it was left out. In a batch or pending "
+                        + "approval the values are pre-update. "
                         + "Related: get-element (inspect before/after), search-elements "
                         + "(find element to update), create-element (create new elements), "
                         + "list-specializations.")
@@ -280,6 +291,19 @@ public class ElementUpdateHandler {
                         + "associationDirected (AssociationRelationship — boolean), "
                         + "influenceStrength (InfluenceRelationship — free text, max 255 chars; "
                         + "empty string clears). Omit to leave unchanged. "
+                        + "Provenance: this tool takes no source map — create-element and "
+                        + "create-relationship accept one at create time only. To add or correct "
+                        + "source traceability afterwards, put the keys in properties with the "
+                        + "'mcp.source.' prefix spelled out (e.g. 'mcp.source.tool'); that is the "
+                        + "same storage a create-time source map produces. "
+                        + "Returns id, name, type, sourceId, targetId and documentation; the "
+                        + "resolved endpoint names sourceName and targetName whenever the "
+                        + "relationship still has that endpoint; specialization only "
+                        + "when set, and properties only when the relationship has any. The "
+                        + "values are re-read from the model after the write, so clearing "
+                        + "documentation returns it as an empty string rather than omitting the "
+                        + "field. In a "
+                        + "batch or pending approval the values are pre-update. "
                         + "Related: get-relationships (verify changes), search-relationships "
                         + "(find relationship to update), get-view-contents (check visual "
                         + "representation), list-specializations.")
@@ -301,11 +325,14 @@ public class ElementUpdateHandler {
 
             Map<String, Object> args = request.arguments();
             String id = HandlerUtils.requireStringParam(args, "id");
-            String name = HandlerUtils.optionalStringParam(args, "name");
-            String documentation = HandlerUtils.optionalStringParam(args, "documentation");
+            String name = HandlerUtils.optionalStringParamAllowEmpty(args, "name");
+            String documentation = HandlerUtils.optionalStringParamAllowEmpty(args, "documentation");
             Map<String, String> properties = HandlerUtils.optionalMapParamWithNulls(args, "properties");
             // Specialization clear semantics: empty string means "clear all profiles".
             String specialization = HandlerUtils.optionalStringParamAllowEmpty(args, "specialization");
+            // Relationship name/documentation are read above with AllowEmpty because this tool's
+            // schema promises an empty string clears them. update-element promises no such thing
+            // and keeps the blank-stripping reader.
             // semantic attributes (type-conditional)
             RelationshipSemanticAttributes semanticAttributes =
                     ElementCreationHandler.readSemanticAttributes(args);

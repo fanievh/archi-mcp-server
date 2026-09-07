@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.response.dto;
 
+import java.util.Map;
+
 /**
  * Failure details for a single operation within a bulk-mutate response.
  *
@@ -15,4 +17,13 @@ public record BulkOperationFailure(
     String errorCode,
     String message,
     String suggestedCorrection
-) {}
+) implements FailureRow {
+
+    @Override
+    public Map<String, Object> identity() {
+        // Absent only for an operation that is not an object at all, where there is no tool name
+        // to report. Reporting the key as null would claim the caller named nothing when it named
+        // something unreadable.
+        return tool != null ? Map.of("tool", tool) : Map.of();
+    }
+}

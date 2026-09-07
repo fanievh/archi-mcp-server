@@ -17,8 +17,9 @@ import java.io.PrintWriter;
  * {@code net.vheerden.archi.mcp.tests/src} for every {@code *Test.java}, subtracts the exclusion
  * manifest {@code tools/osgi-excluded-tests.txt}, compiles both projects from source, runs the
  * headless-safe majority via {@code JUnitCore}, asserts {@code testsRun > 0} per class, and emits
- * JUnit XML. That harness closes the repo-audit T2 gap (a hand-maintained list with no run-count
- * postcondition). The single enumeration of HEADLESS-EXCLUDED classes lives in that manifest.</p>
+ * JUnit XML. That harness closes the gap this runner leaves open: a hand-maintained list has no
+ * run-count postcondition, so it reports green over a class that silently ran nothing. The single
+ * enumeration of HEADLESS-EXCLUDED classes lives in that manifest.</p>
  *
  * <p>This runner is the owner's convenience gate for exercising classes under a real Eclipse/OSGi
  * runtime (the only place the {@code tools/osgi-excluded-tests.txt} classes — {@code McpServerManagerTest},
@@ -61,6 +62,7 @@ public class AllPluginTestsRunner {
         "net.vheerden.archi.mcp.handlers.ViewHandlerTest",
         "net.vheerden.archi.mcp.handlers.ViewHandlerTreeFormatTest",
         "net.vheerden.archi.mcp.handlers.ViewPlacementHandlerTest",
+        "net.vheerden.archi.mcp.integration.DeleteViewSurvivingPlaceholderConnectionRoundTripIntegrationTest",
         "net.vheerden.archi.mcp.integration.ErrorConsistencyTest",
         "net.vheerden.archi.mcp.integration.MultiStepWorkflowTest",
         "net.vheerden.archi.mcp.integration.ToolDiscoveryIntegrationTest",

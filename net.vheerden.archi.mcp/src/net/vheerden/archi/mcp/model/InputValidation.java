@@ -73,4 +73,23 @@ final class InputValidation {
         }
         return value;
     }
+
+    /**
+     * Rejects a half-supplied coordinate pair. A caller who sends one of {@code x}/{@code y} has
+     * either mistyped or expects the other to be inferred; auto-placement is all-or-nothing, so
+     * guessing the missing axis would silently place the object somewhere it was never asked to go.
+     *
+     * @throws ModelAccessException with {@link ErrorCode#INVALID_PARAMETER} when exactly one of
+     *         {@code x} and {@code y} is present
+     */
+    static void requireCoordinatePair(Integer x, Integer y) {
+        if ((x == null) != (y == null)) {
+            throw new ModelAccessException(
+                    "Both x and y must be specified together, or both omitted for auto-placement",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Provide both x and y coordinates, or omit both for auto-placement",
+                    null);
+        }
+    }
 }

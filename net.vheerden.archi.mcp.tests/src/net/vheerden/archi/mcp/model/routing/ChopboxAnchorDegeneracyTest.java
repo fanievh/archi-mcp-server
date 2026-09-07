@@ -34,6 +34,21 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * <p>The cartesian dispatch is the test-side
  * encoding of the wrap-site rule: any future sixth mutator that joins the
  * rule auto-qualifies through {@link WrapSite} without scope renegotiation.
+ *
+ * <p><strong>Scope: the predicate, not the rollback policy.</strong> Every
+ * assertion here calls {@link TerminalAnchoringAssertion#preservesEndpoints},
+ * which forwards to the predicate and never invokes a mutator, and the helper
+ * returns the same verdict for all five {@link WrapSite} constants. The matrix
+ * therefore pins the claim that the five sites share one predicate — it
+ * contributes no discrimination between them, and it cannot observe what any
+ * site does with a negative verdict. All five now roll back on a per-end
+ * true-to-false flip, three of them also refusing to move a terminal that
+ * arrived off-face ({@code SNAP_TO_STRAIGHT},
+ * {@code COLLAPSE_STAIRCASE_JOGS}, {@code APPLY_OFFSETS}); <em>none of that is
+ * visible from here</em>. The policy is pinned separately, by driving the
+ * mutators — {@code TerminalAnchoringRollbackPolicyTest} for the four
+ * {@link PathStraightener} sites, {@code CoincidentSegmentDetectorTest} for
+ * {@code APPLY_OFFSETS}.
  */
 public class ChopboxAnchorDegeneracyTest {
 

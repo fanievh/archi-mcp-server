@@ -48,6 +48,19 @@ public class FolderMutationHandlerCreateTest {
     // ---- Tool registration ----
 
     @Test
+    public void createFolder_descriptionShouldDocumentResponseFields() {
+        String desc = registry.getToolSpecifications().stream()
+                .filter(spec -> "create-folder".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must name the returned path", desc.contains("path"));
+        // prepareCreateFolder hardcodes both counts to 0 — they are NOT measured, so a
+        // caller must not read them as "the new folder is empty, verified".
+        assertTrue("must name elementCount", desc.contains("elementCount"));
+        assertTrue("must state the counts are always 0 and not measured",
+                desc.contains("always 0 here, not measured"));
+    }
+
+    @Test
     public void shouldRegisterCreateFolderTool() {
         boolean found = registry.getToolSpecifications().stream()
                 .anyMatch(spec -> "create-folder".equals(spec.tool().name()));

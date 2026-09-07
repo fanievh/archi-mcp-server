@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  M0-2 CI dependency-provisioning pom (NOT a build of this project).
+  CI dependency-provisioning pom (NOT a build of this project).
 
   Sole purpose: populate the GitHub Actions runner's Maven local repo (~/.m2) with the EXACT
-  version-pinned jars that tools/run-tests.sh (M0-1) expects, so the headless harness can be
+  version-pinned jars that tools/run-tests.sh expects, so the headless harness can be
   invoked UNMODIFIED on Linux. Nothing here compiles or packages the plugin — the harness does
   its own javac compile-from-source against the Archi jar set.
 
@@ -19,9 +19,9 @@
 
   2. JUnit 4 + Hamcrest, fetched here from Maven Central, then COPIED-AND-RENAMED by the workflow
      into ECLIPSE_HOME/plugins under the Eclipse OSGi-qualified names the harness globs
-     (org.junit_4*.jar / org.hamcrest_*.jar — run-tests.sh:80-83). This is OQ-2 path (a): the
-     glob is satisfied by provisioning Eclipse-named jars, so run-tests.sh stays BYTE-IDENTICAL
-     to the macOS dev box (honours M0-1 AC-8). Versions mirror the dev box exactly:
+     (org.junit_4*.jar / org.hamcrest_*.jar — run-tests.sh:80-83). The glob is satisfied by
+     provisioning Eclipse-named jars, so run-tests.sh stays BYTE-IDENTICAL to the macOS dev
+     box. Versions mirror the dev box exactly:
        junit:junit:4.13.2          -> org.junit_4.13.2.jar
        org.hamcrest:hamcrest:3.0   -> org.hamcrest_3.0.0.jar
 

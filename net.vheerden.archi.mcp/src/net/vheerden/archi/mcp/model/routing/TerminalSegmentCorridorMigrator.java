@@ -9,9 +9,9 @@ import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator.Face;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * HPRPS story (Track A) — terminal-segment corridor-migration primitive.
+ * Axis 3 of the hub-perimeter stage — the terminal-segment corridor-migration primitive.
  *
- * <p><b>Why this exists (the operative gap H5 cannot reach).</b> The shipped H5
+ * <p><b>Why this exists (the gap hub-perimeter routing cannot reach).</b> The shipped
  * primitives ({@link AlternativeCorridorSelector} / {@link CorridorSpreadEnforcer},
  * orchestrated by {@link HubPerimeterRoutingStage}) operate only on
  * <em>non-terminal-incident</em> segments — {@link HubFaceConnectionPartitioner}'s
@@ -19,7 +19,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * {@code TerminalAnchoring.preservesEndpoints} invariant for those generic
  * perpendicular-shift primitives. On the v1.4 HH/ST gate views 25 of 30 routed
  * paths are size-3 L-shapes whose <em>both</em> segments are terminal-incident, so
- * the partitioner emits zero cell members and H5 is a documented structural no-op
+ * the partitioner emits zero cell members and the stage is a documented structural no-op
  * there. The M4 ({@code connectionEdgeCoincidence}) / V_p10 violators that block ST
  * agent-in-loop strict-PASS parity <em>are</em> those excluded terminal-incident
  * segments. This sibling reaches exactly that sub-case.
@@ -69,12 +69,12 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * both segments terminal-incident, a clean orthogonal L. This keeps the Tier-1
  * reasoning airtight (no co-moved corner can introduce a zigzag on a 2-segment
  * path). Larger paths (size 4/5 = 5/30 of gate-view paths) retain interior
- * segments the existing H5 primitives can already reach and are deliberately out
+ * segments the existing hub-perimeter primitives can already reach and are deliberately out
  * of MVP scope. On tight/saturated faces where no clearing slot exists within the
  * face extent the migrator emits no proposal — i.e. it degrades to a no-op rather
- * than a perimeter-terminal-immutability/role-boundary violation (spike §2: "at worst empirically behaves like
- * Track B; the monotonicity guard handles tight geometry safely — never worse than
- * {@code main}").
+ * than a perimeter-terminal-immutability/role-boundary violation: at worst it empirically behaves
+ * like the no-op fallback, and the monotonicity guard handles tight geometry safely — never
+ * worse than {@code main}.
  *
  * <p><b>Pure geometry.</b> No EMF, no SWT, no PDE. {@link #apply} mutates the
  * caller-supplied bendpoint lists in place; {@link #restore} reverts via the
@@ -151,7 +151,7 @@ public class TerminalSegmentCorridorMigrator {
      *
      * @param connections  index-parallel per-route endpoint records (source/target rects)
      * @param paths        index-parallel per-route bendpoint lists (NOT mutated by this method)
-     * @param allObstacles all element rectangles on the view
+     * @param allObstacles every non-container view object — elements, notes and images alike
      * @return one proposal per viable connection; empty if none qualify
      */
     public List<MigrationProposal> evaluate(
@@ -313,7 +313,7 @@ public class TerminalSegmentCorridorMigrator {
             oriented = new ArrayList<>(after);
             Collections.reverse(oriented);
         }
-        if (!TerminalAnchoring.preservesTerminalAnchoring(anchoring, elem, center, oriented)) {
+        if (!TerminalAnchoring.preservesTerminalAnchoring(anchoring, elem, oriented)) {
             return null;
         }
 

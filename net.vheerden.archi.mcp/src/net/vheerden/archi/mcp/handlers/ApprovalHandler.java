@@ -75,10 +75,24 @@ public class ApprovalHandler {
                 .description("[Session] List the pending mutation proposals awaiting the human's "
                         + "approval for the current session. Each proposal shows what would change, "
                         + "current state (for updates), proposed state, and validation status. "
+                        + "proposedChanges is the complete disclosure of the pending write: every "
+                        + "parameter the approval will apply is in it, and a parameter the write "
+                        + "will not apply is not, so it can be read as the authoritative account "
+                        + "of what approving does — a contract test over every proposal site holds "
+                        + "that, rather than it being maintained by hand. On update-view-object "
+                        + "and update-view-connection, description and validationSummary are "
+                        + "derived from that same map, so they name every aspect the call will "
+                        + "change rather than only one of them. "
                         + "Returns empty list if no proposals pending. This is a READ-ONLY "
                         + "observation tool: approval mode is owned by the human in Archi — you "
                         + "cannot enable/disable it or approve/reject from here. When changes are "
-                        + "pending, tell the user to approve or reject them in Archi.")
+                        + "pending, tell the user to approve or reject them in Archi. "
+                        + "While the gate is on, every mutation returns its normal result under "
+                        + "result.preview with a result.proposal sibling instead of at result, and "
+                        + "the id of a newly created object in that preview is provisional — the "
+                        + "object is rebuilt when the human approves and gets a different id. "
+                        + "bulk-mutate and the two discovery create tools shape this differently "
+                        + "— see their own descriptions.")
                 .inputSchema(inputSchema)
                 .build();
 

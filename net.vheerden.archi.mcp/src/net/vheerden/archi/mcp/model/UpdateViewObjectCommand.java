@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import org.eclipse.gef.commands.Command;
 
+import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelNote;
@@ -144,6 +145,26 @@ public class UpdateViewObjectCommand extends Command {
     private final String oldAnchorDy;
     private final String newAnchorDy;
     private final boolean hasAnchorChange;
+
+    // The anchor target's bounds as they stood when this command was built, or null when the
+    // target did not resolve in the same diagram then (which includes every command that sets no
+    // anchor at all — see newAnchorTarget, which gates the whole rail).
+    //
+    // The caller resolves an anchor into a concrete newX/newY while preparing the request. On the
+    // deferred paths — a queued batch — nothing has executed yet, which breaks that resolution in
+    // two distinct ways, and execute() has to tell them apart:
+    //
+    //   * The target resolved at prepare, but a command queued earlier moves or resizes it before
+    //     this one runs. Comparing the live target against this snapshot separates "has not moved"
+    //     (write the prepared position verbatim — every non-deferred call lands here) from "moved"
+    //     (resolve the edge again).
+    //   * The target did not resolve at prepare AT ALL, because either object was still detached:
+    //     every add-*-to-view defers containment to its own command's execute(), and the lookup
+    //     walks committed containment from the anchored object's diagram. There is no snapshot to
+    //     compare against, so the has-not-moved test is skipped and the edge is resolved outright.
+    //     Queue order guarantees the adds have run by then, so both objects are attached and the
+    //     information the prepare lacked is available.
+    private final int[] anchorTargetBoundsAtPrepare;
 
     // Styling extensions — all ride the same hasStylingChange boundary.
     // Captured-old / captured-new pairs. The font composite string is captured as ONE
@@ -499,13 +520,29 @@ public class UpdateViewObjectCommand extends Command {
             this.oldAnchorDy = null;
             this.newAnchorDy = null;
         }
+        this.anchorTargetBoundsAtPrepare = captureBounds(
+                AnchorResolver.findInSameDiagram(diagramObject, this.newAnchorTarget));
 
         setLabel("Update view object");
     }
 
     @Override
     public void execute() {
-        diagramObject.setBounds(newX, newY, newWidth, newHeight);
+        int execX = newX;
+        int execY = newY;
+        // Gated on the anchor being set rather than on the snapshot existing: a null snapshot is
+        // also what "the target was unresolvable at prepare" looks like, and that case still has
+        // to be resolved here. A snapshot can only be non-null when newAnchorTarget is, so this
+        // strictly widens the old condition — commands built with the short constructors, and
+        // every anchor-clearing update, leave newAnchorTarget null and never enter.
+        if (newAnchorTarget != null) {
+            int[] moved = resolveAgainstMovedAnchorTarget();
+            if (moved != null) {
+                execX = moved[0];
+                execY = moved[1];
+            }
+        }
+        diagramObject.setBounds(execX, execY, newWidth, newHeight);
         applyText(newText);
         if (hasStylingChange) {
             applyStyling(newFillColor, newLineColor, newFontColor, newAlpha, newLineWidth,
@@ -543,6 +580,53 @@ public class UpdateViewObjectCommand extends Command {
         if (hasAnchorChange) {
             applyAnchor(oldAnchorTarget, oldAnchorEdge, oldAnchorDx, oldAnchorDy);
         }
+    }
+
+    /**
+     * The anchor edge re-resolved against the target's live bounds, or {@code null} to keep the
+     * position computed when the command was built.
+     *
+     * <p>Null is returned — deliberately, never an exception — when the target has since left the
+     * diagram, is the object itself, sits in a different container (bounds are stored relative to
+     * the immediate parent, so resolving across coordinate spaces would write the wrong numbers),
+     * or has not moved at all. The same-space and self-anchor conditions are rejected up front
+     * when the request is validated; repeating them here is a fallback, not a second validation
+     * site, so a target that changed shape after validation degrades to the prepared position
+     * rather than failing a commit that is already under way. That degrade-never-throw rule is
+     * what lets the no-snapshot case share this method: a pairing the prepare could not even see —
+     * so could not validate — reaches these same fallbacks instead of a late exception.</p>
+     *
+     * <p>With no snapshot there is nothing to have moved relative to, so the has-not-moved test is
+     * skipped and whatever the target now holds is resolved outright. The prepared position it
+     * replaces was computed with the anchor ignored, so keeping it would silently drop the
+     * caller's request.</p>
+     */
+    private int[] resolveAgainstMovedAnchorTarget() {
+        IDiagramModelObject target = AnchorResolver.findInSameDiagram(diagramObject, newAnchorTarget);
+        if (target == null || target == diagramObject
+                || target.eContainer() != diagramObject.eContainer()) {
+            return null;
+        }
+        IBounds live = target.getBounds();
+        if (anchorTargetBoundsAtPrepare != null
+                && live.getX() == anchorTargetBoundsAtPrepare[0]
+                && live.getY() == anchorTargetBoundsAtPrepare[1]
+                && live.getWidth() == anchorTargetBoundsAtPrepare[2]
+                && live.getHeight() == anchorTargetBoundsAtPrepare[3]) {
+            return null;
+        }
+        return AnchorResolver.resolveByEdge(newAnchorEdge,
+                live.getX(), live.getY(), live.getWidth(), live.getHeight(),
+                newWidth, newHeight,
+                AnchorResolver.parseOffset(newAnchorDx), AnchorResolver.parseOffset(newAnchorDy));
+    }
+
+    private static int[] captureBounds(IDiagramModelObject obj) {
+        if (obj == null) {
+            return null;
+        }
+        IBounds b = obj.getBounds();
+        return new int[] { b.getX(), b.getY(), b.getWidth(), b.getHeight() };
     }
 
     private void applyText(String text) {

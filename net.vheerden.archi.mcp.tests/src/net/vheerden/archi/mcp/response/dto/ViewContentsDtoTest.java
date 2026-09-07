@@ -86,7 +86,7 @@ public class ViewContentsDtoTest {
     // ---- G16 AXIS C — images array ----
 
     @Test
-    public void shouldSerialiseImagesArrayWhenSet_AC5() throws Exception {
+    public void shouldSerialiseImagesArrayWhenSet() throws Exception {
         DiagramImageDto image = new DiagramImageDto(
                 "img-vo-1", "images/abc.png", 100, 100, 64, 64,
                 null, null, null);
@@ -103,7 +103,7 @@ public class ViewContentsDtoTest {
     }
 
     @Test
-    public void shouldOmitImagesArrayWhenNull_AC5() throws Exception {
+    public void shouldOmitImagesArrayWhenNull() throws Exception {
         ViewContentsDto dto = new ViewContentsDto(
                 "v-2", "Test View", null, null,
                 List.of(), List.of(), List.of(), List.of(),
@@ -115,7 +115,7 @@ public class ViewContentsDtoTest {
     }
 
     @Test
-    public void shouldPreserveBackCompat10ArgCtor_AC5() throws Exception {
+    public void shouldPreserveBackCompat10ArgCtor() throws Exception {
         // Earlier callers used the 10-arg ctor; the 11th
         // `images` field was added via a NEW canonical ctor + preserved the 10-arg form
         // as a back-compat delegating ctor that passes null for images. JSON
@@ -136,7 +136,7 @@ public class ViewContentsDtoTest {
     }
 
     @Test
-    public void shouldPreserveBackCompat7ArgCtor_AC5() throws Exception {
+    public void shouldPreserveBackCompat7ArgCtor() throws Exception {
         // Earlier callers used the 7-arg ctor. It is preserved
         // by delegating with null for connectionRouterType, groups, notes,
         // AND images.

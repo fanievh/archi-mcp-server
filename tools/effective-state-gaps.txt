@@ -1,0 +1,133 @@
+# Effective-state gap registry — the pawl for "report EFFECTIVE state, never REQUESTED state".
+#
+# WHY THIS FILE EXISTS
+#   The client of this server is an LLM agent that cannot see the canvas, so a mutating tool's
+#   success response IS its only ground truth. A response that echoes the request while the model
+#   diverged is a correctness defect, not a cosmetic one — the agent builds its next action on the
+#   lie and the failure surfaces far downstream, unattributable.
+#
+#   Fixing one call site does nothing to stop the next tool being born with the same bug. So the
+#   invariant is enforced by a contract test over EVERY registered tool
+#   (EffectiveStateContractTest), and this file is that test's known-gap list.
+#
+# THE PAWL (can only tighten, never loosen)
+#   EffectiveStateContractTest requires every registered tool to be classified exactly once:
+#     * read-only            -> listed in the test's READ_ONLY set (no obligation; it mutates nothing)
+#     * covered by an oracle -> listed in the test's ORACLES registry (actively asserted)
+#     * a known gap          -> listed HERE, with a status and a reason
+#   A tool in none of the three FAILS THE BUILD. That is the "a new tool must register or fail"
+#   property: a tool that cannot report effective state must be DELIBERATELY added here, in a
+#   reviewable commit, rather than quietly shipping the bug.
+#
+#   ENTRY_CEILING in EffectiveStateContractTest is LOWERED (only ever lowered) in the same commit
+#   that removes an entry — the manual, reviewable "click", exactly as tools/size-ratchet.sh does
+#   for CEILING_LOC. NEVER raise it. Every fix is one line deleted here and one ceiling click.
+#
+# LOCALE
+#   If you sort this file, pin `LC_ALL=C`. An unpinned `sort` collates differently on macOS (dev)
+#   and the C-locale CI runner; that exact false positive already shipped once against the
+#   signature baseline (see tools/size-ratchet.sh, "locale pin: REQUIRED, not cosmetic").
+#
+# FORMAT
+#   <tool-name> <STATUS> # <reason>
+#   STATUS is one of:
+#     KNOWN-GAP  — MEASURED to not report effective state. The defect is understood and located.
+#     UNAUDITED  — mutating, but no oracle has been written for it yet. Not a claim of innocence:
+#                  it is an explicit admission that nothing checks this tool. Auditing one may
+#                  move it to an oracle (delete the line) or to KNOWN-GAP (same line count).
+#   Blank lines and #-comments are ignored.
+
+# ---- KNOWN-GAP: measured, understood, deliberately not fixed yet ----------------------------
+# (none — both entries closed by the cascade-reporting sweep)
+
+# ---- UNAUDITED: mutating, not fully covered by an oracle -------------------------------------
+# (Entries here have no oracle at all. A tool whose standalone path is covered while another of
+#  its paths is not still belongs here — a gap is not closed by covering one of its paths.)
+# RULING (empty-label work): the entry STAYS and the ceiling does NOT move. The label axis is now
+# covered on all four paths — immediate, bulk, batched-under-preview and approval — and the
+# empty-label bounds are pinned at the default 300x200. None of that touches what this entry names.
+# The gap is GEOMETRY: the response's x/y/width/height are the values the prepare resolved, and no
+# assertion compares them against a fresh read of the model after the write, so a container auto-fit
+# to its children would still be reported at the pre-fit size. Covering one axis of a tool does not
+# discharge another, and the header above already says a gap is not closed by covering one path.
+add-group-to-view UNAUDITED # geometry-bearing; no oracle written yet
+add-image-to-model UNAUDITED # no oracle written yet
+add-image-to-view UNAUDITED # geometry-bearing; no oracle written yet
+# RULING (empty-content work): the entry STAYS and the ceiling does NOT move — the same reasoning as
+# the add-group-to-view entry above. Accepting an empty content covered the CONTENT axis on all
+# paths and pinned the empty-content bounds at the 185x80 defaults. The gap this entry names is
+# GEOMETRY, and no assertion yet compares a reported x/y/width/height against a fresh read of the
+# model after the write. A second axis covered is not the axis this entry is about.
+add-note-to-view UNAUDITED # geometry-bearing; no oracle written yet
+add-view-reference-to-view UNAUDITED # geometry-bearing; no oracle written yet
+# RULING (spacing convenience-tool resize reporting): all three entries below STAY and the ceiling
+# does NOT move. Each of the three now reports, inside its embedded adjustResult, every object whose
+# SIZE the call changed, at the rectangle the dispatched compound lands it at — including the
+# one-shot hub resize, which had never been reported on any surface. That closes ONE axis: every
+# element's POSITION is still compared against nothing, and the header above already says a gap is
+# not closed by covering one of its paths.
+#
+# It also stops short of an oracle here for a MEASURED reason, recorded so the next reader does not
+# re-derive it. EffectiveStateContractTest's oracle shape is execute-then-re-read, and these three
+# cannot be executed in any automated lane: SpacingControlLoop.iterate runs each accepted command
+# directly, that command wraps a NonNotifyingCompoundCommand, and its execute() reads
+# IEditorModelManager.INSTANCE, whose initialisation calls Platform.getInstanceLocation() — which
+# ASSERTS when the Eclipse application has not been initialised rather than returning null, so the
+# fallback Archi wrote for a missing location is never reached. Neither the headless bucket nor the
+# display bucket initialises an Eclipse application, so both fail at the first bytecode of the first
+# accepted command. The projection's arithmetic is pinned directly instead (AnchorResolverTest), the
+# accept/reject semantics across the REAL loop are pinned in SpacingLoopResizeProjectionTest, and the
+# wire and preview-labelling claims are pinned in ViewPlacementHandlerTest. Deleting these lines
+# needs an oracle, and an oracle here needs a runtime none of the lanes has.
+apply-element-spacing-recommendations UNAUDITED # geometry-bearing; no oracle written yet
+apply-group-spacing-recommendations UNAUDITED # geometry-bearing; no oracle written yet
+apply-positions UNAUDITED # geometry-bearing; no oracle written yet
+apply-spacing-recommendations UNAUDITED # geometry-bearing; no oracle written yet
+auto-connect-view UNAUDITED # no oracle written yet
+# RULING (resize-reporting sweep): the entry STAYS and the ceiling does NOT move. The tool now has
+# its FIRST oracle, covering the RESIZE axis of GROUPED mode — the rectangle a leaf lands at when
+# the recursive descent sizes it. That is one axis of one of two modes. Every element's POSITION
+# is still compared against nothing, on both modes, and FLAT mode has no oracle of any kind. One
+# axis covered is not the axis this entry is about, and the header above already says a gap is not
+# closed by covering one of its paths.
+auto-layout-and-route UNAUDITED # geometry-bearing; grouped resize axis has an oracle, positions and flat mode do not
+clear-view UNAUDITED # counts-bearing; no oracle written yet
+clone-view UNAUDITED # no oracle written yet
+create-element UNAUDITED # CRUD name field; no oracle written yet
+# RULING (create-time provenance work): the entry STAYS and the ceiling does NOT move, the same
+# reasoning the two rulings above apply. Accepting documentation, properties and source at create
+# time added TWO NEW AXES and covered them — the values are asserted against a fresh read of the
+# relationship on the immediate and bulk paths, and a duplicate create is pinned as leaving the
+# existing relationship untouched. But this entry names the CRUD NAME field, and no assertion yet
+# compares a reported `name` against a fresh read of the model after the write. Adding axes cannot
+# discharge an axis; if anything it widens what an oracle for this tool would have to cover.
+create-relationship UNAUDITED # CRUD name field; no oracle written yet
+create-view UNAUDITED # CRUD name field; no oracle written yet
+delete-element UNAUDITED # counts-bearing; no oracle written yet
+delete-folder UNAUDITED # counts-bearing; no oracle written yet
+delete-specialization UNAUDITED # counts-bearing; no oracle written yet
+delete-view UNAUDITED # counts-bearing; no oracle written yet
+get-or-create-element UNAUDITED # CRUD name field; no oracle written yet
+# RULING (resize-reporting sweep): the entry STAYS and the ceiling does NOT move. This tool now
+# has its FIRST oracle — it had none of any kind, every prior test drove the handler over a stub
+# accessor — and that oracle executes, re-reads the model and compares the RESIZE axis: the
+# rectangle a parent lands at when it is grown to contain the children the same call laid out
+# inside it. The gap this entry names is wider. Every top-level element and every embedded
+# child is written a full x/y/width/height, and nothing yet compares the POSITIONS in the
+# response against a fresh read after the write. One axis covered is not the axis this entry
+# is about, and the header above already says a gap is not closed by covering one of its paths.
+layout-flat-view UNAUDITED # geometry-bearing; resize axis has an oracle, positions do not
+move-to-folder UNAUDITED # no oracle written yet
+# RULING (resize-reporting sweep): the entry STAYS and the ceiling does NOT move. The tool now has
+# its FIRST oracle, covering the RESIZE axis — the rectangle a child lands at when a grid gives
+# every cell the widest element's width. Two other geometry axes this entry covers are still
+# compared against nothing: every child's POSITION, and the GROUP's own re-fit, which no field in
+# the response carries at all (filed separately). One axis covered is not the axis this entry is
+# about, and the header above already says a gap is not closed by covering one of its paths.
+optimize-group-order UNAUDITED # geometry-bearing; resize axis has an oracle, positions and the group re-fit do not
+redo UNAUDITED # replays a command stack entry; response describes the stack, not model state
+remove-from-view UNAUDITED # counts-bearing; no oracle written yet
+search-and-create UNAUDITED # CRUD name field; no oracle written yet
+undo UNAUDITED # rewinds a command stack entry; response describes the stack, not model state
+update-model UNAUDITED # CRUD name field; no oracle written yet
+update-view UNAUDITED # CRUD name field; no oracle written yet

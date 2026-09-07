@@ -78,4 +78,22 @@ public class CreateRelationshipCommand extends Command {
     IFolder getFolder() {
         return folder;
     }
+
+    /**
+     * Returns the element this command will connect the relationship's source end to.
+     *
+     * <p>Not the same question as {@code getRelationship().getSource()}, which is null until
+     * {@code execute()} runs: between prepare and commit the relationship exists and is connected
+     * to nothing. A caller validating a queued relationship against something else — the elements
+     * behind the view objects a connection is being drawn between, say — has to ask the command
+     * what it is going to connect, because the relationship itself does not know yet.</p>
+     */
+    IArchimateElement getSource() {
+        return source;
+    }
+
+    /** The target end this command will connect, for the same reason as {@link #getSource()}. */
+    IArchimateElement getTarget() {
+        return target;
+    }
 }

@@ -27,6 +27,19 @@ import com.archimatetool.model.IIdentifier;
  * source/target endpoints are tracked instead. Any id the guard cannot resolve later degrades to the
  * {@link ProposalBuilder} rebuild-throw safety net, never an NPE.</p>
  *
+ * <p>The three <em>add</em> commands follow that same rule for the same reason: the object being placed
+ * does not exist yet, so what is tracked is the container it is being placed into. That container is the
+ * thing an approval can outlive — it may be an object a human deletes during review, or one an enclosing
+ * batch queued and then rolled back, and in both cases applying the frozen command afterwards would place
+ * a child into something that is no longer there. This is what {@code bulk-mutate} was missing: it
+ * fingerprinted each operation's own new id, which resolves nowhere at propose time, so its tracked set
+ * came out empty and the guard had nothing to vet.</p>
+ *
+ * <p>Nested compounds are walked recursively. A placement is rarely a bare add — the group and note paths
+ * wrap theirs in a placement guard, and the element path builds a compound when it also has fill recession
+ * or auto-connect work to do — so without the recursion the arms above would see a {@code CompoundCommand}
+ * and skip the add inside it.</p>
+ *
  * <p>Package-private, {@code model/}-only, dependency-light (constructs no model and needs no OSGi runtime),
  * so it is covered headlessly by {@code CompoundChildTargetsTest} — unlike the OSGi-gated
  * {@code ArchiModelAccessorImpl} that calls it.</p>
@@ -66,6 +79,18 @@ final class CompoundChildTargets {
                     // pre-existing endpoints so a human deleting/moving either one rejects-stale.
                     addId(ids, a.getSource());
                     addId(ids, a.getTarget());
+                } else if (child instanceof AddToViewCommand a) {
+                    // getView() is the TARGET CONTAINER, not the diagram root — the command holds an
+                    // IDiagramModelContainer and the create path passes it the resolved parent, which
+                    // is a nested group whenever parentViewObjectId was given. Named for the common
+                    // case, so it reads like an exception to the two arms below and is not one.
+                    addId(ids, a.getView());
+                } else if (child instanceof AddGroupToViewCommand a) {
+                    addId(ids, a.getParent());
+                } else if (child instanceof AddNoteToViewCommand a) {
+                    addId(ids, a.getParent());
+                } else if (child instanceof CompoundCommand nested) {
+                    ids.addAll(collect(nested));
                 }
             }
         }

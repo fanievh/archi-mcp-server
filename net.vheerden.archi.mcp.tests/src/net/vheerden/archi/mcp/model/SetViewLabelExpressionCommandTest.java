@@ -89,7 +89,7 @@ public class SetViewLabelExpressionCommandTest {
         return new java.util.HashMap<>(Map.of("viewId", view.getId(), "labelExpression", template));
     }
 
-    // ---- AC1: apply to all eligible elements ----
+    // ---- apply to all eligible elements ----
 
     @Test
     public void shouldStampEveryNamedElement_whenExecuted() {
@@ -122,7 +122,7 @@ public class SetViewLabelExpressionCommandTest {
         assertEquals(1, result.skippedCount());
     }
 
-    // ---- AC2: default scope is elements only ----
+    // ---- default scope is elements only ----
 
     @Test
     public void shouldSkipNotesAndGroups_whenDefaultScope() {
@@ -150,7 +150,7 @@ public class SetViewLabelExpressionCommandTest {
         assertEquals(TEMPLATE, labelOf(group));
     }
 
-    // ---- AC3: no-ghost name guard ----
+    // ---- no-ghost name guard ----
 
     @Test
     public void shouldSkipUnnamedElement_soNoGhostGlyph() {
@@ -165,7 +165,7 @@ public class SetViewLabelExpressionCommandTest {
         assertEquals(1, result.skippedCount());
     }
 
-    // ---- AC4: idempotent re-apply ----
+    // ---- idempotent re-apply ----
 
     @Test
     public void shouldBeByteIdenticalAndSameCounts_whenReapplied() {
@@ -179,7 +179,7 @@ public class SetViewLabelExpressionCommandTest {
         assertEquals(first.skippedCount(), second.skippedCount());
     }
 
-    // ---- AC5: empty clears ----
+    // ---- empty clears ----
 
     @Test
     public void shouldClearLabel_whenTemplateEmpty() {
@@ -204,7 +204,7 @@ public class SetViewLabelExpressionCommandTest {
         }
     }
 
-    // ---- AC6: empty view no-op ----
+    // ---- empty view no-op ----
 
     @Test
     public void shouldNoOp_whenNoEligibleObjects() {
@@ -215,7 +215,7 @@ public class SetViewLabelExpressionCommandTest {
         assertEquals(0, result.appliedCount());
     }
 
-    // ---- AC7: single-command undo across set, change, clear ----
+    // ---- single-command undo across set, change, clear ----
 
     @Test
     public void shouldRestorePriorLabel_whenUndone() {

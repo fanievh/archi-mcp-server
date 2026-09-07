@@ -6,9 +6,9 @@ package net.vheerden.archi.mcp.model;
  * <p>Controls how mutations are applied to the ArchiMate model:</p>
  * <ul>
  *   <li>{@link #GUI_ATTACHED} — mutations applied immediately via CommandStack,
- *       UI updates in real-time (FR39)</li>
+ *       UI updates in real-time</li>
  *   <li>{@link #BATCH} — mutations queued, applied atomically on end-batch
- *       commit via NonNotifyingCompoundCommand (FR40)</li>
+ *       commit via NonNotifyingCompoundCommand</li>
  * </ul>
  */
 public enum OperationalMode {

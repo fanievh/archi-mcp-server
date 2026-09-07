@@ -17,7 +17,7 @@ import com.archimatetool.model.IDiagramModelObject;
 import net.vheerden.archi.mcp.response.ErrorCode;
 
 /**
- * Tests for the G5 styling extensions to {@link StylingHelper}:
+ * Tests for the typography and decoration styling extensions to {@link StylingHelper}:
  * typography (fontName / fontSize / fontStyle), connection lineStyle,
  * gradient, note borderType, deriveLineColor, outlineOpacity.
  *
@@ -25,14 +25,14 @@ import net.vheerden.archi.mcp.response.ErrorCode;
  * int mappers, SWT FontData composite-string parser/assembler, read-helpers, and
  * applyStylingToNewObject extension.
  */
-public class StylingHelperG5Test {
+public class StylingHelperTypographyAndDecorationTest {
 
     // ------------------------------------------------------------------
     // validateStylingParams — fontStyle / gradient / borderType / outlineOpacity
     // ------------------------------------------------------------------
 
     @Test
-    public void validateFontStyle_acceptsAllEnumValues_AC13() {
+    public void validateFontStyle_acceptsAllEnumValues() {
         StylingHelper.validateFontStyle("normal");
         StylingHelper.validateFontStyle("bold");
         StylingHelper.validateFontStyle("italic");
@@ -42,13 +42,13 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateFontStyle_acceptsNullOrEmpty_AC13() {
+    public void validateFontStyle_acceptsNullOrEmpty() {
         StylingHelper.validateFontStyle(null);
         StylingHelper.validateFontStyle("");
     }
 
     @Test
-    public void validateFontStyle_rejectsInvalid_AC13() {
+    public void validateFontStyle_rejectsInvalid() {
         try {
             StylingHelper.validateFontStyle("strikethrough");
             fail("Expected ModelAccessException");
@@ -58,7 +58,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateFontSize_acceptsPositiveAndNull_AC13() {
+    public void validateFontSize_acceptsPositiveAndNull() {
         StylingHelper.validateFontSize(null);
         StylingHelper.validateFontSize(1);
         StylingHelper.validateFontSize(9);
@@ -66,7 +66,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateFontSize_rejectsZeroAndNegative_AC13() {
+    public void validateFontSize_rejectsZeroAndNegative() {
         try {
             StylingHelper.validateFontSize(0);
             fail("Expected ModelAccessException");
@@ -82,7 +82,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateLineStyle_acceptsEnumValues_AC13() {
+    public void validateLineStyle_acceptsEnumValues() {
         StylingHelper.validateLineStyle("solid");
         StylingHelper.validateLineStyle("dashed");
         StylingHelper.validateLineStyle("dotted");
@@ -94,7 +94,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateLineStyle_rejectsInvalid_AC13() {
+    public void validateLineStyle_rejectsInvalid() {
         try {
             StylingHelper.validateLineStyle("zigzag");
             fail("Expected ModelAccessException");
@@ -104,7 +104,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateGradient_acceptsEnumValues_AC13() {
+    public void validateGradient_acceptsEnumValues() {
         StylingHelper.validateGradient("none");
         StylingHelper.validateGradient("top-bottom");
         StylingHelper.validateGradient("bottom-top");
@@ -114,7 +114,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateGradient_rejectsInvalid_AC13() {
+    public void validateGradient_rejectsInvalid() {
         try {
             StylingHelper.validateGradient("radial");
             fail("Expected ModelAccessException");
@@ -124,14 +124,14 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateBorderType_acceptsEnumValues_AC13() {
+    public void validateBorderType_acceptsEnumValues() {
         StylingHelper.validateBorderType("dogear");
         StylingHelper.validateBorderType("rectangle");
         StylingHelper.validateBorderType("none");
     }
 
     @Test
-    public void validateBorderType_rejectsInvalid_AC13() {
+    public void validateBorderType_rejectsInvalid() {
         try {
             StylingHelper.validateBorderType("circle");
             fail("Expected ModelAccessException");
@@ -141,7 +141,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateOutlineOpacity_acceptsRange_AC13() {
+    public void validateOutlineOpacity_acceptsRange() {
         StylingHelper.validateOutlineOpacity(0);
         StylingHelper.validateOutlineOpacity(128);
         StylingHelper.validateOutlineOpacity(255);
@@ -149,7 +149,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void validateOutlineOpacity_rejectsOutOfRange_AC13() {
+    public void validateOutlineOpacity_rejectsOutOfRange() {
         try {
             StylingHelper.validateOutlineOpacity(-1);
             fail("Expected ModelAccessException");
@@ -362,11 +362,11 @@ public class StylingHelperG5Test {
     }
 
     // ------------------------------------------------------------------
-    // applyStylingToNewObject — G5 fields applied to real EMF objects
+    // applyStylingToNewObject — typography and decoration fields applied to real EMF objects
     // ------------------------------------------------------------------
 
     @Test
-    public void applyStylingToNewObject_setsGradient_onIDiagramModelObject_AC5() {
+    public void applyStylingToNewObject_setsGradient_onIDiagramModelObject() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         // Default
         assertEquals(IDiagramModelObject.GRADIENT_NONE, group.getGradient());
@@ -379,7 +379,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_clearsGradient_onEmptyString_AC5() {
+    public void applyStylingToNewObject_clearsGradient_onEmptyString() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         group.setGradient(2);  // pre-set to "right-left"
 
@@ -391,7 +391,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_setsBorderType_onNoteOnly_AC6() {
+    public void applyStylingToNewObject_setsBorderType_onNoteOnly() {
         IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
         StylingParams styling = new StylingParams(
                 null, null, null, null, null, null, null, null,
@@ -401,7 +401,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_ignoresBorderType_onGroup_AC6() {
+    public void applyStylingToNewObject_ignoresBorderType_onGroup() {
         // borderType is note-only — applying to a group must NOT call setBorderType (which
         // would conflict with figureType's tabbed/rectangular semantics on groups).
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
@@ -414,7 +414,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_setsDeriveLineColor_AC7() {
+    public void applyStylingToNewObject_setsDeriveLineColor() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         // Archi default is true.
         assertTrue(group.getDeriveElementLineColor());
@@ -427,7 +427,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_setsOutlineOpacity_AC8() {
+    public void applyStylingToNewObject_setsOutlineOpacity() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         // Default 255.
         assertEquals(IDiagramModelObject.FEATURE_LINE_ALPHA_DEFAULT, group.getLineAlpha());
@@ -440,7 +440,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_mergesFont_onIFontAttribute_AC2() {
+    public void applyStylingToNewObject_mergesFont_onIFontAttribute() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         // Empty/null font initially.
         assertNull(group.getFont());
@@ -458,7 +458,7 @@ public class StylingHelperG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void readGradient_returnsNullAtDefault_AC9() {
+    public void readGradient_returnsNullAtDefault() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertNull(StylingHelper.readGradient(group));  // default = GRADIENT_NONE
         group.setGradient(0);
@@ -466,13 +466,13 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void readBorderType_returnsNullForNonNote_AC9() {
+    public void readBorderType_returnsNullForNonNote() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertNull(StylingHelper.readBorderType(group));  // not a note → null
     }
 
     @Test
-    public void readBorderType_returnsNullAtDefaultForNote_AC9() {
+    public void readBorderType_returnsNullAtDefaultForNote() {
         IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
         assertNull(StylingHelper.readBorderType(note));  // default dogear → null
         note.setBorderType(IDiagramModelNote.BORDER_RECTANGLE);
@@ -480,7 +480,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void readDeriveLineColor_returnsNullAtDefault_AC9() {
+    public void readDeriveLineColor_returnsNullAtDefault() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         // Default is true → DTO null.
         assertNull(StylingHelper.readDeriveLineColor(group));
@@ -489,7 +489,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void readOutlineOpacity_returnsNullAtDefault_AC9() {
+    public void readOutlineOpacity_returnsNullAtDefault() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertNull(StylingHelper.readOutlineOpacity(group));  // default 255 → null
         group.setLineAlpha(128);
@@ -497,7 +497,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void readFontName_returnsNullAtDefault_AC9() {
+    public void readFontName_returnsNullAtDefault() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertNull(StylingHelper.readFontName(group));  // no font set → null
         group.setFont("Arial|9|0");
@@ -509,7 +509,7 @@ public class StylingHelperG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void applyStylingToNewObject_setsLineStyle_onViewObject_AC4() {
+    public void applyStylingToNewObject_setsLineStyle_onViewObject() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertEquals(IDiagramModelObject.LINE_STYLE_DEFAULT, group.getLineStyle());
 
@@ -521,7 +521,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyStylingToNewObject_clearsLineStyleToDefault_onEmptyString_AC4() {
+    public void applyStylingToNewObject_clearsLineStyleToDefault_onEmptyString() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         group.setLineStyle(IDiagramModelObject.LINE_STYLE_DOTTED);
 
@@ -533,7 +533,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void readLineStyle_returnsNullAtDefault_AC9() {
+    public void readLineStyle_returnsNullAtDefault() {
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         assertNull(StylingHelper.readLineStyle(group));   // -1 (default) → null
         group.setLineStyle(IDiagramModelObject.LINE_STYLE_DASHED);
@@ -545,7 +545,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void applyConnectionStyling_silentlyIgnoresLineStyle_AC4() {
+    public void applyConnectionStyling_silentlyIgnoresLineStyle() {
         // Connections do not support lineStyle in Archi 5.8 (Task-9 empirical correction).
         // applyConnectionStyling now ignores styling.lineStyle() entirely.
         IDiagramModelConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
@@ -565,13 +565,13 @@ public class StylingHelperG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void stylingParams_5ArgCtor_keepsCompiling_AC11() {
+    public void stylingParams_5ArgCtor_keepsCompiling() {
         // The 5-arg back-compat ctor still works after the 8→16 extension.
         StylingParams sp = new StylingParams("#FF0000", null, null, 128, 2);
         assertEquals("#FF0000", sp.fillColor());
         assertEquals(Integer.valueOf(128), sp.opacity());
         assertEquals(Integer.valueOf(2), sp.lineWidth());
-        // New G5 fields default to null.
+        // New typography and decoration fields default to null.
         assertNull(sp.fontName());
         assertNull(sp.gradient());
         assertNull(sp.deriveLineColor());
@@ -579,7 +579,7 @@ public class StylingHelperG5Test {
     }
 
     @Test
-    public void stylingParams_8ArgCtor_keepsCompiling_AC11() {
+    public void stylingParams_8ArgCtor_keepsCompiling() {
         // Post-predecessor back-compat ctor.
         StylingParams sp = new StylingParams(
                 "#FF0000", "#00FF00", "#0000FF", 128, 2,
@@ -587,14 +587,14 @@ public class StylingHelperG5Test {
         assertEquals("rectangular", sp.figureType());
         assertEquals("left", sp.textAlignment());
         assertEquals("centre", sp.verticalTextAlignment());
-        // G5 fields null.
+        // Typography and decoration fields null.
         assertNull(sp.fontName());
         assertNull(sp.lineStyle());
     }
 
     @Test
-    public void stylingParams_hasAnyValue_returnsTrueForAnyG5Field() {
-        // None of the new G5 fields should be invisible to hasAnyValue().
+    public void stylingParams_hasAnyValue_returnsTrueForAnyTypographyOrDecorationField() {
+        // None of the new typography or decoration fields should be invisible to hasAnyValue().
         assertTrue(new StylingParams(null, null, null, null, null, null, null, null,
                 "Arial", null, null, null, null, null, null, null).hasAnyValue());
         assertTrue(new StylingParams(null, null, null, null, null, null, null, null,

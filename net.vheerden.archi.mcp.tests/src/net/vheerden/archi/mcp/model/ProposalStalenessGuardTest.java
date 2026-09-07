@@ -94,7 +94,7 @@ public class ProposalStalenessGuardTest {
                 Map.of("id-1", "fpA"), Map.of("id-1", "Payment Gateway"));
         StaleVerdict v = ProposalStalenessGuard.decide(true, cap,
                 Map.of("id-1", "fpA"), Map.of("id-1", "Payment Gateway"));
-        assertFalse("unchanged targets ⇒ fresh even with human activity (AC-3)", v.stale());
+        assertFalse("unchanged targets ⇒ fresh even with human activity", v.stale());
     }
 
     @Test
@@ -157,10 +157,10 @@ public class ProposalStalenessGuardTest {
 
         CommandStack stack = new CommandStack();
         ProposalStalenessGuard guard = newGuardOn(stack, model);
-        StalenessCapture cap = guard.capture(java.util.Set.of(actor.getId()));
+        StalenessCapture cap = guard.capture(java.util.Set.of(actor.getId()), null);
 
         assertEquals("one target fingerprinted", 1, cap.targetIds().size());
-        assertFalse("untouched target ⇒ fresh", guard.vet(cap).stale());
+        assertFalse("untouched target ⇒ fresh", guard.vet(cap, null).stale());
     }
 
     @Test
@@ -172,12 +172,12 @@ public class ProposalStalenessGuardTest {
 
         CommandStack stack = new CommandStack();
         ProposalStalenessGuard guard = newGuardOn(stack, model);
-        StalenessCapture cap = guard.capture(java.util.Set.of(actor.getId()));
+        StalenessCapture cap = guard.capture(java.util.Set.of(actor.getId()), null);
 
         // Human removes the targeted element from the model.
         model.getFolder(FolderType.BUSINESS).getElements().remove(actor);
 
-        StaleVerdict v = guard.vet(cap);
+        StaleVerdict v = guard.vet(cap, null);
         assertTrue("a removed target ⇒ stale (no NPE/raw exception)", v.stale());
         assertTrue(v.reason().contains("Payment Gateway"));
     }
@@ -185,9 +185,9 @@ public class ProposalStalenessGuardTest {
     @Test
     public void shouldCaptureEmpty_whenNoTargets() {
         ProposalStalenessGuard guard = new ProposalStalenessGuard(() -> null);
-        StalenessCapture cap = guard.capture(java.util.Set.of());
+        StalenessCapture cap = guard.capture(java.util.Set.of(), null);
         assertTrue(cap.targetIds().isEmpty());
-        assertFalse("an empty capture always vets fresh", guard.vet(cap).stale());
+        assertFalse("an empty capture always vets fresh", guard.vet(cap, null).stale());
     }
 
     // ---- bounds/move decision core (decide 5-arg) ----
@@ -267,14 +267,14 @@ public class ProposalStalenessGuardTest {
     public void shouldVetStaleRemoved_whenTrackedDiagramChildDeleted() {
         Fixture f = modelWithDiagramChild("child-1", "Customer Identity Platform");
         ProposalStalenessGuard guard = newGuardOn(new CommandStack(), f.model);
-        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"));
+        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"), null);
         assertEquals("the broadened child id is tracked", 1, cap.targetIds().size());
 
         // Human deletes the child view-object from the view (a frozen child command would now misapply).
         ((IArchimateDiagramModel) f.child.eContainer()).getChildren().remove(f.child);
 
-        StaleVerdict v = guard.vet(cap);
-        assertTrue("a deleted tracked child ⇒ stale (AC-2)", v.stale());
+        StaleVerdict v = guard.vet(cap, null);
+        assertTrue("a deleted tracked child ⇒ stale", v.stale());
         assertTrue("names the removed child", v.reason().contains("Customer Identity Platform"));
         assertTrue("removed wording", v.reason().toLowerCase().contains("removed"));
     }
@@ -284,13 +284,13 @@ public class ProposalStalenessGuardTest {
         Fixture f = modelWithDiagramChild("child-1", "Customer Identity Platform");
         CommandStack stack = new CommandStack();
         ProposalStalenessGuard guard = newGuardOn(stack, f.model);
-        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"));
+        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"), null);
 
         stack.execute(human("Human drag"));      // a human command intervenes
         f.child.setBounds(120, 40, 100, 50);      // ...and drags the tracked child
 
-        StaleVerdict v = guard.vet(cap);
-        assertTrue("a dragged tracked child ⇒ stale (AC-4)", v.stale());
+        StaleVerdict v = guard.vet(cap, null);
+        assertTrue("a dragged tracked child ⇒ stale", v.stale());
         assertTrue("names the moved child", v.reason().contains("Customer Identity Platform"));
         assertTrue("moved wording", v.reason().toLowerCase().contains("moved"));
     }
@@ -300,12 +300,41 @@ public class ProposalStalenessGuardTest {
         Fixture f = modelWithDiagramChild("child-1", "Untouched");
         CommandStack stack = new CommandStack();
         ProposalStalenessGuard guard = newGuardOn(stack, f.model);
-        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"));
+        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"), null);
 
         stack.execute(human("Unrelated human edit elsewhere"));  // human intervened, child untouched
 
-        assertFalse("an untouched tracked child ⇒ fresh even with human activity (AC-3)",
-                guard.vet(cap).stale());
+        assertFalse("an untouched tracked child ⇒ fresh even with human activity",
+                guard.vet(cap, null).stale());
+    }
+
+    /**
+     * Probes the residual that the reviewed-or-reject propose sites carry — the ones whose deferred
+     * handle returns the already-reviewed compound instead of re-preparing.
+     *
+     * <p>A changed fingerprint only counts as stale when a <em>human</em> intervened; an intervening
+     * <em>agent</em> command is deliberately forgiven, because the rebuild is expected to re-resolve
+     * against whatever the agent did. That forgiveness is correct for every propose site that
+     * re-prepares. At the sites that freeze their compound nothing re-resolves, so the forgiven change
+     * is silently overwritten by propose-time state when the human approves.</p>
+     *
+     * <p>This measures the forgiveness itself, against a real model and a real agent-authored command.
+     * It does not drive a frozen site end-to-end; that the frozen sites re-resolve nothing is a
+     * structural property of their handles, not a behaviour to observe here.</p>
+     */
+    @Test
+    public void shouldVetFresh_whenAnAgentAuthoredCommandMovedATrackedChild_frozenCompoundResidualProbe() {
+        Fixture f = modelWithDiagramChild("child-1", "Payments Gateway");
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("child-1"), null);
+
+        stack.execute(agent("Agent-authored move"));  // an AGENT command intervenes...
+        f.child.setBounds(400, 400, 100, 50);          // ...and moves the tracked child
+
+        assertFalse("an agent-authored change to a tracked object is forgiven — sound where the handle "
+                + "re-prepares, and the residual where it returns a frozen compound",
+                guard.vet(cap, null).stale());
     }
 
     // ---- helpers ----

@@ -39,21 +39,21 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldSetName_whenExecuted_AC2() {
+    public void shouldSetName_whenExecuted() {
         UpdateModelCommand cmd = new UpdateModelCommand(model, "New Model Name", null, false, null);
         cmd.execute();
         assertEquals("New Model Name", model.getName());
     }
 
     @Test
-    public void shouldSetPurpose_whenExecuted_AC2() {
+    public void shouldSetPurpose_whenExecuted() {
         UpdateModelCommand cmd = new UpdateModelCommand(model, null, "New purpose", false, null);
         cmd.execute();
         assertEquals("New purpose", model.getPurpose());
     }
 
     @Test
-    public void shouldClearPurpose_whenEmptyStringPassed_AC4() {
+    public void shouldClearPurpose_whenEmptyStringPassed() {
         // Caller passes "" via JSON, which the boundary converts to clearPurpose=true + null payload.
         UpdateModelCommand cmd = new UpdateModelCommand(model, null, null, true, null);
         cmd.execute();
@@ -65,7 +65,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldMergeProperties_whenPropertyMapProvided_AC5() {
+    public void shouldMergeProperties_whenPropertyMapProvided() {
         // Pre-existing property
         IProperty existing = IArchimateFactory.eINSTANCE.createProperty();
         existing.setKey("Author");
@@ -82,7 +82,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldRemoveProperty_whenValueIsNull_AC5() {
+    public void shouldRemoveProperty_whenValueIsNull() {
         IProperty toRemove = IArchimateFactory.eINSTANCE.createProperty();
         toRemove.setKey("OldKey");
         toRemove.setValue("OldValue");
@@ -97,7 +97,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldAddNewProperty_whenKeyMissing_AC5() {
+    public void shouldAddNewProperty_whenKeyMissing() {
         Map<String, String> props = new LinkedHashMap<>();
         props.put("Tag", "draft");
         UpdateModelCommand cmd = new UpdateModelCommand(model, null, null, false, props);
@@ -109,21 +109,21 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldLeaveNameUnchanged_whenNameNull_AC3() {
+    public void shouldLeaveNameUnchanged_whenNameNull() {
         UpdateModelCommand cmd = new UpdateModelCommand(model, null, "Some purpose", false, null);
         cmd.execute();
         assertEquals("Old Model Name", model.getName());
     }
 
     @Test
-    public void shouldLeavePurposeUnchanged_whenPurposeNull_AC3() {
+    public void shouldLeavePurposeUnchanged_whenPurposeNull() {
         UpdateModelCommand cmd = new UpdateModelCommand(model, "Renamed", null, false, null);
         cmd.execute();
         assertEquals("Old purpose", model.getPurpose());
     }
 
     @Test
-    public void shouldLeavePropertiesUnchanged_whenPropertiesNull_AC3() {
+    public void shouldLeavePropertiesUnchanged_whenPropertiesNull() {
         IProperty prop = IArchimateFactory.eINSTANCE.createProperty();
         prop.setKey("Keep");
         prop.setValue("Me");
@@ -138,7 +138,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldRestoreOldState_whenUndone_AC6() {
+    public void shouldRestoreOldState_whenUndone() {
         IProperty originalProp = IArchimateFactory.eINSTANCE.createProperty();
         originalProp.setKey("Original");
         originalProp.setValue("Value");
@@ -167,7 +167,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldRestoreNullPurpose_whenUndoneAfterSet_AC6() {
+    public void shouldRestoreNullPurpose_whenUndoneAfterSet() {
         // Start with no purpose. A freshly created IArchimateModel reports "no purpose" as
         // null OR "" depending on the EMF runtime (Archi treats them equivalently — see
         // UpdateModelCommand.undo()'s null<->"" note), so accept either as the baseline.
@@ -191,7 +191,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldReexecute_whenRedoCalled_AC6() {
+    public void shouldReexecute_whenRedoCalled() {
         UpdateModelCommand cmd = new UpdateModelCommand(
                 model, "Renamed", "New purpose", false, null);
         cmd.execute();
@@ -206,7 +206,7 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldStateAtConstruction_notExecute_AC6() {
+    public void shouldCaptureOldStateAtConstruction_notExecute() {
         // Mutate AFTER construction; undo must restore the CONSTRUCTION-TIME snapshot
         UpdateModelCommand cmd = new UpdateModelCommand(model, "Renamed", null, false, null);
 

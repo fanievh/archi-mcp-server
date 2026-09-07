@@ -10,7 +10,7 @@ import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * H5 story — orchestration stage owning hub-perimeter routing quality as a 2-axis
+ * Orchestration stage owning hub-perimeter routing quality as a 2-axis
  * simultaneous property (corridor-CHOICE diversification + intra-corridor SPREAD
  * enforcement).
  *
@@ -18,8 +18,8 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * property of the route set, not a local property of individual edges or connections.
  * This stage extends that commitment from {@link ChannelNudgingPass} (channel-global
  * nudging) to a NEW orchestration owning <em>hub-perimeter</em> quality. The 2-axis
- * defect was discovered analytically in the predecessor scoping spike after the H1-H4
- * single-axis hypotheses were falsified or refuted; H5 is the
+ * defect was discovered analytically in the predecessor scoping spike after the earlier
+ * single-axis hypotheses were falsified or refuted; this stage is the
  * coordinated abstraction combining the design insights.
  *
  * <p><b>Insertion point:</b> {@link RoutingPipeline#routeAllConnections} between
@@ -47,7 +47,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * is wrapped by {@link #verifyMetricMonotonicity}, a lightweight before/after monotonicity
  * check on M4 (connection-edge-coincidence count), V_p10 (V-axis parallel-connection-gap
  * 10th percentile) and HPQ (hub-port-quality aggregate). Tier-1 defects (overlap,
- * passThrough, interiorTermination, zigzag) are protected by construction — H5 only
+ * passThrough, interiorTermination, zigzag) are protected by construction — the stage only
  * shifts intermediate bendpoints (loop bound {@code s = 1..lastIdx-2} in
  * {@link HubFaceConnectionPartitioner#partition}), never moves terminal endpoints.
  * The verifier mirrors the relevant
@@ -102,11 +102,11 @@ public class HubPerimeterRoutingStage {
     private final CorridorSpreadEnforcer enforcer;
 
     /**
-     * HPRPS Track-A: the terminal-segment corridor-migration sibling. Composed as a third
+     * Axis 3: the terminal-segment corridor-migration sibling. Composed as a third
      * independent axis (see {@link #apply}). It reaches exactly the
      * terminal-incident size-3 L-shapes that {@link HubFaceConnectionPartitioner}
      * correctly excludes (its {@code s=1; s<lastIdx-1} bound is NOT relaxed) and on
-     * which H5 is a documented structural no-op — the dominant gate-view geometry.
+     * which this stage is a documented structural no-op — the dominant gate-view geometry.
      */
     private final TerminalSegmentCorridorMigrator migrator;
 
@@ -118,9 +118,9 @@ public class HubPerimeterRoutingStage {
     }
 
     /**
-     * Backwards-compatible 3-arg test-injection constructor (pre-HPRPS). Delegates
+     * Backwards-compatible 3-arg test-injection constructor (pre-Axis-3). Delegates
      * to the 4-arg constructor with a default {@link TerminalSegmentCorridorMigrator}
-     * so existing H5 test injection sites remain source-compatible.
+     * so existing test injection sites remain source-compatible.
      */
     HubPerimeterRoutingStage(HubFaceConnectionPartitioner partitioner,
                               AlternativeCorridorSelector selector,
@@ -128,7 +128,7 @@ public class HubPerimeterRoutingStage {
         this(partitioner, selector, enforcer, new TerminalSegmentCorridorMigrator());
     }
 
-    /** Constructor for test injection (HPRPS Track-A — includes the migrator). */
+    /** Constructor for test injection (Axis 3 — includes the migrator). */
     HubPerimeterRoutingStage(HubFaceConnectionPartitioner partitioner,
                               AlternativeCorridorSelector selector,
                               CorridorSpreadEnforcer enforcer,
@@ -147,8 +147,8 @@ public class HubPerimeterRoutingStage {
      * @param axis1Rolled      Axis 1 corrections rolled back by the metric-monotonicity verifier
      * @param axis2Applied     Axis 2 spread corrections committed
      * @param axis2Rolled      Axis 2 corrections rolled back by the metric-monotonicity verifier
-     * @param migratorApplied  HPRPS Track-A terminal-segment migrations committed
-     * @param migratorRolled   HPRPS Track-A migrations rolled back by the metric-monotonicity verifier
+     * @param migratorApplied  Axis-3 terminal-segment migrations committed
+     * @param migratorRolled   Axis-3 migrations rolled back by the metric-monotonicity verifier
      */
     public record Result(int cellsProcessed,
                          int axis1Applied,
@@ -169,18 +169,18 @@ public class HubPerimeterRoutingStage {
     public record MetricSnapshot(int m4Count, Double vP10, double hpq) {}
 
     /**
-     * Apply the H5 algorithm + the HPRPS Track-A third axis: partition into cells,
+     * Apply the hub-perimeter algorithm + the third axis: partition into cells,
      * run Axis 1 (corridor-CHOICE) with strict-then-relaxed retry, then Axis 2
      * (intra-corridor SPREAD), then Axis 3 ({@link TerminalSegmentCorridorMigrator}
      * — terminal-segment corridor migration), all with Tier-1 ceiling-preserved
      * rollback hooks.
      *
-     * <p><b>HPRPS wiring note (load-bearing).</b> Axis 3 runs over ALL connections
+     * <p><b>Axis-3 wiring note (load-bearing).</b> Axis 3 runs over ALL connections
      * independently of the partitioner cells and <b>regardless of whether any cell
-     * exists</b>. The pre-HPRPS early-return on {@code cells.isEmpty()} was removed
+     * exists</b>. The pre-Axis-3 early-return on {@code cells.isEmpty()} was removed
      * precisely because the v1.4 HH/ST gate views produce zero cells (25/30 paths
      * are size-3 L-shapes whose terminal-incident segments the partitioner correctly
-     * excludes) — that early-return is exactly what made H5 a structural no-op there.
+     * excludes) — that early-return is exactly what made the stage a structural no-op there.
      * Axis 3 is the reach into that geometry. Axis 1/2 (on empty cells the loop is a
      * natural no-op) still run first on hub-rich views; Axis 3 then reads the
      * now-mutated paths (third pass; never re-partitions) and its
@@ -189,7 +189,7 @@ public class HubPerimeterRoutingStage {
      *
      * @param connections   index-parallel per-route endpoint records
      * @param paths         index-parallel per-route bendpoint lists (MUTATED in place)
-     * @param allObstacles  all element rectangles on the view
+     * @param allObstacles  every non-container view object — elements, notes and images alike
      * @return aggregate stats for diagnostics; never null
      */
     public Result apply(List<RoutingPipeline.ConnectionEndpoints> connections,
@@ -244,7 +244,7 @@ public class HubPerimeterRoutingStage {
             }
         }
 
-        // Axis 3 (HPRPS Track-A): terminal-segment corridor migration. Runs over ALL
+        // Axis 3: terminal-segment corridor migration. Runs over ALL
         // connections (its own terminal-incident discovery; does NOT route through the
         // partitioner cells and does NOT relax the partitioner loop bound) and reads
         // the post-Axis-1/2 path state. Each proposal is independently safe + Tier-1

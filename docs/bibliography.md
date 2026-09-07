@@ -207,7 +207,7 @@ Each entry below names the source class plus the references that ground it. **Em
 | Recommendation engine | `RoutingRecommendationEngine` | empirical |
 | Best-of-K seeded multi-start (never-worse-by-construction, K=12) | `BestOfKRoutingStrategy` | empirical (project contribution) |
 | Hub-perimeter routing stage | `HubPerimeterRoutingStage` | [8] (Kandinsky high-degree-vertex background); stage is project-specific |
-| Terminal-segment corridor migration (HPRPS Track-A, Axis-3) | `TerminalSegmentCorridorMigrator` | [4] (channel-centring rationale); migration strategy is empirical |
+| Terminal-segment corridor migration | `TerminalSegmentCorridorMigrator` | [4] (channel-centring rationale); migration strategy is empirical |
 
 ### Layout engine
 

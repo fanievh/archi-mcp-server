@@ -1,5 +1,11 @@
 package net.vheerden.archi.mcp.response;
 
+import java.util.stream.Stream;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.util.ArrayList;
+import java.nio.file.Path;
+import java.nio.file.Files;
 import static org.junit.Assert.*;
 
 import java.util.List;
@@ -607,4 +613,87 @@ public class FieldSelectorTest {
     public void shouldContainProtectedFields() {
         assertEquals(Set.of("id", "name"), FieldSelector.ALWAYS_INCLUDED_FIELDS);
     }
+
+	// ---- the prose surfaces that name this list to a caller ----
+
+	@Test
+	public void shouldNameEveryValidExcludeFieldInTheProse() {
+		String prose = FieldSelector.validExcludeFieldsAsProse();
+		for (String field : FieldSelector.VALID_EXCLUDE_FIELDS) {
+			assertTrue("a caller reading this list must be able to find every field the validator "
+					+ "accepts, and '" + field + "' is missing from: " + prose,
+					prose.contains(field));
+		}
+		assertEquals("and it must name nothing the validator would reject",
+				FieldSelector.VALID_EXCLUDE_FIELDS.size(), prose.split(", ").length);
+	}
+
+	@Test
+	public void shouldOrderTheExcludeFieldProseDeterministically() {
+		// The underlying set is a Set.of, whose iteration order is deliberately randomised per JVM,
+		// so a message built by iterating it would read differently between runs and no test could
+		// pin it. That failure mode cannot be reproduced inside one JVM -- calling the method twice
+		// here would agree however it was built, and asserting that it does would be a check that
+		// cannot fail. What IS checkable in one run is the property that makes the order stable:
+		// the output is sorted, so it is a function of the set's contents and not of this JVM.
+		List<String> names = List.of(FieldSelector.validExcludeFieldsAsProse().split(", "));
+		List<String> sorted = new ArrayList<>(names);
+		java.util.Collections.sort(sorted);
+		assertEquals("alphabetical, so the order is a property of the list and not of the JVM",
+				sorted, names);
+	}
+
+	/**
+	 * Every rejection message that validates against this list must also print it.
+	 *
+	 * <p>The message a caller reads is the one they reach after getting it wrong, so a message
+	 * naming fewer fields than the validator accepts tells them a field is invalid when it is not.
+	 * Eight handler sites had their own hand-written copy and every one had fallen behind -- by
+	 * three names at best and by nine at worst -- so a caller of {@code search-relationships} was
+	 * told they could not exclude {@code layer}, and no caller of any tool could learn that
+	 * {@code images} is excludable at all.</p>
+	 *
+	 * <p>Reading the handler sources is legitimate here for the reason it is not always: these are
+	 * whole expressions, and what this asserts is that the expression CALLS the generator rather
+	 * than what any string contains. A transcribed list is exactly what that catches.</p>
+	 */
+	@Test
+	public void shouldGenerateEveryExcludeFieldRejectionMessageFromTheList() throws Exception {
+		Path handlers = sourceRoot().resolve("net/vheerden/archi/mcp/handlers");
+		List<String> transcribed = new ArrayList<>();
+		try (Stream<Path> files = Files.list(handlers)) {
+			for (Path file : files.filter(f -> f.toString().endsWith(".java")).toList()) {
+				String source = stripComments(Files.readString(file));
+				Matcher m = Pattern.compile("\"Valid exclude fields: (.{0,120}?)(?:\"|$)",
+						Pattern.MULTILINE).matcher(source);
+				while (m.find()) {
+					if (!m.group(1).isEmpty()) {
+						transcribed.add(file.getFileName() + ": " + m.group(1));
+					}
+				}
+			}
+		}
+		assertEquals("every one of these must read \"Valid exclude fields: \" + "
+				+ "FieldSelector.validExcludeFieldsAsProse() instead of naming the fields itself",
+				List.of(), transcribed);
+	}
+
+	/** The test tree and the main tree are siblings under the repository root. */
+	private static Path sourceRoot() {
+		Path dir = Path.of("").toAbsolutePath();
+		while (dir != null && !Files.isDirectory(dir.resolve("net.vheerden.archi.mcp/src"))) {
+			dir = dir.getParent();
+		}
+		assertNotNull("could not locate the plugin source tree from " + Path.of("").toAbsolutePath(),
+				dir);
+		return dir.resolve("net.vheerden.archi.mcp/src");
+	}
+
+	/**
+	 * Removes block and line comments so a commented-out or merely discussed literal cannot
+	 * satisfy -- or trip -- a source-reading assertion. A Javadoc has satisfied one of these before.
+	 */
+	private static String stripComments(String source) {
+		return source.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("(?m)//.*$", "");
+	}
 }

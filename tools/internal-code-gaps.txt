@@ -1,0 +1,292 @@
+# Internal-code gap registry — the pawl for "no internal project-management codes in source".
+#
+# WHY THIS FILE EXISTS
+#   This repo is curated to a public OSS repo. A reader outside the project cannot resolve an
+#   internal tracking code: "B44 center-termination detected" in a log, or "per review M1" in a
+#   comment, names something they have no way to look up. The rule (project-context.md, Critical
+#   Anti-Patterns) bans such codes from code, comments, log strings and tool descriptions.
+#
+#   One cleanup pass does not keep a repo clean — the next comment reintroduces the habit. So the
+#   rule is enforced by a contract test (InternalCodeContractTest) that scans both source trees,
+#   the shipped resource bundle and the published non-source surface, and this file is that
+#   test's known-gap list.
+#
+# THE PAWL (can only tighten, never loosen)
+#   Every code family the detector knows about must end up in exactly one state:
+#     * CLEAN    -> zero matches in either tree. NOT listed here. This is the target state.
+#     * ALLOWED  -> published vocabulary, allow-listed in the test itself, with the test proving
+#                   the publication still exists. Only the assessor metric ids qualify.
+#     * DEFERRED -> listed HERE, with a measured count that is a LOWER-ONLY ceiling.
+#   A family with matches and no entry here FAILS THE BUILD. That is the "a new code family must
+#   register or fail" property: reintroducing a banned code costs a deliberate, reviewable line.
+#
+#   FAMILY_ENTRY_CEILING in InternalCodeContractTest is LOWERED (only ever lowered) in the same
+#   commit that removes an entry — the manual, reviewable "click", exactly as tools/size-ratchet.sh
+#   does for CEILING_LOC. NEVER raise either ceiling.
+#
+# DEFERRED IS NOT APPROVED
+#   A count here is an admission, not a certificate. It says "the detector sees these and nobody
+#   has cleaned them yet" — never "these are fine". Seeding a registry from whatever happens to be
+#   in the tree and calling the rule closed is the over-reporting hazard this format exists to
+#   avoid, which is why each entry carries the measured number rather than a bare exemption.
+#
+# WHAT IS NOT DEFERRABLE
+#   Four surfaces are gated at zero and have no entries here at all:
+#     * any string literal in net.vheerden.archi.mcp/src — these become log output and MCP tool
+#       descriptions, so they leave the plugin and reach a user or an LLM agent;
+#     * every file under net.vheerden.archi.mcp/resources — the bundle serves these to the agent
+#       WHOLE, so there is no literal to extract and every byte counts.
+#     * .github/** and tools/** — this repo is curated to a PUBLIC OSS repo, and GitHub renders
+#       the CI workflow and the build harness inline. They are the first two files a contributor
+#       opens after the README, so a story code there is read by more people than most of the
+#       source. docs/** is deliberately NOT scanned: 28 of its 30 matches are Mermaid node ids
+#       carrying their own visible human label (subgraph L1["Layer 1: Protocol"]), which is
+#       machine syntax a reader resolves on the same line, not an unresolvable code.
+#     * the OSGi bundle descriptors — plugin.xml, plugin.properties, build.properties and
+#       META-INF/MANIFEST.MF. These are SIBLINGS of src/ and resources/, so they fell between the
+#       two scanned roots and were outside every surface this file describes.
+#   The second bullet was added after a review pointed out that scanning only *.java left the most
+#   directly agent-facing content in the bundle unchecked while this file reported clean. The
+#   third was added after a census found 29 codes in ci.yml and 18 in tools/ that no gate saw.
+#   The FOURTH was added after an adversarial review asked what sits BETWEEN src/ and resources/,
+#   and the answer was six live story codes in files that ship: plugin.properties carried
+#   "# Story S6a: human-owned approval-mode toggle" and "# Story S6b: ...", plugin.xml three
+#   "Story 1.4" comments. build.properties lists both in bin.includes, and plugin.properties is
+#   the externalized-string file whose VALUES become the labels Archi renders in its own menu bar
+#   — a shorter path to a user than the resource bundle the second bullet exists for. Three of the
+#   six were also invisible in SHAPE: `story-code` was `Story [0-9]+-[0-9]+`, dash-only, and could
+#   not match the dotted `Story 1.4`. Both the surface and the separator class were widened.
+#
+#   A comment, by contrast, is read only by someone already inside the tree. That asymmetry is why
+#   every count below is test-tree only: the main plugin is at ZERO for every family here.
+#
+# LOCALE
+#   If you sort this file, pin `LC_ALL=C`. An unpinned `sort` collates differently on macOS (dev)
+#   and the C-locale CI runner; that exact false positive already shipped once against the
+#   signature baseline (see tools/size-ratchet.sh, "locale pin: REQUIRED, not cosmetic").
+#
+# FORMAT
+#   <family-id> <STATUS> <ceiling> # <reason>
+#   STATUS is one of:
+#     DEFERRED   — detected and counted; cleanup is scheduled, not done. The ceiling is the
+#                  measured match count at the time of the last click and may only go down.
+#     COLLISION  — as DEFERRED, but the token also has a legitimate non-code meaning in this tree,
+#                  so cleanup must be per-site by hand and can never be mechanical.
+#   Blank lines and #-comments are ignored.
+
+# ---- DEFERRED: comment- and test-tree only. None of these reach the shipped surface, the
+# ---- shipped resources, or the published non-source surface (.github/**, tools/**), all of
+# ---- which are gated at zero with no entry here at all.
+bug-code DEFERRED 69 # internal bug numbers surviving in test comments and test method names. The shipped log strings they came from are already at zero and gated there. Clicked 72 -> 69 by the acceptance-criterion row: TWO assertion messages and one @Ignore line naming bug numbers were rewritten (an earlier version of this sentence said 'three assertion messages and one @Ignore line' - four items against a delta of three; the RoutingPipelineTest lines edited in the same pass kept their B70/B71 tokens and so removed nothing) to name the behaviour they pin (the approach-direction correction ratio, and the styling/label assessment fields).
+task-code DEFERRED 112 # task-sequence numbers from the plan that produced each block; comment-only. The MAIN PLUGIN IS AT ZERO for this family. Clicked 114 -> 112, but only ONE of those two came from a deliberate edit: `Task 6.16` sat inside an acceptance-criterion section header that the identifier row rewrote. The other was PRE-EXISTING SLACK - this entry was carrying 114 against a measured 113 at ca305905, before that row began, so the ceiling had quietly stopped being tight. Re-measure a ceiling before trusting that it is at its floor.
+hypothesis-code COLLISION 121 # hypothesis labels H1..H6. The token also reads as a hex digit, an axis label and a matrix cell in geometry code, so every site needs reading before it is touched. H5 alone is 91 of the total. The MAIN PLUGIN IS AT ZERO for this family - its H5 sites named the hub-perimeter routing work and were rewritten to say so. Clicked 122 -> 121 by the acceptance-criterion row: the V4-oracle regression message now names the hub perimeter directly.
+successor-code DEFERRED 16 # successor-workstream letters; comment-only. The MAIN PLUGIN IS AT ZERO for this family - its Successor C/D sites named the parallelConnectionGap metric family and were rewritten to name it directly.
+gap-code COLLISION 45 # capability-gap codes (G1, G5, G16 ...). THE MAIN PLUGIN IS AT ZERO for this family, as the DETECTOR sees it - see the UNCHECKED note on `hasG1` below, which no family matches. Its 38 plugin sites named the semantic-attribute, styling, model-metadata and image surfaces and were rewritten to name them directly. What remains is test-tree and genuinely mixed, which is why this is a COLLISION and not a DEFERRED: 19 of the 45 are GROUP FIXTURE LABELS in ChannelNudgingPassTest ("// Group G1: x=[0, 200]", "G1.maxX=200") and are not codes at all, sitting under the same token as the real ones. Every site needs reading; this can never be mechanical. Clicked 76 -> 45 by the acceptance-criterion row: the 21 G5 comments inside the three renamed styling-rail test classes, plus the G1 section headers and prose in the five relationship-semantic-attribute test files, were rewritten to name the surfaces they stand for. The shipped resource bundle held one more collision of the same kind - an ArchiMate roadmap recipe drawing its Gap elements as box-diagram labels - and was relabelled rather than deferred, because that surface is gated at zero.
+letter-story-code COLLISION 25 # story codes in their LETTER spelling (Story C3b, Story C4). THE MAIN PLUGIN IS AT ZERO for this family. The registered story-code family is `Story [0-9]+-[0-9]+` and is structurally incapable of matching a letter-numbered story - the same shape of miss as `Session [0-9]+` against `Session-9`, in the alphabet rather than the separator. Anchored at C3-C5 deliberately: C1/C2 are oracle-datapoint and node labels in the routing and crossing tests, 34 matches of pure collision, and 9 of the C3/C4 matches that DO fall in range are node labels too (List.of("C1", "C2", "C3", "C4") in CrossingMinimizerTest). Read per site.
+row-ref DEFERRED 32 # backlog row numbers (row-774, row 775) in test comments. Newly detected - no family carried this shape before, so these 32 were previously reported nowhere. The MAIN PLUGIN IS AT ZERO for this family.
+unpublished-metric-sibling COLLISION 19 # tokens shaped like the published metric ids but not published. What remains is three unrelated things sharing one shape, so every site needs reading: workstream round labels (R2 Task ...), calibration datapoint names (A-HH-R1, B-ST-R2), and retired metric numbers in test docs (R5..R9). The routing-tier shorthand that was also in this family IS now closed. The MAIN PLUGIN IS AT ZERO for this family.
+sprint-code COLLISION 3 # sprint and guardrail codes. Newly detected. Two survivors are genuine COLLISIONS left alone: "S6" in HubPerimeterRoutingStageTest sits beside E6 and T6 in an S/E/T source-edge-target fixture scheme, and renaming it would churn a fixture to remove nothing a reader cannot resolve - the same call the predecessor made on sub1.setName("L1"). The THIRD is NOT excused: "S3" at LayoutQualityAssessorPerceptionFixturesTest:339 is a real deferred code awaiting cleanup, in the identical assertion idiom to its sibling at :307 ("H2 sibling-overlap pair must register overlapCount=1") which IS counted as hypothesis-code. An earlier version of this reason excused it as a fixture label by citing the LOWERCASE _s3_ in the method name - a fragment the uppercase pattern cannot even match, so the justification addressed an occurrence that was never the one detected. The MAIN PLUGIN IS AT ZERO for this family.
+
+# ---- UNCHECKED: measured, NOT covered by any pattern above. Recorded here because a family the
+# ---- detector does not scan is UNCHECKED, never clean - and because leaving it silently absent
+# ---- is precisely what made an earlier version of this file read as a census it was not.
+#
+#   lowercase codes embedded in identifiers, e.g. `b71PreservedByRejection`. The existing
+#   embedded-code-identifier pattern requires a `.` or `_` immediately before a lowercase code, so
+#   a code preceded by a letter is invisible. MEASURED, and the reason it stays uncovered: the
+#   narrowest widening that catches the three real sites also fires 109 times across 50 distinct
+#   identifiers, of which 106 are false positives - `hasTier1Regression` (16, main plugin),
+#   `iter0Cmd` (16), `tier1Clean` (7), `formatDepth0AsGraph`, `suggestedWidth2D`,
+#   `shouldDefaultToDepth1_`. A 97% false-positive rate is coverage that costs more trust than it
+#   buys, so the gap is recorded rather than papered over with a pattern nobody would keep green.
+#
+#   a bug code leading an identifier, e.g. `b38_tieredRating_*` (5 sites, one test class). Same
+#   root cause, same lookbehind. Not separately fixable without the widening above.
+#
+#   THE LETTER-SERIES CODES. 246 matches, 38 distinct tokens, ACROSS BOTH TREES (main 113 in 22
+#   files, test 133 in 43 files): story/gap codes G1 x37 ("G1: validate semantic attributes..."),
+#   G5 x30 ("Apply G5 styling at creation time"), G16 x13, G6 x12, G2 x12, G8, G10; workstream
+#   names HPRPS x25 and Track-A/Track B x10; open-question dispositions Q5 x11, Q4 x7, Q2 x6,
+#   Q1 x5; story codes C3b x10 ("Story C3b"), C3 x9, C3c x6; design-section refs D6 x5 ("design
+#   §4 D6 guardrail"), D5 x5, D4; architecture-spec section ids O1 x3, O6; cross-review codes
+#   FA2 x2 ("cross-LLM-review FA2"), FR17/18/20, F1-F5. MOSTLY CLOSED: nine families now cover this
+#   population - gap-code, letter-story-code, design-decision-code, open-question-code,
+#   workstream-acronym, spec-section-code, requirement-code, finding-code, workshop-code - and the
+#   MAIN PLUGIN is at zero for every one of them. What survives is the test-tree residue carried by
+#   the two COLLISION entries above. This paragraph said "No family here matches any of them" until
+#   the row that closed it; leaving that sentence standing would have understated coverage in the
+#   opposite direction to the over-claim this file exists to prevent.
+#
+#   An earlier version of this note said "119 ... ALL in net.vheerden.archi.mcp/src". That figure
+#   was main-plugin-only under a narrower regex, and stating it without its scope understated the
+#   population by half - the same defect, one level down, as the overclaim check that missed this
+#   family entirely. Both figures are scoped here now.
+#
+#   SEPARATELY MEASURED AND DELIBERATELY EXCLUDED FROM THAT COUNT: 193 further matches (main 24,
+#   test 169) of the same SHAPE that are NOT codes - E1..E10 are element fixture names
+#   (RoutingRect E3, e.setName("E3")), T0..T3 are terminal/intermediate bendpoint labels in
+#   RoutingPipeline ("3-BP path: [T0, I0, T1]") and a named metric threshold in
+#   LayoutQualityAssessor ("T1 in the parallelConnectionGap metric family"), C1/C2 are oracle
+#   fixture labels. That is ~44% of the raw shape-match population, which is why a blanket
+#   [A-Z][0-9] family is rejected in advance and every site needs reading.
+#
+#   ALSO VERIFIED, so a future census does not re-raise it as a breach: the ONE shipped
+#   string-literal hit for this shape, ModelQueryHandler.java:634 ("...retail bank XYZ - Q3 2026
+#   cut"), is a CALENDAR QUARTER in an example model purpose, not a code. The shipped literal
+#   surface is CLEAN for this population.
+#
+#   This gap was found by ADVERSARIAL REVIEW, not by the census that preceded it - the census
+#   could only report the shapes its patterns already knew, which is the same blind spot this
+#   registry exists to make visible. Covering it needs a ruling first, and the test is
+#   PUBLICATION, not shape: O1 and D6 cite an architecture-spec and a design-doc section, and the
+#   predecessor row renamed Phase 1.1 believing it a plan code when docs/routing-pipeline.md
+#   published it as a section heading. Scheduled as its own row:
+#   public-oss-rule-letter-series-codes-ruling. Counted and named here so it is an admission
+#   rather than an absence.
+#
+#   `Phase N.N` sub-phase numbers in EdgeAttachmentCalculator (17 sites) and its test (6). Ruled a
+#   code family during this row and the ruling was WRONG, then reverted. They belong to a coherent
+#   Phase 1 / Phase 2 / Phase 3 scheme in the same method, each carrying its own human label, and
+#   docs/routing-pipeline.md publishes "### Phase 1.1: Hub Face Redistribution" as a section
+#   heading with docs/bibliography.md indexing all three - which makes them resolvable published
+#   architecture vocabulary, not plan codes. The detector pattern was dotted-only and therefore
+#   structurally incapable of seeing `Phase 2`; reading its silence as "there is no Phase 2
+#   anywhere" is exactly the mistake this registry warns about, committed while writing it.
+#
+#   THE V-SERIES CALIBRATION LABELS. `V1`, `V2`, `V3` x14, `V7` x11, and `V4` x164 - 192 matches
+#   across both trees. NO family matches `\bV[0-9]\b`, so the detector makes NO claim about any of
+#   them, in either direction.
+#
+#   `V4` is the one to be careful about. It reads as published - docs/routing-pipeline.md:110,120,
+#   528,536 and docs/layout-engine.md:425,430 all say "the V4 manual oracle" - but every one of
+#   those is a bare PROSE MENTION. There is no heading for V4, no glossary row, and it is not in
+#   ALLOWED_VOCABULARY. That is exactly the bar this repo applies to HPRPS, whose single
+#   docs/bibliography.md mention was ruled NOT a publication: a mention is not a definition. So V4
+#   is UNCHECKED, not exempt. An earlier ruling called it "published vocabulary - LEAVE" and, before
+#   that, "a vX.Y version tag" (which it does not even match in shape - no dot, no lowercase v).
+#   Both readings accepted for V4 precisely what was refused for HPRPS.
+#
+#   Closing this needs a ruling, not a pattern: either publish a glossary row for V4 and allow-list
+#   it self-verifyingly as M1-M6 are, or clean all 192 sites. Recorded here rather than left absent,
+#   because the registry header is where an admission belongs - an earlier version of this row put
+#   it only in sprint-status.yaml, which no gate reads.
+#
+#   A backlog row number of 4+ digits. row-ref is anchored at exactly three digits because
+#   widening to [0-9]{1,4} was measured at 14 additional matches of which ALL 14 are false
+#   positives - `row 0`..`row 4` grid indices in the layout tests. Documented rather than bought.
+
+#   ---- Recorded by the acceptance-criterion row (measured, NOT covered) ----
+#
+#   A CODE AT THE END OF AN IDENTIFIER. The embedded-code-identifier pattern requires an
+#   UPPERCASE letter AFTER the digits ((?<=[a-z])[MRBHLSQG][0-9]{1,3}(?=[A-Z])), so a code that
+#   ENDS the identifier is invisible to it: `boolean hasG1 = ...` and `onlyG5(...)` match nothing,
+#   in either that family or gap-code, whose \bG[0-9]{1,2}\b needs a word boundary the preceding
+#   letter denies it. MEASURED at 97 matches in 6 files under the narrowest widening that would
+#   catch them, and the reason it stays uncovered is the false-positive rate: 43 are `elemB1` /
+#   `voB1` / `groupB1` ArchiMate fixture variables in ArchiModelAccessorImplTest, 27 more are the
+#   `B2` siblings, and one is `0xB8` - a HEX COMPONENT of an SWT Color in PendingApprovalsView.
+#   ~97% false positives is coverage that costs more trust than it buys.
+#
+#   TWO OF THE 97 ARE REAL, AND THEY ARE IN THE MAIN PLUGIN: ArchiModelAccessorImpl.java:12311
+#   and :12313, `boolean hasG1` / `!hasG1`. So the sentence "THE MAIN PLUGIN IS AT ZERO" on the
+#   gap-code entry above is true OF THE DETECTOR and not of the tree. It was left alone
+#   deliberately, for SCOPE reasons only: the row that found it was scoped to leave the plugin
+#   tree byte-identical, and it is a local variable rather than a string literal, so it never
+#   reaches the shipped surface. An earlier version of this note ALSO cited size-ratchet.sh's
+#   zero headroom as if the ratchet were at risk. It is not: renaming a local variable is
+#   line-count-neutral, so CEILING_LOC could never have been the constraint. Padding a real
+#   reason with a second reason that does not hold makes the whole justification weaker.
+#
+#   A STORY NUMBER INSIDE AN IDENTIFIER. `shouldPreserveStory4_1Behavior` and
+#   `ac7_3_fixtureA_...`. (Two tokens formerly cited here as live examples, `pre14_2_styling` and
+#   `model-14-11-ac3`, no longer exist anywhere in the tree - both were renamed as collateral of
+#   other edits in the row that recorded them. Citing a dead token as live residue is the same
+#   over-report this file exists to prevent, one level down.) story-code is `Story [0-9]+-[0-9]+` and cannot match a number with no
+#   `Story` prefix and an underscore separator. 24 matches. The two the row happened to open were
+#   rewritten; the family is otherwise unscanned.
+#
+#   `Task-N` WITH NO DOT. task-code is `Task[ -][0-9]+\.[0-9]+` - it REQUIRES the sub-number, so
+#   `Task 0`, `Task 2`, `Task-9` match nothing. 74 matches, and 18 of them are in the MAIN PLUGIN
+#   (ArchiModelAccessorImpl:466, :8077, :13055; SpacingControlLoop:58; StylingHelper:196, :345,
+#   :578, :884; AlternativeCorridorSelector:24; CorridorSpreadEnforcer:17; PendingProposalView:7;
+#   McpPreferencePage:502; ApplyElementSpacingRecommendationsResultDto:130, :135;
+#   ApplyGroupSpacingRecommendationsResultDto:131, :133; ApplySpacingRecommendationsResultDto:200,
+#   :203), all comments. THIS COUNT SAID 8 UNTIL AN ADVERSARIAL REVIEW RE-DERIVED IT: the 8 was
+#   read off a debug print that sliced the first 8 rows, and 'first 8 shown' was written up as
+#   '8 in the main plugin'. A head-truncated list is not a count. The task-code entry's "THE MAIN PLUGIN IS AT ZERO for this family"
+#   is therefore a statement about the DOTTED form only. Same defect shape as `Session [0-9]+`
+#   against `Session-9` and `\bB[0-9]{2,3}\b` against `B69B`: the separator, not the alphabet.
+#
+#   THE LETTER `A` IN embedded-code-identifier. Exactly 1 match, 0 false positives:
+#   `densityAware_regimeAbsent_decisionA13ContractPreserved` in
+#   SpacingControlLoopPartialCommitRegressionTest. Real, and cheap - but adding a letter to that
+#   class is a coverage decision, and buying one site without a ruling is how a letter class ends
+#   up carrying `+P` and firing on the published parallelConnectionGap_V_p10 metric component.
+#   Left UNCHECKED and named rather than silently widened.
+
+#   ---- Added by the adversarial review of the acceptance-criterion row ----
+#
+#   THE LOWER-ONLY RATCHET IS ENFORCED BY REVIEW, NOT BY THIS TEST. Both pawls - the per-family
+#   ceilings in this file and FAMILY_ENTRY_CEILING in the test - are compared only against the
+#   CURRENT file content. Nothing reads git history or a stored baseline, so a commit that adds N
+#   matches AND raises that family's number by N passes green, as does one that adds an entry and
+#   bumps the entry ceiling. The "15 -> 12 -> 9, never raised" arithmetic is a convention the tests
+#   cannot see. tools/size-ratchet.sh has the same property for CEILING_LOC. Recorded rather than
+#   fixed because closing it means committing a baseline artefact and a comparison step, which is a
+#   design change rather than a cleanup - but it should be recorded, because "the pawl cannot be
+#   loosened" is exactly the sentence a reader would otherwise take on trust.
+#
+#   TEST FIXTURE DATA IS UNSCANNED. net.vheerden.archi.mcp.tests/testdata/** is a sibling of src/
+#   and holds 18 non-.java files; readSource filters to *.java, so none is read. MEASURED: 4 real
+#   matches - hh-source-clone-fixture.json:6 and st-source-clone-fixture.json:6 each carry
+#   "(H5 story Task 14.2)". Test-tree only, never shipped, so this is comment-analogous. Note for
+#   whoever widens it: the same files contain "id-ac3af9994938480a94fe757bba5c292e", a hex id that
+#   an ac-identifier pattern must not fire on - the current lowercase alternative is written
+#   `ac[0-9]+[a-z]?(?![0-9a-z])` precisely so it does not.
+#
+#   ROOT-LEVEL PUBLISHED DOCS ARE UNSCANNED. README.md, CHANGELOG.md, BUILDING.md, MAINTAINING.md,
+#   SECURITY.md are outside PUBLISHED_SURFACE_ROOTS (.github, tools). The rationale for that list
+#   names the CI workflow and the build harness as "a contributor's first two clicks AFTER the
+#   README" - and then does not scan the README. MEASURED: 3 raw matches, all CHANGELOG.md:36
+#   ("[F1, F3, F2]", a fixture-ordering example in undo-batch prose), 0 true positives today. So
+#   this is a live hole with nothing currently in it, which is the cheapest possible moment to
+#   record it and the worst possible moment to mistake for coverage.
+#
+#   shouldHoldTheMainPluginAtZero KEYS OFF A FREE-TEXT SUBSTRING. An entry opts into the stronger
+#   plugin-only-zero check purely by whether its reason contains the exact, case-sensitive string
+#   "MAIN PLUGIN IS AT ZERO". All 9 entries phrase it that way today, so nothing is broken - but a
+#   paraphrase, or a change of case, silently drops that family out of the stronger check with NO
+#   test failure. The guard has no guard.
+#
+#   LOWERCASE/UPPERCASE ASYMMETRY IN embedded-code-identifier. The uppercase class is [MRBHLSQG];
+#   the lowercase alternative is [mrbhg], missing l, s and q with no stated reason. MEASURED: 1
+#   additional match if widened (a date-fixture fragment, not a code), so the yield today is zero.
+#   Recorded because an unexplained asymmetry is how the G blind spot survived in the first place.
+#
+#   UPPERCASE TRAILING SUFFIX LETTERS. sprint-code (\bS[0-9]{1,2}[a-z]?\b), letter-story-code
+#   (\bC[3-5][a-c]?\b) and fix-round-code (\b(?:Fix|PATCH)-[0-9]+[a-z]?\b) each allow only a
+#   LOWERCASE suffix letter, so `S6A`, `C3A` and `Fix-2A` are unmatchable. MEASURED: 0 matches for
+#   all three today - a dormant gap, named so it is not rediscovered as a surprise.
+
+#   ---- Recorded by the release-documentation pass ----
+#
+#   A STORY NAMED RATHER THAN NUMBERED. story-code is `Story [0-9]+-[0-9]+` and letter-story-code is
+#   `\bC[3-5][a-c]?\b`, so THREE further spellings of the same word are unmatchable by either:
+#   a dotted initiative-qualified name (`Story RoutingPreconditions.AutoRouteStructuredWarning`,
+#   `Story RoutingPreconditions.InterGroup.DensityAwareDefault`), a bare single letter outside C3-C5
+#   (`Story B, v1.6`), and an initiative name standing alone. MEASURED at 5 matches when this note
+#   was written — THREE OF THEM IN THE MAIN PLUGIN (StructuredWarningCodes, OverlapResolver,
+#   RemoveFromViewCommand), which is exactly the surface every entry above certifies as zero. All 5
+#   were cleaned in the same pass, so the shape is at zero across both trees, the shipped resource
+#   bundle and the published non-source surface — but it stays recorded HERE rather than removed,
+#   because nothing scans for it and zero-by-inspection is not zero-by-gate. The gap is the SHAPE,
+#   not the count: the detector's silence about `Story B` is the same defect as its silence about
+#   `Session-9` and `Task 2` — the separator and the alphabet, not the keyword.
+#
+#   A MILESTONE KEY IN THE PUBLISHED NON-SOURCE SURFACE. `m0-2-github-actions-ci` stood in
+#   tools/README.md as the name of the CI that would one day call the harness. No family matches
+#   `m[0-9]+-[0-9]+-<slug>`, and tools/** is one of the four surfaces gated at ZERO with no
+#   deferral available — so the one file that documents the pawl was itself carrying an
+#   unresolvable code past it. 1 match, now 0: the sentence names `.github/workflows/ci.yml`, which
+#   is both resolvable and true, the workflow having since been written. Same lesson as the
+#   letter-series note above — the census can only report the shapes its patterns already know.

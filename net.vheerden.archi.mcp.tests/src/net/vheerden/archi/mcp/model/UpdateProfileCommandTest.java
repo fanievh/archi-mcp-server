@@ -76,7 +76,7 @@ public class UpdateProfileCommandTest {
     // ---- G16 AXIS B — imagePath snapshot/apply/undo/idempotence ----
 
     @Test
-    public void shouldSetImagePath_whenExecuted_AC4() {
+    public void shouldSetImagePath_whenExecuted() {
         UpdateProfileCommand cmd = new UpdateProfileCommand(profile, null,
                 UpdateProfileCommand.ImagePathChange.setTo("images/cloud.png"));
 
@@ -89,7 +89,7 @@ public class UpdateProfileCommandTest {
     }
 
     @Test
-    public void shouldRestoreOldImagePath_whenUndone_AC6() {
+    public void shouldRestoreOldImagePath_whenUndone() {
         profile.setImagePath("images/old.png");
         UpdateProfileCommand cmd = new UpdateProfileCommand(profile, null,
                 UpdateProfileCommand.ImagePathChange.setTo("images/new.png"));
@@ -103,7 +103,7 @@ public class UpdateProfileCommandTest {
     }
 
     @Test
-    public void shouldClearImagePath_whenClearKindSupplied_AC4() {
+    public void shouldClearImagePath_whenClearKindSupplied() {
         profile.setImagePath("images/will-be-cleared.png");
         UpdateProfileCommand cmd = new UpdateProfileCommand(profile, null,
                 UpdateProfileCommand.ImagePathChange.clear());
@@ -119,7 +119,7 @@ public class UpdateProfileCommandTest {
     }
 
     @Test
-    public void shouldBeIdempotentOnSameValueImagePathSet_AC6() {
+    public void shouldBeIdempotentOnSameValueImagePathSet() {
         // Task 0.4 EMF probe pin: IProfile.setImagePath is non-idempotent
         // (raw putfield + eNotify on same-value sets). UpdateProfileCommand
         // MUST guard with Objects.equals before invoking the setter.
@@ -140,7 +140,7 @@ public class UpdateProfileCommandTest {
     }
 
     @Test
-    public void shouldCombineRenameAndImagePathChange_AC4() {
+    public void shouldCombineRenameAndImagePathChange() {
         UpdateProfileCommand cmd = new UpdateProfileCommand(profile, "Renamed",
                 UpdateProfileCommand.ImagePathChange.setTo("images/combined.png"));
 
@@ -155,7 +155,7 @@ public class UpdateProfileCommandTest {
     }
 
     @Test
-    public void shouldPreserveLegacy2ArgCtor_AC4() {
+    public void shouldPreserveLegacy2ArgCtor() {
         // The 2-arg ctor is kept as a back-compat delegating ctor that
         // calls the 3-arg ctor with ImagePathChange.unchanged().
         UpdateProfileCommand cmd = new UpdateProfileCommand(profile, "BackCompat");

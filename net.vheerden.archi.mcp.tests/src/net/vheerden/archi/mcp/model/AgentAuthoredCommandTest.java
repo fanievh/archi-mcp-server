@@ -12,8 +12,8 @@ import org.junit.Test;
 
 /**
  * Headless tests for the {@link AgentAuthoredCommand} origin tag /
- * {@link AgentAuthoredCompoundCommand} wrapper (D3) and the scoped-undo/redo "betrayal" guard core
- * ({@link MutationDispatcher#scopedUndo}/{@link MutationDispatcher#scopedRedo}, D4).
+ * {@link AgentAuthoredCompoundCommand} wrapper (origin tagging) and the scoped-undo/redo "betrayal" guard core
+ * ({@link MutationDispatcher#scopedUndo}/{@link MutationDispatcher#scopedRedo}).
  *
  * <p>All cases run against a <strong>real</strong> {@link CommandStack}, which is instantiable with
  * no {@code Display} — only {@code MutationDispatcher.dispatchOnUiThread} needs one, which is why the

@@ -1,9 +1,11 @@
 package net.vheerden.archi.mcp.model;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -14,6 +16,14 @@ import java.util.Map;
 import org.eclipse.gef.commands.Command;
 import org.junit.Before;
 import org.junit.Test;
+
+import com.archimatetool.model.FolderType;
+import com.archimatetool.model.IArchimateDiagramModel;
+import com.archimatetool.model.IArchimateFactory;
+import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IBusinessActor;
+import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelNote;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.response.dto.BatchStatusDto;
@@ -483,7 +493,7 @@ public class MutationDispatcherTest {
                 dispatched.add(c);
             }
         };
-        StalenessCapture cap = d.captureStaleness(java.util.Set.of(actor.getId()));
+        StalenessCapture cap = d.captureStaleness("s-1", java.util.Set.of(actor.getId()));
         PendingProposal p = new PendingProposal(null, "delete-element", "Delete actor",
                 () -> new PreparedMutation<>(new StubCommand("del"), "e", actor.getId()),
                 cap, "e", null, Map.of(), "v", Instant.now(), null, null);
@@ -522,7 +532,7 @@ public class MutationDispatcherTest {
                 dispatched.add(c);
             }
         };
-        StalenessCapture cap = d.captureStaleness(java.util.Set.of(actor.getId()));
+        StalenessCapture cap = d.captureStaleness("s-1", java.util.Set.of(actor.getId()));
         Command rebuilt = new StubCommand("update");
         PendingProposal p = new PendingProposal(null, "update-element", "Update actor",
                 () -> new PreparedMutation<>(rebuilt, "freshEntity", actor.getId()),
@@ -810,7 +820,366 @@ public class MutationDispatcherTest {
         assertTrue(dispatcher.listAllPending().isEmpty());
     }
 
+    // ---- silent measurement window ----
+    // Guards the content-change version bump during a known net-zero
+    // measurement (the route-normalized baseline probe): a call that applies
+    // nothing must not advance the model-changed signal.
+
+    @Test
+    public void shouldNotBeSilent_byDefault() {
+        assertFalse(dispatcher.isSilentMeasurementActive());
+    }
+
+    @Test
+    public void shouldBeSilent_whileWindowOpen() {
+        dispatcher.beginSilentMeasurement();
+        assertTrue(dispatcher.isSilentMeasurementActive());
+        dispatcher.endSilentMeasurement();
+        assertFalse(dispatcher.isSilentMeasurementActive());
+    }
+
+    @Test
+    public void shouldStaySilentUntilOutermostClose_whenWindowsNest() {
+        // Re-entrant: the composer runs the probe once per arm, so nested/
+        // repeated windows must not close early.
+        dispatcher.beginSilentMeasurement();
+        dispatcher.beginSilentMeasurement();
+        dispatcher.endSilentMeasurement();
+        assertTrue("inner close must not end the window",
+                dispatcher.isSilentMeasurementActive());
+        dispatcher.endSilentMeasurement();
+        assertFalse("outermost close ends the window",
+                dispatcher.isSilentMeasurementActive());
+    }
+
+    @Test
+    public void shouldNotUnderflow_whenEndCalledWithoutBegin() {
+        dispatcher.endSilentMeasurement();
+        assertFalse(dispatcher.isSilentMeasurementActive());
+        // A subsequent well-formed window still works (depth clamped at 0).
+        dispatcher.beginSilentMeasurement();
+        assertTrue(dispatcher.isSilentMeasurementActive());
+        dispatcher.endSilentMeasurement();
+        assertFalse(dispatcher.isSilentMeasurementActive());
+    }
+
+    @Test
+    public void shouldBeThreadScoped_soAnotherThreadNeverSeesAnOpenWindow()
+            throws InterruptedException {
+        // A window opened on this thread must NOT suppress a real mutation's
+        // version bump performed concurrently on a different thread.
+        dispatcher.beginSilentMeasurement();
+        try {
+            final boolean[] otherThreadSawActive = { true };
+            Thread other = new Thread(() ->
+                    otherThreadSawActive[0] = dispatcher.isSilentMeasurementActive());
+            other.start();
+            other.join();
+            assertFalse("window must be invisible to other threads",
+                    otherThreadSawActive[0]);
+            assertTrue("window still open on the opening thread",
+                    dispatcher.isSilentMeasurementActive());
+        } finally {
+            dispatcher.endSilentMeasurement();
+        }
+    }
+
     // ---- Test helpers ----
+
+    // ---- queuedParentContainer: the batch-mode gate over the queue lookup ----
+
+    /** The guard is mechanical: no batch open on this session means no queued container, ever. */
+    @Test
+    public void shouldReturnNullQueuedParent_whenSessionIsNotInBatchMode() {
+        assertEquals("pre-condition", OperationalMode.GUI_ATTACHED, dispatcher.getMode("session-1"));
+
+        assertNull("no context at all", dispatcher.queuedParentContainer("session-1", "grp-1"));
+        assertNull("null id", dispatcher.queuedParentContainer("session-1", null));
+    }
+
+    /** Inside a batch, a queued group resolves; an id that names nothing queued still returns null. */
+    @Test
+    public void shouldResolveQueuedParent_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddGroupToViewCommand(group, view), "add group");
+
+        assertEquals("the queued group resolves inside the batch",
+                group, dispatcher.queuedParentContainer("session-1", "grp-1"));
+        assertNull("an unknown id resolves to nothing",
+                dispatcher.queuedParentContainer("session-1", "grp-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedParentContainer("session-2", "grp-1"));
+    }
+
+    /** Rollback clears the queue, so the group stops being addressable. */
+    @Test
+    public void shouldStopResolvingQueuedParent_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddGroupToViewCommand(group, view), "add group");
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back group must not stay addressable",
+                dispatcher.queuedParentContainer("session-1", "grp-1"));
+    }
+
+    // ---- queuedViewObject: the same gate over the update-target lookup ----
+
+    /** Same mechanical guard: no batch open on this session means no queued target, ever. */
+    @Test
+    public void shouldReturnNullQueuedViewObject_whenSessionIsNotInBatchMode() {
+        assertEquals("pre-condition", OperationalMode.GUI_ATTACHED, dispatcher.getMode("session-1"));
+
+        assertNull("no context at all", dispatcher.queuedViewObject("session-1", "note-1"));
+        assertNull("null id", dispatcher.queuedViewObject("session-1", null));
+    }
+
+    /**
+     * Inside a batch a queued object resolves along with its destined parent, and the widening is
+     * asymmetric on purpose: a note is an update target but never a nesting parent.
+     */
+    @Test
+    public void shouldResolveQueuedViewObject_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelNote note = f.createDiagramModelNote();
+        note.setId("note-1");
+        note.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddNoteToViewCommand(note, view), "add note");
+
+        assertEquals("the queued note resolves as an update target",
+                note, dispatcher.queuedViewObject("session-1", "note-1").object());
+        assertEquals("its destined parent comes back with it",
+                view, dispatcher.queuedViewObject("session-1", "note-1").parent());
+        assertNull("but it is never a nesting parent",
+                dispatcher.queuedParentContainer("session-1", "note-1"));
+        assertNull("an unknown id resolves to nothing",
+                dispatcher.queuedViewObject("session-1", "note-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedViewObject("session-2", "note-1"));
+    }
+
+    /** Rollback clears the queue, so the object stops being addressable as a target too. */
+    @Test
+    public void shouldStopResolvingQueuedViewObject_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelNote note = f.createDiagramModelNote();
+        note.setId("note-1");
+        note.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddNoteToViewCommand(note, view), "add note");
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back object must not stay addressable",
+                dispatcher.queuedViewObject("session-1", "note-1"));
+    }
+
+    // ---- queuedParents: the same gate over the whole-queue containment ----
+
+    /** Same mechanical guard: outside a batch there is no queue, so there is no containment. */
+    @Test
+    public void shouldReturnNullQueuedParents_whenSessionIsNotInBatchMode() {
+        assertEquals("pre-condition", OperationalMode.GUI_ATTACHED, dispatcher.getMode("session-1"));
+
+        assertNull("no context at all", dispatcher.queuedParents("session-1"));
+    }
+
+    /**
+     * Inside a batch the whole queue's containment resolves at once, and stays confined to the
+     * session that queued it.
+     */
+    @Test
+    public void shouldResolveQueuedParents_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddGroupToViewCommand(group, view), "add group");
+
+        assertEquals("the queued group's destined parent resolves",
+                view, dispatcher.queuedParents("session-1").get("grp-1"));
+        assertNull("an unknown id maps to nothing",
+                dispatcher.queuedParents("session-1").get("grp-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedParents("session-2"));
+    }
+
+    /** Rollback clears the queue, so the derived containment goes with it. */
+    @Test
+    public void shouldStopResolvingQueuedParents_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1", new AddGroupToViewCommand(group, view), "add group");
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back batch derives no containment",
+                dispatcher.queuedParents("session-1"));
+    }
+
+    // ---- queuedBounds: the same gate over the whole-queue geometry ----
+
+    /** Same mechanical guard: outside a batch there is no queue, so there is no geometry. */
+    @Test
+    public void shouldReturnNullQueuedBounds_whenSessionIsNotInBatchMode() {
+        assertEquals("pre-condition", OperationalMode.GUI_ATTACHED, dispatcher.getMode("session-1"));
+
+        assertNull("no context at all", dispatcher.queuedBounds("session-1"));
+    }
+
+    /**
+     * Inside a batch the whole queue's geometry resolves at once, and stays confined to the session
+     * that queued it.
+     */
+    @Test
+    public void shouldResolveQueuedBounds_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new UpdateViewObjectCommand(group, 5, 5, 800, 800), "resize group");
+
+        assertArrayEquals("the queued write resolves",
+                new int[] { 5, 5, 800, 800 }, dispatcher.queuedBounds("session-1").get("grp-1"));
+        assertNull("an unknown id maps to nothing",
+                dispatcher.queuedBounds("session-1").get("grp-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedBounds("session-2"));
+    }
+
+    /**
+     * The view a queued {@code create-view} will make resolves for the session that queued it, and
+     * for no other — the same session isolation its sibling lookups keep.
+     */
+    @Test
+    public void shouldResolveQueuedCreatedView_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateModel m = f.createArchimateModel();
+        m.setDefaults();
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        view.setId("view-created-1");
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new CreateViewCommand(view, m.getFolder(FolderType.DIAGRAMS)), "create view");
+
+        assertSame("the queued view resolves",
+                view, dispatcher.queuedCreatedView("session-1", "view-created-1"));
+        assertNull("an unknown id resolves to nothing",
+                dispatcher.queuedCreatedView("session-1", "view-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedCreatedView("session-2", "view-created-1"));
+    }
+
+    /** Rollback clears the queue, so a created view stops being addressable with it. */
+    @Test
+    public void shouldStopResolvingQueuedCreatedView_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateModel m = f.createArchimateModel();
+        m.setDefaults();
+        IArchimateDiagramModel view = f.createArchimateDiagramModel();
+        view.setId("view-created-2");
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new CreateViewCommand(view, m.getFolder(FolderType.DIAGRAMS)), "create view");
+        assertNotNull("pre-condition: resolvable while queued",
+                dispatcher.queuedCreatedView("session-1", "view-created-2"));
+
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back create leaves nothing addressable",
+                dispatcher.queuedCreatedView("session-1", "view-created-2"));
+    }
+
+    /**
+     * The element a queued {@code create-element} will make resolves for the session that queued it,
+     * and for no other.
+     */
+    @Test
+    public void shouldResolveQueuedCreatedElement_whenSessionIsInBatchMode() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateModel m = f.createArchimateModel();
+        m.setDefaults();
+        IBusinessActor actor = f.createBusinessActor();
+        actor.setId("actor-created-1");
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new CreateElementCommand(actor, m.getFolder(FolderType.BUSINESS)),
+                "create element");
+
+        assertSame("the queued element resolves",
+                actor, dispatcher.queuedCreatedElement("session-1", "actor-created-1"));
+        assertNull("an unknown id resolves to nothing",
+                dispatcher.queuedCreatedElement("session-1", "actor-nope"));
+        assertNull("another session sees nothing of this batch",
+                dispatcher.queuedCreatedElement("session-2", "actor-created-1"));
+    }
+
+    /** Rollback clears the queue, so a created element stops being addressable with it. */
+    @Test
+    public void shouldStopResolvingQueuedCreatedElement_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IArchimateModel m = f.createArchimateModel();
+        m.setDefaults();
+        IBusinessActor actor = f.createBusinessActor();
+        actor.setId("actor-created-2");
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new CreateElementCommand(actor, m.getFolder(FolderType.BUSINESS)),
+                "create element");
+        assertNotNull("pre-condition: resolvable while queued",
+                dispatcher.queuedCreatedElement("session-1", "actor-created-2"));
+
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back create leaves nothing addressable",
+                dispatcher.queuedCreatedElement("session-1", "actor-created-2"));
+    }
+
+    /** Rollback clears the queue, so the derived geometry goes with it. */
+    @Test
+    public void shouldStopResolvingQueuedBounds_whenBatchIsRolledBack() throws Exception {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IDiagramModelGroup group = f.createDiagramModelGroup();
+        group.setId("grp-1");
+        group.setBounds(0, 0, 100, 100);
+
+        dispatcher.beginBatch("session-1", "batch");
+        dispatcher.queueForBatch("session-1",
+                new UpdateViewObjectCommand(group, 5, 5, 800, 800), "resize group");
+        dispatcher.endBatch("session-1", false);
+
+        assertNull("a rolled-back batch derives no geometry",
+                dispatcher.queuedBounds("session-1"));
+    }
 
     /**
      * Test subclass that overrides dispatchCommand to avoid Display.syncExec + CommandStack.
@@ -828,6 +1197,46 @@ public class MutationDispatcherTest {
         protected void dispatchCommand(Command command) throws MutationException {
             dispatchedCommands.add(command);
         }
+    }
+
+    // ---- armFor tests ----
+
+    @Test
+    public void armFor_shouldReportApplied_whenNeitherApprovalNorBatchIsActive() {
+        dispatcher.setApprovalModeProvider(() -> false);
+
+        assertEquals(DispatchArm.APPLIED, dispatcher.armFor("session-arm"));
+    }
+
+    @Test
+    public void armFor_shouldReportQueued_whenABatchIsOpenAndApprovalIsOff() {
+        dispatcher.setApprovalModeProvider(() -> false);
+        dispatcher.beginBatch("session-arm", "Arm batch");
+
+        assertEquals(DispatchArm.QUEUED, dispatcher.armFor("session-arm"));
+    }
+
+    @Test
+    public void armFor_shouldReportAwaitingApproval_whenApprovalIsOnAndNoBatchIsOpen() {
+        dispatcher.setApprovalModeProvider(() -> true);
+
+        assertEquals(DispatchArm.AWAITING_APPROVAL, dispatcher.armFor("session-arm"));
+    }
+
+    @Test
+    public void armFor_shouldReportAwaitingApproval_whenApprovalIsOnInsideAnOpenBatch() {
+        // The ordering claim, and the one a naive implementation gets wrong. Both conditions hold
+        // here, so the answer depends entirely on which is read first -- and the accessor settles
+        // it: every tool tests isApprovalRequired and returns a proposal BEFORE it reaches
+        // dispatchOrQueue, so nothing is queued on this path. Answering QUEUED would hand the call
+        // a disclosure describing a batch entry that was never made, and tell the caller to run
+        // end-batch to commit something the batch does not hold.
+        dispatcher.setApprovalModeProvider(() -> true);
+        dispatcher.beginBatch("session-arm", "Arm batch");
+
+        assertEquals(OperationalMode.BATCH, dispatcher.getMode("session-arm"));
+        assertEquals("approval wins over an open batch, exactly as the accessor's gates order it",
+                DispatchArm.AWAITING_APPROVAL, dispatcher.armFor("session-arm"));
     }
 
     /**

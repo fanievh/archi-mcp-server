@@ -113,10 +113,14 @@ public record ArrangeGroupsDefaultResolutionDecision(
      *                                   (sourced from
      *                                   {@code AssessLayoutResultDto.connectionCount()})
      * @param interGroupConnectionCount  count of connections that cross a
-     *                                   top-level group boundary; informs
-     *                                   the trigger value + reason wording
+     *                                   top-level container boundary — a
+     *                                   native view group and an ArchiMate
+     *                                   {@code Grouping} element alike;
+     *                                   informs the trigger value + reason
+     *                                   wording
      * @param isConnected                true when at least one connection
-     *                                   crosses a top-level group boundary
+     *                                   crosses a top-level container
+     *                                   boundary
      *                                   (Model B trigger; selects the
      *                                   connected column on the heuristic
      *                                   table)
@@ -173,8 +177,11 @@ public record ArrangeGroupsDefaultResolutionDecision(
         if (!isConnected) {
             return new ArrangeGroupsDefaultResolutionDecision(
                     false, DEFAULT_ARRANGE_GROUPS_SPACING,
-                    "spacing omitted; view has no inter-group connections; "
-                    + "density-aware default not applicable",
+                    "spacing omitted; no connection crosses between the arranged containers — a "
+                    + "connection counts when it joins objects inside two different containers, "
+                    + "and one drawn directly between two container boxes is not counted at all "
+                    + "because a container is not inside itself; density-aware default not "
+                    + "applicable",
                     TriggerCondition.NONE, 0);
         }
 

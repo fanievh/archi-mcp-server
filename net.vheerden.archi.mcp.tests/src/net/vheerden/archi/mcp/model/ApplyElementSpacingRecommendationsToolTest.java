@@ -244,7 +244,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
     //         review action item [MEDIUM] 2026-05-04) WITHOUT requiring an
     //         OSGi context.
     //         The production accessor method calls
-    //         ApplyElementSpacingDecision.decide(...) once and dispatches on
+    //         ApplyElementSpacingDecision.decide(..., null) once and dispatches on
     //         shouldCallAdjustViewSpacing(); this test pins that contract. ----
 
     @Test
@@ -254,7 +254,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ false,
                 /*hasGroupWithMultipleChildren=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interElementDelta());
         assertTrue("no-groups branch must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -274,7 +274,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 60, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interElementDelta());
         assertTrue("no-2+-children branch must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -292,7 +292,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 60, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interElementDelta());
         assertTrue("zero-connections branch must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -309,7 +309,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interElementDelta());
         assertTrue("delta=0 (equal target) must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -328,7 +328,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 60, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(0, d.interElementDelta());
         assertTrue("negative-delta clamped to 0 must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -346,7 +346,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ true);
+                /*hasTargetSpacingOverride=*/ true, null);
         assertEquals(0, d.interElementDelta());
         assertTrue(!d.shouldCallAdjustViewSpacing());
         assertNotNull(d.noChangeReason());
@@ -366,7 +366,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ true,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(40, d.interElementDelta());
         assertTrue("dryRun=true must NOT call adjustViewSpacing",
                 !d.shouldCallAdjustViewSpacing());
@@ -383,7 +383,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 80, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ true,
                 /*hasGroupWithMultipleChildren=*/ true,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertEquals(40, d.interElementDelta());
         assertTrue("happy path must call adjustViewSpacing",
                 d.shouldCallAdjustViewSpacing());
@@ -400,7 +400,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
                 /*targetSpacingPx=*/ 60, /*dryRun=*/ false,
                 /*hasNonEmptyGroups=*/ false,
                 /*hasGroupWithMultipleChildren=*/ false,
-                /*hasTargetSpacingOverride=*/ false);
+                /*hasTargetSpacingOverride=*/ false, null);
         assertTrue(d.noChangeReason().contains("no groups"));
         assertTrue("no-groups branch must NOT mention connections",
                 !d.noChangeReason().contains("no connections"));
@@ -421,7 +421,7 @@ public class ApplyElementSpacingRecommendationsToolTest {
     @Test
     public void hubAware_tier2_returns100_whenHasLargeHubsTrue() {
         // N=20 + has hubs → hub-aware tier 2 = 100px (vs no-hubs 80px;
-        // matches the H1 textbook F4 case from 2026-05-06 paired empirical).
+        // matches the H1 textbook case from 2026-05-06 paired empirical).
         assertEquals(100,
                 ElementSpacingHeuristic.targetSpacingForConnectionCount(20, true));
     }

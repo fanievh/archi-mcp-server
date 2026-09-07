@@ -161,8 +161,95 @@ public class RoutingClassificationPrecedenceTest {
 
         assertEquals("Precedence guard must fire in rating-only path — zigzag count should be 0",
                 0, zigzagResult.count());
-        assertTrue("zigzag violatorIds is empty when collectViolatorIds=false",
+        // Empty because the passthrough guard skipped the connection before any zigzag was found —
+        // NOT because the flag suppressed collection. countZigzags now collects its violator IDs
+        // unconditionally, for the same reason detectPassThroughs already did: it is itself a
+        // precedence skip-set (for countLateralJogReversals), and a skip-set that empties when the
+        // caller declines violator IDs would silently let one connection be counted under two
+        // reversal dimensions on the rating-only path.
+        assertTrue("no zigzag was found here, so nothing was collected",
                 zigzagResult.violatorIds().isEmpty());
+    }
+
+    /**
+     * {@code countZigzags} must publish its violators whether or not the caller wants them, because
+     * {@code countLateralJogReversals} consumes that set as a precedence skip-set. A connection
+     * carrying a real zigzag proves the collection is unconditional; the test above only shows the
+     * set is empty when nothing was found.
+     */
+    @Test
+    public void zigzagViolatorIds_collectedEvenWhenNotRequested() {
+        List<AssessmentNode> nodes = List.of(
+                node("source", 0, 100, 50, 100),
+                node("target", 400, 100, 50, 100));
+        // A plain shared-X reversal, with no obstacle to make it a passthrough.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "source", "target",
+                        List.of(new double[]{100, 100}, new double[]{100, 200},
+                                new double[]{100, 150}, new double[]{425, 150}), "", 3));
+
+        LayoutQualityAssessor.ZigzagResult zigzagResult =
+                assessor.countZigzags(connections, Set.of(), false);
+
+        assertEquals(1, zigzagResult.count());
+        assertTrue("the skip-set must be populated for the downstream precedence guard",
+                zigzagResult.violatorIds().contains("c1"));
+    }
+
+    /**
+     * A connection classified as a pass-through is not counted as a lateral-jog reversal either.
+     * The pass-through label is the visually correct one, exactly as it is for zigzags.
+     */
+    @Test
+    public void lateralJogReversal_yieldsToPassthrough() {
+        List<AssessmentNode> nodes = List.of(
+                node("source", 0, 100, 50, 100),
+                node("obstacle", 200, 100, 100, 100),
+                node("target", 400, 100, 50, 100));
+        // A lateral-jog reversal whose long arm drives straight through the obstacle.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "source", "target",
+                        List.of(new double[]{25, 150}, new double[]{250, 150},
+                                new double[]{250, 156}, new double[]{100, 156},
+                                new double[]{425, 150}), "", 3));
+
+        LayoutQualityAssessor.PassThroughResult passThrough =
+                assessor.detectPassThroughs(connections, nodes, true);
+        assertTrue("fixture must actually be a passthrough",
+                passThrough.violatorIds().contains("c1"));
+
+        LayoutQualityAssessor.LateralJogReversalResult withGuard =
+                assessor.countLateralJogReversals(connections, passThrough.violatorIds(), Set.of(), true);
+        assertEquals("passthrough takes precedence", 0, withGuard.count());
+
+        LayoutQualityAssessor.LateralJogReversalResult withoutGuard =
+                assessor.countLateralJogReversals(connections, Set.of(), Set.of(), true);
+        assertEquals("and the shape really is there — the guard is what suppressed it",
+                1, withoutGuard.count());
+    }
+
+    /** A connection already counted as a zigzag is not counted as a lateral-jog reversal too. */
+    @Test
+    public void lateralJogReversal_yieldsToZigzag() {
+        // Both shapes on one path: a shared-X reversal, then a narrow-jog reversal.
+        List<AssessmentConnection> connections = List.of(
+                new AssessmentConnection("c1", "source", "target",
+                        List.of(new double[]{100, 100}, new double[]{100, 200},
+                                new double[]{100, 150}, new double[]{100, 250},
+                                new double[]{107, 250}, new double[]{107, 180}), "", 3));
+
+        LayoutQualityAssessor.ZigzagResult zigzag =
+                assessor.countZigzags(connections, Set.of(), true);
+        assertEquals(1, zigzag.count());
+
+        LayoutQualityAssessor.LateralJogReversalResult withGuard =
+                assessor.countLateralJogReversals(connections, Set.of(), zigzag.violatorIds(), true);
+        assertEquals("zigzag takes precedence", 0, withGuard.count());
+
+        LayoutQualityAssessor.LateralJogReversalResult withoutGuard =
+                assessor.countLateralJogReversals(connections, Set.of(), Set.of(), true);
+        assertEquals("and the shape really is there — the guard is what suppressed it",
+                1, withoutGuard.count());
     }
 
     // ---- Helpers ----

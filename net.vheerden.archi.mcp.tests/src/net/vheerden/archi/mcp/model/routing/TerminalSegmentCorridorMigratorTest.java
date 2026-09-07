@@ -19,8 +19,8 @@ import net.vheerden.archi.mcp.model.routing.TerminalSegmentCorridorMigrator.Snap
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * Unit tests for {@link TerminalSegmentCorridorMigrator} (HPRPS Task 1 —
- * Track A terminal-segment corridor migration).
+ * Unit tests for {@link TerminalSegmentCorridorMigrator} (Axis 3 —
+ * terminal-segment corridor migration).
  *
  * <p>Pure-geometry: no EMF, no SWT, no PDE. Hand-constructed size-3 L-shape
  * scenarios exercise the evaluate / apply / restore primitives and the two
@@ -108,8 +108,7 @@ public class TerminalSegmentCorridorMigratorTest {
         // Terminal anchoring: terminal orthogonal coord (x) still exactly on the RIGHT face line.
         assertEquals("terminal x stays on RIGHT face line 181", 181, paths.get(0).get(0).x());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(Face.RIGHT), H,
-                new int[] {H.centerX(), H.centerY()}, paths.get(0)));
+                new TerminalAnchoring(Face.RIGHT), H, paths.get(0)));
         // Post: M4 == 0 (seg0 no longer hugs E).
         assertEquals(0, HubPerimeterRoutingStage.computeM4Count(paths, obstacles));
     }
@@ -142,8 +141,7 @@ public class TerminalSegmentCorridorMigratorTest {
         // Terminal anchoring: terminal orthogonal coord (y) still on the TOP face line 99.
         assertEquals(99, paths.get(0).get(0).y());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(Face.TOP), s,
-                new int[] {s.centerX(), s.centerY()}, paths.get(0)));
+                new TerminalAnchoring(Face.TOP), s, paths.get(0)));
     }
 
     @Test
@@ -174,8 +172,7 @@ public class TerminalSegmentCorridorMigratorTest {
         var reversed = new ArrayList<>(paths.get(0));
         java.util.Collections.reverse(reversed);
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(Face.LEFT), u,
-                new int[] {u.centerX(), u.centerY()}, reversed));
+                new TerminalAnchoring(Face.LEFT), u, reversed));
     }
 
     // =====================================================================
@@ -243,7 +240,7 @@ public class TerminalSegmentCorridorMigratorTest {
     }
 
     @Test
-    public void noProposal_whenTerminalNotExactlyOnB71FaceLine() {
+    public void noProposal_whenTerminalNotExactlyOnFaceLine() {
         // Terminal at x=180 (on the rect edge, NOT the face line 181) → not our
         // domain (EdgeAttachmentCalculator owns it) → inferAttachedFace null → no proposal.
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");

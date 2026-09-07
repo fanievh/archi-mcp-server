@@ -556,6 +556,13 @@ public class ErrorConsistencyTest {
         assertNotNull("Should have modelVersion in _meta", meta.get("modelVersion"));
     }
 
+    /**
+     * Envelope shape only. The stub accessor below fabricates the exception and hands it the
+     * correction by hand, so the real accessor is never entered and this test cannot observe
+     * whether production supplies a correction of its own or falls back to the generic one.
+     * That question is a different test's job — see the bulk missing-parameter parity pin in
+     * {@code ParamNameNearMissTest}, which drives every supported tool through the live accessor.
+     */
     @SuppressWarnings("unchecked")
     @Test
     public void shouldReturnConsistentBulkValidationFailedError() throws Exception {

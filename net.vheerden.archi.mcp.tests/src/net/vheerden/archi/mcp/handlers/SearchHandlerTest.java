@@ -2153,6 +2153,44 @@ public class SearchHandlerTest {
     }
 
     @SuppressWarnings("unchecked")
+    private int dryRunTokens(String tool, String preset) throws Exception {
+        Map<String, Object> args = new HashMap<>();
+        args.put("query", "");
+        args.put("dryRun", true);
+        args.put("fields", preset);
+        McpSchema.CallToolResult result = findToolSpec(tool).callHandler()
+                .apply(null, new McpSchema.CallToolRequest(tool, args));
+        assertFalse(result.isError());
+        Map<String, Object> dryRun = (Map<String, Object>) parseJson(result).get("dryRun");
+        assertNotNull("dryRun key must be present at " + preset, dryRun);
+        return ((Number) dryRun.get("estimatedTokens")).intValue();
+    }
+
+    @Test
+    public void shouldRaiseDryRunEstimate_whenFieldsIsFull_searchRelationships() throws Exception {
+        new SearchHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // The full preset returns specialization, documentation, properties, sourceName and
+        // targetName on top of the standard row, so a caller budgeting from the dry run must
+        // see a larger number than the same query at standard.
+        int minimal = dryRunTokens("search-relationships", "minimal");
+        int standard = dryRunTokens("search-relationships", "standard");
+        int full = dryRunTokens("search-relationships", "full");
+        assertTrue("minimal (" + minimal + ") must be cheaper than standard (" + standard + ")",
+                minimal < standard);
+        assertTrue("full (" + full + ") must exceed standard (" + standard + ")", standard < full);
+    }
+
+    @Test
+    public void shouldNotVaryDryRunEstimateWithPreset_searchElements() throws Exception {
+        new SearchHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // The element full preset is the standard preset, so an element estimate that moved
+        // between the two would be reporting a difference the payload does not have.
+        assertEquals(dryRunTokens("search-elements", "standard"),
+                dryRunTokens("search-elements", "full"));
+        assertTrue(dryRunTokens("search-elements", "minimal") < dryRunTokens("search-elements", "standard"));
+    }
+
+    @SuppressWarnings("unchecked")
     @Test
     public void shouldPaginateResults_searchRelationships() throws Exception {
         StubAccessor accessor = new StubAccessor(true);

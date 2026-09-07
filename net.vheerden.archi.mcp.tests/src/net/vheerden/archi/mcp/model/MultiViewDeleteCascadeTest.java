@@ -254,6 +254,151 @@ public class MultiViewDeleteCascadeTest {
                 viewA.getChildren().contains(placeholder));
     }
 
+    // ---- folder-force delete: view-folder ORDER restored exactly on undo ----
+
+    /** Adds a fresh archimate view to {@code folder} at the tail and returns it. */
+    private IArchimateDiagramModel subView(IFolder folder, String id) {
+        IArchimateDiagramModel v = factory.createArchimateDiagramModel();
+        v.setId(id);
+        v.setName(id);
+        folder.getElements().add(v);
+        return v;
+    }
+
+    /** Ordered ids of a folder's direct elements (views), for a positional assertion. */
+    private List<String> elementIds(IFolder folder) {
+        List<String> ids = new ArrayList<>();
+        for (Object o : folder.getElements()) {
+            ids.add(((com.archimatetool.model.IIdentifier) o).getId());
+        }
+        return ids;
+    }
+
+    /**
+     * Undo of a folder-force delete restores the folder's child ORDER exactly, not just
+     * membership. The cascade builds one {@link DeleteViewCommand} per view (index captured
+     * at prepare time); {@link DeleteFolderCommand#undo()} reverses that flat sub-command
+     * list, re-inserting each view before its captured surviving successor. A raw absolute
+     * index would overshoot into the collapsed survivors and transpose the middle views
+     * (e.g. [v1,v2,v3] restored as [v1,v3,v2]); the successor anchor keeps the order intact.
+     *
+     * <p>Three views are the minimal reproduction: with two, the list empties before the
+     * second restore so it appends back in order by luck; the transposition only surfaces
+     * once an already-restored later view sits where an earlier one must be re-inserted.
+     * No distinct non-view survivor is used because a diagrams folder's {@code getElements()}
+     * holds only {@link com.archimatetool.model.IDiagramModel} views, every one of which the
+     * cascade removes — the later-restored views themselves play the surviving-anchor role.</p>
+     */
+    @Test
+    public void shouldRestoreFolderViewOrderExactly_whenFolderForceDeletesMultipleViews() {
+        IFolder sub = factory.createFolder();
+        sub.setId("folder-order");
+        sub.setName("Ordered Views");
+        diagrams.getFolders().add(sub);
+
+        subView(sub, "ov1");
+        subView(sub, "ov2");
+        subView(sub, "ov3");
+
+        List<String> before = elementIds(sub);
+        assertEquals("Fixture built in known order", List.of("ov1", "ov2", "ov3"), before);
+
+        Command cmd = accessor.prepareDeleteFolder(sub.getId(), true).command();
+        cmd.execute();
+        assertFalse("Subfolder removed on execute", diagrams.getFolders().contains(sub));
+        assertTrue("All views cascaded out on execute", sub.getElements().isEmpty());
+
+        cmd.undo();
+        assertTrue("Subfolder restored on undo", diagrams.getFolders().contains(sub));
+        assertEquals("Folder view order restored exactly after folder-force undo",
+                before, elementIds(sub));
+
+        // Repeatability: redo removes again and a second undo restores the same order.
+        // (This exercises a clean redo/undo round-trip, NOT the restore's already-present
+        // guard — each view is touched by exactly one command here, so the guard's
+        // contains()==true branch never fires. That branch is pinned separately by
+        // shouldNotThrow_whenFolderForceCascadeOverlapsStandaloneViewDelete.)
+        cmd.redo();
+        assertTrue("All views cascaded out again on redo", sub.getElements().isEmpty());
+        cmd.undo();
+        assertTrue("Subfolder restored again after redo + undo",
+                diagrams.getFolders().contains(sub));
+        assertEquals("Folder view order restored again after redo + undo",
+                before, elementIds(sub));
+    }
+
+    /**
+     * The already-present guard in {@link SiblingUndoAnchor#restore} on the folder-cascade
+     * path. A folder-force delete whose cascade removes view V is composed in ONE compound
+     * with a standalone delete of that SAME view V. On undo, both the folder cascade's inner
+     * {@link DeleteViewCommand} and the standalone one re-insert V into the same folder list;
+     * the second re-insert must be a no-op, not an EMF "no duplicates" throw that aborts the
+     * undo mid-way. This is the "folder-cascade delete overlapping a standalone delete of a
+     * contained view" case named in {@code SiblingUndoAnchor}'s own contract — otherwise
+     * unpinned for the folder path.
+     */
+    @Test
+    public void shouldNotThrow_whenFolderForceCascadeOverlapsStandaloneViewDelete() {
+        IFolder sub = factory.createFolder();
+        sub.setId("folder-overlap");
+        sub.setName("Overlap Folder");
+        diagrams.getFolders().add(sub);
+        IArchimateDiagramModel v = subView(sub, "ovl-v");
+
+        List<String> before = elementIds(sub);
+        assertEquals("Fixture built with the shared view", List.of("ovl-v"), before);
+
+        // Prepare both against the unmutated model (bulk phase-1 semantics), then compose
+        // into one compound so a single undo runs both overlapping restore paths.
+        List<PreparedMutation<DeleteResultDto>> prepared = List.of(
+                accessor.prepareDeleteView(v.getId()),
+                accessor.prepareDeleteFolder(sub.getId(), true));
+        CompoundCommand compound = new CompoundCommand("Overlapping view + folder-force delete");
+        for (PreparedMutation<DeleteResultDto> pm : prepared) {
+            compound.add(pm.command());
+        }
+
+        compound.execute();
+        assertFalse("Folder removed on execute", diagrams.getFolders().contains(sub));
+
+        // Load-bearing: undo must complete without an IllegalArgumentException from a
+        // duplicate re-insert of V, and leave V present exactly once.
+        compound.undo();
+
+        assertTrue("Folder restored on undo", diagrams.getFolders().contains(sub));
+        assertEquals("Shared view restored exactly once, in order", before, elementIds(sub));
+    }
+
+    /**
+     * Same invariant with a longer run (four views) so the reverse-undo walk crosses more
+     * than one already-restored survivor. Guards against an off-by-one in the anchor lookup
+     * that a three-item list might mask.
+     */
+    @Test
+    public void shouldRestoreFolderViewOrderExactly_whenFolderForceDeletesFourViews() {
+        IFolder sub = factory.createFolder();
+        sub.setId("folder-order-4");
+        sub.setName("Four Ordered Views");
+        diagrams.getFolders().add(sub);
+
+        subView(sub, "w1");
+        subView(sub, "w2");
+        subView(sub, "w3");
+        subView(sub, "w4");
+
+        List<String> before = elementIds(sub);
+        assertEquals("Fixture built in known order",
+                List.of("w1", "w2", "w3", "w4"), before);
+
+        Command cmd = accessor.prepareDeleteFolder(sub.getId(), true).command();
+        cmd.execute();
+        assertTrue("All four views cascaded out on execute", sub.getElements().isEmpty());
+
+        cmd.undo();
+        assertEquals("Four-view folder order restored exactly after folder-force undo",
+                before, elementIds(sub));
+    }
+
     // ---- bulk compound delete: atomicity + reversibility across views ----
 
     /**

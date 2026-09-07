@@ -40,6 +40,21 @@ public class FolderMutationHandlerUpdateTest {
     }
 
     @Test
+    public void updateFolder_descriptionShouldDocumentResponseFields() {
+        CommandRegistry reg = new CommandRegistry();
+        FolderMutationHandler h = new FolderMutationHandler(accessor, formatter, reg, null);
+        h.registerTools();
+        String desc = reg.getToolSpecifications().stream()
+                .filter(spec -> "update-folder".equals(spec.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        // Unlike create-folder these counts ARE live (folder.getElements().size()), and
+        // the path is recomputed from the parent only when a rename was requested.
+        assertTrue("must name elementCount", desc.contains("elementCount"));
+        assertTrue("must state the path is recomputed on rename",
+                desc.contains("recomputed on rename"));
+    }
+
+    @Test
     public void shouldRegisterUpdateFolderTool() {
         CommandRegistry registry = new CommandRegistry();
         FolderMutationHandler h = new FolderMutationHandler(

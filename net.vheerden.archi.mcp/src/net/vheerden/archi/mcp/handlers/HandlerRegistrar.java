@@ -64,5 +64,8 @@ public final class HandlerRegistrar {
         new FolderMutationHandler(accessor, formatter, registry, sm).registerTools();
         new SessionHandler(sm, formatter, registry).registerTools();
         new CommandStackHandler(accessor, formatter, registry).registerTools();
+        // Guidance lookup is registered here, not from the server bootstrap, so that the
+        // contract tests which enumerate through this method see it like every other tool.
+        new ResourceHandler().registerTools(formatter, registry);
     }
 }

@@ -1,0 +1,98 @@
+# Approval-card disclosure gap registry — the pawl for "a human is never asked to approve a write
+# the card did not describe".
+#
+# WHY THIS FILE EXISTS
+#   When a session runs behind the approval gate, a mutating tool does not write. It stores a
+#   proposal, and a human approves or rejects it. The card that human reads is built from the
+#   proposal's proposedChanges map, and that map is the ONLY description of the write they get:
+#   it travels verbatim onto the wire (ProposalDto.proposedChanges, which any agent can read back
+#   through list-pending-approvals) and verbatim into the card's Technical-details / Copy-JSON
+#   disclosure. A parameter the accessor accepts but never puts into that map is applied on
+#   approval and named nowhere. The approval is real; the disclosure is not.
+#
+#   This had already been fixed once, tool by tool, with no contract to hold it — and the next
+#   omission surfaced thirty days later, by accident, during an unrelated review. Fixing one card
+#   does nothing to stop the next tool being born with the same silence. So the invariant is
+#   enforced by a contract test over EVERY proposal site (ApprovalCardContractTest), and this file
+#   is that test's known-exemption list.
+#
+# THE PAWL (can only tighten, never loosen)
+#   ApprovalCardContractTest requires every proposal site to be classified exactly once:
+#     * COMPLETE       -> the test PARSES the site and asserts the card discloses every parameter
+#                         the enclosing method accepts. Nothing is listed here; the proof is the
+#                         parse itself.
+#     * an exemption   -> listed HERE, with a status and a reason.
+#   A site in neither FAILS THE BUILD, and so does a site classified in both. That is the "a new
+#   proposal site must disclose or register or fail" property: a card that cannot disclose a
+#   parameter must be DELIBERATELY entered here, in a reviewable commit, rather than quietly
+#   shipping the silence.
+#
+#   ENTRY_CEILING in ApprovalCardContractTest is LOWERED (only ever lowered) in the same commit
+#   that removes an entry — the manual, reviewable "click", exactly as tools/size-ratchet.sh does
+#   for CEILING_LOC. NEVER raise it. Every closure is one line deleted here and one ceiling click.
+#
+# KEYED BY ENCLOSING METHOD, NOT BY TOOL NAME
+#   Four proposal sites belong to auto-layout-and-route and two to auto-route-connections, each
+#   building a different card. A tool-name key would collapse them and let one site's exemption
+#   silently cover another's. The enclosing method name is unique across all sites.
+#
+# LOCALE
+#   If you sort this file, pin `LC_ALL=C`. An unpinned `sort` collates differently on macOS (dev)
+#   and the C-locale CI runner; that exact false positive already shipped once against the
+#   signature baseline (see tools/size-ratchet.sh, "locale pin: REQUIRED, not cosmetic").
+#
+# FORMAT
+#   <enclosing-method> <STATUS> <parameter,parameter,...> # <reason>
+#
+#   THE PARAMETER LIST IS LOAD-BEARING, NOT DOCUMENTATION. An entry exempts exactly the parameters
+#   it names and nothing else. If a site stops disclosing some OTHER parameter, that parameter is
+#   not on the line, and the build fails — the entry does not blanket-exempt its site. This matters
+#   because the two parameters most worth protecting here (force on both auto-route sites, wrapFit
+#   on resize-elements-to-fit) live on sites that are themselves registered, so a whole-site
+#   exemption would have left precisely them unguarded in this lane.
+#
+#   A parameter listed here that the site HAS since disclosed is a stale exemption and also fails,
+#   so the list cannot quietly outlive the gap it describes.
+#
+#   STATUS is one of:
+#     FROZEN-COMPOUND   — the card reports an OUTCOME, not the inputs that produced it. The site's
+#                         deferred handle returns the already-built, already-reviewed compound
+#                         instead of re-preparing, so the gate reads "apply exactly this reviewed
+#                         result; it is not recomputed". A human approving a computed layout is
+#                         approving the arrangement, not the spacing that produced it, and the
+#                         effect of every listed input is already visible as the outcome on the
+#                         card. Inputs that change WHAT gets applied rather than how it was
+#                         computed are NOT covered by this status and are disclosed outright —
+#                         force on both auto-route-connections sites and wrapFit on
+#                         resize-elements-to-fit are disclosed for exactly that reason.
+#     COUNT-SUMMARISED  — a bendpoint LIST is disclosed as its count rather than element by
+#                         element. Ruled admissible on an approval card: the card is a summary a
+#                         human reads before approving, and a coordinate-by-coordinate dump of a
+#                         polyline is noise at that moment, not disclosure. This status covers ONLY
+#                         the bendpoint lists named in the reason; every other parameter on these
+#                         two sites is disclosed in full.
+#   Blank lines and #-comments are ignored.
+
+# ---- COUNT-SUMMARISED: a bendpoint list disclosed as its count ------------------------------
+# Both sites disclose bendpointCount and absoluteBendpointCount under their own separate keys, so
+# a caller supplying only absolute bendpoints is never announced as having supplied relative ones.
+addConnectionToView COUNT-SUMMARISED bendpoints,absoluteBendpoints # bendpoints/absoluteBendpoints disclosed as bendpointCount and absoluteBendpointCount
+updateViewConnection COUNT-SUMMARISED bendpoints,absoluteBendpoints # bendpoints/absoluteBendpoints disclosed as bendpointCount and absoluteBendpointCount
+
+# ---- FROZEN-COMPOUND: outcome-shaped cards over an already-reviewed compound -----------------
+# Thirteen sites. The code enumerates this family itself, in ProposalBuilder.REVIEWED_OR_REJECT's
+# javadoc, as fourteen members: these thirteen plus bulk-mutate. bulk-mutate is NOT listed here —
+# its card is input-shaped and discloses every parameter it accepts, continueOnError included.
+applyViewLayout FROZEN-COMPOUND positions,connections # discloses positionsUpdated/connectionsUpdated/totalOperations; the positions and connections lists ARE that outcome
+arrangeGroups FROZEN-COMPOUND columns,spacing,groupIds,direction # discloses the resulting arrangement, group count and layout extent; columns/spacing/groupIds/direction are the inputs that produced them
+autoConnectView FROZEN-COMPOUND elementIds,relationshipTypes,relationshipIds,showLabel,styling # discloses connectionsCreated/connectionsSkipped/skippedDueToNesting; the element and relationship filters are the inputs that produced them
+autoRouteConnections FROZEN-COMPOUND connectionIds,autoNudge,snapThreshold,perimeterMargin,mode,enableChannelNudging,labelPolicy # discloses strategy, force and the routing outcome; the nudge and margin tuning inputs are visible as nudgedElements/resizedGroups
+executeGroupedQualityTargetLoop FROZEN-COMPOUND baseSpacing,model,diagramModel,topLevelGroups,labelPolicy # discloses the achieved rating, spacing and termination reason; the search inputs are visible as that outcome
+executeGroupedSinglePass FROZEN-COMPOUND model,diagramModel,topLevelGroups,labelPolicy # discloses mode, direction, spacing and the reposition/route counts; the model objects are resolved internals, not caller parameters
+executeQualityTargetLoop FROZEN-COMPOUND baseSpacing,model,diagramModel,nodes,edges,labelPolicy # discloses the achieved rating, spacing and termination reason; the search inputs are visible as that outcome
+executeSingleLayoutPass FROZEN-COMPOUND model,diagramModel,nodes,edges # discloses direction, spacing and the reposition/route counts; the model objects are resolved internals, not caller parameters
+layoutFlatView FROZEN-COMPOUND spacing,padding,columns,autoLayoutChildren # discloses arrangement, sortBy, categoryField and the reposition counts; spacing/padding/columns are the inputs that produced them
+layoutWithinGroup FROZEN-COMPOUND spacing,padding,elementWidth,elementHeight,autoResize,autoWidth,columns,recursive,recursiveChildren # discloses arrangement, the reposition counts, the resize outcome and the ancestor-propagation reason; the sizing inputs are visible as that outcome
+optimizeGroupOrder FROZEN-COMPOUND arrangement,spacing,padding,elementWidth,elementHeight,autoWidth,columns,groupArrangements # discloses crossingsBefore/After, reductionPercent and groupsOptimized; the arrangement and sizing inputs are visible as that outcome
+resizeElementsToFit FROZEN-COMPOUND elementIds # discloses wrapFit and the resized/unchanged counts; elementIds is the selection those counts already summarise
+runTerminalsOnly FROZEN-COMPOUND diagramModel,targetConnections,effectiveStrategy,arm,warnings,structuredWarnings # discloses strategy, force, mode and the routed/skipped counts; the connection selection is what those counts summarise

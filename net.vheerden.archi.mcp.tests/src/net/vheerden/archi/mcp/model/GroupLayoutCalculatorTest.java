@@ -829,4 +829,72 @@ public class GroupLayoutCalculatorTest {
 
         assertFalse(GroupLayoutCalculator.validateGroupGaps(rects));
     }
+
+    // ====================================================================
+    // BLOCK: GRID CELL WIDTH — UNIFORM (DEFAULT) VS PER-COLUMN (OPT-IN)
+    // ====================================================================
+    //
+    // computeGridLayout has nine direct callers, so the default may not move: uniform cell width
+    // stays exactly what it was, and the per-column behaviour is reachable only through the new
+    // parameter. These tests pin BOTH arms, so the additive-ness is executable rather than
+    // asserted in a commit message.
+
+    @Test
+    public void computeGridLayout_defaultOverload_shouldStillGiveEveryCellTheWidestWidth() {
+        List<int[]> sizes = List.of(
+                new int[]{100, 50}, new int[]{420, 50},
+                new int[]{80, 50}, new int[]{120, 50});
+
+        List<int[]> uniform = GroupLayoutCalculator
+                .computeGridLayout(sizes, 10, 34, 20, 10, 0, 2).positions();
+
+        for (int[] p : uniform) {
+            assertEquals("the seven-arg overload's behaviour must not move", 420, p[2]);
+        }
+        assertEquals("second column still starts after the widest width", 10 + 420 + 20, uniform.get(1)[0]);
+    }
+
+    @Test
+    public void computeGridLayout_perColumn_shouldSizeEachColumnFromItsOwnWidestMember() {
+        List<int[]> sizes = List.of(
+                new int[]{100, 50}, new int[]{420, 50},
+                new int[]{80, 50}, new int[]{120, 50});
+
+        List<int[]> perColumn = GroupLayoutCalculator
+                .computeGridLayout(sizes, 10, 34, 20, 10, 0, 2, false).positions();
+
+        assertEquals("column 0 is max(100, 80)", 100, perColumn.get(0)[2]);
+        assertEquals("column 1 is max(420, 120)", 420, perColumn.get(1)[2]);
+        assertEquals("column 0, row 2 keeps the column's width", 100, perColumn.get(2)[2]);
+        assertEquals("column 1, row 2 keeps the column's width", 420, perColumn.get(3)[2]);
+        assertEquals("columns still align across rows",
+                perColumn.get(1)[0], perColumn.get(3)[0]);
+    }
+
+    @Test
+    public void computeGridLayout_perColumn_shouldNarrowTheFittedContainer() {
+        // The point of the change, stated as the number that matters: the container the grid is
+        // fitted into. Uniform cells make it as wide as two copies of the widest element.
+        List<int[]> sizes = List.of(
+                new int[]{100, 50}, new int[]{420, 50});
+
+        int uniformWidth = GroupLayoutCalculator.computeAutoResizeDimensions(
+                GroupLayoutCalculator.computeGridLayout(sizes, 10, 34, 20, 10, 0, 2).positions(), 10)[0];
+        int perColumnWidth = GroupLayoutCalculator.computeAutoResizeDimensions(
+                GroupLayoutCalculator.computeGridLayout(sizes, 10, 34, 20, 10, 0, 2, false).positions(), 10)[0];
+
+        assertEquals(10 + 420 + 20 + 420 + 10, uniformWidth);
+        assertEquals(10 + 100 + 20 + 420 + 10, perColumnWidth);
+    }
+
+    @Test
+    public void computeGridLayout_perColumn_shouldHandleASingleColumn() {
+        List<int[]> sizes = List.of(new int[]{100, 50}, new int[]{420, 50});
+
+        List<int[]> positions = GroupLayoutCalculator
+                .computeGridLayout(sizes, 10, 34, 20, 10, 0, 1, false).positions();
+
+        assertEquals("a one-column grid sizes that column from all its members", 420, positions.get(0)[2]);
+        assertEquals(420, positions.get(1)[2]);
+    }
 }

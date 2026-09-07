@@ -38,7 +38,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldFindUsageForElementOnSingleView_AC3() {
+    public void shouldFindUsageForElementOnSingleView() {
         IArchimateElement comp = factory.createApplicationComponent();
         comp.setName("MyComponent");
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
@@ -64,7 +64,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldFindUsageForElementOnMultipleViews_AC3() {
+    public void shouldFindUsageForElementOnMultipleViews() {
         IArchimateElement comp = factory.createApplicationComponent();
         comp.setName("Shared");
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
@@ -86,7 +86,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldFindUsageForElementPlacedTwiceOnOneView_AC4() {
+    public void shouldFindUsageForElementPlacedTwiceOnOneView() {
         IArchimateElement comp = factory.createApplicationComponent();
         comp.setName("Twice");
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
@@ -110,7 +110,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldFindUsageForRelationship_AC3() {
+    public void shouldFindUsageForRelationship() {
         IArchimateElement src = factory.createApplicationComponent();
         src.setName("Src");
         IArchimateElement tgt = factory.createApplicationComponent();
@@ -149,7 +149,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldReturnEmptyForOrphanElement_AC4() {
+    public void shouldReturnEmptyForOrphanElement() {
         IArchimateElement comp = factory.createApplicationComponent();
         comp.setName("Orphan");
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
@@ -162,7 +162,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldReturnEmptyForOrphanRelationship_AC4() {
+    public void shouldReturnEmptyForOrphanRelationship() {
         IArchimateElement src = factory.createApplicationComponent();
         IArchimateElement tgt = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(src);
@@ -181,7 +181,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldOrderViewReferencesByName_AC4() {
+    public void shouldOrderViewReferencesByName() {
         IArchimateElement comp = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
 
@@ -204,7 +204,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldOrderVisualObjectsByViewObjectId_AC4() {
+    public void shouldOrderVisualObjectsByViewObjectId() {
         IArchimateElement comp = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
 
@@ -232,7 +232,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldHandleUnnamedView_sortsAsEmptyString_AC4() {
+    public void shouldHandleUnnamedView_sortsAsEmptyString() {
         IArchimateElement comp = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
 
@@ -261,7 +261,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldHandleSketchViewReference_AC4() {
+    public void shouldHandleSketchViewReference() {
         // Sketch views can't contain ArchiMate elements as IDiagramModelArchimateObject
         // children directly (Sketch uses sketch-specific objects). The viewKind
         // discrimination is exercised via deriveViewKind() helper instead.
@@ -271,13 +271,13 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldReturnArchimateViewKind_forArchimateDiagramModel_AC4() {
+    public void shouldReturnArchimateViewKind_forArchimateDiagramModel() {
         IArchimateDiagramModel view = factory.createArchimateDiagramModel();
         assertEquals("archimate", ArchiModelAccessorImpl.deriveViewKind(view));
     }
 
     @Test
-    public void shouldPopulateViewpointType_whenSet_AC4() {
+    public void shouldPopulateViewpointType_whenSet() {
         IArchimateElement comp = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
 
@@ -297,7 +297,7 @@ public class ArchiModelAccessorImplFindConceptUsageTest {
     }
 
     @Test
-    public void shouldOmitEmptyViewpointType_AC4() {
+    public void shouldOmitEmptyViewpointType() {
         IArchimateElement comp = factory.createApplicationComponent();
         model.getFolder(FolderType.APPLICATION).getElements().add(comp);
 

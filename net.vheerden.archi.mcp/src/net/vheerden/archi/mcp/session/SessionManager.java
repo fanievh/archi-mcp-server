@@ -43,7 +43,7 @@ public class SessionManager implements ModelChangeListener {
     public static final String DEFAULT_SESSION_ID = "default";
 
     /**
-     * Idle time-to-live for per-session state (audit finding S4). A session whose last
+     * Idle time-to-live for per-session state. A session whose last
      * request — filter read/write or cache read/write — is older than this is evicted from
      * {@link #sessions}, {@link #sessionCaches}, and {@link #lastAccess} on the next opportunistic
      * sweep. 24h is generous for a single-user desktop conversation: every access refreshes the
@@ -426,7 +426,7 @@ public class SessionManager implements ModelChangeListener {
         logger.info("SessionManager disposed ({} sessions invalidated)", sessionCount);
     }
 
-    // ---- Idle-TTL eviction (audit finding S4) ----
+    // ---- Idle-TTL eviction ----
 
     /**
      * Registers/refreshes a session's wall-clock last-access. Called from the state-creating write

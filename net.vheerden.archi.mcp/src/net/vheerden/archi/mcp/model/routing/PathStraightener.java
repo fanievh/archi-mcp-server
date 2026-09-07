@@ -27,12 +27,25 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * <p>Each of the four mutators above is one of the five "wrap sites" governed by
  * {@link TerminalAnchoring#preservesTerminalAnchoring}. The new overloads accept
  * source/target {@link TerminalAnchoring} pairs and snapshot the path on entry,
- * run the mutation, then roll back if the predicate is violated at either
- * terminal. The legacy overloads (without anchorings) bypass the wrap and are
- * preserved for legacy callers — primarily {@link PathStraightener}'s own unit
- * tests. The legacy {@code containsPerimeterBP} guards previously living
- * inside {@link #eliminateReversals} and {@link #collapseBends} are removed by
- * this rewrite — the predicate-based wrap supersedes them.
+ * run the mutation, then compare the snapshot against the result. The legacy
+ * overloads (without anchorings) bypass the wrap and are preserved for legacy
+ * callers — primarily {@link PathStraightener}'s own unit tests. The legacy
+ * {@code containsPerimeterBP} guards previously living inside
+ * {@link #eliminateReversals} and {@link #collapseBends} are removed by this
+ * rewrite — the predicate-based wrap supersedes them.
+ *
+ * <p><strong>The five wrap sites share the predicate and the rollback
+ * policy.</strong> All five roll back on a <em>delta</em>: only a mutation that
+ * moves a terminal off a faceline that terminal was on beforehand is rejected,
+ * and the two ends are decided independently. The policy itself lives once, in
+ * {@link TerminalAnchoringRollbackPolicy}; this class contributes the augmented
+ * frame and the structural arm that go with it — see
+ * {@link #checkAnchoringWrap}. The fifth site,
+ * {@link CoincidentSegmentDetector#applyOffsets}, judged the post-state alone
+ * until it was converted to the same policy; it applies the off-face pin as
+ * well, its write range reaching a terminal with nothing else bounding it, and
+ * it needs no structural arm because its frame is unaugmented and its mutation
+ * size-invariant.
  *
  * @see TerminalAnchoring#preservesEndpoints
  */
@@ -79,9 +92,9 @@ public class PathStraightener {
             boolean augmented) {
         List<AbsoluteBendpointDto> snapshot = new ArrayList<>(path);
         snapToStraightCore(path, threshold, obstacles);
-        if (!checkAnchoringWrap(path, augmented,
+        if (!checkAnchoringWrap(snapshot, path, augmented,
                 sourceAnchoring, source, sourceCenter,
-                targetAnchoring, target, targetCenter)) {
+                targetAnchoring, target, targetCenter, true)) {
             path.clear();
             path.addAll(snapshot);
             logger.debug("snapToStraight: rolled back — terminal anchoring violated");
@@ -173,9 +186,9 @@ public class PathStraightener {
             boolean augmented) {
         List<AbsoluteBendpointDto> snapshot = new ArrayList<>(path);
         eliminateReversalsCore(path, obstacles, augmented);
-        if (!checkAnchoringWrap(path, augmented,
+        if (!checkAnchoringWrap(snapshot, path, augmented,
                 sourceAnchoring, source, sourceCenter,
-                targetAnchoring, target, targetCenter)) {
+                targetAnchoring, target, targetCenter, false)) {
             path.clear();
             path.addAll(snapshot);
             logger.debug("eliminateReversals: rolled back — terminal anchoring violated");
@@ -300,9 +313,9 @@ public class PathStraightener {
             boolean augmented) {
         List<AbsoluteBendpointDto> snapshot = new ArrayList<>(path);
         collapseBendsCore(path, obstacles);
-        if (!checkAnchoringWrap(path, augmented,
+        if (!checkAnchoringWrap(snapshot, path, augmented,
                 sourceAnchoring, source, sourceCenter,
-                targetAnchoring, target, targetCenter)) {
+                targetAnchoring, target, targetCenter, false)) {
             path.clear();
             path.addAll(snapshot);
             logger.debug("collapseBends: rolled back — terminal anchoring violated");
@@ -378,9 +391,9 @@ public class PathStraightener {
             boolean augmented) {
         List<AbsoluteBendpointDto> snapshot = new ArrayList<>(path);
         collapseStaircaseJogsCore(path, threshold, obstacles);
-        if (!checkAnchoringWrap(path, augmented,
+        if (!checkAnchoringWrap(snapshot, path, augmented,
                 sourceAnchoring, source, sourceCenter,
-                targetAnchoring, target, targetCenter)) {
+                targetAnchoring, target, targetCenter, true)) {
             path.clear();
             path.addAll(snapshot);
             logger.debug("collapseStaircaseJogs: rolled back — terminal anchoring violated");
@@ -447,44 +460,156 @@ public class PathStraightener {
     // ---------------------------------------------------------------------
 
     /**
-     * Wrap helper. Returns {@code true} iff
-     * {@link TerminalAnchoring#preservesEndpoints} reports both terminals
-     * intact post-mutation.
+     * Wrap helper. Returns {@code true} when the mutation may be kept.
      *
-     * <p>When {@code augmented} is true, the predicate is evaluated against
-     * an interior view that excludes index 0 and {@code path.size() - 1}
-     * (the temporary source/target center sentinels prepended/appended by
-     * {@code RoutingPipeline} stage 4.7i). An augmented path that enters a
-     * wrap site is always ≥ 4 BPs (sentinel + realSrc + realTgt + sentinel),
-     * so any post-mutation size below 4 means at least one real terminal
-     * has been collapsed out of the interior — REJECT. This is the
-     * load-bearing replacement for the legacy {@code containsPerimeterBP}
+     * <h3>The faceline criterion is a delta, not a post-condition</h3>
+     *
+     * <p>A mutation is rejected on the faceline criterion only when it moves a
+     * terminal <em>off a faceline that terminal was on before the mutation</em>.
+     * A path that arrives with a terminal already off its faceline is not
+     * rejected on that terminal's account. Judging the post-state alone would
+     * reject every mutation on such a path, discarding straightening the
+     * mutation never broke — and the four mutators here run on exactly the
+     * congested paths that most need them.
+     *
+     * <p>The flip rule alone would say nothing more about an end once its
+     * pre-mutation verdict is {@code false}: it compares faceline membership
+     * of whatever point occupies the terminal index, not whether that point is
+     * still the <em>same</em> point. So a mutator could rewrite an
+     * already-off-face terminal, push it further off, or delete it and let the
+     * next interior point inherit the slot, with no flip to observe. That is
+     * what {@code pinsOffFaceTerminals} exists to prevent, and it is applied
+     * <strong>per mutator</strong> because the four differ in whether they can
+     * reach a terminal at all.
+     *
+     * <h3>Why only two of the four sites pin</h3>
+     *
+     * <p>Terminals sit at index {@code 1} and {@code size - 2} of the augmented
+     * path. Whether a mutator can touch them is decided by its write range, not
+     * by policy:
+     *
+     * <ul>
+     *   <li>{@link #snapToStraightCore} writes {@code path.set(i, …)} over
+     *       {@code i} in {@code [1, size-2]} — <strong>both terminals are in
+     *       range</strong>, and it can move one onto the element centre, which is
+     *       the degenerate zero-length-anchor shape. <strong>Pins.</strong></li>
+     *   <li>{@link #collapseStaircaseJogsCore} writes {@code i} in
+     *       {@code [1, size-4]} and removes {@code i+1}, {@code i+2} in
+     *       {@code [2, size-2]} — <strong>both terminals are in range</strong>,
+     *       and because it rewrites one point and removes two, a removed terminal
+     *       need not be collinear with anything: the drawn route genuinely
+     *       changes. <strong>Pins.</strong></li>
+     *   <li>{@link #collapseBendsCore} removes {@code i+1} only when
+     *       {@code path[i]}, {@code path[i+1]}, {@code path[i+2]} are collinear.
+     *       Removing a terminal forces {@code i == 0}, so the triple is
+     *       (centre sentinel, terminal, next) — a deleted terminal is therefore
+     *       collinear with the element centre by construction, and the
+     *       ChopboxAnchor ray is unchanged. Render-neutral in every case, not
+     *       merely in the ones observed. <strong>Does not pin</strong>, and
+     *       pinning it would reject a genuine redundant-bendpoint removal.</li>
+     *   <li>{@link #eliminateReversalsCore} is bounded by its own
+     *       {@code protectTerminals} guard, which skips every pair with
+     *       {@code i == 0} or {@code j >= size - 2}, confining its removals and
+     *       its L-turn insertion to {@code [2, size-3]}. It cannot reach a
+     *       terminal. <strong>Does not pin</strong>; the flag would be dead
+     *       code.</li>
+     * </ul>
+     *
+     * <p>The asymmetry is therefore derived, not chosen: pin where the write
+     * range reaches a terminal and nothing else bounds it. If
+     * {@code collapseBendsCore}'s collinearity precondition is ever relaxed, or
+     * {@code protectTerminals} removed, the corresponding site must start
+     * pinning — both properties are pinned by test so the change fails loudly
+     * rather than silently widening this wrap.
+     *
+     * <p>The structural arm below stays unconditional and independent of all of
+     * the above.
+     *
+     * <p>The flip rule and the pin are not implemented here. They live in
+     * {@link TerminalAnchoringRollbackPolicy}, shared with
+     * {@link CoincidentSegmentDetector#applyOffsets} so that the five wrap
+     * sites cannot drift apart on the one thing they used to disagree about.
+     * What remains site-specific is above and below this paragraph: which
+     * mutators pin, and the structural arm that only an augmented frame needs.
+     *
+     * <p>{@link CoincidentSegmentDetector#applyTerminalAnchoredReconciliation}
+     * still compares the predicate over the <em>whole path</em>, before against
+     * after, rather than per end. <strong>The load differs, which is why it is
+     * left alone.</strong> There the terminal bendpoint is provably untouched —
+     * that stage resolves a coincidence by inserting a drop bendpoint — so the
+     * verdict must be invariant and a flip signals a logic bug; the check is
+     * defensive, and its rollback logs a warning saying so. Here the mutators
+     * can and do relocate terminals, so the flip <em>is</em> the policy: it is
+     * the only thing standing between a straightening pass and a terminal
+     * dragged off its perimeter.
+     *
+     * <h3>The two ends are decided independently</h3>
+     *
+     * <p>{@link TerminalAnchoring#preservesEndpoints} conjoins the two ends, so
+     * once the source verdict is {@code false} no target verdict can change the
+     * answer. Comparing that conjunction before and after would therefore leave
+     * the target end <em>unprotected</em> on any path whose source arrived
+     * off-face: both readings would be {@code false}, no flip would be seen, and
+     * a mutation dragging the target off its faceline would commit unchallenged.
+     * Each end is evaluated on its own instead, reusing the predicate's
+     * null-per-end idiom rather than changing the predicate.
+     *
+     * <h3>The structural arm is unconditional</h3>
+     *
+     * <p>When {@code augmented} is true, the criterion is evaluated against an
+     * interior view that excludes index 0 and {@code path.size() - 1} (the
+     * temporary source/target center sentinels prepended/appended by
+     * {@code RoutingPipeline} stage 4.7i). An augmented path that enters a wrap
+     * site is always ≥ 4 BPs (sentinel + realSrc + realTgt + sentinel), so any
+     * post-mutation size below 4 means at least one real terminal has been
+     * collapsed out of the interior — REJECT, whatever the pre-state was. This
+     * is the load-bearing replacement for the legacy {@code containsPerimeterBP}
      * guard that used to live inside the core mutators: it catches the
-     * slot-at-hub-center class where a
-     * fully-collinear augmented path trivially collapses to
-     * {@code [sourceCenter, targetCenter]} under {@link #collapseBendsCore},
-     * wiping the perimeter terminals and leaving an empty BP list after
-     * stage 4.7i strips the sentinels.
+     * slot-at-hub-center class where a fully-collinear augmented path trivially
+     * collapses to {@code [sourceCenter, targetCenter]} under
+     * {@link #collapseBendsCore}, wiping the perimeter terminals and leaving an
+     * empty BP list after stage 4.7i strips the sentinels. A terminal that was
+     * already off its faceline is still a terminal; losing it is not licensed by
+     * the delta rule.
+     *
+     * @param before the pre-mutation path, as snapshotted on wrap-site entry
+     * @param after  the live path, post-mutation
      */
+
     private static boolean checkAnchoringWrap(
-            List<AbsoluteBendpointDto> path, boolean augmented,
+            List<AbsoluteBendpointDto> before, List<AbsoluteBendpointDto> after, boolean augmented,
             TerminalAnchoring sourceAnchoring, RoutingRect source, int[] sourceCenter,
-            TerminalAnchoring targetAnchoring, RoutingRect target, int[] targetCenter) {
-        List<AbsoluteBendpointDto> view;
-        if (augmented) {
-            if (path.size() < 4) {
-                // Inner view has < 2 BPs → at least one real terminal
-                // has been collapsed out of the augmented path. Reject so
-                // the wrap rolls back to the pre-mutation snapshot.
-                return false;
-            }
-            view = new ArrayList<>(path.subList(1, path.size() - 1));
-        } else {
-            view = path;
+            TerminalAnchoring targetAnchoring, RoutingRect target, int[] targetCenter,
+            boolean pinsOffFaceTerminals) {
+        if (augmented && after.size() < 4) {
+            return false;
         }
-        return TerminalAnchoring.preservesEndpoints(
-                sourceAnchoring, source, sourceCenter,
-                targetAnchoring, target, targetCenter, view);
+        List<AbsoluteBendpointDto> beforeView = interiorView(before, augmented);
+        List<AbsoluteBendpointDto> afterView = interiorView(after, augmented);
+
+        return !TerminalAnchoringRollbackPolicy.rejects(sourceAnchoring, source, sourceCenter,
+                        beforeView, afterView, false, pinsOffFaceTerminals)
+                && !TerminalAnchoringRollbackPolicy.rejects(targetAnchoring, target, targetCenter,
+                        beforeView, afterView, true, pinsOffFaceTerminals);
+    }
+
+    /**
+     * The view the faceline criterion is evaluated against: the whole path when
+     * unaugmented, otherwise the interior between the two sentinels.
+     */
+    private static List<AbsoluteBendpointDto> interiorView(
+            List<AbsoluteBendpointDto> path, boolean augmented) {
+        if (!augmented) {
+            // Copied rather than aliased: the unaugmented view would otherwise
+            // hand out the wrap site's own entry snapshot, the list the
+            // rollback restores from. Nothing mutates it today; copying keeps
+            // it that way without relying on every future reader to notice.
+            return new ArrayList<>(path);
+        }
+        if (path.size() < 4) {
+            return List.of();
+        }
+        return new ArrayList<>(path.subList(1, path.size() - 1));
     }
 
     private static boolean isReversal(List<AbsoluteBendpointDto> path, int i, int j) {

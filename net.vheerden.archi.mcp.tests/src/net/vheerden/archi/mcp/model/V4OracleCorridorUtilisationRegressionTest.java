@@ -216,7 +216,7 @@ public class V4OracleCorridorUtilisationRegressionTest {
 
         // includeViolatorIds=false: this test only asserts on the scalar
         // corridorUtilisationScore; per-channel CorridorUtilisationDetail records
-        // are not inspected (code-review L2 2026-05-03 — avoid building 12 unused
+        // are not inspected (avoid building 12 unused
         // detail objects per test run).
         return assessor.assess(nodes, connections, false);
     }

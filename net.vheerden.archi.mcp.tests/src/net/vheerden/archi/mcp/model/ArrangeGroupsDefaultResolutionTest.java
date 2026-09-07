@@ -10,7 +10,7 @@ import org.junit.Test;
 
 /**
  * Pure-unit JUnit pins for the density-aware default-resolution decision
- * function (Story RoutingPreconditions.InterGroup.DensityAwareDefault).
+ * function for inter-group spacing.
  *
  * <p>Mirrors the inter-element sibling's
  * {@link AdjustViewSpacingDefaultResolutionTest} discipline and the
@@ -109,7 +109,29 @@ public class ArrangeGroupsDefaultResolutionTest {
                 d.triggerCondition());
         assertNotNull("informational reason populated for transparency",
                 d.reason());
-        assertTrue(d.reason().contains("no inter-group connections"));
+        // The reason is read by an agent that cannot see the canvas, and this branch fires on a
+        // view that may hold MANY connections — the sample above has 20 — none of which run
+        // directly between the arranged containers. Measured 2026-08-14: a run took the older
+        // wording ("view has no inter-group connections") to mean the view had no connections at
+        // all, on a view with 33. So the reason must not be sayable as "no connections", and must
+        // say what was actually counted.
+        String reason = d.reason();
+        assertTrue("must say connections between the CONTAINERS are what is missing, not "
+                        + "connections generally. Was: " + reason,
+                reason.contains("crosses between the arranged containers"));
+        // The clause naming which connections count used to have both cases the wrong way round:
+        // it said a connection between two containers' nested children was NOT counted and
+        // implied a connection running directly between the containers was. Measured on two
+        // fixtures — two zones with one child each and one child-to-child connection, and the
+        // same two zones with one box-to-box connection — the route counts the first and not the
+        // second. A caller reading the old sentence would have drawn a connection that could not
+        // move this branch and left alone the one that would.
+        assertTrue("must say what IS counted: a connection joining objects inside two different "
+                        + "containers. Was: " + reason,
+                reason.contains("objects inside two different containers"));
+        assertTrue("must say what is NOT: a connection drawn between the container boxes "
+                        + "themselves. Was: " + reason,
+                reason.contains("between two container boxes is not counted"));
     }
 
     @Test
@@ -170,7 +192,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // differs (null vs 0 vs 40). Backwards-compat preservation pin.
 
     @Test
-    public void ac7_3_fixtureA_callerOmitted_triggerFires_resolvesNonZero() {
+    public void fixtureA_callerOmitted_triggerFires_resolvesNonZero() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,   // OMITTED
@@ -187,7 +209,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_3_fixtureB_callerExplicitZero_sameViewState_doesNotFire() {
+    public void fixtureB_callerExplicitZero_sameViewState_doesNotFire() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ 0,      // EXPLICIT ZERO
@@ -204,7 +226,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_3_fixtureC_callerExplicit40_sameViewState_doesNotFire() {
+    public void fixtureC_callerExplicit40_sameViewState_doesNotFire() {
         // Fixture C: caller passes the static-default value (40) explicitly.
         // Must be preserved as 40, NOT silently overridden to the heuristic value.
         ArrangeGroupsDefaultResolutionDecision d =
@@ -222,7 +244,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_3_callerExplicitArbitraryValue_passesThroughUnchanged() {
+    public void callerExplicitArbitraryValue_passesThroughUnchanged() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ 137,
@@ -241,7 +263,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // 12 inter-group connections. Heuristic => target=100 px.
 
     @Test
-    public void ac7_4_triggerFiresHappyPath_connected16to30Tier() {
+    public void triggerFiresHappyPath_connected16to30Tier() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,
@@ -251,7 +273,7 @@ public class ArrangeGroupsDefaultResolutionTest {
                         /*hasAtLeast2TopLevelGroups=*/ true,
                         /*hasLargeHubs=*/ false);
         assertTrue(d.fired());
-        assertEquals("AC-4.2 expected target=100 px (connected 16-30 tier)",
+        assertEquals("expected target=100 px (connected 16-30 tier)",
                 100, d.resolvedSpacing());
         assertEquals(ArrangeGroupsDefaultResolutionDecision.TriggerCondition.IS_CONNECTED,
                 d.triggerCondition());
@@ -271,7 +293,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_4_triggerFires_connectedLe15Tier_target80() {
+    public void triggerFires_connectedLe15Tier_target80() {
         // Connected ≤15 tier
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
@@ -286,7 +308,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_4_triggerFires_connectedAbove30Tier_target120() {
+    public void triggerFires_connectedAbove30Tier_target120() {
         // Connected >30 tier
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
@@ -303,7 +325,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // -------- Single-group + 0-group degenerate --------
 
     @Test
-    public void ac7_5_lessThan2TopLevelGroups_doesNotFire() {
+    public void lessThan2TopLevelGroups_doesNotFire() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,
@@ -323,7 +345,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // DEFAULT_ARRANGE_GROUPS_SPACING (40). Reason populated for transparency.
 
     @Test
-    public void ac7_6_unconnectedView_noFire_legacyShortCircuit() {
+    public void unconnectedView_noFire_legacyShortCircuit() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,
@@ -342,7 +364,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // -------- Connected + zero connections degenerate --------
 
     @Test
-    public void ac7_7_zeroConnections_degenerateDoesNotFire() {
+    public void zeroConnections_degenerateDoesNotFire() {
         // No connections AT ALL on the view (rare but valid: layout-only view).
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
@@ -367,7 +389,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // logic and this test fails until they agree again.
 
     @Test
-    public void ac7_9_heuristicCrossClassConsistency() {
+    public void heuristicCrossClassConsistency() {
         // Shared fixture: connectionCount=20, connected. GroupSpacingHeuristic
         // returns 100; this story's decision function MUST resolve to 100.
         int connectionCount = 20;
@@ -394,7 +416,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     // transparency string. Intentional revision requires updating the regex.
 
     @Test
-    public void ac7_10_reasonStringFormat_canonicalFixture() {
+    public void reasonStringFormat_canonicalFixture() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,
@@ -414,7 +436,7 @@ public class ArrangeGroupsDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_10_reasonStringFormat_singularConnection() {
+    public void reasonStringFormat_singularConnection() {
         ArrangeGroupsDefaultResolutionDecision d =
                 ArrangeGroupsDefaultResolutionDecision.decide(
                         /*callerProvidedSpacing=*/ null,

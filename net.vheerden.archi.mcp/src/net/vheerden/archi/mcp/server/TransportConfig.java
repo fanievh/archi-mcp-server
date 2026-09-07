@@ -63,7 +63,7 @@ public class TransportConfig {
     private static final String SERVER_NAME = "ArchiMate MCP Server";
     private static final String SERVER_VERSION = "1.0.0";
 
-    // --- Jetty resource guardrails (audit S3: no request-size cap / idle timeout / thread bound on
+    // --- Jetty resource guardrails (no request-size cap / idle timeout / thread bound on
     // the embedded server => a buggy or hostile client could OOM the JVM with a giant body or hold
     // connections open). These are SAFETY BOUNDS, not user-tunable config: they are deliberately
     // generous so no legitimate single-user loopback workload is affected, while capping the blast
@@ -115,6 +115,8 @@ public class TransportConfig {
     private boolean tlsActive;
     private List<McpServerFeatures.SyncToolSpecification> toolSpecifications = Collections.emptyList();
     private List<McpServerFeatures.SyncResourceSpecification> resourceSpecifications = Collections.emptyList();
+    private List<McpServerFeatures.SyncResourceTemplateSpecification> resourceTemplateSpecifications =
+            Collections.emptyList();
 
     /**
      * Sets the tool specifications to register on both MCP servers at build time.
@@ -132,6 +134,20 @@ public class TransportConfig {
      */
     public void setResourceSpecifications(List<McpServerFeatures.SyncResourceSpecification> resourceSpecs) {
         this.resourceSpecifications = resourceSpecs != null ? resourceSpecs : Collections.emptyList();
+    }
+
+    /**
+     * Sets the resource-template specifications to register on both MCP servers at build time.
+     *
+     * <p>Templates advertise the parameterised form of the same URIs the static resources expose,
+     * for clients that implement only {@code resources/templates/list}. They are additive: the
+     * static registrations above are unaffected.</p>
+     *
+     * @param templateSpecs the resource-template specifications, or empty list for none
+     */
+    public void setResourceTemplateSpecifications(
+            List<McpServerFeatures.SyncResourceTemplateSpecification> templateSpecs) {
+        this.resourceTemplateSpecifications = templateSpecs != null ? templateSpecs : Collections.emptyList();
     }
 
     /**
@@ -317,6 +333,9 @@ public class TransportConfig {
             if (!resourceSpecifications.isEmpty()) {
                 streamableBuilder.resources(resourceSpecifications);
             }
+            if (!resourceTemplateSpecifications.isEmpty()) {
+                streamableBuilder.resourceTemplates(resourceTemplateSpecifications);
+            }
             streamableMcpServer = streamableBuilder.build();
 
             var sseBuilder = McpServer.sync(sseTransport)
@@ -328,9 +347,12 @@ public class TransportConfig {
             if (!resourceSpecifications.isEmpty()) {
                 sseBuilder.resources(resourceSpecifications);
             }
+            if (!resourceTemplateSpecifications.isEmpty()) {
+                sseBuilder.resourceTemplates(resourceTemplateSpecifications);
+            }
             sseMcpServer = sseBuilder.build();
 
-            // Create Jetty server with an explicit, bounded worker pool (guardrail S3). Passing the
+            // Create Jetty server with an explicit, bounded worker pool. Passing the
             // pool to the Server constructor hands it lifecycle ownership (started/stopped with the
             // server), replacing the implicit unbounded-by-default pool (max 200).
             QueuedThreadPool threadPool = new QueuedThreadPool(MAX_THREADS, MIN_THREADS);
@@ -365,7 +387,7 @@ public class TransportConfig {
 
             connector.setHost(bindAddress);
             connector.setPort(port);
-            // Idle timeout guardrail (S3): drop connections that stop making progress.
+            // Idle timeout guardrail: drop connections that stop making progress.
             connector.setIdleTimeout(IDLE_TIMEOUT_MS);
             jettyServer.addConnector(connector);
 
@@ -384,7 +406,7 @@ public class TransportConfig {
             // Guard both transports with the wrapper chain, inserted between the server and the
             // servlet context so every request to /mcp/* and /sse/* is checked before it reaches a
             // servlet. Order (outer -> inner):
-            //   SizeLimitHandler (413, guardrail S3) -> Origin/Host (403, default-on)
+            //   SizeLimitHandler (413, size guardrail) -> Origin/Host (403, default-on)
             //     -> bearer-token (401, opt-in) -> request-charset header (415, default-on)
             //     -> request-body UTF-8 (415, default-on) -> servlet context.
             // The size limit is OUTERMOST so an oversized body is bounded for the entire downstream
@@ -436,7 +458,7 @@ public class TransportConfig {
             throw e;
         } catch (Exception e) {
             cleanup();
-            // Classify the failure (audit Q2) so the user gets an actionable message instead of one
+            // Classify the failure so the user gets an actionable message instead of one
             // generic "startup failed". The direct catch (BindException) above is the fast path; this
             // walks the FULL cause chain — a BindException can be nested deeper than one level — and,
             // on a TLS run, attributes a keystore/SSL load failure that slipped past
@@ -500,7 +522,7 @@ public class TransportConfig {
     private static final int MAX_CAUSE_DEPTH = 20;
 
     /**
-     * Classifies a server-start failure (audit Q2) into a {@link ServerStartException} error code, so
+     * Classifies a server-start failure into a {@link ServerStartException} error code, so
      * the two most common desktop failures are self-diagnosable instead of collapsing into one generic
      * "startup failed":
      *

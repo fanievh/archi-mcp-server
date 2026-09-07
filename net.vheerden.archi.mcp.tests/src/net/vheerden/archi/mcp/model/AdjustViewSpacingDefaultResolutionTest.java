@@ -143,7 +143,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // delta differs (null vs 0). Backwards-compat preservation pin.
 
     @Test
-    public void ac7_3_fixtureA_callerOmitted_triggerFires_resolvesNonZero() {
+    public void fixtureA_callerOmitted_triggerFires_resolvesNonZero() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,   // OMITTED
@@ -160,7 +160,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_3_fixtureB_callerExplicitZero_sameViewState_doesNotFire() {
+    public void fixtureB_callerExplicitZero_sameViewState_doesNotFire() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ 0,      // EXPLICIT ZERO
@@ -178,7 +178,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_3_callerExplicitNonZero_passesThroughUnchanged() {
+    public void callerExplicitNonZero_passesThroughUnchanged() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ 17,
@@ -199,7 +199,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // Heuristic for connectionCount=30 => target=80 => delta = max(0, 80-40) = 40.
 
     @Test
-    public void ac7_4_triggerFiresHappyPath_v4ClassFixture() {
+    public void triggerFiresHappyPath_v4ClassFixture() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,
@@ -211,7 +211,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
                         /*hasGroupWithMultipleChildren=*/ true,
                         /*hasLargeHubs=*/ false);
         assertTrue(d.fired());
-        assertEquals("AC-4.2 expected delta", 40, d.resolvedDelta());
+        assertEquals("expected delta", 40, d.resolvedDelta());
         assertEquals(AdjustViewSpacingDefaultResolutionDecision.TriggerMetric.COINCIDENT_SEGMENTS,
                 d.triggerMetric());
         assertEquals(11, d.triggerValue());
@@ -235,7 +235,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_4_edgeCoincidenceTriggerHappyPath() {
+    public void edgeCoincidenceTriggerHappyPath() {
         // edge-coincidence = 5 (>4) trigger fires.
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
@@ -263,7 +263,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // a no-mutation response).
 
     @Test
-    public void ac7_5_triggerFires_alreadyMeetsTarget_deltaZero() {
+    public void triggerFires_alreadyMeetsTarget_deltaZero() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,
@@ -281,7 +281,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     }
 
     @Test
-    public void ac7_5_triggerFires_currentExceedsTarget_clampsToZero() {
+    public void triggerFires_currentExceedsTarget_clampsToZero() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,
@@ -302,7 +302,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // over at the call site.
 
     @Test
-    public void ac7_6_cleanView_noTrigger_noFire() {
+    public void cleanView_noTrigger_noFire() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,
@@ -325,7 +325,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // undefined. No fire, but informational reason populated for transparency.
 
     @Test
-    public void ac7_7_noConnections_doesNotFire_reasonInformational() {
+    public void noConnections_doesNotFire_reasonInformational() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,
@@ -386,7 +386,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // heuristic-resolution logic and this test fails until they agree again.
 
     @Test
-    public void ac7_9_heuristicCrossClassConsistency() {
+    public void heuristicCrossClassConsistency() {
         // Shared fixture: connectionCount=20, currentSpacing=40 => target=80,
         // delta=40. Both classes should arrive at the same numbers.
         int connectionCount = 20;
@@ -402,7 +402,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
                         /*dryRun=*/ false,
                         /*hasNonEmptyGroups=*/ true,
                         /*hasGroupWithMultipleChildren=*/ true,
-                        /*hasTargetSpacingOverride=*/ false);
+                        /*hasTargetSpacingOverride=*/ false, null);
 
         // This class's decision function (default-resolution path with
         // trigger fired so the heuristic computation actually runs).
@@ -433,7 +433,7 @@ public class AdjustViewSpacingDefaultResolutionTest {
     // allowing intentional revision (which would require updating this test).
 
     @Test
-    public void ac16_reasonStringFormat_canonicalFixture() {
+    public void reasonStringFormat_canonicalFixture() {
         AdjustViewSpacingDefaultResolutionDecision d =
                 AdjustViewSpacingDefaultResolutionDecision.decide(
                         /*callerProvidedDelta=*/ null,

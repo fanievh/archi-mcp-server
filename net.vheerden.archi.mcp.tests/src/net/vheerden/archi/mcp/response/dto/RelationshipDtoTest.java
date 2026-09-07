@@ -51,10 +51,10 @@ public class RelationshipDtoTest {
         assertEquals(dto1.hashCode(), dto2.hashCode());
     }
 
-    // ---- G1 ----
+    // ---- relationship semantic attributes ----
 
     @Test
-    public void shouldSerialiseG1Fields_whenSet_AC4() throws Exception {
+    public void shouldSerialiseSemanticAttributeFields_whenSet() throws Exception {
         RelationshipDto dto = new RelationshipDto(
                 "rel-1", "Customer→Order", "AccessRelationship", null,
                 "src-1", "tgt-1", false, null, null, null, null,
@@ -65,7 +65,7 @@ public class RelationshipDtoTest {
     }
 
     @Test
-    public void shouldOmitG1Fields_whenNull_AC4() throws Exception {
+    public void shouldOmitSemanticAttributeFields_whenNull() throws Exception {
         RelationshipDto dto = new RelationshipDto(
                 "rel-1", "Uses", "ServingRelationship", "src-1", "tgt-1");
         String json = new ObjectMapper().writeValueAsString(dto);
@@ -75,7 +75,7 @@ public class RelationshipDtoTest {
     }
 
     @Test
-    public void shouldRoundTripG1Fields_AC4() throws Exception {
+    public void shouldRoundTripSemanticAttributeFields() throws Exception {
         RelationshipDto original = new RelationshipDto(
                 "rel-1", "Customer→Order", "AccessRelationship", null,
                 "src-1", "tgt-1", false, null, null, null, null,
@@ -89,8 +89,8 @@ public class RelationshipDtoTest {
     }
 
     @Test
-    public void shouldPreserveBackCompatCtors_AC4() throws Exception {
-        // 5-arg back-compat ctor — G1 fields must default to null + be omitted from JSON
+    public void shouldPreserveBackCompatCtors() throws Exception {
+        // 5-arg back-compat ctor — semantic-attribute fields must default to null + be omitted from JSON
         RelationshipDto dto5 = new RelationshipDto("rel-1", "Uses", "ServingRelationship", "a", "b");
         assertNull(dto5.accessType());
         assertNull(dto5.associationDirected());
@@ -102,7 +102,7 @@ public class RelationshipDtoTest {
         assertTrue(dto6.alreadyExisted());
         assertNull(dto6.accessType());
 
-        // 11-arg back-compat ctor (pre-G1 canonical shape) — same
+        // 11-arg back-compat ctor (the canonical shape before semantic attributes) — same
         RelationshipDto dto11 = new RelationshipDto(
                 "rel-1", "Data Flow", "FlowRelationship", "Material Flow",
                 "src-1", "tgt-1", false, null, null, null, null);
@@ -113,7 +113,7 @@ public class RelationshipDtoTest {
     }
 
     @Test
-    public void shouldOmitDefaultAlreadyExistedButPopulateAccessType_AC4() throws Exception {
+    public void shouldOmitDefaultAlreadyExistedButPopulateAccessType() throws Exception {
         // NON_DEFAULT on alreadyExisted means false is omitted; NON_NULL on accessType
         // means it IS populated. Sanity check that the new field annotations didn't
         // shift existing behaviour.

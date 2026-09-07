@@ -141,6 +141,46 @@ public class CertificateGeneratorTest {
     }
 
     @Test
+    public void shouldGenerateKeystore_whenPasswordStartsWithLauncherOption() throws Exception {
+        // The JDK launcher pre-scans argv and swallows any argument beginning with "-J" as a JVM
+        // option, so a password drawn from the Base64 URL alphabet can begin with a launcher option.
+        String password = "-JxGNf2OuLXZr6Ef";
+        String keystorePath = tempFolder.getRoot().toPath()
+                .resolve("launcher-option-keystore.p12").toString();
+
+        CertificateGenerator.Result result = CertificateGenerator.generate(keystorePath, password);
+
+        assertEquals(password, result.password());
+
+        KeyStore ks = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(keystorePath)) {
+            ks.load(fis, password.toCharArray());
+        }
+
+        assertTrue("Keystore should contain 'archi-mcp' alias", ks.containsAlias("archi-mcp"));
+        assertNotNull("Private key should unlock with the exact generated password",
+                ks.getKey("archi-mcp", password.toCharArray()));
+    }
+
+    @Test
+    public void shouldRejectNullPassword_whenGeneratingWithSuppliedPassword() throws Exception {
+        // A null reaching the environment map surfaces as an opaque NPE from java.lang after the
+        // keystore directory has already been created. Both halves are asserted: the exception
+        // names the offending parameter, and it is thrown before any filesystem work happens.
+        Path nested = tempFolder.getRoot().toPath().resolve("null-pw/dir");
+        String keystorePath = nested.resolve("keystore.p12").toString();
+
+        try {
+            CertificateGenerator.generate(keystorePath, null);
+            fail("Expected NullPointerException for a null password");
+        } catch (NullPointerException expected) {
+            assertEquals("password", expected.getMessage());
+        }
+
+        assertFalse("Should fail before creating the keystore directory", Files.exists(nested));
+    }
+
+    @Test
     public void shouldReturnDefaultKeystorePath() {
         String path = CertificateGenerator.getDefaultKeystorePath();
 

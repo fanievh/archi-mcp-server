@@ -33,8 +33,8 @@ vertically at hand-offs. Assignment is implied by containment, never drawn.
   - Step 2: one group per role/actor — these are the swimlanes (large containers).
   - Step 3: nest each process under its performing role via `parentViewObjectId`.
   - Step 4: `relationshipTypes: ["TriggeringRelationship", "FlowRelationship"]` (Assignment excluded — implied by nesting).
-  - Step 6: `layout-within-group` `row` (steps sit in flow order within the lane).
-  - Step 7: `arrange-groups` `arrangement: "topology"`, `direction: "horizontal"`.
+  - Step 6: `layout-within-group` `row` (steps sit in flow order within the lane). Note that `row` packs each lane **independently**: it starts at that lane's own padding and advances by each step's width, so a step's x depends only on the steps before it *in the same lane*. Steps that share an ordinal therefore do **not** line up into columns across lanes, and hand-offs stop rendering as clean vertical drops. When that temporal alignment is what makes the diagram readable, place each step at the x of its ordinal instead of calling `row` on the lanes.
+  - Step 7: `arrange-groups` `arrangement: "topology"`, `direction: "vertical"` — `vertical` stacks the lanes top-to-bottom, matching the topology block above; `topology` orders them by inter-group connection density to minimise long-range crossings. `arrange-groups` repositions the lanes without changing their width or height.
 - **Caveat — a return/back Flow edge reverses ELK's direction.** ELK derives the flow direction from edge direction, so a cycle edge (e.g. a `response`/`ack` Flow from the final step back to the first) flips the whole layout right-to-left. Keep the spine acyclic *for layout*: lay out and route from the forward `TriggeringRelationship` chain only; if a genuine return must be shown, add it **after** layout (or carry it in a note / a short labelled Flow), and never let the back-edge feed `arrange-groups` / ELK `direction`. Numbered step labels anchor the reader's order even if a late edge nudges the layout.
 - **Source:** Cookbook "Business Process Cooperation" + swimlane/nesting pattern; reference [17].
 
@@ -44,7 +44,7 @@ vertically at hand-offs. Assignment is implied by containment, never drawn.
 - **Element subset:** journey steps (`BusinessProcess` / `BusinessService` on the path), supporting `BusinessService` / `ApplicationService`, supporting `ApplicationComponent`; `ServingRelationship` from the support layers up to the journey.
 - **Relationship subset:**
   - **Draw:** `ServingRelationship` (support seams, drawn sparingly — the journey order carries the narrative).
-  - **Imply by nesting, exclude:** `CompositionRelationship` / `AssignmentRelationship` within the support layers.
+  - **Imply by nesting, exclude:** `CompositionRelationship` of a `BusinessService` into sub-services or an `ApplicationComponent` into sub-components — nest the part. **Same type only:** an `ApplicationComponent` is **not** composed of its `ApplicationService`s, and ArchiMate permits no Composition between two *different* types among `BusinessService`, `ApplicationService`, `ApplicationComponent` and `BusinessProcess`. `AssignmentRelationship` `ApplicationComponent`→`ApplicationService` — the component performs the service, so nest the service inside its component. That is the **only** Assignment these four types permit, in any ordering, and none of them may be assigned to itself.
 - **Topology:**
 
 ```text

@@ -28,10 +28,15 @@ import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
+import net.vheerden.archi.mcp.response.dto.AnchorPointDto;
+import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
 import net.vheerden.archi.mcp.response.dto.BulkOperationFailure;
 import net.vheerden.archi.mcp.response.dto.BulkOperationResult;
+import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
+import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 
 import org.eclipse.gef.commands.Command;
 
@@ -57,6 +62,232 @@ public class MutationHandlerTest {
         accessor = new StubAccessor();
         handler = new MutationHandler(accessor, formatter, registry, null);
         handler.registerTools();
+    }
+
+    // ---- Response-envelope documentation pins ----
+
+    private String descriptionOf(String toolName) {
+        return registry.getToolSpecifications().stream()
+                .filter(spec -> toolName.equals(spec.tool().name()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Tool not found: " + toolName))
+                .tool().description();
+    }
+
+    @Test
+    public void endBatch_descriptionShouldDocumentSkippedOperations() {
+        String desc = descriptionOf("end-batch");
+        assertTrue("must name the field carrying declined operations",
+                desc.contains("skippedOperations"));
+        assertTrue("must say the field is absent when nothing was skipped",
+                desc.contains("absent when"));
+        // operationCount counts what was QUEUED, so a batch with a skip reports a count
+        // higher than the number of changes actually applied. An agent reconciling the two
+        // without being told this reads it as a lost operation.
+        assertTrue("must reconcile operationCount against skips",
+                desc.contains("operationCount"));
+        // "atomically" was removed deliberately: a skipped operation means the batch is no
+        // longer all-or-nothing, and the word would now be a false promise.
+        assertFalse("must not promise atomicity it no longer provides",
+                desc.contains("atomically"));
+    }
+
+    /**
+     * The atomicity promise appeared in five wire-visible places, not one. Fixing only
+     * end-batch's own description left it live on three paths an agent reads constantly —
+     * including two nextSteps hints returned on every call — so all of them are pinned here.
+     */
+    @Test
+    public void batchTools_mustNotPromiseAtomicityAnywhereOnTheWire() throws Exception {
+        assertFalse("begin-batch's description must not promise atomicity",
+                descriptionOf("begin-batch").contains("atomically"));
+        assertFalse("bulk-mutate's operations schema must not promise atomicity",
+                descriptionOf("bulk-mutate").contains("atomically"));
+
+        // nextSteps hints are returned on every call, so a stale promise there is read more
+        // often than the tool description itself.
+        assertFalse("begin-batch's nextSteps must not promise atomicity",
+                String.valueOf(callAndParse("begin-batch", Map.of())).contains("atomically"));
+        assertFalse("get-batch-status's nextSteps must not promise atomicity",
+                String.valueOf(callAndParse("get-batch-status", Map.of())).contains("atomically"));
+        callAndParse("end-batch", Map.of("rollback", true));
+    }
+
+    /**
+     * The wire, not the DTO. This response map is assembled field by field, so a component
+     * added to {@code BulkMutationResult} reaches the agent only if it is copied across
+     * explicitly — a DTO-level assertion passes while the field is missing from the JSON.
+     * That is exactly how this shipped broken once.
+     */
+    @Test
+    public void bulkMutate_shouldPutSkippedOperationsOnTheWire() throws Exception {
+        accessor.setBulkBehavior(ops -> BulkMutationResult.of(
+                List.of(new BulkOperationResult(0, "delete-folder", "deleted",
+                        "folder-1", "Folder", "Doomed")),
+                List.of(), 1, null,
+                List.of("Delete folder: folder-1 — it was not empty when the changes were applied")));
+
+        Map<String, Object> parsed = callAndParse("bulk-mutate", Map.of("operations", List.of(
+                Map.of("tool", "delete-folder", "params", Map.of("folderId", "folder-1")))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> res = (Map<String, Object>) parsed.get("result");
+
+        assertEquals("A declined operation must clear allSucceeded", false, res.get("allSucceeded"));
+        @SuppressWarnings("unchecked")
+        List<String> skipped = (List<String>) res.get("skippedOperations");
+        assertNotNull("skippedOperations must reach the wire, not just the DTO", skipped);
+        assertEquals(1, skipped.size());
+        assertTrue(skipped.get(0).contains("not empty"));
+    }
+
+    @Test
+    public void bulkMutate_shouldOmitSkippedOperations_whenNothingDeclined() throws Exception {
+        accessor.setBulkBehavior(ops -> BulkMutationResult.of(
+                List.of(new BulkOperationResult(0, "create-element", "created",
+                        "e-1", "BusinessActor", "Fine")),
+                List.of(), 1, null, List.of()));
+
+        Map<String, Object> parsed = callAndParse("bulk-mutate", Map.of("operations", List.of(
+                Map.of("tool", "create-element",
+                        "params", Map.of("type", "BusinessActor", "name", "Fine")))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> res = (Map<String, Object>) parsed.get("result");
+
+        assertEquals(true, res.get("allSucceeded"));
+        assertNull("The field must stay absent in the normal case",
+                res.get("skippedOperations"));
+    }
+
+    @Test
+    public void bulkMutate_descriptionShouldDocumentSkippedOperations() {
+        String desc = descriptionOf("bulk-mutate");
+        assertTrue("must name the field carrying declined operations",
+                desc.contains("skippedOperations"));
+        // Per-operation entries are built before dispatch, so one can report an action that
+        // never happened. The agent must be told which field is authoritative.
+        assertTrue("must warn that per-operation entries predate the changes being applied",
+                desc.contains("before"));
+        assertTrue("must tie a skip to allSucceeded", desc.contains("allSucceeded"));
+    }
+
+    /**
+     * The description used to state a COUNT beside the field list it introduces, which made the
+     * count load-bearing rather than decorative: an agent that reads "four" and finds three assumes
+     * it missed one. Every field added since cost a second edit to a number nothing computes, and
+     * one of them would eventually not be made — so the count is gone rather than corrected again,
+     * and what is pinned here is that each field is NAMED and that no superseded count survives to
+     * miscount the list beside it.
+     */
+    @Test
+    public void bulkMutate_descriptionShouldDocumentTheConnectionReport() {
+        String desc = descriptionOf("bulk-mutate");
+        assertTrue("must name the field carrying a connection's post-dispatch state",
+                desc.contains("effectiveConnection"));
+        assertTrue("must name the fields carrying a concept's post-dispatch state",
+                desc.contains("effectiveRelationship") && desc.contains("effectiveElement"));
+        assertTrue("must name the field carrying the container a view object sits in, which is "
+                + "the origin its effectiveBounds are measured from",
+                desc.contains("parentViewObjectId"));
+        assertFalse("no count may stand beside the field list: it is maintained by hand, nothing "
+                + "computes it, and a stale one tells an agent it missed a field",
+                desc.contains("Three per-operation fields") || desc.contains("All three are")
+                        || desc.contains("Four per-operation fields")
+                        || desc.contains("Each of the four is omitted")
+                        || desc.contains("Six per-operation fields")
+                        || desc.contains("Each of the six is omitted")
+                        || desc.contains("Seven per-operation fields")
+                        || desc.contains("Each of the seven is omitted"));
+        assertTrue("must say which attributes the relationship report is the answer for, or an "
+                + "agent cannot tell that setting one is now confirmed rather than merely accepted",
+                desc.contains("accessType, associationDirected or influenceStrength"));
+        assertTrue("must state the omit-at-default rule, since a subtype that cannot hold an "
+                + "attribute reports nothing and silence there is not a failure",
+                desc.contains("cannot hold an attribute omits it"));
+        // The gate is "does the entry describe its entity", and describe() now has a branch for a
+        // prepared MoveResultDto — so a moved concept passes it and does carry a report. The
+        // superseded sentence said the opposite, and an agent that reads it declines to look for a
+        // field the server is sending.
+        assertTrue("must carry the gate, not just the type rule",
+                desc.contains("entity is, which every operation on a concept now does"));
+        assertFalse("the superseded gate sentence must not survive alongside the current one",
+                desc.contains("move-to-folder names no entity today")
+                        || desc.contains("any folder or model update — omit it entirely"));
+        assertTrue("must say the value is read after the write rather than echoed, or an agent "
+                + "cannot tell it apart from the parameters it sent",
+                desc.contains("read from the model"));
+        // update-view-connection is dispatched as a bare UpdateViewConnectionCommand, which does
+        // not implement CommitSkippableCommand — so a restyle CANNOT decline, and prose describing
+        // what a declined restyle reports would describe a state the server cannot produce. An
+        // unconditional sentence is a claim about every state, including the unreachable ones.
+        assertFalse("must not describe what a DECLINED update reports — no connection update can "
+                + "decline, so that sentence would be an unreachable claim",
+                desc.contains("an update that declined"));
+    }
+
+    @Test
+    public void beginBatch_descriptionShouldDocumentBatchEnvelopeReshape() {
+        String desc = descriptionOf("begin-batch");
+        assertTrue("must state where the result moves", desc.contains("result.preview"));
+        assertTrue("must name the batch sibling", desc.contains("result.batch"));
+        assertTrue("must name the only informative batch field",
+                desc.contains("sequenceNumber"));
+        // batch.success is hardcoded true and batch.description is a fixed string, so a caller
+        // must not branch on them.
+        assertTrue("must mark the other batch fields as carrying no information",
+                desc.contains("are constants"));
+        // BatchSummaryDto has no id field, so preview is the sole source of created ids.
+        assertTrue("must state end-batch reports no entity IDs",
+                desc.contains("never entity IDs"));
+        // bulk-mutate keeps its normal shape and the two discovery create tools put the element
+        // beside preview — documenting the reshape as unconditional would be false for all three.
+        assertTrue("must carry the bulk-mutate exception",
+                desc.contains("bulk-mutate has no preview"));
+        assertTrue("must carry the discovery-tool exception",
+                desc.contains("search-and-create put the element at result.element"));
+        // The approval gate is checked BEFORE dispatchOrQueue at every accessor call site, and
+        // formatMutationResponse tests isProposal() first — so with the gate on, a mutation
+        // inside an open batch is never queued and never gets a result.batch sibling. Claiming
+        // the batch reshape unconditionally would be false in exactly that state.
+        assertTrue("must state the approval gate outranks batching",
+                desc.contains("approval gate takes precedence over batching"));
+        assertTrue("must state the mutation is not queued while the gate is on",
+                desc.contains("not queued at all"));
+    }
+
+    @Test
+    public void getBatchStatus_descriptionShouldDocumentConditionalFields() {
+        String desc = descriptionOf("get-batch-status");
+        assertTrue("must name the literal mode values", desc.contains("'GUI_ATTACHED'"));
+        assertTrue("must scope the queue fields to batch mode",
+                desc.contains("only in batch mode"));
+        // approvalRequired is Boolean.TRUE or null — NON_NULL drops it, so it is never false.
+        assertTrue("must scope approvalRequired to the gate being on",
+                desc.contains("approvalRequired only when"));
+        assertTrue("must state approvalRequired is absent rather than false",
+                desc.contains("the field is absent instead"));
+        // pendingApprovalCount is null when the queue is empty, not 0.
+        assertTrue("must scope pendingApprovalCount to a non-empty queue",
+                desc.contains("pendingApprovalCount only when"));
+        assertTrue("must state pendingApprovalCount is never zero", desc.contains("never 0"));
+    }
+
+    @Test
+    public void bulkMutate_descriptionShouldDocumentEnvelopeDivergence() {
+        String desc = descriptionOf("bulk-mutate");
+        assertTrue("must state bulk-mutate does not use preview",
+                desc.contains("does not use result.preview"));
+        assertTrue("must state modelChanged is false in both deferred modes",
+                desc.contains("modelChanged is false in "));
+        // validOperationCount/failedValidationCount are added only when hasFailures.
+        assertTrue("must gate the proposal counts on failed validation",
+                desc.contains("only when some operations failed validation"));
+        // bulk's rebuild handle returns the already-reviewed compound rather than re-invoking
+        // prepareXxx, so its approved ids are stable — the INVERSE of the single-tool rule that
+        // get-model-info states. Routing a reader here without saying so would mislead them.
+        assertTrue("must state approved bulk ids are stable",
+                desc.contains("approved bulk are stable"));
+        assertTrue("must give the reason bulk ids survive approval",
+                desc.contains("applies the reviewed compound itself"));
     }
 
     // ---- Tool registration tests ----
@@ -947,6 +1178,222 @@ public class MutationHandlerTest {
                 nextSteps.stream().anyMatch(s -> s.contains("2 succeeded operations")));
     }
 
+    /**
+     * The partial-success path publishes rows too, and what those rows share is published beside
+     * them — in the result, where they are, rather than in an error object this envelope does not
+     * have.
+     *
+     * <p>This is the one of the four row-building sites where many rows reach a caller on a
+     * <em>successful</em> call, so a fix applied only to the refusal builders would leave it
+     * repeating. It is also the only one reachable without a live model, which is what lets it be
+     * asserted in the lane that runs on every change.</p>
+     */
+    @Test
+    public void shouldCarryASharedCorrectionOnce_whenContinueOnErrorReportsManyFailures()
+            throws Exception {
+        String shared = "Use get-view-contents to find valid view object IDs on the view, and "
+                + "back-reference the operation that placed the object rather than the operation "
+                + "that created the concept it draws.";
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> succeeded = List.of(new BulkOperationResult(
+                    0, "create-element", "created", "elem-1", "BusinessActor", "Actor A"));
+            List<BulkOperationFailure> failed = List.of(
+                    new BulkOperationFailure(1, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                            "View object not found: ghost-a", shared),
+                    new BulkOperationFailure(2, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                            "View object not found: ghost-b", shared),
+                    new BulkOperationFailure(3, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                            "View object not found: ghost-c", shared));
+            return new BulkMutationResult(succeeded, failed, 4, false, null, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "create-element",
+                        "params", Map.of("type", "BusinessActor", "name", "Actor A")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-a")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-b")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-c"))),
+                "continueOnError", true);
+
+        McpSchema.CallToolResult callResult = callTool("bulk-mutate", args);
+        Map<String, Object> parsed = parseResult(callResult);
+        Map<String, Object> bulkResult = getResult(parsed);
+
+        assertFalse("a partial success is not an error", callResult.isError());
+        assertNull("the dictionary belongs beside the rows, and the rows are in the result",
+                parsed.get("error"));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> corrections = (Map<String, Object>) bulkResult.get("corrections");
+        assertNotNull("the shared correction must be published once, beside the rows", corrections);
+        assertEquals("one shared string, one entry", 1, corrections.size());
+        assertEquals(shared, corrections.get("VIEW_OBJECT_NOT_FOUND"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> failedOps =
+                (List<Map<String, Object>>) bulkResult.get("failed");
+        assertEquals(3, failedOps.size());
+        for (Map<String, Object> row : failedOps) {
+            assertNull("no row may still carry its own copy: " + row,
+                    row.get("suggestedCorrection"));
+            assertEquals("and every row must name the one that was kept",
+                    "VIEW_OBJECT_NOT_FOUND", row.get("correctionRef"));
+            assertEquals("reassembly must return exactly what the row used to carry",
+                    shared, corrections.get(row.get("correctionRef")));
+            assertNotNull("the row keeps its own account of what went wrong", row.get("message"));
+        }
+    }
+
+    /**
+     * One failure shares a string with nobody, so nothing is carried away from it however long its
+     * correction is.
+     *
+     * <p>The refusal builders never reach the projection with a single failure — they publish no
+     * row array at all below two — so this partial-success path is the only place a lone failure
+     * is projected, and therefore the only place that can prove the rule is in the projection
+     * rather than only in the guards around it. A dictionary emitted for a group of one would move
+     * a correction off the single row that carries it and make the caller resolve a reference to
+     * read what used to be in front of them, for a saving of nothing.</p>
+     */
+    @Test
+    public void shouldLeaveALoneFailuresCorrectionOnItsRow_howeverLongItIs() throws Exception {
+        String long_ = "Use get-view-contents to find valid view object IDs and connection IDs on "
+                + "the view. A back-reference resolves only to something addressable on a view: a "
+                + "note, group, element view object or connection this call created.";
+        assertTrue("the fixture must be past the length a dictionary would pay for",
+                long_.length() > 120);
+        accessor.setBulkBehavior(ops -> new BulkMutationResult(
+                List.of(new BulkOperationResult(0, "create-element", "created",
+                        "elem-1", "BusinessActor", "Actor A")),
+                List.of(new BulkOperationFailure(1, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                        "View object not found: ghost-a", long_)),
+                2, false, null, null));
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "create-element",
+                        "params", Map.of("type", "BusinessActor", "name", "Actor A")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-a"))),
+                "continueOnError", true);
+
+        Map<String, Object> bulkResult = getResult(parseResult(callTool("bulk-mutate", args)));
+        assertNull("one failure shares nothing, so nothing is carried away from it",
+                bulkResult.get("corrections"));
+        assertNull(bulkResult.get("messages"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> failedOps =
+                (List<Map<String, Object>>) bulkResult.get("failed");
+        assertEquals(1, failedOps.size());
+        assertEquals("the row keeps its own correction, whole and in place",
+                long_, failedOps.get(0).get("suggestedCorrection"));
+        assertNull(failedOps.get(0).get("correctionRef"));
+    }
+
+    /**
+     * Rows that share a long ending with no sentence boundary in it are left alone.
+     *
+     * <p>Splitting needs somewhere to split. When the shared ending runs back past every full stop
+     * there is no point at which a head could be cut and still read as something a client can take
+     * at face value, so the projection declines rather than cutting mid-clause — the conservative
+     * direction, at the cost of a saving it could otherwise have taken.</p>
+     *
+     * <p>Built here from hand-written failures because no live refusal produces this shape: the
+     * branch exists for strings the tools do not currently throw, and a rule with no fixture
+     * reaching it is a rule nothing is holding.</p>
+     */
+    @Test
+    public void shouldDeclineToSplit_whenTheSharedEndingHasNoSentenceBoundary() throws Exception {
+        String tail = " and the identifier must be one this view already carries rather than one "
+                + "the caller expects it to carry after some later operation has run";
+        assertTrue("the fixture's shared ending must be past the length gate", tail.length() > 80);
+        assertFalse("and must contain no sentence boundary to split on", tail.contains(". "));
+        accessor.setBulkBehavior(ops -> new BulkMutationResult(
+                List.of(),
+                List.of(new BulkOperationFailure(0, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                                "Object ghost-a was not found" + tail, null),
+                        new BulkOperationFailure(1, "update-view-object", "VIEW_OBJECT_NOT_FOUND",
+                                "Object ghost-b was not found" + tail, null)),
+                2, false, null, null));
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-a")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-b"))),
+                "continueOnError", true);
+
+        Map<String, Object> bulkResult = getResult(parseResult(callTool("bulk-mutate", args)));
+        assertNull("nothing may be carried away when there is nowhere to cut",
+                bulkResult.get("messages"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> failedOps =
+                (List<Map<String, Object>>) bulkResult.get("failed");
+        for (Map<String, Object> row : failedOps) {
+            assertNull("so every row keeps its whole message: " + row, row.get("messageRef"));
+            assertTrue(String.valueOf(row.get("message")).endsWith(tail));
+        }
+    }
+
+    /**
+     * A failure carrying no error code still produces a dictionary a JSON encoder will take.
+     *
+     * <p>The error code is three things at once here — the group a row is bucketed into, the value
+     * of its reference, and the key of the dictionary entry — and they have to be the same string.
+     * Reading the group from a sanitised value and the reference from the raw one leaves a row
+     * naming a key the dictionary does not hold; worse, a null code written as a map key is
+     * something Jackson refuses outright, so the refusal would fail while being serialised and the
+     * caller would get an internal error in place of a report that used to work. Losing the whole
+     * response is a worse outcome than the duplication this mechanism removes.</p>
+     *
+     * <p>The interface permits a null code and nothing else holds that, which is why this is
+     * pinned from hand-written failures: both collectors currently default a missing code to
+     * {@code UNKNOWN}, so no live path reaches it and no live path guards it either.</p>
+     */
+    @Test
+    public void shouldStillPublishAUsableDictionary_whenFailuresCarryNoErrorCode() throws Exception {
+        String shared = "Use get-view-contents to find valid view object IDs on the view, and "
+                + "back-reference the operation that placed the object rather than the one that "
+                + "created the concept it draws.";
+        accessor.setBulkBehavior(ops -> new BulkMutationResult(
+                List.of(),
+                List.of(new BulkOperationFailure(0, "update-view-object", null,
+                                "View object not found: ghost-a", shared),
+                        new BulkOperationFailure(1, "update-view-object", null,
+                                "View object not found: ghost-b", shared)),
+                2, false, null, null));
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-a")),
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewId", "v", "viewObjectId", "ghost-b"))),
+                "continueOnError", true);
+
+        // Serialising at all is half the assertion: a null map key throws here, not later.
+        McpSchema.CallToolResult callResult = callTool("bulk-mutate", args);
+        Map<String, Object> bulkResult = getResult(parseResult(callResult));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> corrections = (Map<String, Object>) bulkResult.get("corrections");
+        assertNotNull("the two rows share a remedy, so it is carried once", corrections);
+        assertFalse("and no entry may be keyed by null: " + corrections.keySet(),
+                corrections.containsKey(null));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> failedOps =
+                (List<Map<String, Object>>) bulkResult.get("failed");
+        for (Map<String, Object> row : failedOps) {
+            Object ref = row.get("correctionRef");
+            assertNotNull("every row must name an entry, not null: " + row, ref);
+            assertEquals("and the entry it names must resolve to what the row used to carry",
+                    shared, corrections.get(ref));
+        }
+    }
+
     @Test
     public void shouldFormatAllFailedResponse_whenBulkMutateAllFail() throws Exception {
         accessor.setBulkBehavior(ops -> {
@@ -990,7 +1437,7 @@ public class MutationHandlerTest {
     // ---- bulk-mutate flows labelExpression through update-view-object ----
 
     @Test
-    public void shouldFlowLabelExpression_inBulkUpdateViewObject_AC2_AC11() throws Exception {
+    public void shouldFlowLabelExpression_inBulkUpdateViewObject() throws Exception {
         // Capture the operations the handler hands to the accessor so we can
         // assert the labelExpression param survived the JSON → BulkOperation
         // conversion intact.
@@ -1033,7 +1480,7 @@ public class MutationHandlerTest {
         accessor.setBulkBehavior(ops -> {
             List<BulkOperationResult> results = new ArrayList<>();
             results.add(new BulkOperationResult(0, "set-view-label-expression", "updated",
-                    "view-1", "DiagramModel", "Main View", 11, 1));
+                    "view-1", "ArchimateDiagramModel", "Main View", 11, 1));
             return new BulkMutationResult(results, 1, true, null);
         });
 
@@ -1054,7 +1501,7 @@ public class MutationHandlerTest {
         assertEquals(1, operations.size());
         Map<String, Object> op = operations.get(0);
         assertEquals("set-view-label-expression", op.get("tool"));
-        assertEquals("DiagramModel", op.get("entityType"));
+        assertEquals("ArchimateDiagramModel", op.get("entityType"));
         assertEquals("Main View", op.get("entityName"));
         assertEquals(11, ((Number) op.get("appliedCount")).intValue());
         assertEquals(1, ((Number) op.get("skippedCount")).intValue());
@@ -1085,8 +1532,182 @@ public class MutationHandlerTest {
         assertFalse("single-entity op must not carry skippedCount", op.containsKey("skippedCount"));
     }
 
+    /**
+     * The connection report must survive {@code formatBulkResponse}, which hand-builds each
+     * operation map key by key.
+     *
+     * <p>This assertion is on the serialized JSON the tool actually returns, not on the result
+     * object, because the object is exactly where the predecessor family's evidence stopped being
+     * true: {@code effectiveBounds} was computed, attached to the DTO, and never copied across
+     * here, so a typed assertion passed while nothing reached the agent. It took a second commit.
+     * Attaching a component to the record proves it was computed; only parsing the envelope proves
+     * it was sent.</p>
+     */
     @Test
-    public void shouldFlowEmptyLabelExpression_inBulkUpdateViewObject_AC3() throws Exception {
+    public void shouldPutEffectiveConnectionOnTheWire_whenABulkOperationTouchedAConnection()
+            throws Exception {
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "add-connection-to-view", "created",
+                    "conn-1", "AssociationRelationship", null)
+                    .withEffectiveConnection(new ViewConnectionDto(
+                            "conn-1", "rel-1", "AssociationRelationship", "vo-src", "vo-tgt",
+                            List.of(new BendpointDto(10, 20, -10, 20)), null,
+                            new AnchorPointDto(60, 30), new AnchorPointDto(260, 30), 2,
+                            "#D35400", 2, null, null, null, null, null)));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "add-connection-to-view",
+                        "params", Map.of(
+                                "viewId", "view-1",
+                                "relationshipId", "rel-1",
+                                "sourceViewObjectId", "vo-src",
+                                "targetViewObjectId", "vo-tgt"))
+        ));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>)
+                getResult(callAndParse("bulk-mutate", args)).get("operations");
+        Map<String, Object> op = operations.get(0);
+
+        assertTrue("the per-operation map must carry the connection report",
+                op.containsKey("effectiveConnection"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> connection = (Map<String, Object>) op.get("effectiveConnection");
+        assertEquals("#D35400", connection.get("lineColor"));
+        assertEquals(2, ((Number) connection.get("lineWidth")).intValue());
+        assertEquals("conn-1", connection.get("viewConnectionId"));
+        assertNotNull("anchors are the field a later operation can change without naming the "
+                + "connection, so they are the ones worth proving reached the wire",
+                connection.get("sourceAnchor"));
+        assertNotNull(connection.get("targetAnchor"));
+    }
+
+    /**
+     * The same proof for the relationship report, at the same boundary and for the same reason.
+     *
+     * <p>{@code formatBulkResponse} hand-builds each operation's map key by key, so a component
+     * that is computed, attached to the record and never copied across is invisible on the wire
+     * while every typed assertion about it still passes. That has cost this family a field once
+     * already, which is why the assertion here parses the envelope rather than reading the DTO.</p>
+     */
+    @Test
+    public void shouldPutEffectiveRelationshipOnTheWire_whenABulkOperationTouchedARelationship()
+            throws Exception {
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "update-relationship", "updated",
+                    "rel-1", "InfluenceRelationship", "Drives")
+                    .withEffectiveRelationship(new RelationshipDto(
+                            "rel-1", "Drives", "InfluenceRelationship", null, "el-src", "el-tgt",
+                            false, null, null, null, null, null, null, "+++")));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-relationship",
+                        "params", Map.of("id", "rel-1", "influenceStrength", "+++"))
+        ));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>)
+                getResult(callAndParse("bulk-mutate", args)).get("operations");
+        Map<String, Object> op = operations.get(0);
+
+        assertTrue("the per-operation map must carry the relationship report",
+                op.containsKey("effectiveRelationship"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> relationship = (Map<String, Object>) op.get("effectiveRelationship");
+        assertEquals("the semantic attribute is the field the bulk caller could set and was never "
+                + "told about, so it is the one worth proving reached the wire",
+                "+++", relationship.get("influenceStrength"));
+        assertEquals("rel-1", relationship.get("id"));
+        assertEquals("InfluenceRelationship", relationship.get("type"));
+        assertFalse("an attribute this subtype cannot hold must stay off the wire",
+                relationship.containsKey("accessType"));
+    }
+
+    /** The element half, proven at the same boundary. */
+    @Test
+    public void shouldPutEffectiveElementOnTheWire_whenABulkOperationTouchedAnElement()
+            throws Exception {
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "update-element", "updated",
+                    "el-1", "BusinessActor", "Alpha")
+                    .withEffectiveElement(ElementDto.standard("el-1", "Alpha", "BusinessActor",
+                            null, "Business", "Rewritten docs", null)));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-element",
+                        "params", Map.of("id", "el-1", "documentation", "Rewritten docs"))
+        ));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>)
+                getResult(callAndParse("bulk-mutate", args)).get("operations");
+        Map<String, Object> op = operations.get(0);
+
+        assertTrue("the per-operation map must carry the element report",
+                op.containsKey("effectiveElement"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> element = (Map<String, Object>) op.get("effectiveElement");
+        assertEquals("Rewritten docs", element.get("documentation"));
+        assertEquals("el-1", element.get("id"));
+    }
+
+    /** A non-concept operation's wire bytes must be exactly what they were before. */
+    @Test
+    public void shouldOmitTheConceptReports_whenTheOperationTouchedNoConcept() throws Exception {
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "update-view-object", "updated",
+                    "vo-1", "BusinessActor", "Test"));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewObjectId", "vo-1"))
+        ));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>)
+                getResult(callAndParse("bulk-mutate", args)).get("operations");
+        assertFalse("a view-object operation must stay byte-identical to before",
+                operations.get(0).containsKey("effectiveRelationship"));
+        assertFalse(operations.get(0).containsKey("effectiveElement"));
+    }
+
+    /** A non-connection operation's wire bytes must be exactly what they were before. */
+    @Test
+    public void shouldOmitEffectiveConnection_whenTheOperationTouchedNoConnection()
+            throws Exception {
+        accessor.setBulkBehavior(ops -> {
+            List<BulkOperationResult> results = new ArrayList<>();
+            results.add(new BulkOperationResult(0, "update-view-object", "updated",
+                    "vo-1", "BusinessActor", "Test"));
+            return new BulkMutationResult(results, 1, true, null);
+        });
+
+        Map<String, Object> args = Map.of("operations", List.of(
+                Map.of("tool", "update-view-object",
+                        "params", Map.of("viewObjectId", "vo-1"))
+        ));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> operations = (List<Map<String, Object>>)
+                getResult(callAndParse("bulk-mutate", args)).get("operations");
+        assertFalse("a non-connection operation must stay byte-identical to before",
+                operations.get(0).containsKey("effectiveConnection"));
+    }
+
+    @Test
+    public void shouldFlowEmptyLabelExpression_inBulkUpdateViewObject() throws Exception {
         final java.util.concurrent.atomic.AtomicReference<List<BulkOperation>> capturedOps =
                 new java.util.concurrent.atomic.AtomicReference<>();
         accessor.setBulkBehavior(ops -> {
@@ -1130,7 +1751,7 @@ public class MutationHandlerTest {
     // ---- update-model bulk-mutate parity tests ----
 
     @Test
-    public void shouldFlowUpdateModel_inBulkMutate_AC9() throws Exception {
+    public void shouldFlowUpdateModel_inBulkMutate() throws Exception {
         Map<String, Object> args = Map.of("operations", List.of(
                 Map.of("tool", "update-model",
                         "params", Map.of("name", "Renamed Model", "purpose", "New EA cut"))
@@ -1150,7 +1771,7 @@ public class MutationHandlerTest {
     }
 
     @Test
-    public void shouldFlowEmptyPurpose_inBulkUpdateModel_AC9() throws Exception {
+    public void shouldFlowEmptyPurpose_inBulkUpdateModel() throws Exception {
         // Empty-string purpose must NOT cause the bulk-mutate framing to reject the op.
         // The empty-string → clearPurpose conversion happens inside prepareBulkOperation
         // (Layer 3) — this test verifies the Layer 2 framing accepts the request.
@@ -1168,7 +1789,7 @@ public class MutationHandlerTest {
     }
 
     @Test
-    public void shouldAdvertiseUpdateModel_inBulkMutateDescription_AC9() {
+    public void shouldAdvertiseUpdateModel_inBulkMutateDescription() {
         // The bulk-mutate tool description is built from BulkOperation.SUPPORTED_TOOLS_ORDERED.
         // Adding "update-model" to the list automatically extends the description.
         // This is the regression pin for the one-liner registry insert in BulkOperation.
@@ -1183,7 +1804,7 @@ public class MutationHandlerTest {
     }
 
     @Test
-    public void shouldAdvertiseAddViewReferenceToView_inBulkMutateDescription_AC9() {
+    public void shouldAdvertiseAddViewReferenceToView_inBulkMutateDescription() {
         // Regression pin for the one-liner registry insert.
         String description = registry.getToolSpecifications().stream()
                 .filter(s -> "bulk-mutate".equals(s.tool().name()))
@@ -1193,6 +1814,111 @@ public class MutationHandlerTest {
         assertNotNull(description);
         assertTrue("bulk-mutate description must advertise add-view-reference-to-view",
                 description.contains("add-view-reference-to-view"));
+    }
+
+    @Test
+    public void shouldPointToStandaloneToolsForPerOperationDocs_inBulkMutateDescription() {
+        // bulk-mutate owns batching semantics; each operation's own parameters and response
+        // fields are documented on the standalone tool of the same name. Without this pointer
+        // an agent driving bulk-mutate has no route to per-operation detail, while the same
+        // operation called standalone is fully documented — two discoverability tiers over
+        // one execution path.
+        //
+        // Assert SHORT, STABLE substrings, not whole sentences: a full-string match would
+        // fail on the next innocuous rewording of the description.
+        String description = registry.getToolSpecifications().stream()
+                .filter(s -> "bulk-mutate".equals(s.tool().name()))
+                .findFirst()
+                .orElseThrow()
+                .tool().description();
+        assertNotNull(description);
+        assertTrue("bulk-mutate description must point at the standalone tool of the same name",
+                description.contains("standalone tool of the same name"));
+        assertTrue("bulk-mutate description must scope itself to batching semantics",
+                description.contains("batching semantics only"));
+        // The pointer must direct the caller to READ the standalone tool's description, not to
+        // invoke it — several bulk operations are destructive (clear-view, delete-*), so an
+        // agent must never be nudged into calling one just to discover its response shape.
+        assertTrue("pointer must direct the agent to the tool's description, not to calling it",
+                description.contains("read that tool's description"));
+    }
+
+    @Test
+    public void shouldDocumentTheBulkOnlyOperation_inBulkMutateDescription() {
+        // set-view-label-expression is the ONE supported operation with no standalone tool
+        // (verified against the registered tool names), so bulk-mutate is its only
+        // LLM-facing surface. The pointer above would send an agent looking for a tool that
+        // does not exist unless this exception is named and documented here.
+        String description = registry.getToolSpecifications().stream()
+                .filter(s -> "bulk-mutate".equals(s.tool().name()))
+                .findFirst()
+                .orElseThrow()
+                .tool().description();
+        assertNotNull(description);
+        assertTrue("bulk-mutate description must name the bulk-only operation as an exception",
+                description.contains("set-view-label-expression is bulk-only"));
+        assertTrue("bulk-only operation's required params must be documented on its only surface",
+                description.contains("labelExpression"));
+        assertTrue("bulk-only operation's objectTypes filter must be documented",
+                description.contains("objectTypes"));
+        assertTrue("bulk-only operation's result fields must be documented",
+                description.contains("appliedCount") && description.contains("skippedCount"));
+        // The blank-name skip is CONDITIONAL: SetViewLabelExpressionCommand passes
+        // requireName = (value != null), so nameless objects are skipped only while setting a
+        // non-empty expression — when clearing they are still cleared and counted in
+        // appliedCount. Documenting the guard unconditionally would make an agent mispredict
+        // skippedCount for every mass-clear call.
+        assertTrue("blank-name skip must be documented as conditional on setting, not clearing",
+                description.contains("only when setting a non-empty")
+                        && description.contains("never when clearing"));
+    }
+
+    /**
+     * Guards the division of labour the pointer promises: bulk-mutate must NOT accumulate
+     * per-operation documentation for operations that have their own standalone tool. With
+     * 28 supported operations, inlining that detail would balloon the description, cost
+     * tokens on every tool listing, and drift the first time a standalone tool changes.
+     */
+    @Test
+    public void shouldNotDuplicatePerOperationDetail_inBulkMutateDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(s -> "bulk-mutate".equals(s.tool().name()))
+                .findFirst()
+                .orElseThrow()
+                .tool().description();
+        assertNotNull(description);
+        // Parameters that belong exclusively to standalone-documented operations. If one of
+        // these appears here, per-op detail has started leaking into the batching surface.
+        for (String standaloneOnlyParam : new String[] {
+                "imageCoveragePercent", "connectionRouterType", "fillColor", "bendpoints" }) {
+            assertFalse("bulk-mutate must not duplicate per-operation detail ('"
+                            + standaloneOnlyParam + "' belongs on the standalone tool)",
+                    description.contains(standaloneOnlyParam));
+        }
+    }
+
+    /**
+     * Image import is the one capability an agent reaches for here and cannot have: an archive
+     * write has no inverse, so it can be neither rolled back with a declined proposal nor deferred
+     * to execute time. Listing only what IS supported leaves the agent to discover the absence by
+     * probing, learning nothing about why or where to go instead — so the reason and the redirect
+     * belong beside the supported list. The sibling half of this pin lives on add-image-to-model's
+     * own description; an agent arriving from either direction must find the same answer.
+     */
+    @Test
+    public void shouldExplainWhyImageImportIsNotBulkable_inBulkMutateDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(s -> "bulk-mutate".equals(s.tool().name()))
+                .findFirst()
+                .orElseThrow()
+                .tool().description();
+        assertNotNull(description);
+        assertTrue("bulk-mutate must name the import tool it cannot carry",
+                description.contains("add-image-to-model"));
+        assertTrue("bulk-mutate must give the reason, not just the absence",
+                description.contains("not undoable"));
+        assertTrue("bulk-mutate must redirect to the batch form that does work",
+                description.contains("'images'"));
     }
 
     // ---- Helper methods ----

@@ -12,20 +12,21 @@ import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 
 /**
- * Single-undo-unit pins for the G5 styling rail extensions to
+ * Single-undo-unit pins for the typography styling-rail extensions to
  * {@link UpdateViewConnectionCommand}: typography (font composite-string merge).
  *
- * <p>Note: lineStyle is a view-object property in Archi 5.8 (Task-9 empirical correction)
- * — see {@link UpdateViewObjectCommandG5Test} for view-object lineStyle pins.</p>
+ * <p>Note: lineStyle is a view-object property in Archi 5.8 (established empirically, against
+ * the earlier assumption that it was a connection property) — see
+ * {@link UpdateViewObjectCommandTypographyAndDecorationTest} for view-object lineStyle pins.</p>
  */
-public class UpdateViewConnectionCommandG5Test {
+public class UpdateViewConnectionCommandTypographyTest {
 
     private static IDiagramModelArchimateConnection freshConnection() {
         return IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
     }
 
-    private static StylingParams connectionG5Styling(String fontName, Integer fontSize,
-                                                      String fontStyle) {
+    private static StylingParams connectionTypographyStyling(String fontName, Integer fontSize,
+                                                             String fontStyle) {
         return new StylingParams(
                 null, null, null, null, null, null, null, null,
                 fontName, fontSize, fontStyle, null, null, null, null, null);
@@ -36,12 +37,12 @@ public class UpdateViewConnectionCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldApplyFont_onConnection_AC3() {
+    public void shouldApplyFont_onConnection() {
         IDiagramModelArchimateConnection conn = freshConnection();
         assertNull(conn.getFont());
 
         UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
-                conn, List.of(), connectionG5Styling("Verdana", 11, "italic"));
+                conn, List.of(), connectionTypographyStyling("Verdana", 11, "italic"));
         cmd.execute();
 
         assertEquals("Verdana|11|2", conn.getFont());
@@ -51,12 +52,12 @@ public class UpdateViewConnectionCommandG5Test {
     }
 
     @Test
-    public void shouldMergeFontStyleOnly_intoExistingComposite_AC3() {
+    public void shouldMergeFontStyleOnly_intoExistingComposite() {
         IDiagramModelArchimateConnection conn = freshConnection();
         conn.setFont("Segoe UI|10|0");  // NORMAL
 
         UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
-                conn, List.of(), connectionG5Styling(null, null, "bold"));
+                conn, List.of(), connectionTypographyStyling(null, null, "bold"));
         cmd.execute();
 
         assertEquals("Segoe UI|10|1", conn.getFont());
@@ -66,21 +67,21 @@ public class UpdateViewConnectionCommandG5Test {
     }
 
     // ------------------------------------------------------------------
-    // back-compat: pre-G5 styling-only call leaves font alone
+    // back-compat: a pre-existing styling-only call leaves font alone
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldLeaveFontUntouched_whenNoG5FieldsProvided_AC11() {
+    public void shouldLeaveFontUntouched_whenNoTypographyFieldsProvided() {
         IDiagramModelArchimateConnection conn = freshConnection();
         conn.setFont("PreExistingFont|12|2");
 
-        // Pre-G5 styling only.
-        StylingParams pre14_2_styling = new StylingParams(
+        // Pre-existing styling fields only.
+        StylingParams preExistingStyling = new StylingParams(
                 null, "#FF0000", null, null, 2, null, null, null,
                 null, null, null, null, null, null, null, null);
 
         UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
-                conn, List.of(), pre14_2_styling);
+                conn, List.of(), preExistingStyling);
         cmd.execute();
 
         // hasStylingChange triggered by lineColor + lineWidth → applyStyling block runs,
@@ -90,11 +91,11 @@ public class UpdateViewConnectionCommandG5Test {
     }
 
     // ------------------------------------------------------------------
-    // single-undo-unit covering typography + pre-G5 fields
+    // single-undo-unit covering typography + the pre-existing styling fields
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldUndoAllConnectionStylingTogether_AC10() {
+    public void shouldUndoAllConnectionStylingTogether() {
         IDiagramModelArchimateConnection conn = freshConnection();
         conn.setLineColor("#000000");
         conn.setFont("Segoe UI|9|0");
@@ -122,7 +123,7 @@ public class UpdateViewConnectionCommandG5Test {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldExposeCapturedConnectionG5State_forTesting() {
+    public void shouldExposeCapturedConnectionTypographyState_forTesting() {
         IDiagramModelArchimateConnection conn = freshConnection();
         conn.setFont("Arial|10|0");
 

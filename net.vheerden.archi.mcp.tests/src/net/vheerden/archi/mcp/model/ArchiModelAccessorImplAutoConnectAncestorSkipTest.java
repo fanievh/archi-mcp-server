@@ -1,7 +1,9 @@
 package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.beans.PropertyChangeListener;
@@ -27,6 +29,8 @@ import com.archimatetool.model.IBusinessProcess;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
+import net.vheerden.archi.mcp.response.dto.AddToViewResultDto.SkippedConnection;
+import net.vheerden.archi.mcp.response.dto.ProposalDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoConnectResultDto.SkippedNestingPair;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
@@ -57,10 +61,21 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     private StubEditorModelManager stubModelManager;
     private ArchiModelAccessorImpl accessor;
 
+    /**
+     * Whether the gated dispatcher is currently parking mutations for a human.
+     *
+     * <p>Flipped mid-test on purpose: the card tests need a nested fixture, which they have to
+     * BUILD by applying placements, and a gate that was on from the start would park those instead
+     * of executing them — leaving the pass with nothing nested to decline and a card assertion that
+     * passes for the wrong reason.</p>
+     */
+    private boolean approvalRequired;
+
     @Before
     public void setUp() {
         factory = IArchimateFactory.eINSTANCE;
         stubModelManager = new StubEditorModelManager();
+        approvalRequired = false;
     }
 
     @After
@@ -76,7 +91,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldSkipNestedAncestorPair_descendantInsideAncestor_AC1() {
+    public void shouldSkipNestedAncestorPair_descendantInsideAncestor() {
         // Uses RealizationRelationship — literal match to the spec
         // AND mirrors the View K retail-bank reproducer (WP→Deliverable
         // realization is the exact bug surface the empirical caught).
@@ -97,7 +112,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
         String childVoId = childRes.entity().viewObject().viewObjectId();
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         assertEquals("No connection should be created", 0, dto.connectionsCreated());
@@ -136,7 +151,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldDrawSiblingPair_insideSameGroup_AC2() {
+    public void shouldDrawSiblingPair_insideSameGroup() {
         IArchimateModel model = buildModelWithPair("sib-A", "sib-B");
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
@@ -152,7 +167,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
                 150, 10, 120, 55, false, groupVoId, null, null);
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         assertEquals("Sibling pair inside a group must be drawn",
@@ -170,10 +185,10 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldSkipBothEdges_threeDeepNesting_AC3() {
+    public void shouldSkipBothEdges_threeDeepNesting() {
         IArchimateModel model = factory.createArchimateModel();
-        model.setName("Test 14-11 AC-3");
-        model.setId("model-14-11-ac3");
+        model.setName("Auto-Connect Ancestor Skip Test");
+        model.setId("model-auto-connect-ancestor-skip");
         model.setDefaults();
 
         IApplicationComponent containerX = factory.createApplicationComponent();
@@ -226,7 +241,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
         String dVoId = dRes.entity().viewObject().viewObjectId();
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         assertEquals("Neither transitive ancestor pair is drawn",
@@ -258,7 +273,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldDrawCrossBranchPair_AC4() {
+    public void shouldDrawCrossBranchPair() {
         IArchimateModel model = buildModelWithPair("cross-A", "cross-B");
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
@@ -279,7 +294,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
                 10, 10, 120, 55, false, gyVoId, null, null);
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         assertEquals("Cross-branch pair must be drawn",
@@ -296,7 +311,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldRecordSkippedPair_evenWhenAllCandidatesAreSkipped_AC5() {
+    public void shouldRecordSkippedPair_evenWhenAllCandidatesAreSkipped() {
         IArchimateModel model = buildModelWithPair("only-A", "only-B");
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
@@ -312,7 +327,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
         String childVoId = childRes.entity().viewObject().viewObjectId();
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         // Hits the empty-commands early-return branch (no other relationships exist).
@@ -342,7 +357,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // ------------------------------------------------------------------
 
     @Test
-    public void shouldPreserveExistingDtoFields_byteIdenticalOnFlatViews_AC6() {
+    public void shouldPreserveExistingDtoFields_byteIdenticalOnFlatViews() {
         IArchimateModel model = buildFlatBaselineModel();
         stubModelManager.setModels(List.of(model));
         accessor = createAccessorWithTestDispatcher(model);
@@ -354,7 +369,7 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
                 250, 50, 120, 55, false, null, null, null);
 
         MutationResult<AutoConnectResultDto> result = accessor.autoConnectView(
-                "default", "view-001", null, null, null, null);
+                "default", "view-001", null, null, null, null, null);
 
         AutoConnectResultDto dto = result.entity();
         // Prior fields — must be byte-identical to legacy behaviour.
@@ -367,6 +382,308 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
         assertNotNull("skippedDueToNesting always present", dto.skippedDueToNesting());
         assertTrue("Flat view must yield zero ancestor/descendant skips",
                 dto.skippedDueToNesting().isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // The sibling that places and connects in one call. add-to-view with
+    // autoConnect scans the same relationships and drew the pair this pass
+    // declines, on exactly the shape the server's own guidance prescribes.
+    // ------------------------------------------------------------------
+
+    /**
+     * Placing a child inside a container it has a relationship with must not draw the line between
+     * them. The nesting already expresses the relationship, and the connection would leave the
+     * container and re-enter it — the self-pass-through {@code assess-layout} flags.
+     *
+     * <p>The model relationship is untouched, which is what makes this a disclosure and not a
+     * refusal: the response names the pair, and an agent that wants the line anyway has both view
+     * object ids and the relationship id to draw it with.</p>
+     */
+    @Test
+    public void shouldDeclineTheSelfPassThrough_whenAPlacementNestsInsideARelatedEndpoint() {
+        IArchimateModel model = buildModelWithPair("wp-A", "del-1", true);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        String parentVoId = accessor.addToView("default", "view-001", "wp-A",
+                50, 50, 300, 200, false, null, null, null)
+                .entity().viewObject().viewObjectId();
+
+        MutationResult<AddToViewResultDto> nested = accessor.addToView(
+                "default", "view-001", "del-1", 10, 10, 100, 50,
+                true, parentVoId, null, null);
+
+        AddToViewResultDto dto = nested.entity();
+        String childVoId = dto.viewObject().viewObjectId();
+
+        assertTrue("no connection may be drawn between a child and the container it sits in",
+                dto.autoConnections() == null || dto.autoConnections().isEmpty());
+        assertEquals("and the pair must be named, not merely omitted",
+                1, dto.skippedDueToNesting().size());
+        SkippedConnection pair = dto.skippedDueToNesting().get(0);
+        assertEquals(parentVoId, pair.sourceViewObjectId());
+        assertEquals(childVoId, pair.targetViewObjectId());
+        assertEquals("RealizationRelationship", pair.relationshipType());
+        assertEquals("rel-wp-A-del-1", pair.relationshipId());
+        assertEquals("ancestor_descendant_on_view", pair.reason());
+        assertNotNull("the model relationship is preserved — this declines a LINE, not a fact",
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(
+                        model, "rel-wp-A-del-1"));
+    }
+
+    /**
+     * The control, and the non-regression. The same relationship between two objects that are
+     * siblings rather than nested is still drawn, and both skip lists stay empty — so a flat
+     * placement serializes exactly as it did before this pass learned to decline anything.
+     */
+    @Test
+    public void shouldStillDrawTheConnection_whenTheAutoConnectedPlacementIsNotNested() {
+        IArchimateModel model = buildModelWithPair("wp-A", "del-1", true);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        accessor.addToView("default", "view-001", "wp-A",
+                50, 50, 300, 200, false, null, null, null);
+
+        AddToViewResultDto dto = accessor.addToView("default", "view-001", "del-1",
+                500, 50, 100, 50, true, null, null, null).entity();
+
+        assertEquals("a sibling pair is an ordinary connection and must still be drawn",
+                1, dto.autoConnections().size());
+        assertTrue("nothing was declined for nesting", dto.skippedDueToNesting().isEmpty());
+        assertTrue("nothing was declined by the cap", dto.skippedByCap().isEmpty());
+        assertNull("and the cap count stays absent", dto.skippedAutoConnections());
+    }
+
+    /**
+     * The cap counted what it dropped and named none of it. An agent told that eight connections
+     * were excluded cannot draw any of them; one told which can place each with
+     * {@code add-connection-to-view}. The count is kept — it was published — and is now pinned as
+     * exactly the size of the list beside it, so the two cannot drift.
+     */
+    @Test
+    public void shouldNameThePairsTheCapDropped_ratherThanOnlyCountingThem() {
+        int over = 3;
+        IArchimateModel model = buildHubModel(50 + over);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        for (int i = 0; i < 50 + over; i++) {
+            accessor.addToView("default", "view-001", "spoke-" + i,
+                    600, 40 * i, 80, 30, false, null, null, null);
+        }
+
+        AddToViewResultDto dto = accessor.addToView("default", "view-001", "hub",
+                50, 50, 200, 100, true, null, null, null).entity();
+
+        assertEquals("the cap still applies", 50, dto.autoConnections().size());
+        assertEquals("the published count is unchanged",
+                Integer.valueOf(over), dto.skippedAutoConnections());
+        assertEquals("and it is now the size of a list that names each one",
+                over, dto.skippedByCap().size());
+        for (SkippedConnection dropped : dto.skippedByCap()) {
+            assertEquals("auto_connect_cap_reached", dropped.reason());
+            assertNotNull("each dropped pair must name its relationship, or an agent cannot draw "
+                    + "it: " + dropped, dropped.relationshipId());
+            assertNotNull(dropped.sourceViewObjectId());
+            assertNotNull(dropped.targetViewObjectId());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The approval card — the one surface a HUMAN authorises from.
+    // ------------------------------------------------------------------
+
+    /**
+     * The card is the only description of the pending write anyone gets: it travels verbatim onto
+     * the wire for {@code list-pending-approvals} and verbatim into the card's technical details.
+     * It collapsed the pairs to a bare integer there, so the response named what was suppressed and
+     * the authorising surface did not.
+     *
+     * <p>Asserted as "not a Number" as well as by content, because replacing the list with
+     * {@code .size()} is the exact regression, and an assertion that only checked presence would
+     * survive it.</p>
+     */
+    @Test
+    public void shouldCarryThePairsOntoTheApprovalCard_ratherThanTheirCount() {
+        // The fixture needs a DRAWABLE pair beside the nested one. A pass whose every candidate is
+        // skipped returns at the empty-commands branch, well above the approval gate — correctly,
+        // since there is nothing to authorise — so a lone nested pair would store no card at all
+        // and the assertions below would never run.
+        IArchimateModel model = buildModelWithNestedAndDrawablePairs();
+        stubModelManager.setModels(List.of(model));
+        MutationDispatcher gated = gatedDispatcher(model);
+        accessor = new ArchiModelAccessorImpl(stubModelManager, gated);
+
+        // Place all three with approval OFF at the dispatcher, so the fixture reaches the nested
+        // shape rather than parking its own placements for a human.
+        String parentVoId = accessor.addToView("default", "view-001", "wp-A",
+                50, 50, 300, 200, false, null, null, null)
+                .entity().viewObject().viewObjectId();
+        accessor.addToView("default", "view-001", "del-1", 10, 10, 100, 50,
+                false, parentVoId, null, null);
+        accessor.addToView("default", "view-001", "sib-1", 500, 50, 120, 55,
+                false, null, null, null);
+
+        approvalRequired = true;
+        accessor.autoConnectView("default", "view-001", null, null, null, null, null);
+
+        List<ProposalDto> pending = gated.getPendingProposalDtos("default");
+        assertEquals("the call must have stored exactly one proposal", 1, pending.size());
+        Object disclosed = pending.get(0).proposedChanges().get("skippedDueToNesting");
+
+        assertEquals("the fixture must still propose real work, or the gate is not the thing "
+                + "under test", 1, pending.get(0).proposedChanges().get("connectionsCreated"));
+        assertNotNull("the card must disclose what the pass declined to draw", disclosed);
+        assertFalse("a count is not a disclosure: the pairs collapse to a number the human cannot "
+                + "act on. Card carried: " + disclosed, disclosed instanceof Number);
+        assertTrue("it must be the pairs themselves. Card carried: " + disclosed,
+                disclosed instanceof List);
+        assertEquals("both endpoints and the relationship type, per pair",
+                1, ((List<?>) disclosed).size());
+        assertTrue("and each entry must be addressable. Card carried: " + disclosed,
+                ((List<?>) disclosed).get(0) instanceof SkippedNestingPair);
+    }
+
+    /**
+     * The negative for the card. A pass that declined nothing must omit the key rather than send an
+     * empty list or a zero — a count defaulted to nothing beside a description list reads as a
+     * measured all-clear.
+     */
+    @Test
+    public void shouldOmitTheDisclosureFromTheCard_whenThePassDeclinedNothing() {
+        IArchimateModel model = buildFlatBaselineModel();
+        stubModelManager.setModels(List.of(model));
+        MutationDispatcher gated = gatedDispatcher(model);
+        accessor = new ArchiModelAccessorImpl(stubModelManager, gated);
+
+        accessor.addToView("default", "view-001", "ac-001", 50, 50, 120, 55,
+                false, null, null, null);
+        accessor.addToView("default", "view-001", "bp-001", 250, 50, 120, 55,
+                false, null, null, null);
+
+        approvalRequired = true;
+        accessor.autoConnectView("default", "view-001", null, null, null, null, null);
+
+        List<ProposalDto> pending = gated.getPendingProposalDtos("default");
+        assertEquals(1, pending.size());
+        assertFalse("nothing was declined, so the card must say nothing rather than say 'none'",
+                pending.get(0).proposedChanges().containsKey("skippedDueToNesting"));
+    }
+
+    /**
+     * The sibling card. A proposal carries {@code proposedChanges} and a summary onto the wire and
+     * never the prepared result, so the skip lists this pass computes are invisible to the human
+     * authorising it unless they are copied across.
+     *
+     * <p>The fixture is the worst case on purpose: every eligible pair is nested, so nothing will be
+     * drawn. Counting only what WILL be drawn produces a card that mentions auto-connect not at all,
+     * which is a human approving silent non-drawing.</p>
+     */
+    @Test
+    public void shouldDiscloseOnTheCard_whatAPlacementsAutoConnectWillNotDraw() {
+        IArchimateModel model = buildModelWithPair("wp-A", "del-1", true);
+        stubModelManager.setModels(List.of(model));
+        MutationDispatcher gated = gatedDispatcher(model);
+        accessor = new ArchiModelAccessorImpl(stubModelManager, gated);
+
+        String parentVoId = accessor.addToView("default", "view-001", "wp-A",
+                50, 50, 300, 200, false, null, null, null)
+                .entity().viewObject().viewObjectId();
+
+        approvalRequired = true;
+        accessor.addToView("default", "view-001", "del-1", 10, 10, 100, 50,
+                true, parentVoId, null, null);
+
+        List<ProposalDto> pending = gated.getPendingProposalDtos("default");
+        assertEquals("the placement must have been parked for a human", 1, pending.size());
+        ProposalDto card = pending.get(0);
+        Object disclosed = card.proposedChanges().get("skippedDueToNesting");
+
+        assertNotNull("the card must name the connection this placement will decline to draw — "
+                + "nothing else on the wire carries it", disclosed);
+        assertFalse("the pairs, never their count. Card carried: " + disclosed,
+                disclosed instanceof Number);
+        assertEquals(1, ((List<?>) disclosed).size());
+        assertTrue("and the human-readable summary must say so too, because a card whose only "
+                + "auto-connect sentence is about what WILL be drawn says nothing at all when "
+                + "nothing will be. Summary was: " + card.validationSummary(),
+                card.validationSummary().contains("NOT be drawn"));
+        assertTrue("the summary must also say the relationship survives, or 'not drawn' reads as "
+                + "'deleted'. Summary was: " + card.validationSummary(),
+                card.validationSummary().contains("preserved"));
+    }
+
+    /** The negative: a placement that declines nothing must not grow a disclosure. */
+    @Test
+    public void shouldLeaveTheCardUnchanged_whenAPlacementDeclinesNothing() {
+        IArchimateModel model = buildModelWithPair("wp-A", "del-1", true);
+        stubModelManager.setModels(List.of(model));
+        MutationDispatcher gated = gatedDispatcher(model);
+        accessor = new ArchiModelAccessorImpl(stubModelManager, gated);
+
+        accessor.addToView("default", "view-001", "wp-A",
+                50, 50, 300, 200, false, null, null, null);
+
+        approvalRequired = true;
+        accessor.addToView("default", "view-001", "del-1", 500, 50, 100, 50,
+                true, null, null, null);
+
+        ProposalDto card = gated.getPendingProposalDtos("default").get(0);
+        assertFalse("nothing was declined, so the key must be absent rather than empty",
+                card.proposedChanges().containsKey("skippedDueToNesting"));
+        assertFalse("and no cap disclosure either",
+                card.proposedChanges().containsKey("skippedByCap"));
+        assertTrue("the ordinary sentence is unchanged. Summary was: " + card.validationSummary(),
+                card.validationSummary().contains("1 auto-connection(s) will be created."));
+    }
+
+    /**
+     * Nesting and the cap in ONE call, which nothing else drives.
+     *
+     * <p>A declined pair no longer consumes a cap slot: {@code eligibleCount} advances in the drawn
+     * and capped branches and not in the declined one. That changes WHICH pairs end up capped —
+     * more drawable ones now fit under the cap than before — so the two disclosures have to stay
+     * exact against each other when both fire, not merely when each fires alone.</p>
+     */
+    @Test
+    public void shouldKeepBothDisclosuresExact_whenAPlacementNestsAndAlsoOverflowsTheCap() {
+        int over = 3;
+        IArchimateModel model = buildHubModel(50 + over);
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        // spoke-0 becomes the hub's CONTAINER, so the hub nests inside a spoke it relates to.
+        String containerVoId = accessor.addToView("default", "view-001", "spoke-0",
+                0, 0, 600, 400, false, null, null, null)
+                .entity().viewObject().viewObjectId();
+        for (int i = 1; i < 50 + over; i++) {
+            accessor.addToView("default", "view-001", "spoke-" + i,
+                    700, 40 * i, 80, 30, false, null, null, null);
+        }
+
+        AddToViewResultDto dto = accessor.addToView("default", "view-001", "hub",
+                10, 10, 200, 100, true, containerVoId, null, null).entity();
+
+        assertEquals("the one nested pair is declined and named", 1,
+                dto.skippedDueToNesting().size());
+        assertEquals("and it is the container it was placed into", containerVoId,
+                dto.skippedDueToNesting().get(0).targetViewObjectId());
+
+        // 52 remaining candidates, 50 drawn, 2 capped — the declined pair did NOT eat a cap slot,
+        // which is the whole point: a connection that was never going to be drawn cannot displace
+        // one that would have been.
+        assertEquals("the cap is spent only on connections that could actually be drawn",
+                50, dto.autoConnections().size());
+        assertEquals("the count and the list must agree when BOTH disclosures fire",
+                Integer.valueOf(dto.skippedByCap().size()), dto.skippedAutoConnections());
+        assertEquals(2, dto.skippedByCap().size());
+
+        for (SkippedConnection capped : dto.skippedByCap()) {
+            assertEquals("auto_connect_cap_reached", capped.reason());
+        }
+        assertEquals("a declined pair must not also be reported as capped, or the agent double-counts",
+                "ancestor_descendant_on_view", dto.skippedDueToNesting().get(0).reason());
     }
 
     // ------------------------------------------------------------------
@@ -505,6 +822,89 @@ public class ArchiModelAccessorImplAutoConnectAncestorSkipTest {
     // and the per-file StubEditorModelManager already in use by
     // ArchiModelAccessorImplAddViewReferenceToViewTest.
     // ------------------------------------------------------------------
+
+    /** As {@link #createAccessorWithTestDispatcher}, but the gate follows {@code approvalRequired}. */
+    private MutationDispatcher gatedDispatcher(IArchimateModel testModel) {
+        MutationDispatcher testDispatcher = new MutationDispatcher(() -> testModel) {
+            @Override
+            public void dispatchImmediate(Command command) {
+                executeDecomposed(command);
+            }
+            @Override
+            protected void dispatchCommand(Command command) {
+                executeDecomposed(command);
+            }
+            private void executeDecomposed(Command command) {
+                if (command instanceof CompoundCommand compound) {
+                    for (Object cmd : compound.getCommands()) {
+                        executeDecomposed((Command) cmd);
+                    }
+                } else {
+                    command.execute();
+                }
+            }
+        };
+        testDispatcher.setApprovalModeProvider(() -> approvalRequired);
+        return testDispatcher;
+    }
+
+    /**
+     * {@code wp-A} realized by {@code del-1} (the pair that will be nested and declined) and
+     * associated with {@code sib-1} (the pair that will be drawn), on an empty {@code view-001}.
+     */
+    private IArchimateModel buildModelWithNestedAndDrawablePairs() {
+        IArchimateModel model = buildModelWithPair("wp-A", "del-1", true);
+        model.setId("model-auto-connect-card");
+
+        IApplicationComponent sibling = factory.createApplicationComponent();
+        sibling.setId("sib-1");
+        sibling.setName("sib-1");
+        model.getFolder(FolderType.APPLICATION).getElements().add(sibling);
+
+        IArchimateRelationship drawable = factory.createAssociationRelationship();
+        drawable.setId("rel-wp-A-sib-1");
+        drawable.connect(
+                (IApplicationComponent) com.archimatetool.model.util.ArchimateModelUtils
+                        .getObjectByID(model, "wp-A"),
+                sibling);
+        model.getFolder(FolderType.RELATIONS).getElements().add(drawable);
+
+        return model;
+    }
+
+    /**
+     * A hub with {@code spokes} outgoing relationships, for driving the fifty-connection cap.
+     */
+    private IArchimateModel buildHubModel(int spokes) {
+        IArchimateModel model = factory.createArchimateModel();
+        model.setName("Auto-connect cap fixture");
+        model.setId("model-auto-connect-cap");
+        model.setDefaults();
+
+        IApplicationComponent hub = factory.createApplicationComponent();
+        hub.setId("hub");
+        hub.setName("Hub");
+        model.getFolder(FolderType.APPLICATION).getElements().add(hub);
+
+        for (int i = 0; i < spokes; i++) {
+            IApplicationComponent spoke = factory.createApplicationComponent();
+            spoke.setId("spoke-" + i);
+            spoke.setName("Spoke " + i);
+            model.getFolder(FolderType.APPLICATION).getElements().add(spoke);
+
+            IArchimateRelationship rel = factory.createAssociationRelationship();
+            rel.setId("rel-spoke-" + i);
+            rel.connect(hub, spoke);
+            model.getFolder(FolderType.RELATIONS).getElements().add(rel);
+        }
+
+        IArchimateDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view-001");
+        view.setName("Hub");
+        model.getFolder(FolderType.DIAGRAMS).getElements().add(view);
+
+        return model;
+    }
 
     private ArchiModelAccessorImpl createAccessorWithTestDispatcher(
             IArchimateModel testModel) {

@@ -17,7 +17,7 @@ public class EmbeddedViewDtoTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Test
-    public void shouldSerialiseAllFields_AC4() throws Exception {
+    public void shouldSerialiseAllFields() throws Exception {
         EmbeddedViewDto dto = new EmbeddedViewDto(
                 "vo-ref-1", "view-source-id",
                 100, 200, 185, 80,
@@ -49,7 +49,7 @@ public class EmbeddedViewDtoTest {
     }
 
     @Test
-    public void shouldOmitNullStyling_fromJson_AC4() throws Exception {
+    public void shouldOmitNullStyling_fromJson() throws Exception {
         EmbeddedViewDto dto = new EmbeddedViewDto(
                 "vo-ref-2", "view-source-id",
                 10, 20, 185, 80,
@@ -76,7 +76,7 @@ public class EmbeddedViewDtoTest {
     }
 
     @Test
-    public void shouldOmitParentViewObjectId_whenTopLevel_AC4() throws Exception {
+    public void shouldOmitParentViewObjectId_whenTopLevel() throws Exception {
         EmbeddedViewDto dto = new EmbeddedViewDto(
                 "vo-ref-3", "view-source-id",
                 50, 50, 185, 80,
@@ -89,7 +89,7 @@ public class EmbeddedViewDtoTest {
     }
 
     @Test
-    public void shouldOmitNote_whenAbsent_AC4() throws Exception {
+    public void shouldOmitNote_whenAbsent() throws Exception {
         EmbeddedViewDto dto = new EmbeddedViewDto(
                 "vo-ref-4", "view-source-id",
                 0, 0, 185, 80,
@@ -104,7 +104,7 @@ public class EmbeddedViewDtoTest {
     }
 
     @Test
-    public void shouldRoundTripJson_AC4() throws Exception {
+    public void shouldRoundTripJson() throws Exception {
         EmbeddedViewDto original = new EmbeddedViewDto(
                 "vo-ref-5", "view-source-id",
                 100, 200, 185, 80,

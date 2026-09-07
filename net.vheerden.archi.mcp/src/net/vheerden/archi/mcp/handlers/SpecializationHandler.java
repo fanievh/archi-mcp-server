@@ -13,6 +13,7 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.DispatchArm;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -99,7 +100,8 @@ public class SpecializationHandler {
                 "Optional archive imagePath returned by add-image-to-model or "
                 + "list-model-images. When set, Archi renders this image as the "
                 + "specialization's icon on every element/relationship of this "
-                + "specialization. Format: 'images/<sha1>.png'. Must resolve to "
+                + "specialization. The value is opaque and server-generated — pass it "
+                + "back exactly as received; never construct or parse one. Must resolve to "
                 + "existing bytes in the model archive — typo'd paths are rejected "
                 + "with IMAGE_NOT_FOUND. Omit to leave the specialization without "
                 + "an icon (Archi falls back to the default ArchiMate icon for "
@@ -160,7 +162,8 @@ public class SpecializationHandler {
                     sessionId, name, conceptType, imagePath);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
-                    buildCreateNextSteps(result), accessor, formatter);
+                    buildCreateNextSteps(result),
+                    buildCreateApprovalDisclosures(result), accessor, formatter);
 
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
@@ -175,26 +178,92 @@ public class SpecializationHandler {
         }
     }
 
-    private List<String> buildCreateNextSteps(MutationResult<Map<String, Object>> result) {
-        if (result.isBatched()) {
-            return List.of(
-                    "Mutation queued as operation #" + result.batchSequenceNumber()
-                            + " in current batch",
-                    "Use end-batch to commit all queued mutations");
+    /**
+     * The three lines every queued response ends with.
+     *
+     * <p>{@code get-batch-status} used to be missing from all three of this handler's batched
+     * arms — the only handler in the tree with batched arms and no occurrence of it, two lines
+     * where every other handler emits three. Nothing makes the call unavailable for a
+     * specialization mutation, so the omission read as a difference an agent had to account for
+     * and was not one.</p>
+     */
+    private static List<String> queueTail(MutationResult<?> result) {
+        return List.of(
+                "Mutation queued as operation #" + result.batchSequenceNumber()
+                        + " in current batch",
+                "Use get-batch-status to check batch progress",
+                "Use end-batch to commit all queued mutations");
+    }
+
+    /**
+     * What a create discloses once the specialization exists — or will.
+     *
+     * <p>The name is safe to quote on every arm: the accessor reads it back off the profile the
+     * command will store rather than off the request, so it is the name the model ends up holding
+     * whichever way the write is dispatched.</p>
+     *
+     * <p>The already-existed branch has no deferred wording here on purpose. That outcome is
+     * produced on exactly one path — an existing profile returned with a no-op command — and the
+     * accessor short-circuits on that command above both the approval gate and the queue, so a
+     * caller cannot be on a deferred arm and see it. Note the second-order fact, because it reads
+     * the other way round at a glance: "the batched arm" and "called while a batch is open" are
+     * not the same set for this tool. A duplicate create inside an open batch comes back in the
+     * applied-arm envelope, because nothing was queued.</p>
+     */
+    private List<String> createDisclosures(Map<String, Object> entity, DispatchArm arm) {
+        if (entity == null) {
+            return List.of();
         }
+        String name = String.valueOf(entity.get("name"));
+        String instantiate = "use create-element with specialization='" + name
+                + "' to instantiate an element of this specialization";
+        return switch (arm) {
+            case APPLIED -> List.of(
+                    "Use create-element with specialization='" + name
+                            + "' to instantiate an element of this specialization",
+                    "Use list-specializations to browse the model's vocabulary",
+                    "Use get-specialization-usage to audit usage later");
+            case QUEUED -> List.of(
+                    "Once this batch commits, " + instantiate,
+                    "Use list-specializations to browse the model's vocabulary — it reads the "
+                            + "committed model, so this specialization appears there after "
+                            + "end-batch.",
+                    "Use get-specialization-usage to audit usage later");
+            case AWAITING_APPROVAL -> List.of(
+                    "Once this change is approved, " + instantiate,
+                    "Use list-specializations to browse the model's vocabulary — it reads the "
+                            + "committed model, so this specialization appears there once the "
+                            + "change is approved.",
+                    "Use get-specialization-usage to audit usage later");
+        };
+    }
+
+    /** What a create-specialization response carries when the write is waiting on a human. */
+    private List<String> buildCreateApprovalDisclosures(
+            MutationResult<Map<String, Object>> result) {
         Map<String, Object> entity = result.entity();
-        Object createdFlag = entity.get("created");
-        if (Boolean.FALSE.equals(createdFlag)) {
+        if (entity != null && Boolean.FALSE.equals(entity.get("created"))) {
+            return List.of();
+        }
+        return createDisclosures(entity, DispatchArm.AWAITING_APPROVAL);
+    }
+
+    private List<String> buildCreateNextSteps(MutationResult<Map<String, Object>> result) {
+        Map<String, Object> entity = result.entity();
+        boolean alreadyExisted = entity != null && Boolean.FALSE.equals(entity.get("created"));
+        if (result.isBatched()) {
+            List<String> batchSteps = new ArrayList<>(
+                    alreadyExisted ? List.of() : createDisclosures(entity, DispatchArm.QUEUED));
+            batchSteps.addAll(queueTail(result));
+            return batchSteps;
+        }
+        if (alreadyExisted) {
             return List.of(
                     "Specialization already existed — no model change",
                     "Use list-specializations to see all defined specializations",
                     "Use create-element with this specialization to instantiate it");
         }
-        return List.of(
-                "Use create-element with specialization='" + entity.get("name")
-                        + "' to instantiate an element of this specialization",
-                "Use list-specializations to browse the model's vocabulary",
-                "Use get-specialization-usage to audit usage later");
+        return createDisclosures(entity, DispatchArm.APPLIED);
     }
 
     // ---- update-specialization ----
@@ -221,7 +290,9 @@ public class SpecializationHandler {
         imagePathProp.put("type", "string");
         imagePathProp.put("description",
                 "Optional. Set or change the specialization's icon. Archive imagePath returned "
-                + "by add-image-to-model or list-model-images. Must resolve to existing bytes "
+                + "by add-image-to-model or list-model-images. The value is opaque and "
+                + "server-generated — pass it back exactly as received; never construct or parse one. "
+                + "Must resolve to existing bytes "
                 + "in the model archive — typo'd paths are rejected with IMAGE_NOT_FOUND. "
                 + "Omit to leave the icon unchanged. Mutually exclusive with clearImagePath.");
 
@@ -260,6 +331,9 @@ public class SpecializationHandler {
                         + "imagePath sets/changes the icon; clearImagePath=true explicitly "
                         + "clears it. Mutually exclusive — providing both is rejected with "
                         + "INVALID_PARAMETER. Omit both to leave the icon unchanged. "
+                        + "Returns the effective post-update name and conceptType, plus "
+                        + "imagePath only while an icon is set — its absence after "
+                        + "clearImagePath confirms removal. "
                         + "Related: get-specialization-usage (preview impact), "
                         + "list-specializations (now surfaces imagePath), "
                         + "delete-specialization, add-image-to-model (import an icon first).")
@@ -308,10 +382,11 @@ public class SpecializationHandler {
 
     private List<String> buildUpdateNextSteps(MutationResult<Map<String, Object>> result) {
         if (result.isBatched()) {
-            return List.of(
-                    "Mutation queued as operation #" + result.batchSequenceNumber()
-                            + " in current batch",
-                    "Use end-batch to commit all queued mutations");
+            // No deferred-arm disclosure of its own: this builder emits no conditional step, and
+            // both of its applied lines name a call to make once the rename has landed. It shares
+            // the queue tail so the handler no longer reports batch progress differently from
+            // every other handler.
+            return queueTail(result);
         }
         return List.of(
                 "Use list-specializations to verify the rename",
@@ -357,6 +432,9 @@ public class SpecializationHandler {
                         + "Required: name, conceptType. Optional: force (default false). "
                         + "Recommended workflow: call get-specialization-usage first to inspect "
                         + "impact before force-deleting. "
+                        + "On success returns name, conceptType, deleted: true and "
+                        + "clearedFromConcepts (concepts detached). usageCount is NOT in that "
+                        + "success result — a refusal returns it in the error details. "
                         + "Related: get-specialization-usage (preview), update-specialization "
                         + "(rename instead of delete), list-specializations.")
                 .inputSchema(inputSchema)
@@ -384,7 +462,8 @@ public class SpecializationHandler {
                     sessionId, name, conceptType, force);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
-                    buildDeleteNextSteps(result), accessor, formatter);
+                    buildDeleteNextSteps(result),
+                    buildDeleteApprovalDisclosures(result), accessor, formatter);
 
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
@@ -399,21 +478,108 @@ public class SpecializationHandler {
         }
     }
 
+    /**
+     * How many concepts lose the specialization — exact on one arm, a reading on the others.
+     *
+     * <p>The number is a snapshot taken at prepare time, and this command re-derives at execute in
+     * <em>both</em> directions, which is why the deferred wording fixes no bound at either end.
+     * The compound is one {@code ClearSpecializationCommand} per prepare-time usage followed by one
+     * {@code DeleteProfileCommand}:</p>
+     *
+     * <ul>
+     * <li><b>Upward.</b> The delete command re-reads the usages and clears any concept that
+     *     acquired the specialization after the prepare — beyond the counted set.</li>
+     * <li><b>Downward.</b> Each individual clear re-checks too, and declines for a concept that has
+     *     since acquired a <em>different</em> specialization, because removing it would be
+     *     collateral loss this deletion never authorised. Every prepare-time usage can decline that
+     *     way, so the number cleared can be anywhere from zero to more than the count.</li>
+     * </ul>
+     *
+     * <p>On the applied arm prepare and execute are the same moment with nothing interleaved, and
+     * the prepare-time guard has already refused any usage carrying a second specialization — so
+     * there the count is exact and says so. Only a deferred arm has a gap for either movement to
+     * happen in, and what it owes is the reading plus both directions, not a bound. A floor was the
+     * first wording here and it was wrong: it promised a minimum the commit can miss.</p>
+     */
+    private static String clearedFromConceptsStep(int count, DispatchArm arm) {
+        String concepts = count + " concept" + (count == 1 ? "" : "s");
+        // The deferred wordings lead with the noun phrase, so the verb has to agree with it. The
+        // applied arm does not — "Cleared specialization from 1 concept" reads correctly either way.
+        String carry = count == 1 ? " carries " : " carry ";
+        return switch (arm) {
+            case APPLIED -> "Cleared specialization from " + concepts;
+            case QUEUED -> concepts + " carried this specialization when the deletion was queued. "
+                    + "That is a reading, not a promise: at commit each clear re-checks and is "
+                    + "declined for any concept that has since acquired a different "
+                    + "specialization, so fewer can be cleared — while a concept that acquires "
+                    + "this one is cleared as well. end-batch names every operation it skipped, "
+                    + "with the reason.";
+            case AWAITING_APPROVAL -> concepts + carry + "this specialization now. That is a "
+                    + "reading, not a promise: the deletion is re-prepared when it is approved and "
+                    + "each clear re-checks as it runs, so fewer can be cleared if a concept has "
+                    + "acquired a different specialization by then — while a concept that acquires "
+                    + "this one is cleared as well.";
+        };
+    }
+
+    private static String verifyDeletionStep(DispatchArm arm) {
+        return switch (arm) {
+            case APPLIED -> "Use list-specializations to verify the deletion";
+            case QUEUED -> "Use list-specializations after end-batch to verify the deletion — it "
+                    + "reads the committed model, which still holds this specialization until then.";
+            case AWAITING_APPROVAL -> "Use list-specializations once the human has approved the "
+                    + "change to verify the deletion — it reads the committed model, which still "
+                    + "holds this specialization until then.";
+        };
+    }
+
+    /**
+     * How to take the deletion back, which is a different call on every arm.
+     *
+     * <p>The applied wording sat below the batched arm's early return, so letting the conditional
+     * step through newly exposes it. On a queued call nothing has been deleted and {@code undo}
+     * would revert whichever command is on top of the stack — somebody else's. Awaiting approval
+     * there is no tool at all: the human rejects it in Archi.</p>
+     */
+    private static String deletionReversalStep(DispatchArm arm) {
+        return switch (arm) {
+            case APPLIED -> "Use undo to revert if this was unintentional";
+            case QUEUED -> "Nothing has been deleted yet, so undo would revert whichever command "
+                    + "is on top of the stack; discard this deletion with end-batch rollback:true "
+                    + "instead.";
+            case AWAITING_APPROVAL -> "Nothing has been deleted yet — rejecting the change in "
+                    + "Archi leaves the specialization in place, and no tool the agent can call "
+                    + "recovers it.";
+        };
+    }
+
+    private List<String> deleteDisclosures(Map<String, Object> entity, DispatchArm arm) {
+        List<String> steps = new ArrayList<>();
+        if (entity == null) {
+            return steps;
+        }
+        if (entity.get("clearedFromConcepts") instanceof Number n && n.intValue() > 0) {
+            steps.add(clearedFromConceptsStep(n.intValue(), arm));
+        }
+        steps.add(verifyDeletionStep(arm));
+        steps.add(deletionReversalStep(arm));
+        return steps;
+    }
+
+    /** What a delete-specialization response carries when the deletion is waiting on a human. */
+    private List<String> buildDeleteApprovalDisclosures(
+            MutationResult<Map<String, Object>> result) {
+        return deleteDisclosures(result.entity(), DispatchArm.AWAITING_APPROVAL);
+    }
+
     private List<String> buildDeleteNextSteps(MutationResult<Map<String, Object>> result) {
         if (result.isBatched()) {
-            return List.of(
-                    "Mutation queued as operation #" + result.batchSequenceNumber()
-                            + " in current batch",
-                    "Use end-batch to commit all queued mutations");
+            List<String> batchSteps = new ArrayList<>(
+                    deleteDisclosures(result.entity(), DispatchArm.QUEUED));
+            batchSteps.addAll(queueTail(result));
+            return batchSteps;
         }
-        Object cleared = result.entity().get("clearedFromConcepts");
-        List<String> steps = new ArrayList<>();
-        if (cleared instanceof Number n && n.intValue() > 0) {
-            steps.add("Cleared specialization from " + n + " concept" + (n.intValue() == 1 ? "" : "s"));
-        }
-        steps.add("Use list-specializations to verify the deletion");
-        steps.add("Use undo to revert if this was unintentional");
-        return steps;
+        return deleteDisclosures(result.entity(), DispatchArm.APPLIED);
     }
 
     // ---- get-specialization-usage ----

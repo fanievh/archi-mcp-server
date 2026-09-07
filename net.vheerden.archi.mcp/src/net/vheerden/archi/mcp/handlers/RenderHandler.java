@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.LongSupplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.ContentBounds;
 import net.vheerden.archi.mcp.model.ExportResult;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -39,12 +41,23 @@ public class RenderHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(RenderHandler.class);
 
+    /**
+     * Smallest and largest scale factor the tool accepts. Every surface that
+     * states the range — the parameter schema, the rejection message and its
+     * suggested correction — is built from these two constants, so the published
+     * range cannot drift away from the one enforced.
+     */
+    static final double MIN_SCALE = 0.1;
+    static final double MAX_SCALE = 4.0;
+
     private final ArchiModelAccessor accessor;
     private final ResponseFormatter formatter;
     private final CommandRegistry registry;
+    private final LongSupplier freePhysicalMemory;
 
     /**
-     * Creates a RenderHandler with its required dependencies.
+     * Creates a RenderHandler with its required dependencies, reading the raster
+     * guard's memory budget from the running platform.
      *
      * @param accessor  the model accessor for rendering views
      * @param formatter the response formatter for building JSON envelopes
@@ -53,9 +66,34 @@ public class RenderHandler {
     public RenderHandler(ArchiModelAccessor accessor,
                          ResponseFormatter formatter,
                          CommandRegistry registry) {
+        this(accessor, formatter, registry, new PhysicalMemoryBudget());
+    }
+
+    /**
+     * Creates a RenderHandler with an explicit source for the memory budget the
+     * raster guard compares against.
+     *
+     * <p>The budget is injected because the allocation it protects cannot run
+     * outside a display, so the only way to exercise the guard is to drive the
+     * ceiling from the caller. A test that fixes the budget can show that the
+     * same view at the same scale is refused under a small one and accepted
+     * under a large one, which is the only evidence that separates a queried
+     * ceiling from a constant that happens to suit one view.</p>
+     *
+     * @param accessor        the model accessor for rendering views
+     * @param formatter       the response formatter for building JSON envelopes
+     * @param registry        the command registry for tool registration
+     * @param freePhysicalMemory supplies bytes of physical memory currently free
+     */
+    public RenderHandler(ArchiModelAccessor accessor,
+                         ResponseFormatter formatter,
+                         CommandRegistry registry,
+                         LongSupplier freePhysicalMemory) {
         this.accessor = Objects.requireNonNull(accessor, "accessor must not be null");
         this.formatter = Objects.requireNonNull(formatter, "formatter must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
+        this.freePhysicalMemory = Objects.requireNonNull(
+                freePhysicalMemory, "freePhysicalMemory must not be null");
     }
 
     /**
@@ -84,10 +122,19 @@ public class RenderHandler {
         Map<String, Object> scaleProp = new LinkedHashMap<>();
         scaleProp.put("type", "number");
         scaleProp.put("description",
-                "Rendering scale factor (0.1 to 4.0). "
+                "Rendering scale factor (" + MIN_SCALE + " to " + MAX_SCALE + "). "
                         + "0.5 = half size, 2.0 = double size. Applies to raster "
                         + "formats (PNG/JPG); vector formats (SVG/PDF) are resolution-"
-                        + "independent and ignore scale. Default: 1.0");
+                        + "independent and ignore scale. A scale inside this range is "
+                        + "necessary but not sufficient for a raster export: PNG and JPG "
+                        + "are rendered as ONE bitmap sized from the view's content "
+                        + "bounds, so a large view can need more memory than the machine has "
+                        + "free well before reaching " + MAX_SCALE + ". Such a request is "
+                        + "refused before anything is allocated, and the error names the "
+                        + "projected pixel dimensions, the byte estimate, the budget it "
+                        + "was compared against, and the largest scale that would fit — "
+                        + "retry at that scale, or use 'svg'/'pdf', which are resolution-"
+                        + "independent and allocate no bitmap. Default: 1.0");
 
         Map<String, Object> qualityProp = new LinkedHashMap<>();
         qualityProp.put("type", "integer");
@@ -176,12 +223,19 @@ public class RenderHandler {
                 format = "jpg";
             }
             double scale = HandlerUtils.optionalDoubleParam(args, "scale", 1.0);
-            if (!Double.isFinite(scale) || scale < 0.1 || scale > 4.0) {
+            // Bounds the multiplier only. It is kept as a cheap pre-filter ahead of
+            // the raster guard below: a non-finite scale would make the projection
+            // arithmetic meaningless, and the renderer itself accepts factors this
+            // tool does not. It says nothing about the pixel area a legal factor
+            // produces — that is what the raster guard measures.
+            if (!Double.isFinite(scale) || scale < MIN_SCALE || scale > MAX_SCALE) {
                 throw new ModelAccessException(
-                        "Scale must be between 0.1 and 4.0, got: " + scale,
+                        "Scale must be between " + MIN_SCALE + " and " + MAX_SCALE
+                                + ", got: " + scale,
                         net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
                         null,
-                        "Provide a scale value between 0.1 and 4.0 (1.0 = 100%)",
+                        "Provide a scale value between " + MIN_SCALE + " and " + MAX_SCALE
+                                + " (1.0 = 100%)",
                         null);
             }
             Integer qualityBoxed = HandlerUtils.optionalIntegerParam(args, "quality");
@@ -203,6 +257,17 @@ public class RenderHandler {
             // outputDirectory only applies to file output mode
             boolean outputDirIgnored = inline && outputDirectory != null;
             String effectiveOutputDir = inline ? null : outputDirectory;
+
+            // Refuse an oversized raster BEFORE anything is allocated. The raster
+            // renderers ask the platform for the whole diagram as a single bitmap,
+            // so a scale that is legal as a multiplier can still project to more
+            // memory than the machine can back. That failure is a native fault
+            // during first touch of the buffer, not an exception this handler
+            // could catch and translate — the process is gone. The vector formats
+            // allocate no bitmap and do not forward scale, so they are not guarded.
+            if ("png".equals(format) || "jpg".equals(format)) {
+                requireRasterFitsMemory(viewId, scale);
+            }
 
             ExportResult result = accessor.exportView(viewId, format, scale, quality, inline,
                     effectiveOutputDir);
@@ -232,6 +297,63 @@ public class RenderHandler {
             logger.error("Error handling export-view request", e);
             return HandlerUtils.buildInternalError(formatter, e.getMessage());
         }
+    }
+
+    /**
+     * Refuses a raster export whose projected bitmap will not fit in the physical
+     * memory currently free, before the render is dispatched.
+     *
+     * @param viewId the view about to be rendered
+     * @param scale  the requested scale, already known to be within the accepted range
+     * @throws ModelAccessException if the projection exceeds the budget
+     */
+    private void requireRasterFitsMemory(String viewId, double scale) {
+        ContentBounds bounds = accessor.getContentBounds(viewId);
+        RasterProjection projection = RasterProjection.project(bounds, scale);
+        long free = freePhysicalMemory.getAsLong();
+        long budget = PhysicalMemoryBudget.singleBitmapBudget(free);
+        if (projection.bytes() <= budget) {
+            return;
+        }
+
+        double largestScale =
+                RasterProjection.largestScaleWithin(bounds, budget, MIN_SCALE, MAX_SCALE);
+        String escape = "Export as 'svg' or 'pdf' instead — the vector formats are "
+                + "resolution-independent, ignore scale and allocate no bitmap.";
+        String suggestion = (largestScale >= MIN_SCALE)
+                ? "Retry at scale " + largestScale + " or lower, which projects to "
+                        + formatBytes(RasterProjection.project(bounds, largestScale).bytes())
+                        + ". " + escape
+                : "No accepted scale renders this view within the free memory. " + escape;
+
+        logger.warn("Refusing export-view: viewId={}, scale={}, projected {}x{} = {} bytes, "
+                + "budget {} bytes of {} bytes free",
+                viewId, scale, projection.width(), projection.height(), projection.bytes(),
+                budget, free);
+
+        throw new ModelAccessException(
+                "Export refused before rendering: at scale " + scale + " this view projects "
+                        + "to " + projection.width() + " x " + projection.height()
+                        + " pixels, needing " + formatBytes(projection.bytes())
+                        + " in a single bitmap. That exceeds the " + formatBytes(budget)
+                        + " one bitmap may claim from the " + formatBytes(free)
+                        + " of physical memory currently free.",
+                net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER,
+                "Projection: " + projection.width() + " x " + projection.height()
+                        + " pixels at " + RasterProjection.BYTES_PER_PIXEL
+                        + " bytes per pixel = " + projection.bytes() + " bytes. Budget: "
+                        + budget + " bytes, being the share of the " + free
+                        + " bytes of free physical memory that one bitmap may claim.",
+                suggestion,
+                null);
+    }
+
+    /** Renders a byte count for a human-readable error. */
+    private static String formatBytes(long bytes) {
+        if (bytes >= 1024L * 1024L) {
+            return String.format(java.util.Locale.ROOT, "%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        return bytes + " bytes";
     }
 
     private McpSchema.CallToolResult buildInlinePngResponse(ExportResult result,

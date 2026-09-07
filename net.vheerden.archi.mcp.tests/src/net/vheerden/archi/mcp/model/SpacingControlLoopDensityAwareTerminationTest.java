@@ -306,7 +306,10 @@ public class SpacingControlLoopDensityAwareTerminationTest {
 
     // ==================================================================
     // (D) PASS-honest — stalled + in-regime → reflow-required diagnosis,
-    //     NEVER auto-reflow, never a degraded view.
+    //     NEVER auto-reflow, and no step that degrades the loop's own
+    //     step scalar. That scalar is narrower than overallRating — a
+    //     rating regression it cannot see is disclosed by the accessor
+    //     after the loop returns, not prevented here.
     // ==================================================================
 
     @Test
@@ -323,14 +326,14 @@ public class SpacingControlLoopDensityAwareTerminationTest {
 
         assertEquals(SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED,
                 r.terminationReason());
-        assertNotNull("AC-6 actionable diagnosis must be populated",
+        assertNotNull("actionable diagnosis must be populated",
                 r.densityDiagnosis());
         assertTrue(r.densityDiagnosis().contains("REFLOW REQUIRED"));
         assertTrue("diagnosis names measured avgSpacing vs band",
                 r.densityDiagnosis().contains("average spacing"));
         assertTrue("diagnosis names hub WxH vs connection count",
                 r.densityDiagnosis().contains("hub"));
-        assertTrue("AC-6 explicit no-auto-reflow + consent statement",
+        assertTrue("explicit no-auto-reflow + consent statement",
                 r.densityDiagnosis().contains("NOT auto-reflowed"));
         // Never a SILENTLY-DEGRADED view: no accepted
         // (non-backed-off) iteration may carry a post-state aggregate
@@ -366,14 +369,14 @@ public class SpacingControlLoopDensityAwareTerminationTest {
     }
 
     // ==================================================================
-    // (E) escalation cap + large step + Q2 below-regime-cap safety net
+    // (E) escalation cap + large step + below-regime-cap safety net
     // ==================================================================
 
     @Test
     public void escalation_isIterationCapped_andNotPassHonestWhileBelow() {
         // Permanently flat + permanently below-regime: escalation must be
         // capped at MAX_DENSITY_ESCALATION_ITERS and, if still below-regime
-        // at cap-out, must NOT claim reflow-required — Q2 safety
+        // at cap-out, must NOT claim reflow-required — safety
         // net = the PRESERVED back-off / budget terminal.
         SpacingControlLoop.Request req = new SpacingControlLoop.Request(
                 40, 60, 20, Integer.MAX_VALUE,
@@ -385,10 +388,10 @@ public class SpacingControlLoopDensityAwareTerminationTest {
         SpacingControlLoop.Result r = SpacingControlLoop.iterate(req, cb);
 
         assertFalse("must NOT claim reflow-required while still "
-                + "below-regime (the AC-8 FAIL condition)",
+                + "below-regime (the density-regime FAIL condition)",
                 SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED
                         .equals(r.terminationReason()));
-        assertNull("Q2 safety-net terminal carries no diagnosis",
+        assertNull("safety-net terminal carries no diagnosis",
                 r.densityDiagnosis());
     }
 
@@ -474,7 +477,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
     }
 
     // ==================================================================
-    // (F) Fix-2 —
+    // (F) Hub sizing —
     //     fan-out-scaled hub sub-signal calibration + the
     //     predicate↔resize-target consistency invariant.
     //     The defect: a flat exclusive-< 300×250 evaluated the
@@ -490,7 +493,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
      */
     @Test
     public void fix2_hub300x250with17conns_isUnderSized_true() {
-        assertTrue("row-773 AC-8 HH false-positive: 300×250/17-conn hub "
+        assertTrue("row-773 HH false-positive: 300×250/17-conn hub "
                 + "must flag under-sized (was false under flat 300×250)",
                 SpacingControlLoop.hubUnderSizedForFanOut(
                         new HubExtent(/*conns=*/ 17, /*w=*/ 300,
@@ -533,7 +536,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
 
     /**
      * The {@code c=8} fan-out-boundary coverage gap.
-     * The Fix-2 curve is anchored at
+     * The fan-out-scaled curve is anchored at
      * {@code DENSITY_HUB_FANOUT_CONN_THRESHOLD+1 = 7} (base 300×250,
      * {@code hubFanOutExcess(7)==0}); {@code c=8} is the FIRST +1-connection
      * increment and was previously only covered transitively. Pin the exact
@@ -542,7 +545,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
      * 300+10×1, 250+8×1), strictly greater than the {@code c=7} base.
      */
     @Test
-    public void fix2_ac7b_cEquals8_fanOutBoundary_firstIncrementExact() {
+    public void fix2_cEquals8_fanOutBoundary_firstIncrementExact() {
         assertEquals("hubFanOutExcess(8) = max(0, 8-(6+1)) = 1",
                 1, SpacingControlLoop.hubFanOutExcess(8));
         assertEquals("requiredHubMinWidthPx(8) = 300 + 10×1",
@@ -576,7 +579,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
     }
 
     /**
-     * The predicate↔resize-target CONSISTENCY invariant (Fix-2's hidden
+     * The predicate↔resize-target CONSISTENCY invariant (the hub-sizing
      * coupling) pinned at the pure-formula level: every hub the predicate
      * flags as under-sized has its fan-out-scaled required minimum strictly
      * exceed the current extent in ≥1 dimension — so the coupled
@@ -686,7 +689,8 @@ public class SpacingControlLoopDensityAwareTerminationTest {
      * the run consumes its whole iterationBudget → it would exit via the
      * preserved unconditional `budget_exhausted`. Post terminal-
      * reinterpretation it MUST relabel to REASON_DENSITY_FLOOR_REFLOW_
-     * REQUIRED + a non-null diagnosis, with NO degraded view. RED
+     * REQUIRED + a non-null diagnosis, with no step that degrades the step
+     * scalar. RED
      * pre-fix (the reinterpretation does not exist → `budget_exhausted`).
      */
     @Test
@@ -709,10 +713,10 @@ public class SpacingControlLoopDensityAwareTerminationTest {
                 + "PASS-honest (row-775 insertion #2)",
                 SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED,
                 r.terminationReason());
-        assertNotNull("AC-6 actionable diagnosis must be populated",
+        assertNotNull("actionable diagnosis must be populated",
                 r.densityDiagnosis());
         assertTrue(r.densityDiagnosis().contains("REFLOW REQUIRED"));
-        assertTrue("AC-6 explicit no-auto-reflow + consent statement",
+        assertTrue("explicit no-auto-reflow + consent statement",
                 r.densityDiagnosis().contains("NOT auto-reflowed"));
         // Never silently-degraded: no accepted (non-backed-off)
         // step may carry a post aggregate strictly below the pre-loop
@@ -798,7 +802,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
         SpacingControlLoop.Result r = SpacingControlLoop.iterate(req, cb);
 
         assertFalse("MUST NOT claim reflow-required while below-regime "
-                + "(the AC-6 FAIL condition) — §4 guard withholds",
+                + "(the diagnosis FAIL condition) — §4 guard withholds",
                 SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED
                         .equals(r.terminationReason()));
         assertNull("preserved row-703 terminal carries no diagnosis",
@@ -940,8 +944,8 @@ public class SpacingControlLoopDensityAwareTerminationTest {
      * ESCALATE` rule fires ESCALATE ⇒ escalate engages ⇒ one-shot
      * hub-resize built ⇒ measured avg lifts in-regime ⇒ the already-built
      * insertion #2 relabels the in-regime budget-exhaust as
-     * `REASON_DENSITY_FLOOR_REFLOW_REQUIRED` + non-null diagnosis, no
-     * degraded view.</p>
+     * `REASON_DENSITY_FLOOR_REFLOW_REQUIRED` + non-null diagnosis, no step
+     * that degrades the step scalar.</p>
      */
     @Test
     public void decouple_budgetExhaustBelowRegimeManyGains_reachesEscalateThenPassHonest_elementArm() {
@@ -963,10 +967,10 @@ public class SpacingControlLoopDensityAwareTerminationTest {
                 + "budget_exhausted below-regime — the row-775 Task-8 FAIL)",
                 SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED,
                 r.terminationReason());
-        assertNotNull("AC-6 actionable diagnosis must be populated",
+        assertNotNull("actionable diagnosis must be populated",
                 r.densityDiagnosis());
         assertTrue(r.densityDiagnosis().contains("REFLOW REQUIRED"));
-        assertTrue("AC-6 explicit no-auto-reflow + consent statement",
+        assertTrue("explicit no-auto-reflow + consent statement",
                 r.densityDiagnosis().contains("NOT auto-reflowed"));
         assertTrue("the decouple lever must have ENGAGED escalate (≥1 "
                 + "one-shot hub-resize) — distinguishes from row-775's "
@@ -1052,7 +1056,7 @@ public class SpacingControlLoopDensityAwareTerminationTest {
                     + "preserved by the fix)",
                     cb.buildHubResizeCount >= 1);
             assertFalse(arm + ": must NEVER claim reflow-required while "
-                    + "still below-regime (AC-4/AC-6 FAIL condition)",
+                    + "still below-regime (the master-gate and diagnosis FAIL condition)",
                     SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED
                             .equals(r.terminationReason())
                             && r.densityDiagnosis() != null
@@ -1098,12 +1102,288 @@ public class SpacingControlLoopDensityAwareTerminationTest {
                 r.terminationReason().startsWith(
                         SpacingControlLoop.REASON_BUDGET_EXHAUSTED_PREFIX));
         assertFalse("the decoupled ESCALATE rule is unreachable when "
-                + "regime-signal-absent (AC-4 master-gate invariant)",
+                + "regime-signal-absent (master-gate invariant)",
                 SpacingControlLoop.REASON_DENSITY_FLOOR_REFLOW_REQUIRED
                         .equals(r.terminationReason()));
         assertNull("regime-absent terminal never carries a diagnosis",
                 r.densityDiagnosis());
         assertEquals("regime-absent ⇒ escalate never engages (no "
                 + "one-shot hub-resize)", 0, cb.buildHubResizeCount);
+    }
+
+    // ==================================================================
+    // (I) ORDERED-AXIS REMEDY AT THE IN-LOOP PRODUCER.
+    //
+    //     The pre-loop infeasibility certificate already withholds the
+    //     connectivity-reordering re-layout on a view whose element order is
+    //     load-bearing. That rule was wired to ONE of the two places that
+    //     emit the offer: this one — the PASS-honest density floor — had no
+    //     viewpoint at all, so a view whose geometry is FEASIBLE (the
+    //     certificate does not fire, the loop runs to its floor) still got
+    //     the reorder offer. These pins close that half.
+    //
+    //     The viewpoint keys the REMEDY ONLY, never the decision: the
+    //     termination classification, the regime gates and the escalate
+    //     condition are pinned identical across every viewpoint value.
+    // ==================================================================
+
+    /**
+     * The exact remedy tail this diagnosis shipped before it learned about
+     * ordered axes — a literal, so "outside the set the text is unchanged"
+     * is a byte assertion rather than a paraphrase that drifts with the
+     * source.
+     */
+    private static final String LOOP_LEGACY_TAIL =
+            "This layout was NOT auto-reflowed (a structural reflow moves "
+            + "user-placed elements — an explicit-consent boundary). "
+            + "OFFERED next step (requires your consent): re-layout this "
+            + "view with a structural auto-layout, then re-run "
+            + "auto-route-connections. The current view is preserved "
+            + "unchanged (no degraded layout was applied).";
+
+    /** The (D) PASS-honest fixture, parameterised by viewpoint. */
+    private static SpacingControlLoop.Result passHonestRun(
+            String viewpointType) {
+        SpacingControlLoop.Request req = new SpacingControlLoop.Request(
+                40, 200, 8, Integer.MAX_VALUE,
+                m(2, 112.0), "element", ADEQUATE_HUB, viewpointType);
+        return SpacingControlLoop.iterate(req, ScriptedCb.of(
+                m(2, 112.0), m(2, 112.0), m(2, 112.0), m(2, 112.0)));
+    }
+
+    @Test
+    public void passHonest_onOrderedAxisView_neverOffersAReorderingReflow() {
+        for (String vp : new String[] {"implementation_migration",
+                "migration"}) {
+            String d = passHonestRun(vp).densityDiagnosis();
+            assertNotNull(d);
+            assertFalse("[" + vp + "] the in-loop offer must not send a "
+                            + "roadmap through a connectivity re-layout: " + d,
+                    d.contains("OFFERED next step (requires your consent): "
+                            + "re-layout this view with a structural "
+                            + "auto-layout"));
+            assertTrue("[" + vp + "] must offer the order-preserving remedy "
+                            + "instead: " + d,
+                    d.contains("grow the view along its ordered axis and "
+                            + "re-space the elements in their current "
+                            + "sequence"));
+            assertTrue("[" + vp + "] must say WHY, so the agent does not go "
+                            + "and reorder anyway via another tool: " + d,
+                    d.contains("makes the order in which its elements are "
+                            + "placed meaningful"));
+            // The shared offer SHAPE survives at this producer too.
+            assertTrue("[" + vp + "] stays consent-gated: " + d,
+                    d.toLowerCase().contains("consent"));
+            assertTrue("[" + vp + "] still states the view is preserved: " + d,
+                    d.contains("The current view is preserved unchanged "
+                            + "(no degraded layout was applied)."));
+            assertTrue("[" + vp + "] still names the violated precondition: "
+                            + d, d.contains("REFLOW REQUIRED"));
+            assertFalse("[" + vp + "] no null leakage into user-facing copy: "
+                            + d, d.contains("null"));
+            assertFalse("[" + vp + "] no empty parenthetical: " + d,
+                    d.contains("()"));
+        }
+    }
+
+    /**
+     * With no hub captured there is exactly ONE remedy, so the copy must stay
+     * singular. A plural intro delivering a single item reads as truncated
+     * output to the agent consuming it.
+     */
+    @Test
+    public void passHonest_onOrderedAxisView_isWellFormed_whenHubIsAbsent() {
+        // hubExtent null ⇒ no hub sentence ⇒ remedy (1) has nothing to refer
+        // to. Regime signal still present via the in-band avgSpacing.
+        SpacingControlLoop.Request req = new SpacingControlLoop.Request(
+                40, 200, 8, Integer.MAX_VALUE,
+                m(2, 112.0), "element", /*hubExtent=*/ null,
+                "implementation_migration");
+        String d = SpacingControlLoop.iterate(req, ScriptedCb.of(
+                m(2, 112.0), m(2, 112.0), m(2, 112.0), m(2, 112.0)))
+                .densityDiagnosis();
+        assertNotNull(d);
+        assertFalse("must not dangle a (2) it never emits: " + d,
+                d.contains("(2)"));
+        assertFalse("must not promise 'both' remedies and deliver one: " + d,
+                d.toLowerCase().contains("both"));
+        assertTrue("single-remedy copy must stay singular: " + d,
+                d.contains("OFFERED next step (requires your consent), which "
+                        + "preserves the existing element order:"));
+        assertTrue("the one remedy that survives is the order-preserving one: "
+                        + d, d.contains("grow the view along its ordered "
+                        + "axis"));
+    }
+
+    /**
+     * Outside the reorder-forbidding set — including {@code null} and the
+     * empty string — the emitted text is byte-identical to what shipped
+     * before the viewpoint reached this producer.
+     */
+    @Test
+    public void passHonest_onNonOrderedViews_isByteIdenticalToLegacy() {
+        String legacySevenArg = SpacingControlLoop.buildDensityDiagnosis(
+                m(2, 112.0), ADEQUATE_HUB);
+        assertTrue("the retained 2-arg overload must still emit the shipped "
+                        + "remedy verbatim: " + legacySevenArg,
+                legacySevenArg.endsWith(LOOP_LEGACY_TAIL));
+
+        for (String vp : new String[] {null, "", "layered", "motivation",
+                "business_process_cooperation", "implementation_deployment",
+                "project", "value_stream", "technology_usage",
+                "service_design", "customer_journey"}) {
+            assertEquals("[" + String.valueOf(vp) + "] diagnosis must be "
+                            + "byte-identical to the shipped text",
+                    legacySevenArg,
+                    SpacingControlLoop.buildDensityDiagnosis(
+                            m(2, 112.0), ADEQUATE_HUB, vp));
+            assertEquals("[" + String.valueOf(vp) + "] and byte-identical "
+                            + "through a real loop run too",
+                    legacySevenArg, passHonestRun(vp).densityDiagnosis());
+        }
+    }
+
+    /**
+     * The decision surface is untouched: the same views terminate the same
+     * way, with the same reason, the same iteration count and the same
+     * escalation behaviour, whatever the viewpoint. Only the remedy branches.
+     */
+    @Test
+    public void terminationClassification_isUntouchedByViewpoint() {
+        SpacingControlLoop.Result baseline = passHonestRun(null);
+        for (String vp : new String[] {"implementation_migration",
+                "migration", "layered", "business_process_cooperation", ""}) {
+            SpacingControlLoop.Result r = passHonestRun(vp);
+            assertEquals("[" + vp + "] termination reason must not move",
+                    baseline.terminationReason(), r.terminationReason());
+            assertEquals("[" + vp + "] iteration count must not move",
+                    baseline.iterations().size(), r.iterations().size());
+            assertEquals("[" + vp + "] final spacing must not move",
+                    baseline.finalSpacingPx(), r.finalSpacingPx());
+        }
+
+        // ...and a BELOW-regime view must not be made to reach the
+        // PASS-honest floor by a viewpoint: the escalate/give-up path is
+        // classified on geometry alone.
+        for (String vp : new String[] {null, "implementation_migration",
+                "migration", "business_process_cooperation"}) {
+            FakeCmd hr = new FakeCmd("hub", null);
+            SpacingControlLoop.Request req = new SpacingControlLoop.Request(
+                    40, 5000, 6, Integer.MAX_VALUE,
+                    mNoRegime(0), "composer.element", /*hubExtent=*/ null, vp);
+            SpacingControlLoop.Result r = SpacingControlLoop.iterate(req,
+                    new EscalationSensitiveCb(hr, Double.NaN, Double.NaN) {
+                        @Override
+                        public LayoutMetrics observeLayout() {
+                            obs++;
+                            return mNoRegime(obs);
+                        }
+                    });
+            assertTrue("[" + String.valueOf(vp) + "] regime-absent terminal "
+                            + "must stay the budget terminal",
+                    r.terminationReason().startsWith(
+                            SpacingControlLoop.REASON_BUDGET_EXHAUSTED_PREFIX));
+            assertNull("[" + String.valueOf(vp) + "] and carry no diagnosis",
+                    r.densityDiagnosis());
+        }
+    }
+
+    // ---- escalateHubResizeRect: the one-shot escalate resize's own arithmetic ------------------
+    //
+    // This is the rectangle the escalate step writes to the dominant hub. It used to live inline in
+    // the accessor, between a captureHubExtent call and an EMF bounds read, so nothing could execute
+    // it: the only way to reach it was to drive a real view through the control loop, which needs a
+    // started Eclipse application. Extracted here it is ordinary arithmetic, and the invariant it
+    // carries — that a hub the PREDICATE flags as under-sized always resizes to a STRICTLY larger
+    // target — is now checkable in the same class as the predicate rather than across a boundary.
+
+    @Test
+    public void escalateHubResizeRect_shouldReturnNull_whenThePredicateDoesNotFlagTheHub() {
+        assertNull("no resize may be proposed for a hub the predicate considers adequate",
+                SpacingControlLoop.escalateHubResizeRect(ADEQUATE_HUB, 10, 20, 400, 300));
+        assertNull("nor for a fan-out below the large-hub threshold",
+                SpacingControlLoop.escalateHubResizeRect(
+                        new HubExtent(/*conns=*/ 6, /*w=*/ 100, /*h=*/ 50), 0, 0, 100, 50));
+        assertNull("nor when there is no hub at all",
+                SpacingControlLoop.escalateHubResizeRect(null, 0, 0, 100, 50));
+    }
+
+    @Test
+    public void escalateHubResizeRect_shouldRaiseBothAxesToTheFanOutFloors_andKeepThePosition() {
+        // 7 connections ⇒ hubFanOutExcess(7) = 0 ⇒ the floors are the bare 300 x 250 bases.
+        int[] rect = SpacingControlLoop.escalateHubResizeRect(
+                new HubExtent(/*conns=*/ 7, /*w=*/ 140, /*h=*/ 80), /*x=*/ 10, /*y=*/ 20, 140, 80);
+
+        assertNotNull(rect);
+        assertEquals("x is carried outright — this is a resize, not a move", 10, rect[0]);
+        assertEquals(20, rect[1]);
+        assertEquals(SpacingControlLoop.requiredHubMinWidthPx(7), rect[2]);
+        assertEquals(SpacingControlLoop.requiredHubMinHeightPx(7), rect[3]);
+        assertEquals("and those floors are 300x250 at this fan-out", 300, rect[2]);
+        assertEquals(250, rect[3]);
+    }
+
+    @Test
+    public void escalateHubResizeRect_shouldScaleTheFloorsWithTheFanOutExcess() {
+        // 17 connections ⇒ excess 10 ⇒ 300 + 10*10 = 400 wide, 250 + 8*10 = 330 high.
+        int[] rect = SpacingControlLoop.escalateHubResizeRect(
+                new HubExtent(/*conns=*/ 17, /*w=*/ 140, /*h=*/ 80), 0, 0, 140, 80);
+
+        assertNotNull(rect);
+        assertEquals(400, rect[2]);
+        assertEquals(330, rect[3]);
+        assertEquals("the target must track the SAME connection count the predicate used",
+                SpacingControlLoop.requiredHubMinWidthPx(17), rect[2]);
+        assertEquals(SpacingControlLoop.requiredHubMinHeightPx(17), rect[3]);
+    }
+
+    @Test
+    public void escalateHubResizeRect_shouldNeverShrinkAnAxisThatAlreadyExceedsItsFloor() {
+        // Under-sized on HEIGHT only: the predicate fires, but the width must be left alone rather
+        // than pulled down to the floor. A min() here instead of a max() would silently narrow a
+        // hub the caller never asked to touch.
+        int[] rect = SpacingControlLoop.escalateHubResizeRect(
+                new HubExtent(/*conns=*/ 7, /*w=*/ 900, /*h=*/ 80), 0, 0, 900, 80);
+
+        assertNotNull(rect);
+        assertEquals("the already-wide axis is preserved, not clamped to the floor", 900, rect[2]);
+        assertEquals(250, rect[3]);
+    }
+
+    @Test
+    public void escalateHubResizeRect_shouldReturnNull_whenNeitherAxisWouldActuallyChange() {
+        // The predicate reads the extent captured for the VIEW's dominant hub; the bounds passed in
+        // are the object's own. They can disagree — a stale or differently-measured extent flags a
+        // hub whose actual box is already at both floors. Proposing a no-op resize there would put
+        // a command in the dispatched compound that changes nothing and a rectangle in the response
+        // that reports a change that never happened.
+        assertNull(SpacingControlLoop.escalateHubResizeRect(
+                new HubExtent(/*conns=*/ 7, /*w=*/ 140, /*h=*/ 80), 5, 6, 300, 250));
+    }
+
+    @Test
+    public void escalateHubResizeRect_shouldAlwaysGrowAtLeastOneAxis_whenItProposesAnything() {
+        // The predicate-to-target consistency invariant, asserted as a property rather than at a
+        // point: across the whole fan-out range and a spread of starting boxes, every rectangle this
+        // returns is strictly larger on at least one axis and smaller on neither. If that ever fails
+        // the escalate step can degrade into a no-op loop on the very hub it just diagnosed.
+        for (int conns = 7; conns <= 30; conns++) {
+            for (int w : new int[] { 40, 140, 300, 640, 1200 }) {
+                for (int h : new int[] { 30, 80, 250, 400 }) {
+                    HubExtent hub = new HubExtent(conns, w, h);
+                    int[] rect = SpacingControlLoop.escalateHubResizeRect(hub, 7, 9, w, h);
+                    if (rect == null) {
+                        continue;
+                    }
+                    String at = "conns=" + conns + " box=" + w + "x" + h;
+                    assertTrue(at + ": width must never shrink", rect[2] >= w);
+                    assertTrue(at + ": height must never shrink", rect[3] >= h);
+                    assertTrue(at + ": at least one axis must actually grow",
+                            rect[2] > w || rect[3] > h);
+                    assertEquals(at + ": position is untouched", 7, rect[0]);
+                    assertEquals(at + ": position is untouched", 9, rect[1]);
+                }
+            }
+        }
     }
 }

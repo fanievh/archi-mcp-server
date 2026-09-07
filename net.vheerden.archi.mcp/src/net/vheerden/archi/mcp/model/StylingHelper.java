@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.regex.Pattern;
 
+import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IBorderType;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
@@ -243,6 +244,27 @@ final class StylingHelper {
     }
 
     static void validateConnectionStylingParams(StylingParams styling) {
+        // First, before every other connection-styling check: a line style cannot be applied to a
+        // connection at all. Its dash pattern is fixed by the relationship type — the connection
+        // figures hardcode it and never read the model, and the metamodel carries no connection
+        // line-style attribute to read. Rejecting on the value (an unknown enum) or after another
+        // parameter's error would both imply the parameter itself was acceptable, so the refusal
+        // has to be value-independent and has to come first. It was previously parsed, counted as
+        // a requested change, dropped in silence, and reported as success — and the caller cannot
+        // see the canvas, so that success was its only ground truth.
+        if (styling.lineStyle() != null) {
+            throw new ModelAccessException(
+                    "lineStyle cannot be applied to a connection: a connection's line style is "
+                            + "determined by its ArchiMate relationship type and cannot be "
+                            + "overridden on the view.",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "Remove lineStyle from this call. To carry a visual distinction between "
+                            + "connections — synchronous versus asynchronous flows, for example — "
+                            + "use lineColor and lineWidth, which are supported here. lineStyle "
+                            + "applies to view objects (elements, groups, notes) instead.",
+                    null);
+        }
         validateHexColor(styling.lineColor(), "lineColor");
         validateHexColor(styling.fontColor(), "fontColor");
         if (styling.lineWidth() != null && (styling.lineWidth() < 1 || styling.lineWidth() > 3)) {
@@ -255,7 +277,6 @@ final class StylingHelper {
         }
         validateFontSize(styling.fontSize());
         validateFontStyle(styling.fontStyle());
-        // lineStyle is view-object-only — validated in validateStylingParams.
     }
 
     static void validateFontSize(Integer value) {
@@ -482,7 +503,67 @@ final class StylingHelper {
         }
     }
 
+    /**
+     * Writes the type's default title alignment onto a freshly created diagram object, matching
+     * what Archi's own diagram factory stamps when the same object is drawn from the palette.
+     *
+     * <p>Three types need it. Archi's UI providers for {@code Grouping}, the native group and the
+     * note each return LEFT, while connections, images and view references are born holding the
+     * CENTRE their own providers return. Writing those would write the value already there, so
+     * only the three that actually differ are listed. {@code CreationSiteStampNoOpTest} holds that
+     * arithmetic; {@code TypeDefaultTextAlignmentStampTest} holds this table's effect.</p>
+     *
+     * <p><b>Plain ArchiMate elements are deliberately not stamped, and that is a narrower
+     * guarantee than the other three.</b> Their provider does not return a constant: it reads the
+     * host user's {@code defaultArchiMateTextAlignment} preference, seeded to CENTRE. So leaving
+     * them at the EMF default matches Archi exactly on a stock installation, and can differ on one
+     * where the user changed that preference. Following the preference instead was considered and
+     * rejected: it would make this server's output depend on the host it runs against, which costs
+     * more than the divergence it closes. Callers who need a specific alignment on a plain element
+     * pass one explicitly.</p>
+     *
+     * <p>The three values are read from Archi 5.10 source — {@code GroupingUIProvider:71-73},
+     * {@code GroupUIProvider:68-70}, {@code NoteUIProvider:65-67} — and each is a hardcoded
+     * constant there, not a preference, so this server's output stays identical across hosts.
+     * They are stated here rather than looked up because Archi's provider registry resolves through
+     * the Eclipse extension registry: it cannot initialise outside an OSGi runtime, which would put
+     * every test of this behaviour in a bucket neither the release gate nor CI executes. The cost
+     * of stating them is that this is a second source of truth for a tree this project does not
+     * control; the guard against silent drift is that the values are asserted against their cited
+     * source lines rather than merely used.</p>
+     *
+     * <p>Only the horizontal axis is written. The three types above return TOP for the vertical
+     * one, which is already the EMF default, so there is nothing to correct. A plain element's
+     * vertical default is preference-backed exactly as its horizontal one is, and is left alone on
+     * the same reasoning.</p>
+     *
+     * <p>Reads the attached ArchiMate concept, so it must run after the concept is set on the
+     * diagram object; an unattached object simply matches no row and is left alone rather than
+     * failing.</p>
+     */
+    private static void stampTypeDefaultTextAlignment(IDiagramModelObject diagramObj) {
+        boolean defaultsLeft = diagramObj instanceof IDiagramModelGroup
+                || diagramObj instanceof IDiagramModelNote
+                || (diagramObj instanceof IDiagramModelArchimateObject archi
+                        && archi.getArchimateElement() instanceof IGrouping);
+        if (defaultsLeft) {
+            diagramObj.setTextAlignment(ITextAlignment.TEXT_ALIGNMENT_LEFT);
+        }
+    }
+
+    /**
+     * Prepares a freshly created diagram object's appearance: the type's Archi defaults first, then
+     * whatever the caller explicitly asked for.
+     *
+     * <p>The order is the contract. Defaults are stamped before the early return below, so an
+     * object created with no styling at all still matches what Archi's palette would have produced
+     * — that unstyled case is the whole reason the divergence existed. The caller's own
+     * {@code textAlignment} is applied further down, so an explicit request always overwrites the
+     * default rather than racing it.</p>
+     */
     static void applyStylingToNewObject(IDiagramModelObject diagramObj, StylingParams styling) {
+        stampTypeDefaultTextAlignment(diagramObj);
+
         if (styling == null || !styling.hasAnyValue()) return;
 
         validateStylingParams(styling);
@@ -590,7 +671,10 @@ final class StylingHelper {
                     styling.fontName(), styling.fontSize(), styling.fontStyle());
             conn.setFont(merged);
         }
-        // lineStyle: silently ignored on connections — applies to view objects only.
+        // No lineStyle branch, and deliberately none: validateConnectionStylingParams refuses a
+        // non-null lineStyle before any connection styling is applied, so one cannot arrive here.
+        // Writing the platform's line-type bits would persist a value into the saved model that
+        // nothing renders — a phantom surviving round-trips with no way for a caller to detect it.
     }
 
     // ---- Read styling from view objects ----
@@ -650,9 +734,34 @@ final class StylingHelper {
     }
 
     /**
-     * Reads textAlignment as a user-facing string. Returns null when at Archi default
-     * ({@link ITextAlignment#TEXT_ALIGNMENT_CENTER}). Returns "left" or "right" when
-     * explicitly set; "centre" is the default and therefore omitted from the DTO.
+     * Copies both title-placement features from one diagram object to another.
+     *
+     * <p>They travel together at the render: {@code textAlignment} places the title's glyph run
+     * horizontally and {@code textPosition} selects the band it sits in. A copy that carries one
+     * and drops the other therefore relocates the title while appearing to preserve its styling,
+     * which is why both live in one method rather than at two call sites that can drift apart.</p>
+     *
+     * <p>The vertical half is guarded because not every diagram object carries it: an image has no
+     * title band and does not implement {@link ITextPosition}, while groups, notes, references and
+     * ArchiMate objects all do.</p>
+     */
+    static void copyTextFeatures(IDiagramModelObject source, IDiagramModelObject target) {
+        target.setTextAlignment(source.getTextAlignment());
+        if (source instanceof ITextPosition srcPos && target instanceof ITextPosition tgtPos) {
+            tgtPos.setTextPosition(srcPos.getTextPosition());
+        }
+    }
+
+    /**
+     * Reads textAlignment as a user-facing string. Returns null when at Archi's EMF default
+     * ({@link ITextAlignment#TEXT_ALIGNMENT_CENTER}), which is therefore omitted from the DTO;
+     * returns "left" or "right" otherwise.
+     *
+     * <p>The omission is of the EMF default, not of "whatever the object was born with". Three
+     * types are born LEFT because {@link #applyStylingToNewObject} stamps their Archi type default,
+     * so a group, note or {@code Grouping} reads back carrying this field even when the caller
+     * asked for no styling. That is intended: the value is really on the object, and a response
+     * that hid it would be reporting a model this server did not build.</p>
      */
     static String readTextAlignment(IDiagramModelObject obj) {
         if (obj instanceof ITextAlignment ta) {
@@ -774,6 +883,43 @@ final class StylingHelper {
     }
 
     // ---- Post-styling computation ----
+
+    /**
+     * The thirteen post-execution styling values both {@code update-view-object} prepares reconcile
+     * before building their DTO, computed once.
+     *
+     * <p>Each is the same reconciliation: read what the object holds now, take what the request
+     * asked for, and let the request win only where it said something. Both prepares had their own
+     * copy of all thirteen lines, which is thirteen chances for the two update paths to disagree
+     * about what the same request means. The three alignment fields are deliberately NOT here — the
+     * two prepares genuinely differ on those, and folding them would have changed one path's
+     * behaviour under cover of a refactor.</p>
+     */
+    record PostStyling(
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String fontName, Integer fontSize, String fontStyle,
+            String gradient, String borderType, Boolean deriveLineColor,
+            Integer outlineOpacity, String lineStyle) {
+    }
+
+    /** Reconciles every field of {@link PostStyling} for {@code diagramObj} against {@code styling}. */
+    static PostStyling computePostStyling(IDiagramModelObject diagramObj, StylingParams styling) {
+        return new PostStyling(
+                computePostStylingColor(readFillColor(diagramObj), styling != null ? styling.fillColor() : null),
+                computePostStylingColor(readLineColor(diagramObj), styling != null ? styling.lineColor() : null),
+                computePostStylingColor(readFontColor(diagramObj), styling != null ? styling.fontColor() : null),
+                computePostStylingOpacity(readOpacity(diagramObj), styling != null ? styling.opacity() : null),
+                computePostStylingLineWidth(readLineWidth(diagramObj), styling != null ? styling.lineWidth() : null),
+                computePostStylingFontName(readFontName(diagramObj), styling != null ? styling.fontName() : null),
+                computePostStylingFontSize(readFontSize(diagramObj), styling != null ? styling.fontSize() : null),
+                computePostStylingFontStyle(readFontStyle(diagramObj), styling != null ? styling.fontStyle() : null),
+                computePostStylingGradient(readGradient(diagramObj), styling != null ? styling.gradient() : null),
+                computePostStylingBorderType(readBorderType(diagramObj), styling != null ? styling.borderType() : null),
+                computePostStylingDeriveLineColor(readDeriveLineColor(diagramObj), styling != null ? styling.deriveLineColor() : null),
+                computePostStylingOutlineOpacity(readOutlineOpacity(diagramObj), styling != null ? styling.outlineOpacity() : null),
+                computePostStylingLineStyle(readLineStyle(diagramObj), styling != null ? styling.lineStyle() : null));
+    }
 
     static String computePostStylingColor(String currentValue, String stylingValue) {
         if (stylingValue == null) return currentValue;
@@ -985,6 +1131,35 @@ final class StylingHelper {
         }
         String name = conn.getName();
         return name != null ? name : "";
+    }
+
+
+    /**
+     * Builds the visual connection for a relationship, styled, in the words the two auto-connect
+     * arms used verbatim before they shared them.
+     */
+    static IDiagramModelArchimateConnection newStyledConnection(IArchimateRelationship rel,
+            Boolean showLabel, StylingParams styling) {
+        IDiagramModelArchimateConnection conn =
+                IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        conn.setArchimateRelationship(rel);
+        if (showLabel != null) {
+            conn.setNameVisible(showLabel);
+        }
+        if (styling != null && styling.hasAnyValue()) {
+            if (styling.lineColor() != null) {
+                conn.setLineColor(styling.lineColor().isEmpty() ? null : styling.lineColor());
+            }
+            if (styling.fontColor() != null) {
+                conn.setFontColor(styling.fontColor().isEmpty() ? null : styling.fontColor());
+            }
+            if (styling.lineWidth() != null) {
+                conn.setLineWidth(styling.lineWidth());
+            }
+            // Typography composite + lineStyle bitmask.
+            applyConnectionStyling(conn, styling);
+        }
+        return conn;
     }
 
 }

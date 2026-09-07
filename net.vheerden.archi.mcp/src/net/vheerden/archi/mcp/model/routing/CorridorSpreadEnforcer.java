@@ -10,7 +10,7 @@ import net.vheerden.archi.mcp.model.RoutingRect;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
- * H5 story — Axis 2: intra-corridor SPREAD enforcement primitive.
+ * Hub-perimeter routing — Axis 2: intra-corridor SPREAD enforcement primitive.
  *
  * <p><b>Architectural commitment (load-bearing):</b> for each (hub, face) cell with
  * three or more members sharing the same perpendicular coordinate (a zero-spread
@@ -100,7 +100,8 @@ public class CorridorSpreadEnforcer {
      *
      * @param cell          the (hub, face) cell with its members
      * @param paths         index-parallel per-route bendpoint lists (NOT mutated by this method)
-     * @param allObstacles  all element rectangles on the view (including the hub itself)
+     * @param allObstacles  every non-container view object — elements, notes and images alike
+     *                      (including the hub itself)
      * @return spread proposals; empty if no triggering group exists or channel is too tight
      */
     public List<SpreadProposal> evaluate(

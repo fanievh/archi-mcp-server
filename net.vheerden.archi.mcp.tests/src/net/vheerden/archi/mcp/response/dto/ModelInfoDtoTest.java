@@ -71,7 +71,7 @@ public class ModelInfoDtoTest {
     // ---- G6: purpose + properties + back-compat ctor ----
 
     @Test
-    public void shouldOmitPurposeFromJson_whenNull_AC11() throws Exception {
+    public void shouldOmitPurposeFromJson_whenNull() throws Exception {
         // Legacy 8-arg ctor → purpose + properties default to null
         ModelInfoDto dto = new ModelInfoDto("Model", 5, 3, 1, 0,
                 Map.of(), Map.of(), Map.of());
@@ -83,7 +83,7 @@ public class ModelInfoDtoTest {
     }
 
     @Test
-    public void shouldIncludePurposeInJson_whenPopulated_AC11() throws Exception {
+    public void shouldIncludePurposeInJson_whenPopulated() throws Exception {
         ModelInfoDto dto = new ModelInfoDto("Model", "Strategic EA", null,
                 5, 3, 1, 0, Map.of(), Map.of(), Map.of());
         String json = MAPPER.writeValueAsString(dto);
@@ -92,7 +92,7 @@ public class ModelInfoDtoTest {
     }
 
     @Test
-    public void shouldOmitPropertiesFromJson_whenNull_AC11() throws Exception {
+    public void shouldOmitPropertiesFromJson_whenNull() throws Exception {
         // Populated purpose but null properties — only purpose should serialize
         ModelInfoDto dto = new ModelInfoDto("Model", "Purpose only", null,
                 5, 3, 1, 0, Map.of(), Map.of(), Map.of());
@@ -102,7 +102,7 @@ public class ModelInfoDtoTest {
     }
 
     @Test
-    public void shouldDelegateToCanonicalCtor_whenBackCompat8FieldCtorUsed_AC11() {
+    public void shouldDelegateToCanonicalCtor_whenBackCompat8FieldCtorUsed() {
         // The 8-arg back-compat ctor delegates to the canonical 10-arg form with null purpose/properties
         ModelInfoDto dto = new ModelInfoDto("Model", 5, 3, 1, 0,
                 Map.of("Actor", 5), Map.of("Serving", 3), Map.of("Business", 5));
@@ -117,7 +117,7 @@ public class ModelInfoDtoTest {
     }
 
     @Test
-    public void shouldIncludePropertiesInJson_whenPopulated_AC11() throws Exception {
+    public void shouldIncludePropertiesInJson_whenPopulated() throws Exception {
         Map<String, String> props = new LinkedHashMap<>();
         props.put("Author", "Jane");
         ModelInfoDto dto = new ModelInfoDto("Model", null, props,

@@ -31,7 +31,8 @@ import net.vheerden.archi.mcp.response.ErrorCode;
  * loopback {@link HttpServer} (JDK-bundled, no new dependency, no EMF/OSGi/SWT) so every
  * bound is proven in the standard JUnit lane — the method's {@code requireAndCaptureModel()}
  * wrapper makes the full {@code addImageFromUrl} untestable offline, so the fetch logic was
- * lifted into this package-private seam (the "pure core" discipline). Closes audit P2.
+ * lifted into this package-private seam (the "pure core" discipline), which is what gives the
+ * download bounds automated coverage at all — before the lift, nothing exercised them.
  */
 public class BoundedImageDownloadTest {
 

@@ -16,6 +16,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.BaseTestAccessor;
+import net.vheerden.archi.mcp.model.ContentBounds;
 import net.vheerden.archi.mcp.model.ExportResult;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -549,10 +550,200 @@ public class RenderHandlerTest {
         assertEquals("INVALID_PARAMETER", error.get("code"));
     }
 
+    // ---- Raster area guard ----
+
+    /**
+     * Content bounds of the largest view in the reference corpus — the one whose
+     * scale-2.0 export exhausted the machine. Held here as the discriminating
+     * input for the guard, in the frame the accessor reports.
+     */
+    private static final ContentBounds LARGE_VIEW_BOUNDS = new ContentBounds(12, 12, 6777, 6538);
+
+    /** Physical memory that was actually free when that export died: 412 MB. */
+    private static final long CRASH_SITE_MEMORY = 422256L * 1024L;
+
+    /** A pool large enough that no projection in this suite can exhaust it. */
+    private static final long GENEROUS_MEMORY = 32L * 1024L * 1024L * 1024L;
+
+    @Test
+    public void shouldReturnError_whenProjectedRasterExceedsBudget() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 2.0, null);
+
+        assertTrue("A render projected at 711 MB against 412 MB of free memory must be refused",
+                result.isError());
+        Map<String, Object> envelope = parseJson(result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+    }
+
+    @Test
+    public void shouldNotDispatchRender_whenProjectedRasterExceedsBudget() {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 2.0, null);
+
+        assertTrue(result.isError());
+        assertFalse("The refusal must happen before the render is dispatched",
+                accessor.exportCalled);
+    }
+
+    @Test
+    public void shouldReadBudget_whenSameViewAndScaleFacesDifferentPools() throws Exception {
+        StubAccessor tight = new StubAccessor(true, createDefaultPngResult());
+        tight.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler tightHandler = new RenderHandler(tight, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        tightHandler.registerTools();
+        McpSchema.CallToolResult refused = invokeExportView("view-1", "png", 2.0, null);
+
+        setUp();
+        StubAccessor roomy = new StubAccessor(true, createDefaultPngResult());
+        roomy.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler roomyHandler = new RenderHandler(roomy, formatter, registry,
+                () -> GENEROUS_MEMORY);
+        roomyHandler.registerTools();
+        McpSchema.CallToolResult accepted = invokeExportView("view-1", "png", 2.0, null);
+
+        assertTrue("The same view at the same scale must be refused under a small pool",
+                refused.isError());
+        assertFalse("The same view at the same scale must be accepted under a large pool",
+                accepted.isError());
+        assertTrue("The accepted call must actually reach the renderer", roomy.exportCalled);
+    }
+
+    @Test
+    public void shouldAllowMaximumScale_whenViewIsSmall() {
+        // The guard is driven by projected area, not by the multiplier. A small
+        // view at the largest accepted factor must still render.
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 4.0, null);
+
+        assertFalse("A small view at the largest accepted scale must still export",
+                result.isError());
+        assertTrue(accessor.exportCalled);
+        assertEquals(4.0, accessor.lastScale, 0.001);
+    }
+
+    @Test
+    public void shouldAllowLargeView_whenBudgetAccommodatesIt() {
+        // This view at this scale has demonstrably exported before. A guard that
+        // refuses the models the tool exists for is not a fix.
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> GENEROUS_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 1.0, null);
+
+        assertFalse(result.isError());
+        assertTrue(accessor.exportCalled);
+    }
+
+    @Test
+    public void shouldNameProjectionBudgetAndFittingScale_whenRefusing() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 2.0, null);
+
+        Map<String, Object> envelope = parseJson(result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        String message = (String) error.get("message");
+        String details = (String) error.get("details");
+        String suggestion = (String) error.get("suggestedCorrection");
+
+        assertTrue("must name the projected dimensions: " + message,
+                message.contains("13574 x 13096"));
+        assertTrue("must name the byte estimate: " + message, message.contains("678.1 MB"));
+        assertTrue("must name the budget it compared against: " + message,
+                message.contains("206.2 MB"));
+        assertTrue("must name the pool the budget came from: " + message,
+                message.contains("412.4 MB"));
+        assertTrue("details must carry the exact byte count: " + details,
+                details.contains("711060416"));
+        assertTrue("must name the largest scale that would fit: " + suggestion,
+                suggestion.contains("1.1"));
+        assertTrue("must offer the vector escape: " + suggestion,
+                suggestion.contains("'svg'") && suggestion.contains("'pdf'"));
+    }
+
+    @Test
+    public void shouldGuardTheJpegAlias_whenItNormalisesToJpg() {
+        StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "jpeg", 2.0, null);
+
+        assertTrue("the alias must reach the guard, not bypass it", result.isError());
+        assertFalse(accessor.exportCalled);
+    }
+
+    @Test
+    public void shouldNotGuardVectorFormats_whenRasterWouldBeRefused() {
+        // SVG and PDF do not forward scale and allocate no bitmap, so the same
+        // view at the same scale under the same pool must go straight through.
+        for (String format : new String[] { "svg", "pdf" }) {
+            setUp();
+            ExportResult canned = "svg".equals(format)
+                    ? new ExportResult(new ExportViewResultDto("view-1", "Test View", "svg",
+                            "image/svg+xml", null, null, null, 10), null, "<svg/>")
+                    : createDefaultPdfResult();
+            StubAccessor accessor = new StubAccessor(true, canned);
+            accessor.contentBounds = LARGE_VIEW_BOUNDS;
+            RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                    () -> CRASH_SITE_MEMORY);
+            handler.registerTools();
+
+            McpSchema.CallToolResult result = invokeExportView("view-1", format, 2.0, null);
+
+            assertFalse(format + " must not be guarded", result.isError());
+            assertTrue(format + " must reach the renderer", accessor.exportCalled);
+        }
+    }
+
+    @Test
+    public void shouldNotFail_whenViewHasNoContentToBound() {
+        // An empty view has no content bounds; the renderer draws a fixed blank
+        // square for it, and the guard must project that rather than throw.
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = null;
+        RenderHandler handler = new RenderHandler(accessor, formatter, registry,
+                () -> CRASH_SITE_MEMORY);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 4.0, null);
+
+        assertFalse(result.isError());
+        assertTrue(accessor.exportCalled);
+    }
+
     // ---- JPG routing + alias + content type ----
 
     @Test
-    public void shouldRouteFormatJpg_toJpegRenderer_whenInvoked_AC3() {
+    public void shouldRouteFormatJpg_toJpegRenderer_whenInvoked() {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -563,7 +754,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldNormaliseJpegAliasToJpg_whenFormatIsJpeg_AC3() {
+    public void shouldNormaliseJpegAliasToJpg_whenFormatIsJpeg() {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -575,7 +766,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldReturnImageContentJpeg_whenInlineJpg_AC5() {
+    public void shouldReturnImageContentJpeg_whenInlineJpg() {
         byte[] jpgBytes = new byte[] { (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0 };
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "view-1", "Test View", "jpg", "image/jpeg", 800, 600, null, 120);
@@ -600,7 +791,7 @@ public class RenderHandlerTest {
     // ---- PDF routing + EmbeddedResource ----
 
     @Test
-    public void shouldRouteFormatPdf_toPdfRenderer_whenInvoked_AC2() {
+    public void shouldRouteFormatPdf_toPdfRenderer_whenInvoked() {
         StubAccessor accessor = new StubAccessor(true, createDefaultPdfResult());
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -611,7 +802,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldReturnEmbeddedResourcePdf_whenInlinePdf_AC5() {
+    public void shouldReturnEmbeddedResourcePdf_whenInlinePdf() {
         byte[] pdfBytes = new byte[] { '%', 'P', 'D', 'F', '-', '1', '.', '4' };
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "view-pdf-1", "Pdf View", "pdf", "application/pdf", null, null, null, 250);
@@ -640,7 +831,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldUseArchiExportUri_inPdfBlobResource_AC5() {
+    public void shouldUseArchiExportUri_inPdfBlobResource() {
         byte[] pdfBytes = new byte[] { '%', 'P', 'D', 'F', '-' };
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "abc-123", "View", "pdf", "application/pdf", null, null, null, 50);
@@ -662,7 +853,7 @@ public class RenderHandlerTest {
     // ---- quality param validation + default ----
 
     @Test
-    public void shouldRejectQualityZero_whenFormatJpg_AC4() throws Exception {
+    public void shouldRejectQualityZero_whenFormatJpg() throws Exception {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -682,7 +873,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldRejectQualityAboveHundred_whenFormatJpg_AC4() throws Exception {
+    public void shouldRejectQualityAboveHundred_whenFormatJpg() throws Exception {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -702,7 +893,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldAcceptQualityOne_whenFormatJpg_AC4() {
+    public void shouldAcceptQualityOne_whenFormatJpg() {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(1));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -719,7 +910,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldAcceptQualityHundred_whenFormatJpg_AC4() {
+    public void shouldAcceptQualityHundred_whenFormatJpg() {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(100));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -736,7 +927,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldDefaultQualityToNinety_whenFormatJpgAndQualityOmitted_AC4() {
+    public void shouldDefaultQualityToNinety_whenFormatJpgAndQualityOmitted() {
         StubAccessor accessor = new StubAccessor(true, createDefaultJpgResult(90));
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -748,7 +939,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldIgnoreQuality_whenFormatPng_AC4() {
+    public void shouldIgnoreQuality_whenFormatPng() {
         StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -766,7 +957,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldIgnoreQuality_whenFormatPdf_AC4() {
+    public void shouldIgnoreQuality_whenFormatPdf() {
         StubAccessor accessor = new StubAccessor(true, createDefaultPdfResult());
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -783,7 +974,7 @@ public class RenderHandlerTest {
     }
 
     @Test
-    public void shouldIgnoreQuality_whenFormatSvg_AC4() {
+    public void shouldIgnoreQuality_whenFormatSvg() {
         String svgXml = "<svg/>";
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "view-1", "Test View", "svg", "image/svg+xml", null, null, null, 80);
@@ -807,7 +998,7 @@ public class RenderHandlerTest {
     // ---- Unsupported format rejection ----
 
     @Test
-    public void shouldRejectUnsupportedFormat_AC9() throws Exception {
+    public void shouldRejectUnsupportedFormat() throws Exception {
         StubAccessor accessor = new StubAccessor(true);
         // Accessor's INVALID_PARAMETER for unknown formats; the handler propagates it.
         accessor.throwOnExport = new ModelAccessException(
@@ -832,7 +1023,7 @@ public class RenderHandlerTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void shouldEmitPdfInlineNextSteps_whenInlinePdf_AC10() throws Exception {
+    public void shouldEmitPdfInlineNextSteps_whenInlinePdf() throws Exception {
         StubAccessor accessor = new StubAccessor(true, createDefaultPdfResult());
         RenderHandler handler = new RenderHandler(accessor, formatter, registry);
         handler.registerTools();
@@ -854,7 +1045,7 @@ public class RenderHandlerTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void shouldEmitJpgFileNextSteps_whenInlineFalseJpg_AC10() throws Exception {
+    public void shouldEmitJpgFileNextSteps_whenInlineFalseJpg() throws Exception {
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "view-1", "View", "jpg", "image/jpeg", 800, 600,
                 "/tmp/archi-mcp-export/view-1.jpg", 100);
@@ -881,7 +1072,7 @@ public class RenderHandlerTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    public void shouldEmitPdfFileNextSteps_whenInlineFalsePdf_AC10() throws Exception {
+    public void shouldEmitPdfFileNextSteps_whenInlineFalsePdf() throws Exception {
         ExportViewResultDto metadata = new ExportViewResultDto(
                 "view-1", "View", "pdf", "application/pdf", null, null,
                 "/tmp/archi-mcp-export/view-1.pdf", 200);
@@ -1108,6 +1299,14 @@ public class RenderHandlerTest {
     private static class StubAccessor extends BaseTestAccessor {
         private ExportResult exportResult;
         ModelAccessException throwOnExport;
+        /**
+         * Bounds the raster guard reads before dispatching a render. Defaults to a
+         * view small enough that no existing test trips the guard: at the tool's
+         * largest accepted scale it projects to about 31 MB, well inside any
+         * budget a machine able to run the suite could report.
+         */
+        ContentBounds contentBounds = new ContentBounds(0, 0, 800, 600);
+        boolean exportCalled;
         String lastViewId;
         String lastFormat;
         double lastScale;
@@ -1131,6 +1330,14 @@ public class RenderHandlerTest {
         }
 
         @Override
+        public ContentBounds getContentBounds(String viewId) {
+            if (!isModelLoaded()) {
+                throw new NoModelLoadedException();
+            }
+            return contentBounds;
+        }
+
+        @Override
         public ExportResult exportView(String viewId, String format,
                                         double scale, int quality, boolean inline,
                                         String outputDirectory) {
@@ -1140,6 +1347,7 @@ public class RenderHandlerTest {
             if (throwOnExport != null) {
                 throw throwOnExport;
             }
+            this.exportCalled = true;
             this.lastViewId = viewId;
             this.lastFormat = format;
             this.lastScale = scale;

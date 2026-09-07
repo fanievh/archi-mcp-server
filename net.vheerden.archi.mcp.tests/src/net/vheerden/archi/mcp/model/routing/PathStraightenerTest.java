@@ -723,7 +723,7 @@ public class PathStraightenerTest {
 
     @Test
     public void eliminateReversals_shouldDeclineOvershootCollapse_whenForeignObstacleBlocksCorridor_augmented() {
-        // Soundness (W3 consume-not-create-clearance lesson): a foreign element in the straight
+        // Soundness (the consume-not-create-clearance lesson): a foreign element in the straight
         // collapse corridor must keep the overshoot rather than pierce it. The obstacle set the
         // pipeline passes at 4.7i excludes source/target, so only genuine foreign elements appear.
         List<AbsoluteBendpointDto> path = mutableList(

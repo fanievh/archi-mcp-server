@@ -60,7 +60,7 @@ public class KeystorePasswordMigrationTest {
                 () -> cleared.set(true));
 
         assertFalse("a failed write must not report a migration", migrated);
-        assertFalse("the legacy plaintext value MUST be left intact on write failure (AC-3)", cleared.get());
+        assertFalse("the legacy plaintext value MUST be left intact on write failure", cleared.get());
     }
 
     /**
@@ -80,7 +80,7 @@ public class KeystorePasswordMigrationTest {
 
         assertFalse(migrated);
         assertFalse("must not write when the store is unreadable", written.get());
-        assertFalse("must not clear the legacy value when the store is unreadable (AC-3)", cleared.get());
+        assertFalse("must not clear the legacy value when the store is unreadable", cleared.get());
     }
 
     /**

@@ -165,6 +165,39 @@ public class ApprovalCardModelTest {
     }
 
     @Test
+    public void shouldSurfaceViewCascadeCounts_onDeleteViewRow() {
+        // delete-view folds its two measured counts into the description; the row renders that
+        // sentence verbatim (no effectDescription, no structured name), so the counts reach the
+        // human. A single-op delete row IS the description, so assert the whole string.
+        ApprovalCardModel c = card("p-v", "delete-view",
+                "Delete view: Payments (cascade: 5 view connections, 3 view references)",
+                Map.of("viewId", "id-v1", "viewConnectionsRemoved", 5, "viewReferencesRemoved", 3),
+                "2026-01-01T00:00:00Z");
+
+        ChangeRow row = c.rows().get(0);
+        assertEquals("Delete view: Payments (cascade: 5 view connections, 3 view references)",
+                row.text());
+        assertTrue(row.destructive());
+        assertEquals("🗑", row.icon());
+    }
+
+    @Test
+    public void shouldSurfaceFolderCascadeCounts_onDeleteFolderRow() {
+        ApprovalCardModel c = card("p-f", "delete-folder",
+                "Delete folder: Legacy (force cascade: 1 view, 1 view connection)",
+                Map.of("folderId", "id-f1", "force", true,
+                        "viewsRemoved", 1, "viewConnectionsRemoved", 1),
+                "2026-01-01T00:00:00Z");
+
+        // Full-string equality — a substring check on "1 view" would be subsumed by
+        // "1 view connection" and would not independently prove the separate views clause.
+        ChangeRow row = c.rows().get(0);
+        assertEquals("Delete folder: Legacy (force cascade: 1 view, 1 view connection)", row.text());
+        assertTrue(row.destructive());
+        assertEquals("🗑", row.icon());
+    }
+
+    @Test
     public void shouldFallBackToId_whenNoNameAndNoDescription() {
         Map<String, Object> changes = new LinkedHashMap<>();
         changes.put("elementId", "id-xyz");
@@ -761,5 +794,58 @@ public class ApprovalCardModelTest {
 
         assertTrue(c.isSingleOp());
         assertTrue(c.hasDestructive());
+    }
+
+    /**
+     * A proposed empty name is a request to WIPE the name, and the human is being asked to approve
+     * exactly that. The structured-name lookup rejects blanks, so before this pin an empty name fell
+     * straight through to the generic "<verb> <id>" row and the card said nothing about the clear —
+     * the one fact the approver most needed. Whitespace-only is the same case: the lookup rejects it
+     * identically, and the model stores it verbatim.
+     */
+    @Test
+    public void shouldSayTheNameIsBeingCleared_whenAnUpdateProposesAnEmptyName() {
+        Map<String, Object> changes = new LinkedHashMap<>();
+        changes.put("id", "rel-1");
+        changes.put("name", "");
+
+        ApprovalCardModel c = card("p-clear", "update-relationship",
+                "Update relationship: rel-1", changes, "2026-01-01T00:00:00Z");
+
+        ChangeRow row = c.rows().get(0);
+        assertTrue("the card must name the clear, not fall through to a bare id. Row was: "
+                + row.text(), row.text().toLowerCase().contains("clear"));
+        assertTrue("and must still identify which relationship. Row was: " + row.text(),
+                row.text().contains("rel-1"));
+    }
+
+    @Test
+    public void shouldSayTheNameIsBeingCleared_whenAnUpdateProposesAWhitespaceOnlyName() {
+        Map<String, Object> changes = new LinkedHashMap<>();
+        changes.put("id", "rel-2");
+        changes.put("name", "   ");
+
+        ApprovalCardModel c = card("p-ws", "update-relationship",
+                "Update relationship: rel-2", changes, "2026-01-01T00:00:00Z");
+
+        assertTrue("a whitespace-only name is dropped by the same lookup, so it must be reported "
+                + "the same way. Row was: " + c.rows().get(0).text(),
+                c.rows().get(0).text().toLowerCase().contains("clear"));
+    }
+
+    /** The negative control: a real name must still render as the name, not as a clear. */
+    @Test
+    public void shouldStillRenderTheName_whenAnUpdateProposesANonEmptyName() {
+        Map<String, Object> changes = new LinkedHashMap<>();
+        changes.put("id", "rel-3");
+        changes.put("name", "Serves");
+
+        ApprovalCardModel c = card("p-set", "update-relationship",
+                "Update relationship: rel-3", changes, "2026-01-01T00:00:00Z");
+
+        String text = c.rows().get(0).text();
+        assertTrue("a supplied name must still be shown: " + text, text.contains("Serves"));
+        assertFalse("and must not be described as a clear: " + text,
+                text.toLowerCase().contains("clear"));
     }
 }

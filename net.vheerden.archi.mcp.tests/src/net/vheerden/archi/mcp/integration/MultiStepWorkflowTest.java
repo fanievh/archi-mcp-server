@@ -149,7 +149,7 @@ public class MultiStepWorkflowTest {
     }
 
     /**
-     * Validates handler processing overhead stays within NFR1 budget (2s).
+     * Validates handler processing overhead stays within the 2s latency budget.
      * Note: tests stub accessor, not real model access — validates handler/formatter
      * overhead only. Real model access performance requires E2E testing with Archi.
      */
@@ -169,7 +169,7 @@ public class MultiStepWorkflowTest {
             long elapsed = System.currentTimeMillis() - startTime;
 
             assertFalse(toolName + " should succeed", result.isError());
-            assertTrue(toolName + " should complete within 2000ms (NFR1), took " + elapsed + "ms",
+            assertTrue(toolName + " should complete within the 2000ms budget, took " + elapsed + "ms",
                     elapsed < 2000);
         }
     }

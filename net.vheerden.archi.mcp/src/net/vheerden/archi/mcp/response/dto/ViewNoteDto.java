@@ -17,7 +17,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * {@code lineStyle} so that {@code get-view-contents} surfaces every v1.5
  * styling field that the write tools accept. {@code borderType} (dogear/rectangle/none)
  * is the note-specific surface; {@code figureType} remains absent per the
- * Task-2.3 disposition (notes do not expose figureType). All fields are omitted
+ * Notes do not expose figureType. All fields are omitted
  * from JSON when null via NON_NULL.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -48,7 +48,23 @@ public record ViewNoteDto(
     String borderType,
     Boolean deriveLineColor,
     Integer outlineOpacity,
-    String lineStyle
+    String lineStyle,
+    /**
+     * Placement-time disclosures for THIS call — currently the one that says the rectangle just
+     * placed lands on a route already drawn on the view.
+     *
+     * <p>Present only on the response to a placement call, and on every arm of one: the entity is
+     * built once in the prepare and is the same object the immediate response returns, the
+     * proposal carries under {@code preview}, and the batched response projects — so approval
+     * mode, which discards {@code nextSteps} wholesale, cannot lose it. That is why the
+     * disclosure is a field here rather than a next step.</p>
+     *
+     * <p><strong>Absent on the read path.</strong> {@code get-view-contents} reports what is on
+     * the view, not the outcome of a call that put it there, and a warning about a placement made
+     * at some earlier time would be a claim about routes that have since changed. Null there, and
+     * omitted from JSON.</p>
+     */
+    java.util.List<StructuredWarningDto> structuredWarnings
 ) {
 
     /**
@@ -56,7 +72,7 @@ public record ViewNoteDto(
      * (styling + note + image fields, no textAlignment/verticalTextAlignment). Delegates to the
      * canonical 27-field constructor with eleven trailing nulls
      * (2 predecessor styling row + 9 v1.5 styling fields). Notes do not surface
-     * figureType per Task-2.3 disposition.
+     * figureType is not exposed for notes.
      */
     public ViewNoteDto(
             String viewObjectId, String content,
@@ -70,7 +86,7 @@ public record ViewNoteDto(
                 fillColor, lineColor, fontColor, opacity, lineWidth,
                 note, imagePath, imagePosition, showIcon,
                 null, null,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -94,7 +110,7 @@ public record ViewNoteDto(
                 fillColor, lineColor, fontColor, opacity, lineWidth,
                 note, imagePath, imagePosition, showIcon,
                 textAlignment, verticalTextAlignment,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**

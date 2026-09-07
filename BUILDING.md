@@ -73,9 +73,11 @@ tools/run-tests.sh
 A green run prints, e.g.:
 
 ```
-SUMMARY: 181 classes | 4082 tests run | 0 failed | 0 errors | 0 empty-class violations
+SUMMARY: 252 classes | 5389 tests run | 0 failed | 0 errors | 0 empty-class violations
 RESULT: PASS
 ```
+
+The class and test counts grow with the suite — treat the figures above as the shape of a green run, not a target to match. What matters is `0 failed | 0 errors | 0 empty-class violations`.
 
 Useful invocations:
 
@@ -127,8 +129,8 @@ then restart Archi.
 suite in **two lanes**, each invoking `tools/run-tests.sh` unmodified; both upload JUnit XML and a
 job summary. A failing test in either lane turns the build red.
 
-- **`ci-junit`** — the headless pure-JUnit bucket (the bulk of the suite, ~181 classes / ~4,000
-  tests). No display is needed, so it runs without `xvfb`, and it auto-discovers `*Test.java` — a
+- **`ci-junit`** — the headless pure-JUnit bucket (the bulk of the suite, currently ~250 classes /
+  ~5,400 tests). No display is needed, so it runs without `xvfb`, and it auto-discovers `*Test.java` — a
   new headless test is picked up with no workflow change.
 - **`ci-pde`** — the SWT-display classes listed in `tools/osgi-excluded-tests.txt` (a small subset),
   run under **`xvfb`** so SWT can bind to a virtual framebuffer. The harness runs in explicit-FQCN

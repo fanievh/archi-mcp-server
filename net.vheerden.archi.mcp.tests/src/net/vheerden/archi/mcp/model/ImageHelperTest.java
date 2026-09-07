@@ -2,9 +2,11 @@ package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -13,7 +15,14 @@ import org.junit.Test;
 import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
+import org.eclipse.emf.ecore.EClassifier;
+
+import com.archimatetool.model.IArchimatePackage;
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelObject;
+import com.archimatetool.model.IIconic;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IProfile;
 
@@ -65,10 +74,22 @@ public class ImageHelperTest {
     }
 
     @Test
+    public void shouldReportDrawnArea_whenImageExceedsElement() {
+        // Archi CLIPS an image to the element box, so only the intersection renders.
+        // 40x40 image on a 120x15 element draws 40x15 = 600 of 1800 = 33.3%.
+        // The natural-area ratio would claim 88.9% for the same pixels.
+        assertEquals(33.33, ImageHelper.calculateCoverage(40, 40, 120, 15), 0.01);
+    }
+
+    @Test
     public void shouldReturnHighCoverage_whenLargeImage() {
-        // 100x100 image on 120x55 = 10000/6600 = 151.5%
+        // 100x100 image on 120x55: clipped to 100x55 = 5500/6600 = 83.3% drawn.
+        // The image still EXCEEDS its element on the height axis, and that fact is
+        // reported by the warning rather than by an above-100 coverage number.
         double coverage = ImageHelper.calculateCoverage(100, 100, 120, 55);
-        assertTrue(coverage > 100.0);
+        assertEquals(83.33, coverage, 0.01);
+        assertTrue(ImageHelper.exceedsElement(100, 100, 120, 55, null));
+        assertTrue(ImageHelper.coverageWarning(coverage, true).contains("cut off"));
     }
 
     // ---- Coverage warning ----
@@ -90,10 +111,264 @@ public class ImageHelperTest {
         assertTrue(warning.contains("obscure element name"));
     }
 
+    // Drawn coverage is capped at 100 by construction, so no value above 100 can reach
+    // coverageWarning from calculateCoverage any more. The oversize case that used to be
+    // expressed as "coverage over 100%" is now expressed by the exceedsElement flag, and the
+    // test that pinned the unreachable input is re-authored here to pin the reachable one.
     @Test
-    public void shouldReturnWarning_whenCoverageOver100() {
-        String warning = ImageHelper.coverageWarning(151.5);
-        assertTrue(warning.contains("151.5%"));
+    public void shouldReturnWarning_whenImageExceedsElement() {
+        // Replaces a test that fed coverageWarning a >100 value, which capped semantics make
+        // unreachable. Uses a LOW drawn coverage so it pins the oversize channel on its own,
+        // distinct from the both-clauses case below.
+        String warning = ImageHelper.coverageWarning(8.3, true);
+        assertTrue(warning.contains("cut off"));
+        assertFalse(warning.contains("may obscure element name"));
+    }
+
+    @Test
+    public void shouldNeverExceed100_whenImageIsLargerThanElementOnBothAxes() {
+        assertEquals(100.0, ImageHelper.calculateCoverage(500, 500, 120, 55), 0.001);
+    }
+
+    // ---- fill position: Archi scales the image to the box rather than clipping it ----
+
+    @Test
+    public void shouldReturnFullCoverage_whenFillPosition() {
+        // Natural size is irrelevant under fill — the image is scaled to the element box.
+        assertEquals(100.0, ImageHelper.calculateCoverage(40, 40, 120, 15, "fill"), 0.001);
+        assertEquals(100.0, ImageHelper.calculateCoverage(4, 4, 120, 15, "fill"), 0.001);
+    }
+
+    @Test
+    public void shouldNotReportExceeds_whenFillPosition() {
+        // A fill image is scaled, never cut off, however large its natural size.
+        assertFalse(ImageHelper.exceedsElement(500, 500, 120, 15, "fill"));
+    }
+
+    @Test
+    public void shouldTreatNullPositionAsAnchored_notUnknown() {
+        // null denotes the Archi default (top-right), which is anchored and therefore
+        // clipped — it must NOT be treated as an unknown position or as fill.
+        assertEquals(ImageHelper.calculateCoverage(40, 40, 120, 15),
+                ImageHelper.calculateCoverage(40, 40, 120, 15, null), 0.001);
+        assertEquals(33.33, ImageHelper.calculateCoverage(40, 40, 120, 15, null), 0.01);
+        assertTrue(ImageHelper.exceedsElement(40, 40, 120, 15, null));
+    }
+
+    @Test
+    public void shouldReportSameDrawnCoverage_forEveryAnchoredPosition() {
+        // The anchored rectangle and the element box always share the anchor corner, so the
+        // intersection's SIZE is independent of which corner the image is anchored to.
+        for (String pos : new String[] {"top-left", "top-centre", "top-right", "middle-left",
+                "middle-centre", "middle-right", "bottom-left", "bottom-centre", "bottom-right"}) {
+            assertEquals("position " + pos,
+                    33.33, ImageHelper.calculateCoverage(40, 40, 120, 15, pos), 0.01);
+        }
+    }
+
+    // ---- exceedsElement is INDEPENDENT of drawn coverage: all four combinations ----
+
+    @Test
+    public void shouldReportExceeds_whenLargerOnEitherAxisAlone() {
+        assertTrue("wider only", ImageHelper.exceedsElement(200, 10, 120, 55, null));
+        assertTrue("taller only", ImageHelper.exceedsElement(10, 200, 120, 55, null));
+        assertFalse("fits both axes", ImageHelper.exceedsElement(16, 16, 120, 55, null));
+        assertFalse("exactly the box", ImageHelper.exceedsElement(120, 55, 120, 55, null));
+    }
+
+    @Test
+    public void shouldWarnAboutBoth_forA40x40ImageOnA120x15Element() {
+        // The case that motivated the change: previously reported 88.9% (natural area) with a
+        // "may obscure element name" claim, when only 33.3% is actually painted. Both claims
+        // are TRUE here and both fire — 33.3% is above the 25% legibility threshold AND the
+        // image overruns the element's height. The fix is that the NUMBER is now 33.3 not 88.9,
+        // and that the cut-off fact is stated explicitly instead of being implied by a figure
+        // above 100. Fidelity firing WITHOUT legibility needs a lower-coverage case, pinned by
+        // shouldWarnAboutClippingOnly_whenOversizedButLowDrawnCoverage below.
+        double coverage = ImageHelper.calculateCoverage(40, 40, 120, 15, "top-left");
+        assertEquals(33.33, coverage, 0.01);
+        assertTrue(ImageHelper.exceedsElement(40, 40, 120, 15, "top-left"));
+        String warning = ImageHelper.coverageWarning(coverage, true);
+        assertTrue(warning.contains("may obscure element name"));
+        assertTrue(warning.contains("cut off"));
+    }
+
+    @Test
+    public void shouldWarnAboutClippingOnly_whenOversizedButLowDrawnCoverage() {
+        // A tall narrow image on a short wide box: cut off on the height axis while covering
+        // very little of the element, so fidelity fires and legibility does not. This is the
+        // combination the natural-area ratio could not express at all.
+        double coverage = ImageHelper.calculateCoverage(10, 200, 120, 55, null);
+        assertEquals(8.33, coverage, 0.01); // drawn 10x55 = 550 of 6600
+        String warning = ImageHelper.coverageWarning(coverage, true);
+        assertTrue("must state the image is cut off", warning.contains("cut off"));
+        assertFalse("must NOT claim the name is obscured",
+                warning.contains("may obscure element name"));
+    }
+
+    @Test
+    public void shouldWarnAboutLegibilityOnly_whenLargeCoverageButFits() {
+        String warning = ImageHelper.coverageWarning(45.0, false);
+        assertTrue(warning.contains("may obscure element name"));
+        assertFalse(warning.contains("cut off"));
+    }
+
+    @Test
+    public void shouldWarnAboutBoth_whenOversizedAndHighDrawnCoverage() {
+        String warning = ImageHelper.coverageWarning(83.3, true);
+        assertTrue(warning.contains("may obscure element name"));
+        assertTrue(warning.contains("cut off"));
+    }
+
+    @Test
+    public void shouldReturnNull_whenNeitherConditionHolds() {
+        assertNull(ImageHelper.coverageWarning(10.0, false));
+    }
+
+    @Test
+    public void shouldWarnAboutLegibilityOnly_whenFillPosition() {
+        // fill always covers 100% and is never cut off — legibility only, coherently.
+        // Goes through coverageReport, the PRODUCTION path: it is the only caller that knows the
+        // position, and routing this through the two-argument coverageWarning would silently
+        // exercise the ANCHORED branch while still passing these two assertions.
+        String warning = ImageHelper.coverageReport(500, 500, 120, 15, "fill").warning();
+        assertTrue(warning.contains("may obscure element name"));
+        assertFalse(warning.contains("cut off"));
+    }
+
+    @Test
+    public void shouldOfferOnlyRemediesThatWork_whenFillPosition() {
+        // Both of the anchored remedies are no-ops under fill, and an advisory an agent cannot
+        // discharge by any action it names is worse than none: "use a smaller image" cannot help
+        // because fill SCALES to the box, and "use 'fill'" is circular when fill is already set.
+        String warning = ImageHelper.coverageReport(500, 500, 120, 15, "fill").warning();
+        assertFalse("fill scales to the box, so a smaller image changes nothing",
+                warning.contains("smaller image"));
+        assertFalse("the caller is already at fill — circular advice",
+                warning.contains("'fill' position"));
+        assertTrue("must offer a contrast remedy", warning.contains("lower-contrast"));
+        assertTrue("must offer leaving fill for an anchored position",
+                warning.contains("anchored imagePosition"));
+        // Not an assertion about coverage — a guard against re-introducing a remedy that was
+        // tested against a real render and found inert: opacity is the figure's fill alpha and
+        // does not dim a custom image (an image at opacity 0 still renders fully opaque). This
+        // cannot fail today because the string has never mentioned opacity; it exists to fail
+        // the day someone adds it back.
+        assertFalse("opacity does not dim a custom image", warning.contains("opacity"));
+    }
+
+    @Test
+    public void shouldSayTheWarningPersists_whenFillPositionCannotClearIt() {
+        // Coverage under fill is unconditionally 100%, so lowering the image's contrast — the
+        // remedy that keeps fill — cannot silence this warning, only leaving fill can. Advertising
+        // both as if either discharges the advisory would recreate the loop this branch removes:
+        // an agent would swap in lighter images forever waiting for a warning that never clears.
+        String warning = ImageHelper.coverageReport(500, 500, 120, 15, "fill").warning();
+        assertTrue("must warn that the advisory persists while fill is set",
+                warning.contains("persists for as long as 'fill' is set"));
+        assertTrue("must name the remedy that actually clears it",
+                warning.contains("to clear it"));
+        // The claim above must stay true of the code: no image size clears the warning under fill.
+        assertNotNull(ImageHelper.coverageReport(4, 4, 120, 15, "fill").warning());
+        assertNotNull(ImageHelper.coverageReport(4000, 4000, 120, 15, "fill").warning());
+    }
+
+    @Test
+    public void shouldKeepTheDiagnosis_whenFillPosition() {
+        // The diagnosis is CORRECT and must not be suppressed — a 100%-coverage background
+        // genuinely can hide the name. Only the remedy tail is position-dependent.
+        ImageHelper.CoverageReport report = ImageHelper.coverageReport(500, 500, 120, 15, "fill");
+        assertEquals(100.0, report.percent(), 0.001);
+        assertNotNull("silencing the fill warning would be a regression", report.warning());
+        assertTrue(report.warning().contains("100.0%"));
+    }
+
+    // The anchored message is frozen byte-for-byte. The fill branch must not bleed into it.
+    private static final String ANCHORED_LEGIBILITY_45 =
+            "Image covers 45.0% of element area — may obscure element name. "
+                + "Consider using a smaller image or 'fill' position.";
+
+    @Test
+    public void shouldLeaveTheAnchoredAdviceByteIdentical_forEveryAnchoredPosition() {
+        // null is the Archi default (top-right) — anchored, NOT unknown and NOT fill.
+        assertEquals("null must be treated as anchored",
+                ANCHORED_LEGIBILITY_45, ImageHelper.coverageWarning(45.0, false, null));
+        for (String pos : new String[] {"top-left", "top-centre", "top-right", "middle-left",
+                "middle-centre", "middle-right", "bottom-left", "bottom-centre", "bottom-right"}) {
+            assertEquals("position " + pos,
+                    ANCHORED_LEGIBILITY_45, ImageHelper.coverageWarning(45.0, false, pos));
+        }
+        // The two-argument overload is the anchored one.
+        assertEquals(ANCHORED_LEGIBILITY_45, ImageHelper.coverageWarning(45.0, false));
+    }
+
+    @Test
+    public void shouldThreadPositionFromCoverageReport_notJustFromCoverageNumber() {
+        // The end-to-end pin: a fill image and an anchored image that BOTH read 100.0% must get
+        // DIFFERENT advice. If coverageReport ever stops passing imagePosition down, the number
+        // is unchanged and only this assertion catches it.
+        String fill = ImageHelper.coverageReport(500, 500, 120, 15, "fill").warning();
+        String anchored = ImageHelper.coverageReport(120, 55, 120, 55, "top-left").warning();
+        assertEquals(100.0, ImageHelper.coverageReport(120, 55, 120, 55, "top-left").percent(),
+                0.001);
+        assertTrue("anchored keeps the original advice", anchored.contains("smaller image"));
+        assertFalse("fill must not receive the anchored advice", fill.contains("smaller image"));
+    }
+
+    // ---- coverageReport: the value actually reported, rounded to one decimal ----
+
+    @Test
+    public void shouldRoundReportedCoverage_andQuoteTheSameValueInTheWarning() {
+        ImageHelper.CoverageReport report =
+                ImageHelper.coverageReport(40, 40, 120, 15, "top-left");
+        assertEquals(33.3, report.percent(), 0.001);
+        assertTrue("warning must quote the same rounded number it reports",
+                report.warning().contains("33.3%"));
+    }
+
+    @Test
+    public void shouldReportNoCoverage_whenDimensionsUnavailable() {
+        assertNull(ImageHelper.CoverageReport.NONE.percent());
+        assertNull(ImageHelper.CoverageReport.NONE.warning());
+    }
+
+    @Test
+    public void shouldNotSayOnly_whenClippedImageStillCoversTheWholeBox() {
+        // An image overrunning ONE axis while matching the other exactly is cut off and still
+        // paints 100% of the box. The clipping message must not qualify that with a figure
+        // implying something is missing ("only 100.0%" would contradict itself).
+        double coverage = ImageHelper.calculateCoverage(121, 55, 120, 55, null);
+        assertEquals(100.0, coverage, 0.001);
+        assertTrue(ImageHelper.exceedsElement(121, 55, 120, 55, null));
+        String warning = ImageHelper.coverageWarning(coverage, true);
+        assertTrue(warning.contains("cut off"));
+        assertFalse("must not read 'only 100.0%'", warning.contains("only"));
+    }
+
+    @Test
+    public void shouldReportZeroCoverage_whenFillPositionButNoDecodableImage() {
+        // fill means "scaled to the box", not "assumed present": with no image dimensions
+        // nothing renders, so 0.0 is reported rather than a false 100.0. The degenerate
+        // guards deliberately precede the position check.
+        assertEquals(0.0, ImageHelper.calculateCoverage(0, 0, 120, 55, "fill"), 0.001);
+        assertEquals(0.0, ImageHelper.calculateCoverage(40, 40, 0, 55, "fill"), 0.001);
+        assertFalse(ImageHelper.exceedsElement(0, 0, 120, 55, "fill"));
+    }
+
+    @Test
+    public void shouldDecideTheThresholdOnTheSameValueItReports() {
+        // The threshold is evaluated on the ROUNDED percentage — the one the caller is shown —
+        // so the number reported and the number reasoned about can never disagree. A raw
+        // coverage just above 25 that rounds to 25.0 therefore does NOT warn: warning about a
+        // figure displayed as exactly "25.0%" would contradict the documented "above 25%" rule.
+        // This preserves the pre-existing contract, which also rounded before warning.
+        double raw = ImageHelper.calculateCoverage(2501, 3, 10000, 3, null);
+        assertTrue("raw value is above the threshold", raw > 25.0);
+        ImageHelper.CoverageReport report =
+                ImageHelper.coverageReport(2501, 3, 10000, 3, null);
+        assertEquals(25.0, report.percent(), 0.001);
+        assertNull("reported as exactly 25.0%, so it must not claim to be above 25%",
+                report.warning());
     }
 
     // ---- Validation ----
@@ -353,6 +628,141 @@ public class ImageHelperTest {
         assertEquals(24, ImageHelper.ICON_BAND_HEIGHT);
     }
 
+    // ---- anySameCornerIconChildOccupiesIconBand: nested child's OWN icon vs
+    //      the container's same-corner icon. This gate fires the SECOND
+    //      reserved band (2× total) so the two icon tiles clear each other.
+    //      The rectangle-occupancy predicate above only clears the child RECT,
+    //      leaving the two icons within a tile-height (the residual collision). ----
+
+    @Test
+    public void sameCornerIcon_reproductionRegionAzCluster_bottomLeftBothIconedReturnsTrue() {
+        // Region→AZ→Cluster reproduction. AZ container 200×100 with a
+        // bottom-left (6) icon; nested cluster nearly fills it vertically at
+        // (10, 8, 180, 84) → childBottom=92, so its rectangle occupies the
+        // bottom-left band (y 76..100). The cluster ALSO carries its own
+        // bottom-left (6) icon → the two icons collide → gate returns true.
+        List<int[]> rects = List.of(new int[] {10, 8, 180, 84, 6});
+        assertTrue("AZ bottom-left icon × cluster bottom-left icon collide",
+                ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, rects));
+    }
+
+    @Test
+    public void sameCornerIcon_bottomRightSymmetricReturnsTrue() {
+        // Symmetric bottom-right (8) case. Band x 176..200, y 76..100.
+        // Child (10, 8, 185, 84) → right edge 195, bottom 92 → occupies band;
+        // child carries a bottom-right (8) icon → collide → true.
+        List<int[]> rects = List.of(new int[] {10, 8, 185, 84, 8});
+        assertTrue(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 8, 16, 8, rects));
+    }
+
+    @Test
+    public void sameCornerIcon_differentCornerChildIconReturnsFalse() {
+        // A child whose OWN icon is at a DIFFERENT corner must NOT be
+        // perturbed. Same occupying rectangle, but child icon is bottom-right
+        // (8) while the parent icon is bottom-left (6) → no same-corner
+        // collision → false → no second band reserved (byte-identical).
+        List<int[]> rects = List.of(new int[] {10, 8, 180, 84, 8});
+        assertFalse("Parent bottom-left × child bottom-right icons do NOT collide",
+                ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, rects));
+
+        // A child top-left (0) icon under a bottom-left (6) parent likewise
+        // does not collide.
+        List<int[]> topLeftChild = List.of(new int[] {10, 8, 180, 84, 0});
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, topLeftChild));
+    }
+
+    @Test
+    public void sameCornerIcon_childCarriesNoIconReturnsFalse() {
+        // Child rectangle occupies the band but carries NO icon (-1 sentinel)
+        // → this is exactly the db6bc8b rect-only case → no second band → false.
+        List<int[]> rects = List.of(new int[] {10, 8, 180, 84, -1});
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, rects));
+    }
+
+    @Test
+    public void sameCornerIcon_sameCornerIconButNotOccupyingReturnsFalse() {
+        // Child carries a same-corner (6) icon but sits in the TOP half
+        // (10, 8, 40, 30) → childBottom=38 < 76 → rectangle does not occupy
+        // the band → no collision → false.
+        List<int[]> rects = List.of(new int[] {10, 8, 40, 30, 6});
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, rects));
+    }
+
+    @Test
+    public void sameCornerIcon_multipleChildrenAnyOneSameCornerTriggers() {
+        // Three children: one elsewhere, one occupying with a DIFFERENT-corner
+        // icon, one occupying with a SAME-corner icon → any-one → true.
+        List<int[]> rects = List.of(
+                new int[] {100, 8, 30, 20, -1},   // top-centre, no icon
+                new int[] {10, 8, 180, 84, 8},    // occupies, but bottom-right icon (no collide)
+                new int[] {12, 8, 20, 84, 6}      // occupies with bottom-left icon → collide
+        );
+        assertTrue(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, rects));
+    }
+
+    @Test
+    public void sameCornerIcon_nonCornerParentReturnsFalse() {
+        // Non-corner parent positions never define an icon band → always false,
+        // even with an occupying same-corner-int child.
+        List<int[]> rects = List.of(new int[] {0, 0, 200, 100, 4});
+        for (int nonCorner : new int[] {1, 3, 4, 5, 7, 9}) {
+            assertFalse("non-corner parent " + nonCorner,
+                    ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, nonCorner, 16, 8, rects));
+        }
+    }
+
+    @Test
+    public void sameCornerIcon_nullEmptyAndShortArraysReturnFalse() {
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, null));
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, Collections.emptyList()));
+        // A 4-element array (no icon field) is treated as carrying no icon.
+        List<int[]> fourElem = List.of(new int[] {10, 8, 180, 84});
+        assertFalse(ImageHelper.anySameCornerIconChildOccupiesIconBand(200, 100, 6, 16, 8, fourElem));
+    }
+
+    @Test
+    public void sameCornerIcon_baseRectPredicateIgnoresIconField_db6bc8bByteIdenticalCarryForward() {
+        // Carry-forward: the rectangle-occupancy predicate reads only
+        // [0..3], so a 5-element array with an icon field produces the SAME
+        // result as the equivalent 4-element array — the base db6bc8b
+        // reservation is byte-identical whether or not the icon field rides along.
+        List<int[]> fourElem = List.of(new int[] {10, 80, 30, 15});
+        List<int[]> fiveElem = List.of(new int[] {10, 80, 30, 15, 6});
+        assertEquals(
+                ImageHelper.anyChildOccupiesIconBand(200, 100, 6, 16, 8, fourElem),
+                ImageHelper.anyChildOccupiesIconBand(200, 100, 6, 16, 8, fiveElem));
+        assertTrue(ImageHelper.anyChildOccupiesIconBand(200, 100, 6, 16, 8, fiveElem));
+    }
+
+    // ---- iconCornerOrNone: reads a child's OWN icon corner (or -1 when the
+    //      child carries no custom image). Threads child-icon presence into the
+    //      same-corner collision gate. Requires EMF (runs as PDE JUnit). ----
+
+    @Test
+    public void iconCornerOrNone_returnsPosition_whenObjectCarriesImagePath() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IDiagramModelArchimateObject dmo = f.createDiagramModelArchimateObject();
+        dmo.setArchimateElement(f.createNode());
+        dmo.setImagePath("images/eks.png");
+        dmo.setImagePosition(6); // bottom-left
+        assertEquals(6, ImageHelper.iconCornerOrNone(dmo));
+    }
+
+    @Test
+    public void iconCornerOrNone_returnsMinusOne_whenNoImagePath() {
+        IArchimateFactory f = IArchimateFactory.eINSTANCE;
+        IDiagramModelArchimateObject dmo = f.createDiagramModelArchimateObject();
+        dmo.setArchimateElement(f.createNode());
+        dmo.setImagePosition(6); // position set, but NO image path → not an icon
+        assertEquals(-1, ImageHelper.iconCornerOrNone(dmo));
+    }
+
+    @Test
+    public void iconCornerOrNone_returnsMinusOne_whenNotIconic() {
+        IDiagramModelNote note = IArchimateFactory.eINSTANCE.createDiagramModelNote();
+        assertEquals(-1, ImageHelper.iconCornerOrNone(note));
+    }
+
     // ---- Profile (specialization) image path resolution ----
     // A specialization image lives on the element's profile, not on the diagram
     // object; readImagePath returns null for it. readProfileImagePath resolves it
@@ -422,5 +832,86 @@ public class ImageHelperTest {
         IArchimateModel model = IArchimateFactory.eINSTANCE.createArchimateModel();
         model.setDefaults();
         assertNull(ImageHelper.readNaturalImageDimensions(model, "img/missing.png"));
+    }
+
+    // ---- iconBandGrownHeight: the gate shared by both update paths ----
+
+    /**
+     * MEASURED, not argued: the shared gate's {@code IIconic} test is a no-op for every target that
+     * can actually reach it.
+     *
+     * <p>The two update paths used to carry byte-identical copies of this gate with one difference —
+     * the primary path also tested {@code instanceof IIconic}, the bulk back-reference path did not.
+     * Folding them into one implementation keeps the stricter test, which is only behaviour-preserving
+     * for the bulk path if no reachable target can be a container without being iconic. That is a
+     * claim about Archi's metamodel, so it is checked against the metamodel rather than reasoned about:
+     * every classifier that is both an {@code IDiagramModelObject} (what the prepare accepts) and an
+     * {@code IDiagramModelContainer} (what the gate requires) must also be {@code IIconic}.</p>
+     *
+     * <p>This is a forward guard as much as a regression pin: were a future Archi to add a
+     * non-iconic container, the fold would silently start skipping the band on the bulk path, and this
+     * test is what would catch it.</p>
+     */
+    @Test
+    public void shouldNeverHaveANonIconicContainer_amongDiagramObjectTypes() {
+        List<String> offenders = new ArrayList<>();
+        List<String> checked = new ArrayList<>();
+        for (EClassifier classifier : IArchimatePackage.eINSTANCE.getEClassifiers()) {
+            Class<?> java = classifier.getInstanceClass();
+            if (java == null
+                    || !IDiagramModelObject.class.isAssignableFrom(java)
+                    || !IDiagramModelContainer.class.isAssignableFrom(java)) {
+                continue;
+            }
+            checked.add(java.getSimpleName());
+            if (!IIconic.class.isAssignableFrom(java)) {
+                offenders.add(java.getName());
+            }
+        }
+        // Non-vacuity guard: an empty loop would pass this test while checking nothing. The
+        // metamodel currently offers exactly three such types; assert we saw them.
+        assertTrue("the scan must actually find the diagram containers, not silently check none: "
+                + checked, checked.containsAll(List.of(
+                        "IDiagramModelGroup", "IDiagramModelArchimateObject", "ISketchModelSticky")));
+        assertTrue("a container that is not IIconic would make the shared icon-band gate skip the "
+                + "band on the bulk path, where the old code did not: " + offenders,
+                offenders.isEmpty());
+    }
+
+    /**
+     * The gate can only ever grow a target, never shrink it, and returns the height it was handed
+     * whenever nothing is staged. Both update paths derive "did the band fire?" by comparing the
+     * returned height with the one passed in, so a reserve that could be negative — or a path that
+     * returned something else on a no-op — would silently flip that flag and, through it, the
+     * parent-fit cascade's gate.
+     */
+    @Test
+    public void shouldNeverShrinkTarget_whenIconBandGateRuns() {
+        IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
+        group.setBounds(0, 0, 200, 200);
+
+        assertEquals("no image params staged leaves the height untouched",
+                200, ImageHelper.iconBandGrownHeight(group, null, 200, 200, 16, 8));
+        assertEquals("no position staged leaves the height untouched",
+                200, ImageHelper.iconBandGrownHeight(group, new ImageParams("p.png", null, null),
+                        200, 200, 16, 8));
+        assertEquals("a top corner is out of scope and leaves the height untouched",
+                200, ImageHelper.iconBandGrownHeight(group, new ImageParams(null, "top-left", null),
+                        200, 200, 16, 8));
+        assertEquals("an empty bottom corner reserves nothing",
+                200, ImageHelper.iconBandGrownHeight(group, new ImageParams(null, "bottom-left", null),
+                        200, 200, 16, 8));
+
+        IDiagramModelNote occupant = IArchimateFactory.eINSTANCE.createDiagramModelNote();
+        occupant.setBounds(0, 160, 60, 40); // sits in the bottom-left corner
+        group.getChildren().add(occupant);
+        int grown = ImageHelper.iconBandGrownHeight(group, new ImageParams(null, "bottom-left", null),
+                200, 200, 16, 8);
+        assertTrue("an occupied corner reserves a band, and never a negative one", grown > 200);
+
+        assertFalse("a non-container target can never be grown",
+                ImageHelper.iconBandGrownHeight(
+                        IArchimateFactory.eINSTANCE.createDiagramModelNote(),
+                        new ImageParams(null, "bottom-left", null), 200, 200, 16, 8) != 200);
     }
 }

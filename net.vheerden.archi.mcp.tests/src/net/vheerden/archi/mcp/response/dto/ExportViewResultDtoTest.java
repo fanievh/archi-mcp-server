@@ -20,7 +20,7 @@ public class ExportViewResultDtoTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
-    public void shouldPopulateMimeType_forJpgFormat_AC3() throws Exception {
+    public void shouldPopulateMimeType_forJpgFormat() throws Exception {
         ExportViewResultDto dto = new ExportViewResultDto(
                 "view-1", "View", "jpg", "image/jpeg", 800, 600, null, 100);
         String json = mapper.writeValueAsString(dto);
@@ -30,7 +30,7 @@ public class ExportViewResultDtoTest {
     }
 
     @Test
-    public void shouldPopulateMimeType_forPdfFormat_AC2() throws Exception {
+    public void shouldPopulateMimeType_forPdfFormat() throws Exception {
         ExportViewResultDto dto = new ExportViewResultDto(
                 "view-1", "View", "pdf", "application/pdf", null, null, null, 200);
         String json = mapper.writeValueAsString(dto);
@@ -40,7 +40,7 @@ public class ExportViewResultDtoTest {
     }
 
     @Test
-    public void shouldOmitWidthHeightFromJson_whenPdfFormat_AC2() throws Exception {
+    public void shouldOmitWidthHeightFromJson_whenPdfFormat() throws Exception {
         ExportViewResultDto dto = new ExportViewResultDto(
                 "view-1", "View", "pdf", "application/pdf", null, null, null, 200);
         String json = mapper.writeValueAsString(dto);
@@ -51,7 +51,7 @@ public class ExportViewResultDtoTest {
     }
 
     @Test
-    public void shouldOmitWidthHeightFromJson_whenSvgFormat_AC7() throws Exception {
+    public void shouldOmitWidthHeightFromJson_whenSvgFormat() throws Exception {
         ExportViewResultDto dto = new ExportViewResultDto(
                 "view-1", "View", "svg", "image/svg+xml", null, null, null, 80);
         String json = mapper.writeValueAsString(dto);
@@ -60,7 +60,7 @@ public class ExportViewResultDtoTest {
     }
 
     @Test
-    public void shouldRetainWidthHeight_whenPngFormat_AC8() throws Exception {
+    public void shouldRetainWidthHeight_whenPngFormat() throws Exception {
         ExportViewResultDto dto = new ExportViewResultDto(
                 "view-1", "View", "png", "image/png", 800, 600, null, 100);
         String json = mapper.writeValueAsString(dto);

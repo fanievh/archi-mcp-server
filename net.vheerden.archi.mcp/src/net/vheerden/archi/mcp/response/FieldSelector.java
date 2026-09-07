@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
@@ -15,7 +16,7 @@ import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
 
 /**
- * Stateless utility for field selection and exclude filtering on DTOs (FR17/FR18).
+ * Stateless utility for field selection and exclude filtering on DTOs.
  *
  * <p>Transforms DTO records into {@code Map<String, Object>} with only the
  * requested fields, then removes excluded fields. Records are immutable so
@@ -120,8 +121,6 @@ public final class FieldSelector {
             "id", "name", "type", "specialization", "sourceId", "targetId",
             "documentation", "properties", "sourceName", "targetName",
             "accessType", "associationDirected", "influenceStrength");
-    // Alias for backward compatibility (used by applyToRelationship for non-search contexts)
-    private static final Set<String> RELATIONSHIP_ALL = RELATIONSHIP_STANDARD;
 
     // ---- DTO to Map conversions ----
 
@@ -363,6 +362,42 @@ public final class FieldSelector {
         };
     }
 
+    /**
+     * The width of a relationship nested inside an expanded element, which is NOT the width of a
+     * top-level relationship row.
+     *
+     * <p>Those nested rows were historically serialized as the DTOs themselves, so every non-null
+     * field reached the wire whatever preset the caller asked for. Routing them through the preset
+     * would close that leak and, in the same motion, silently drop {@code specialization} from a
+     * payload that has always carried it — and at {@code minimal} would drop {@code type},
+     * {@code sourceId} and {@code targetId} too. So the set below is exactly what those rows
+     * emitted before, minus the four fields that are now populated and must stay behind the
+     * {@code full} preset. Suppressing the leak is the whole intended change; narrowing an
+     * established payload is not, and would be a second, undeclared one.</p>
+     */
+    private static final Set<String> RELATIONSHIP_NESTED = Set.of(
+            "id", "name", "type", "specialization", "sourceId", "targetId",
+            "accessType", "associationDirected", "influenceStrength");
+
+    /**
+     * Applies the nested-relationship width above to each row of {@code relationships}.
+     *
+     * @param relationships the relationship DTOs nested under an expanded element
+     * @param excludeFields caller-requested field exclusions, honoured as everywhere else
+     * @return one filtered map per relationship
+     */
+    public static List<Object> applyToNestedRelationships(List<RelationshipDto> relationships,
+            Set<String> excludeFields) {
+        if (relationships == null) {
+            return List.of();
+        }
+        List<Object> out = new ArrayList<>();
+        for (RelationshipDto dto : relationships) {
+            out.add(filterMap(relationshipDtoToMap(dto), RELATIONSHIP_NESTED, excludeFields));
+        }
+        return out;
+    }
+
     private static Map<String, Object> applyToView(ViewDto dto, FieldPreset preset,
                                                      Set<String> excludeFields) {
         Map<String, Object> map = viewDtoToMap(dto);
@@ -469,5 +504,24 @@ public final class FieldSelector {
      */
     public static Set<String> getValidExcludeFields() {
         return VALID_EXCLUDE_FIELDS;
+    }
+
+    /**
+     * The valid exclude field names as prose, for the surfaces that name them to a caller.
+     *
+     * <p>Generated from the constant rather than transcribed beside it. Three published surfaces
+     * used to carry their own hand-written copy of this list and all three had fallen behind: the
+     * input schema named eight of the thirteen and both rejection messages named ten, so a caller
+     * reading either could not learn that {@code images} -- a real array of the view-contents
+     * response -- can be excluded at all. Nothing could have caught that, because the only test
+     * over this list checked the constant against itself.</p>
+     *
+     * <p>Sorted, because the underlying set has no defined iteration order and a message that
+     * reorders itself between runs is a message no test can pin.</p>
+     *
+     * @return the field names, alphabetically, comma-separated
+     */
+    public static String validExcludeFieldsAsProse() {
+        return VALID_EXCLUDE_FIELDS.stream().sorted().collect(Collectors.joining(", "));
     }
 }

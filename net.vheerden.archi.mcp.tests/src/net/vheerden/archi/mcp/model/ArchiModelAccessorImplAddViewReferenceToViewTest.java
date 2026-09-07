@@ -89,7 +89,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldCreateViewReferenceObject_withSetReferencedModel_AC5() {
+    public void shouldCreateViewReferenceObject_withSetReferencedModel() {
         MutationResult<EmbeddedViewDto> result = accessor.addViewReferenceToView(
                 "test-session", targetView.getId(), referencedView.getId(),
                 100, 200, 185, 80, null, null);
@@ -106,7 +106,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldPlaceUnderParentGroup_AC3() {
+    public void shouldPlaceUnderParentGroup() {
         IDiagramModelGroup group = factory.createDiagramModelGroup();
         group.setId("vo-group");
         group.setName("Group A");
@@ -126,7 +126,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldApplyGStyling_AC3() {
+    public void shouldApplyGStyling() {
         StylingParams styling = new StylingParams(
                 "#FFE4B5", "#8B4513", "#000000", 255, 2,
                 null, "centre", "top",
@@ -149,7 +149,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldReturnAccurateDto_AC4() {
+    public void shouldReturnAccurateDto() {
         MutationResult<EmbeddedViewDto> result = accessor.addViewReferenceToView(
                 "test-session", targetView.getId(), referencedView.getId(),
                 100, 200, 185, 80, null, null);
@@ -167,7 +167,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldRejectReferencedViewMissing_AC3() {
+    public void shouldRejectReferencedViewMissing() {
         try {
             accessor.addViewReferenceToView(
                     "test-session", targetView.getId(), "does-not-exist",
@@ -181,9 +181,9 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldRejectReferencedViewNotArchimate_AC3() {
+    public void shouldRejectReferencedViewNotArchimate() {
         // The DIAGRAMS folder ID resolves to an IFolder — not an
-        // IArchimateDiagramModel — so it must be rejected (Q3 default scope).
+        // IArchimateDiagramModel — so it must be rejected (default scope).
         IFolder diagramsFolder = model.getFolder(FolderType.DIAGRAMS);
 
         try {
@@ -197,7 +197,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldHandleAutoPlacement_AC3() {
+    public void shouldHandleAutoPlacement() {
         MutationResult<EmbeddedViewDto> result = accessor.addViewReferenceToView(
                 "test-session", targetView.getId(), referencedView.getId(),
                 null, null, null, null, null, null);
@@ -213,7 +213,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldRejectInvalidBounds_AC6() {
+    public void shouldRejectInvalidBounds() {
         try {
             accessor.addViewReferenceToView(
                     "test-session", targetView.getId(), referencedView.getId(),
@@ -225,7 +225,7 @@ public class ArchiModelAccessorImplAddViewReferenceToViewTest {
     }
 
     @Test
-    public void shouldRejectXWithoutY_AC6() {
+    public void shouldRejectXWithoutY() {
         try {
             accessor.addViewReferenceToView(
                     "test-session", targetView.getId(), referencedView.getId(),

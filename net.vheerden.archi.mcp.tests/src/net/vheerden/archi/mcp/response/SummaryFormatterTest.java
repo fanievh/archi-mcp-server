@@ -13,6 +13,9 @@ import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
+import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
+import net.vheerden.archi.mcp.response.dto.ViewNodeDto;
+import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
 
 /**
  * Tests for {@link SummaryFormatter}.
@@ -136,6 +139,72 @@ public class SummaryFormatterTest {
         assertTrue(result.contains("1 connections"));
         assertTrue(result.contains("ApplicationComponent"));
         assertTrue(result.contains("ServingRelationship"));
+    }
+
+    @Test
+    public void summarizeViewContents_shouldCountGroupingContainers_whenNoNativeGroupExists() {
+        // A view built the way the deployment guidance prescribes: containers are ArchiMate
+        // Grouping elements, not native view groups. Sizing the count from the groups() bucket
+        // reported none of them, so changing one parameter from tree to summary took the agent
+        // back to the false zero the tree format no longer gives.
+        List<ElementDto> elements = List.of(
+                ElementDto.standard("z1", "Ingress Zone", "Grouping", null, "Other", null, null),
+                ElementDto.standard("z2", "Data Zone", "Grouping", null, "Other", null, null),
+                ElementDto.standard("n1", "Load Balancer", "Node", null, "Technology", null, null));
+        List<ViewNodeDto> visualMetadata = List.of(
+                new ViewNodeDto("vo-z1", "z1", 40, 40, 260, 180, null),
+                new ViewNodeDto("vo-z2", "z2", 340, 40, 260, 180, null),
+                new ViewNodeDto("vo-n1", "n1", 30, 60, 120, 55, "vo-z1"));
+        ViewContentsDto contents = new ViewContentsDto("v1", "Zones View", null, null,
+                elements, List.of(), visualMetadata, List.of(), List.of(), List.of());
+
+        String result = SummaryFormatter.summarizeViewContents(contents);
+
+        assertTrue("summary must report the Grouping containers: " + result,
+                result.contains("Containers: 2 groups"));
+    }
+
+    @Test
+    public void summarizeViewContents_shouldNotCallAGroupingAVisualAnnotation() {
+        // A Grouping is a model concept that participates in relationships. Filing it under the
+        // same label as a sticky note would misdescribe it, so containers get their own clause.
+        List<ElementDto> elements = List.of(
+                ElementDto.standard("z1", "Ingress Zone", "Grouping", null, "Other", null, null));
+        List<ViewNodeDto> visualMetadata = List.of(
+                new ViewNodeDto("vo-z1", "z1", 40, 40, 260, 180, null));
+        ViewContentsDto contents = new ViewContentsDto("v1", "Zones View", null, null,
+                elements, List.of(), visualMetadata, List.of(), List.of(), List.of());
+
+        String result = SummaryFormatter.summarizeViewContents(contents);
+
+        assertTrue(result.contains("Containers: 1 group"));
+        assertFalse("no notes on this view, so no annotations clause at all: " + result,
+                result.contains("Visual annotations"));
+    }
+
+    @Test
+    public void summarizeViewContents_shouldCountBothContainerKinds_onAMixedView() {
+        List<ElementDto> elements = List.of(
+                ElementDto.standard("z1", "Zone A", "Grouping", null, "Other", null, null),
+                ElementDto.standard("c1", "Portal", "ApplicationComponent", null, "Application", null, null));
+        List<ViewNodeDto> visualMetadata = List.of(
+                new ViewNodeDto("vo-z1", "z1", 40, 40, 260, 180, null),
+                new ViewNodeDto("vo-c1", "c1", 340, 40, 120, 55, null));
+        List<ViewGroupDto> groups = List.of(
+                new ViewGroupDto("grp-1", "Observability", 500, 40, 250, 160, null, List.of()));
+        List<ViewNoteDto> notes = List.of(
+                new ViewNoteDto("note-1", "Design note", 40, 300, 150, 40, null));
+        ViewContentsDto contents = new ViewContentsDto("v1", "Mixed View", null, null,
+                elements, List.of(), visualMetadata, List.of(), groups, notes);
+
+        String result = SummaryFormatter.summarizeViewContents(contents);
+
+        assertTrue("one native group plus one Grouping: " + result,
+                result.contains("Containers: 2 groups"));
+        assertTrue("the note is still reported, under its own label: " + result,
+                result.contains("Visual annotations: 1 note"));
+        assertFalse("a populated ApplicationComponent is a host, not a container: " + result,
+                result.contains("Containers: 3 groups"));
     }
 
     @Test

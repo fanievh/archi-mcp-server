@@ -7,6 +7,7 @@ This document describes the internal architecture of the ArchiMate MCP Server pl
 - [Layered Architecture](#layered-architecture)
 - [Package-to-Layer Mapping](#package-to-layer-mapping)
 - [Import Rules](#import-rules)
+- [Enforced Invariants](#enforced-invariants)
 - [Plugin Lifecycle](#plugin-lifecycle)
 - [Threading Model](#threading-model)
 - [Dependency Summary](#dependency-summary)
@@ -79,7 +80,7 @@ flowchart TD
 
 ### Layer 2: Handlers (`handlers/`)
 
-Nineteen handler classes implement all 69 MCP tools (the SpecializationHandler was added in v1.3; the adjust/apply spacing tools in v1.4; `update-model`, `find-concept-usage`, `add-view-reference-to-view`, and `add-image-to-view` in v1.5; the legacy `compute-layout` tool and the two agent-side approval-control tools were removed in v1.7):
+Nineteen handler classes implement all 70 MCP tools (the SpecializationHandler was added in v1.3; the adjust/apply spacing tools in v1.4; `update-model`, `find-concept-usage`, `add-view-reference-to-view`, and `add-image-to-view` in v1.5; the legacy `compute-layout` tool and the two agent-side approval-control tools were removed in v1.7):
 
 | Handler | Tools | Domain |
 |---------|-------|--------|
@@ -101,7 +102,7 @@ Nineteen handler classes implement all 69 MCP tools (the SpecializationHandler w
 | CommandStackHandler | undo, redo | Undo/redo operations |
 | RenderHandler | export-view | PNG / JPG / SVG / PDF diagram export |
 | ImageHandler | add-image-to-model, list-model-images | Image import and inventory |
-| ResourceHandler | *(registers MCP resources, not tools)* | Static reference materials |
+| ResourceHandler | `get-guidance` | Static reference materials — registers them as MCP resources *and* resource templates, and serves the same bodies through `get-guidance` for clients that do not expose resource reads to the model |
 
 ### Layer 3: Model (`model/`, `model/geometry/`, `model/routing/`)
 
@@ -151,6 +152,21 @@ flowchart LR
 ```
 
 **The most critical boundary:** Handlers (Layer 2) never import EMF or ArchimateTool types. All model access flows through the `ArchiModelAccessor` interface.
+
+## Enforced Invariants
+
+Several architectural rules are checked by the build rather than left to review. Each is a *ratchet*: it can only be tightened, so a rule cannot be relaxed by accident.
+
+| Invariant | Enforced by | Failure mode it prevents |
+|---|---|---|
+| **Accessor facade does not grow** | `tools/size-ratchet.sh` — `CEILING_LOC` and a public-method ceiling on `ArchiModelAccessorImpl`, plus a signature baseline (`tools/accessor-interface-baseline.txt`) for the `ArchiModelAccessor` interface | The Layer-3 facade accreting logic that belongs in a collaborator. The ceiling is **never raised**: new code is paid for by folding duplication out, and the ceiling is clicked *down* by the same commit. A legitimate interface change updates the baseline explicitly. |
+| **Every mutating tool reports effective state** | `EffectiveStateContractTest` + the `tools/effective-state-gaps.txt` registry, walked via `HandlerRegistrar` | A tool echoing the caller's request back as if it were the model's state. A tool classified nowhere fails the build; the registry's entry count is a lower-only ceiling. See [Mutation Model](mutation-model.md#effective-state-reporting). |
+| **No guidance pointer resolves nowhere** | `GuidancePointerReachabilityTest` | A tool description or response telling an agent to consult an `archimate://` URI that no longer exists. The scan concatenates adjacent string literals before matching, because pointers are split across `+` to satisfy line length — a per-line scan would read a fragment as a dead URI and train the next reader to weaken the assertion. The found count is pinned, so a scanner that silently stops matching cannot pass as clean. |
+| **A gated card discloses every parameter the approval will write** | `ApprovalCardContractTest` + the `tools/approval-card-gaps.txt` registry, parsed over every proposal site | A human authorising a change the card described only in part. A proposal's `proposedChanges` map is the *only* description of a pending write anyone gets — it goes verbatim onto the wire and verbatim into the card's `Technical details` — so a parameter the accessor accepts and applies but never discloses is approved and named nowhere. Every site must be **complete** (the test parses it and asserts the disclosure covers every parameter the enclosing method accepts) or carry a registry line naming the exact parameters it exempts; a site classified in neither — or in both — fails the build, and the registry's entry count is a lower-only ceiling. The test asserts it found all 42 sites before asserting anything about their contents, because a parser that matches nothing reads exactly like a clean scan. It parses source only, so it runs in the headless lane on every commit. See [Mutation Model](mutation-model.md#the-disclosure-contract). |
+| **A structured warning code is owned by exactly one tool, and every enumeration of that tool is complete** | `StructuredWarningCodeSurfaceParityTest` + the `tools/structured-warning-code-map.txt` registry | An enumeration lying by omission. Several published surfaces present themselves as *the* list of codes a tool emits, so an absence has to mean "this code does not exist", not "nobody updated this file". The split cannot be derived from constant names — one flat holder is shared by the routing, layout and spacing families, and each family's enumerations correctly omit the others' codes — so ownership is committed here, measured from each **emitting call site**, with every constant classified exactly once. A constant absent from the map fails the build; so does a line naming a code that is not a constant or a tool that is not registered. Once classified, the same test demands the code in every surface that enumerates its tool's codes. |
+| **No internal project-tracking code reaches a reader who cannot resolve it** | `InternalCodeContractTest` + the `tools/internal-code-gaps.txt` registry | A log line, comment or tool description naming something only the project's own tracker can explain. Four surfaces are gated at **zero** with no deferrals available: any string literal in the plugin source (these become log output and MCP tool descriptions, so they leave the plugin), every file under `resources/` (the bundle serves these to the agent whole), and `.github/**` and `tools/**` (GitHub renders them inline to contributors). A code family with matches and no registry entry fails the build, and the family-entry ceiling is lowered — never raised — by the commit that cleans a family. |
+
+The pattern is the same in each case: **register or fail**. Adding a tool that cannot satisfy a rule requires a deliberate, reviewable admission in a committed file, never silence.
 
 ## Plugin Lifecycle
 

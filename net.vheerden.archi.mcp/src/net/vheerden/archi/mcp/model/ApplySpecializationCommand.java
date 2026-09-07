@@ -7,7 +7,7 @@ import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IProfile;
 
 /**
- * GEF Command that assigns a specialization profile to an ArchiMate concept (Story C3b).
+ * GEF Command that assigns a specialization profile to an ArchiMate concept.
  *
  * <p>If the profile is newly created (not yet in the model's profile list),
  * this command also adds it to {@code model.getProfiles()} on execute

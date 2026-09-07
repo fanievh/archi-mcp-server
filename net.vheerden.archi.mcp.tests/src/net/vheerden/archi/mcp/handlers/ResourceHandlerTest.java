@@ -2,15 +2,28 @@ package net.vheerden.archi.mcp.handlers;
 
 import static org.junit.Assert.*;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.util.DefaultMcpUriTemplateManager;
+import io.modelcontextprotocol.util.McpUriTemplateManager;
+import net.vheerden.archi.mcp.model.BaseTestAccessor;
+import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.registry.ResourceRegistry;
+import net.vheerden.archi.mcp.response.ResponseFormatter;
+import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
  * Unit tests for {@link ResourceHandler}.
@@ -302,6 +315,23 @@ public class ResourceHandlerTest {
 		assertTrue("Should contain algorithm reference section",
 				viewPatternsContent.text().contains("Algorithm Reference"));
 
+		// The resource must not merely forbid connection lineStyle — it must name the idiom that
+		// works. An agent told only "no" substitutes something arbitrary; a real run substituted
+		// lineColor + lineWidth unaided, which is exactly what this entry now prescribes.
+		assertTrue("Should carry the connection line style entry",
+				viewPatternsContent.text().contains("Connection line style"));
+		assertTrue("Connection line style entry must name lineColor as the supported idiom",
+				viewPatternsContent.text().contains("`lineColor` + `lineWidth`"));
+		assertTrue("Connection line style entry must state that lineStyle is rejected, not ignored",
+				viewPatternsContent.text().contains("INVALID_PARAMETER"));
+		// Scoped to the connection claim: "silently ignored" is still correct prose elsewhere in
+		// this resource (borderType on non-note objects), so a bare substring ban would go red on
+		// a true sentence about a different field.
+		assertFalse("The resource must not still claim connection lineStyle is silently ignored",
+				viewPatternsContent.text().lines().anyMatch(line ->
+						line.contains("silently ignored")
+								&& line.contains("lineStyle")));
+
 		// Regression pins: control-loop stop-signal phrase in Pre-Layout Planning §2 Spacing Heuristics.
 		// (Updated 2026-05-25: the stop-signal text was rewritten from the row-735 narrow-numeric
 		// "more than three spacing tool calls -> stop at fair" phrasing to the control-loop
@@ -322,7 +352,240 @@ public class ResourceHandlerTest {
 				viewPatternsContent.text().contains("+100px"));
 	}
 
+	// ---- Resource Template Tests ----
+	//
+	// Some MCP clients implement only the template half of the resource capability. The templates
+	// below are the parameterised form of the SAME URIs the static registrations already publish —
+	// no URI is invented, renamed, or given a placeholder parameter, because the guidance pointers
+	// compiled into tool descriptions and runtime strings name the concrete two-segment form.
+
+	@Test
+	public void shouldRegisterOneTemplatePerNamespace_whenResourcesAreRegistered() {
+		TestableResourceHandler handler = new TestableResourceHandler(true);
+		handler.registerResources(registry);
+
+		assertEquals(3, registry.getResourceTemplateCount());
+
+		List<String> templates = registry.getResourceTemplateSpecifications().stream()
+				.map(spec -> spec.resourceTemplate().uriTemplate())
+				.sorted()
+				.collect(Collectors.toList());
+		assertEquals(List.of(
+				"archimate://prompts/{name}",
+				"archimate://recipes/{name}",
+				"archimate://reference/{name}"), templates);
+	}
+
+	/**
+	 * The load-bearing assertion of the template arm: every URI that already ships must be matched
+	 * by a registered template, per URI and not by spot-check. If this fails, a template-only client
+	 * still cannot reach the guidance the pointers name.
+	 */
+	@Test
+	public void shouldMatchEveryStaticResourceUri_withSomeRegisteredTemplate() {
+		TestableResourceHandler handler = new TestableResourceHandler(true);
+		handler.registerResources(registry);
+
+		List<McpUriTemplateManager> matchers = registry.getResourceTemplateSpecifications().stream()
+				.map(spec -> (McpUriTemplateManager)
+						new DefaultMcpUriTemplateManager(spec.resourceTemplate().uriTemplate()))
+				.collect(Collectors.toList());
+		assertFalse("no templates registered", matchers.isEmpty());
+
+		for (McpServerFeatures.SyncResourceSpecification spec : registry.getResourceSpecifications()) {
+			String uri = spec.resource().uri();
+			boolean matched = matchers.stream().anyMatch(m -> m.matches(uri));
+			assertTrue("no registered template expands to the shipped URI " + uri, matched);
+		}
+	}
+
+	@Test
+	public void shouldKeepEveryStaticResource_whenTemplatesAreAlsoRegistered() {
+		TestableResourceHandler handler = new TestableResourceHandler(true);
+		handler.registerResources(registry);
+
+		assertEquals("templates must be additive, never a replacement",
+				14, registry.getResourceCount());
+		for (McpServerFeatures.SyncResourceSpecification spec : registry.getResourceSpecifications()) {
+			McpSchema.ReadResourceResult read = handler.handleReadResource(
+					null, new McpSchema.ReadResourceRequest(spec.resource().uri()));
+			assertEquals("static read must still serve a body for " + spec.resource().uri(),
+					1, read.contents().size());
+		}
+	}
+
+	// ---- get-guidance Tool Tests ----
+	//
+	// Tools are the one MCP surface every client implements, so the guidance bodies are reachable
+	// through a tool as well as through the resource capability. These assert through the REGISTERED
+	// TOOL — a handler method returning the right object proves the value was computed, not sent.
+
+	@Test
+	public void shouldRegisterGetGuidance_throughTheProductionRegistrar() {
+		CommandRegistry commands = productionRegistry();
+
+		assertTrue("get-guidance must register through HandlerRegistrar, so the contract tests "
+				+ "that enumerate through it can see and classify it",
+				toolNames(commands).contains("get-guidance"));
+	}
+
+	@Test
+	public void shouldDeclareUriAsOptional_soTheToolCanAlsoListTheCatalogue() {
+		McpSchema.Tool tool = toolSpec(productionRegistry(), "get-guidance").tool();
+
+		Map<String, Object> properties = tool.inputSchema().properties();
+		assertTrue("schema must accept a uri argument", properties.containsKey("uri"));
+		List<String> required = tool.inputSchema().required();
+		assertTrue("uri must be OPTIONAL — omitting it lists the catalogue",
+				required == null || !required.contains("uri"));
+	}
+
+	@Test
+	public void shouldReturnTheResourceBody_whenCalledThroughTheRegisteredTool() throws Exception {
+		assumeGuidanceContentAvailable();
+		CommandRegistry commands = productionRegistry();
+
+		for (String uri : List.of(
+				"archimate://prompts/routing-preconditions-checklist",
+				"archimate://reference/archimate-layers",
+				"archimate://recipes/index")) {
+			Map<String, Object> envelope = invoke(commands, Map.of("uri", uri));
+			Map<?, ?> result = (Map<?, ?>) envelope.get("result");
+
+			assertNotNull("envelope must carry a result for " + uri, result);
+			assertEquals(uri, result.get("uri"));
+			assertEquals("text/markdown", result.get("mimeType"));
+			String content = (String) result.get("content");
+			assertNotNull("no content on the wire for " + uri, content);
+			assertFalse("empty content on the wire for " + uri, content.isBlank());
+		}
+	}
+
+	/**
+	 * The instance that serves the tool is NOT the instance that registered the MCP resources —
+	 * {@code HandlerRegistrar} constructs its own. If the content cache only ever filled as a side
+	 * effect of {@code registerResources}, this call would answer "not found" for all fourteen URIs
+	 * while every unit test that registers resources itself carried on passing.
+	 */
+	@Test
+	public void shouldServeContent_evenThoughTheToolInstanceNeverRegisteredResources() throws Exception {
+		assumeGuidanceContentAvailable();
+		CommandRegistry commands = productionRegistry();
+
+		Map<String, Object> envelope = invoke(commands, Map.of());
+		Map<?, ?> result = (Map<?, ?>) envelope.get("result");
+		List<?> resources = (List<?>) result.get("resources");
+
+		assertEquals("the tool-side handler must load its own content, not depend on the "
+				+ "resource-side instance having filled a cache it cannot see",
+				14, resources.size());
+	}
+
+	@Test
+	public void shouldListTheCatalogueWithoutBodies_whenNoUriIsGiven() throws Exception {
+		assumeGuidanceContentAvailable();
+		CommandRegistry commands = productionRegistry();
+
+		Map<String, Object> envelope = invoke(commands, Map.of());
+		Map<?, ?> result = (Map<?, ?>) envelope.get("result");
+
+		assertEquals(14, ((Number) result.get("count")).intValue());
+		List<?> resources = (List<?>) result.get("resources");
+		assertEquals(14, resources.size());
+		for (Object entry : resources) {
+			Map<?, ?> row = (Map<?, ?>) entry;
+			assertTrue("catalogue row must name its uri", ((String) row.get("uri")).startsWith("archimate://"));
+			assertNotNull("catalogue row must carry a name", row.get("name"));
+			assertNotNull("catalogue row must carry a description", row.get("description"));
+			assertFalse("the catalogue is an index, not a payload — bodies must not be inlined",
+					row.containsKey("content"));
+		}
+	}
+
+	@Test
+	public void shouldReturnAStructuredError_whenTheRequestedUriIsUnknown() throws Exception {
+		assumeGuidanceContentAvailable();
+		CommandRegistry commands = productionRegistry();
+
+		Map<String, Object> envelope = invoke(commands, Map.of("uri", "archimate://reference/does-not-exist"));
+
+		assertNull("an unknown URI is an error, not an empty success", envelope.get("result"));
+		Map<?, ?> error = (Map<?, ?>) envelope.get("error");
+		assertNotNull("must return a structured error", error);
+		assertEquals("INVALID_PARAMETER", error.get("code"));
+		assertTrue("the error must name the URI that failed",
+				String.valueOf(error.get("message")).contains("archimate://reference/does-not-exist"));
+		assertNotNull("the error must tell the agent how to recover",
+				error.get("suggestedCorrection"));
+	}
+
+	/**
+	 * A `uri` of the wrong JSON type is an error, not an omission. Falling through to the catalogue
+	 * would hand a caller that mis-serialized the argument a different, valid-looking response, and
+	 * leave it unable to tell "I forgot uri" from "my uri never arrived".
+	 */
+	@Test
+	public void shouldRejectAUriOfTheWrongType_ratherThanSilentlyListingTheCatalogue() throws Exception {
+		assumeGuidanceContentAvailable();
+		CommandRegistry commands = productionRegistry();
+
+		for (Object wrong : List.of(42, true, List.of("archimate://recipes/index"))) {
+			Map<String, Object> envelope = invoke(commands, Map.of("uri", wrong));
+
+			assertNull("a " + wrong.getClass().getSimpleName() + " uri must not return a result",
+					envelope.get("result"));
+			Map<?, ?> error = (Map<?, ?>) envelope.get("error");
+			assertNotNull("a " + wrong.getClass().getSimpleName() + " uri must return an error", error);
+			assertEquals("INVALID_PARAMETER", error.get("code"));
+		}
+	}
+
 	// ---- Helper ----
+
+	/** A registry populated exactly the way the running server populates it. */
+	private static CommandRegistry productionRegistry() {
+		CommandRegistry commands = new CommandRegistry();
+		HandlerRegistrar.registerAll(
+				new BaseTestAccessor(),
+				new ResponseFormatter(),
+				commands,
+				new SessionManager(SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS));
+		return commands;
+	}
+
+	private static Set<String> toolNames(CommandRegistry commands) {
+		Set<String> names = new LinkedHashSet<>();
+		commands.getToolSpecifications().forEach(spec -> names.add(spec.tool().name()));
+		return names;
+	}
+
+	private static McpServerFeatures.SyncToolSpecification toolSpec(CommandRegistry commands, String name) {
+		return commands.getToolSpecifications().stream()
+				.filter(s -> s.tool().name().equals(name))
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("Tool not registered: " + name));
+	}
+
+	private static Map<String, Object> invoke(CommandRegistry commands, Map<String, Object> args)
+			throws Exception {
+		McpSchema.CallToolResult result = toolSpec(commands, "get-guidance").callHandler()
+				.apply(null, new McpSchema.CallToolRequest("get-guidance", args));
+		McpSchema.TextContent text = (McpSchema.TextContent) result.content().get(0);
+		return new ObjectMapper().readValue(text.text(), new TypeReference<Map<String, Object>>() {});
+	}
+
+	/**
+	 * The resource bodies are classpath files. Outside a packaged run they are absent, and the
+	 * assertions below would be measuring the harness rather than the code.
+	 *
+	 * <p>The probe reads the classpath DIRECTLY rather than asking the tool, so that a broken tool
+	 * reports as a failure. A guard that asked the subject under test whether it worked would
+	 * convert every real defect into a green skip.</p>
+	 */
+	private static void assumeGuidanceContentAvailable() {
+		Assume.assumeTrue("Resource files only available when packaged on the classpath",
+				new ResourceHandler().getCachedResourceCount() > 0);
+	}
 
 	private void assertResourceRegistered(String uri) {
 		List<McpServerFeatures.SyncResourceSpecification> specs =

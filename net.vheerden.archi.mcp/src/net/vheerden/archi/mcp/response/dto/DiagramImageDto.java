@@ -26,12 +26,31 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record DiagramImageDto(
     String viewObjectId,        // EMF object ID of the image visual
-    String imagePath,            // archive path (e.g. "images/<sha1>.png"), never null in a populated DTO
+    String imagePath,            // opaque archive path minted by Archi — pass back verbatim, never construct or parse; non-null in a populated DTO
     int x,
     int y,
     int width,
     int height,
     String parentViewObjectId,   // null when top-level on the view; non-null when nested in a group/element
     String borderColor,          // #RRGGBB hex; null when default
-    String documentation         // null when empty (mirror existing convention)
-) {}
+    String documentation,        // null when empty (mirror existing convention)
+    /**
+     * Placement-time disclosures for THIS call — currently the one that says the rectangle just
+     * placed lands on a route already drawn on the view.
+     *
+     * <p>Present only on the response to a placement call, and on every arm of one, so approval
+     * mode — which discards {@code nextSteps} wholesale — cannot lose it. A route crossing a
+     * standalone image is a RATED {@code connectionPassThroughs}, not the informational note
+     * metric: an image visual is an ordinary layout node to the assessor.</p>
+     */
+    java.util.List<StructuredWarningDto> structuredWarnings
+) {
+
+    /** The read-path shape: a view's stored image visual carries no placement-time disclosure. */
+    public DiagramImageDto(String viewObjectId, String imagePath, int x, int y,
+            int width, int height, String parentViewObjectId,
+            String borderColor, String documentation) {
+        this(viewObjectId, imagePath, x, y, width, height, parentViewObjectId,
+                borderColor, documentation, null);
+    }
+}

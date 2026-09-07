@@ -137,7 +137,11 @@ public final class SummaryFormatter {
         int elementCount = viewContents.elements() != null ? viewContents.elements().size() : 0;
         int relCount = viewContents.relationships() != null ? viewContents.relationships().size() : 0;
         int connCount = viewContents.connections() != null ? viewContents.connections().size() : 0;
-        int groupCount = viewContents.groups() != null ? viewContents.groups().size() : 0;
+        // Both container kinds, per placement — the same number format=tree reports as totalGroups.
+        // Sizing this from the groups() bucket alone counted native view groups only, so a view
+        // built from ArchiMate Grouping containers reported no groups at all: the same false zero
+        // the tree format used to give, reached by changing one parameter.
+        int groupCount = ViewContainers.countContainers(viewContents);
         int noteCount = viewContents.notes() != null ? viewContents.notes().size() : 0;
 
         StringBuilder sb = new StringBuilder();
@@ -148,16 +152,16 @@ public final class SummaryFormatter {
         sb.append(": ").append(elementCount).append(" elements, ")
                 .append(relCount).append(" relationships, ")
                 .append(connCount).append(" connections.");
-        if (groupCount > 0 || noteCount > 0) {
-            sb.append(" Visual annotations: ");
-            List<String> annParts = new ArrayList<>();
-            if (groupCount > 0) {
-                annParts.add(groupCount + " " + (groupCount == 1 ? "group" : "groups"));
-            }
-            if (noteCount > 0) {
-                annParts.add(noteCount + " " + (noteCount == 1 ? "note" : "notes"));
-            }
-            sb.append(String.join(", ", annParts)).append(".");
+        // Containers are reported apart from notes now that the count includes ArchiMate Grouping
+        // elements. A Grouping is a model concept that participates in relationships, so filing it
+        // under "visual annotations" beside a sticky note would misdescribe half the number.
+        if (groupCount > 0) {
+            sb.append(" Containers: ").append(groupCount)
+                    .append(groupCount == 1 ? " group" : " groups").append(".");
+        }
+        if (noteCount > 0) {
+            sb.append(" Visual annotations: ").append(noteCount)
+                    .append(noteCount == 1 ? " note" : " notes").append(".");
         }
 
         // Element type distribution

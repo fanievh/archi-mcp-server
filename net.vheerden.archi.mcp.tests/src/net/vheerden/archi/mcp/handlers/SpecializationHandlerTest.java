@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.handlers;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -151,7 +152,7 @@ public class SpecializationHandlerTest {
     // ---- AXIS B — imagePath schema introspection ----
 
     @Test
-    public void shouldAdvertiseImagePathOnCreateSpecialization_AC3() {
+    public void shouldAdvertiseImagePathOnCreateSpecialization() {
         McpSchema.Tool tool = findTool("create-specialization");
         @SuppressWarnings("unchecked")
         Map<String, Object> properties = (Map<String, Object>)
@@ -162,12 +163,12 @@ public class SpecializationHandlerTest {
         List<String> required = tool.inputSchema().required();
         assertTrue(required.contains("name"));
         assertTrue(required.contains("conceptType"));
-        assertEquals("required size unchanged at 2 (AC3 — imagePath is optional)",
+        assertEquals("required size unchanged at 2 (imagePath is optional)",
                 2, required.size());
     }
 
     @Test
-    public void shouldAdvertiseImagePathAndClearImagePathOnUpdate_AC4() {
+    public void shouldAdvertiseImagePathAndClearImagePathOnUpdate() {
         McpSchema.Tool tool = findTool("update-specialization");
         @SuppressWarnings("unchecked")
         Map<String, Object> properties = (Map<String, Object>)
@@ -180,12 +181,12 @@ public class SpecializationHandlerTest {
         List<String> required = tool.inputSchema().required();
         assertTrue(required.contains("name"));
         assertTrue(required.contains("conceptType"));
-        assertEquals("AC4: newName relaxed to optional (at-least-one-of guard)",
+        assertEquals("newName relaxed to optional (at-least-one-of guard)",
                 2, required.size());
     }
 
     @Test
-    public void shouldDescribeImagePathClearSemantic_inDescriptions_AC3_AC4() {
+    public void shouldDescribeImagePathClearSemantic_inDescriptions() {
         String createDesc = findTool("create-specialization").description();
         String updateDesc = findTool("update-specialization").description();
         assertTrue("create-spec description should reference imagePath",
@@ -200,7 +201,7 @@ public class SpecializationHandlerTest {
     }
 
     @Test
-    public void shouldPassImagePathThroughHandler_OnCreate_AC3() throws Exception {
+    public void shouldPassImagePathThroughHandler_OnCreate() throws Exception {
         McpSchema.CallToolResult result = call("create-specialization",
                 Map.of("name", "Cloud Server", "conceptType", "Node",
                         "imagePath", "images/cloud.png"));
@@ -213,7 +214,7 @@ public class SpecializationHandlerTest {
     }
 
     @Test
-    public void shouldPassImagePathThroughHandler_OnUpdate_AC4() throws Exception {
+    public void shouldPassImagePathThroughHandler_OnUpdate() throws Exception {
         McpSchema.CallToolResult result = call("update-specialization",
                 Map.of("name", "Cloud Server", "conceptType", "Node",
                         "imagePath", "images/new.png"));
@@ -226,25 +227,77 @@ public class SpecializationHandlerTest {
     }
 
     @Test
-    public void shouldAllowUpdateWithOnlyImagePath_AC4() throws Exception {
+    public void shouldAllowUpdateWithOnlyImagePath() throws Exception {
         // AXIS B relaxation: newName no longer required when imagePath supplied.
         // Handler boundary parses newName as optional — accessor enforces the
         // at-least-one-of guard. With imagePath supplied, this should succeed.
         McpSchema.CallToolResult result = call("update-specialization",
                 Map.of("name", "Cloud Server", "conceptType", "Node",
                         "imagePath", "images/x.png"));
-        assertEquals("AC4 — update with only imagePath should succeed (no newName)",
+        assertEquals("update with only imagePath should succeed (no newName)",
                 false, result.isError());
     }
 
     @Test
-    public void shouldRegisterFourTools_unchanged_AC4() {
+    public void shouldRegisterFourTools_unchanged() {
         // AXIS B extends EXISTING tool schemas, does not add new tools.
         // Tool count STAYS at 4 (create / update / delete / get-usage).
         assertEquals(4, registry.getToolSpecifications().size());
     }
 
     // ---- helpers ----
+
+    @Test
+    public void updateSpecialization_descriptionShouldDocumentResponseFields() {
+        String desc = findTool("update-specialization").description();
+        // NOTE: `conceptType` alone is NOT a valid pin — it is already a required
+        // request parameter in this description. Pin the response sentence instead.
+        assertTrue("must state the returned name is the post-update one",
+                desc.contains("post-update name"));
+        // buildProfileMap omits imagePath when null, so its ABSENCE is the confirmation
+        // that clearImagePath took effect.
+        assertTrue("must explain that absence of imagePath confirms removal",
+                desc.contains("confirms removal"));
+    }
+
+    @Test
+    public void deleteSpecialization_descriptionShouldLocateUsageCountOnTheErrorPath() {
+        String desc = findTool("delete-specialization").description();
+        assertTrue("must name clearedFromConcepts", desc.contains("clearedFromConcepts"));
+        // The pre-existing description already promised usageCount, but that value is
+        // thrown as ModelAccessException details on the refusal path — it is NOT a
+        // success-result field. The success analogue is clearedFromConcepts.
+        assertTrue("must state usageCount is not in the success result",
+                desc.contains("NOT in that"));
+        assertTrue("must locate usageCount on the error path",
+                desc.contains("error details"));
+    }
+
+    /**
+     * The archive path is minted by Archi as {@code images/} + a generated identifier + the source
+     * file's extension, lower-cased ({@code ArchiveManager.createArchiveImagePathname}). It is not a
+     * content hash and its extension is not always {@code .png}, so the previously published
+     * {@code 'images/<sha1>.png'} shape matched nothing the server ever returns — while the same
+     * sentence named the {@code IMAGE_NOT_FOUND} rejection that follows a path a caller built itself.
+     */
+    @Test
+    public void shouldDescribeImagePathAsOpaque_notAsAConstructableShape() {
+        for (String toolName : List.of("create-specialization", "update-specialization")) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> properties = (Map<String, Object>)
+                    findTool(toolName).inputSchema().properties();
+            @SuppressWarnings("unchecked")
+            Map<String, Object> imagePathProp = (Map<String, Object>) properties.get("imagePath");
+            String desc = (String) imagePathProp.get("description");
+            assertFalse(toolName + " must not describe the path as a content hash",
+                    desc.contains("sha1"));
+            assertFalse(toolName + " must not publish a constructable path format",
+                    desc.contains("images/<"));
+            assertTrue(toolName + " must say the value is opaque", desc.contains("opaque"));
+            assertTrue(toolName + " must tell the caller to pass it back unmodified",
+                    desc.contains("never construct or parse one"));
+        }
+    }
 
     private McpSchema.Tool findTool(String name) {
         return registry.getToolSpecifications().stream()

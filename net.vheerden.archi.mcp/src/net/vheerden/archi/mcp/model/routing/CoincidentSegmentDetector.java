@@ -196,7 +196,7 @@ public class CoincidentSegmentDetector {
      * @param horizontal       true if horizontal corridor, false if vertical
      * @param overlapStart     start of the corridor's parallel range
      * @param overlapEnd       end of the corridor's parallel range
-     * @param obstacles        all element rectangles on the view
+     * @param obstacles        every non-container view object — elements, notes and images alike
      * @return gap bounds as [minBound, maxBound], or null if corridor lies inside an obstacle
      */
     int[] computeCorridorGap(int sharedCoordinate, boolean horizontal,
@@ -308,7 +308,7 @@ public class CoincidentSegmentDetector {
      *
      * @param coincidentPairs detected coincident pairs
      * @param bendpointLists  mutable bendpoint lists per connection (modified in place)
-     * @param allObstacles    all element rectangles on the view
+     * @param allObstacles    every non-container view object — elements, notes and images alike
      * @return number of segments actually offset
      */
     public int applyOffsets(List<CoincidentPair> coincidentPairs,
@@ -489,7 +489,7 @@ public class CoincidentSegmentDetector {
             }
 
             if (applied && violatesTerminalAnchoring(
-                    seg.connectionIndex(), bpIdx1, bpIdx2, path, anchoringContexts)) {
+                    seg.connectionIndex(), bpIdx1, bpIdx2, path, snap1, snap2, anchoringContexts)) {
                 path.set(bpIdx1, snap1);
                 path.set(bpIdx2, snap2);
                 applied = false;
@@ -549,7 +549,7 @@ public class CoincidentSegmentDetector {
             }
 
             if (applied && violatesTerminalAnchoring(
-                    seg.connectionIndex(), bpIdx1, bpIdx2, path, anchoringContexts)) {
+                    seg.connectionIndex(), bpIdx1, bpIdx2, path, snap1, snap2, anchoringContexts)) {
                 path.set(bpIdx1, snap1);
                 path.set(bpIdx2, snap2);
                 applied = false;
@@ -602,34 +602,107 @@ public class CoincidentSegmentDetector {
     }
 
     /**
-     * Wrap-site predicate gate: returns {@code true} iff the segment we
-     * just offset touches a terminal index (0 or {@code path.size() - 1}) AND
-     * the connection has an anchoring context AND
-     * {@link TerminalAnchoring#preservesEndpoints} now reports a violation.
+     * Wrap-site rollback gate: returns {@code true} iff the offset just applied
+     * must be rolled back on the terminal-anchoring criterion.
      *
-     * <p>When {@code anchoringContexts} is empty or has no entry for
-     * {@code connIdx}, this returns {@code false} (legacy 3-arg overload
-     * behaviour — no wrap).</p>
+     * <p>The gate opens only when the offset segment touches a terminal index
+     * (0 or {@code path.size() - 1}); a purely interior offset cannot move a
+     * terminal and is never checked. When {@code anchoringContexts} is empty or
+     * has no entry for {@code connIdx} this returns {@code false} (the legacy
+     * 3-arg overload's no-op wrap).
+     *
+     * <p><strong>Decided per end, and only for an end this offset touched.</strong>
+     * {@link TerminalAnchoring#preservesEndpoints} conjoins the two ends, and
+     * the gate above establishes only that the segment reaches <em>one</em> of
+     * them. Judging that conjunction on the post-state therefore let an end at
+     * the far side of the path — one this offset could not reach — veto the
+     * offset, most often an end that a stage licensed to shape terminals by
+     * contract (the {@code alignTerminalsWithCenter} family,
+     * {@link ChannelNudgingPass}) had legitimately moved off its faceline. Each
+     * touched end is now decided on its own, against
+     * {@link TerminalAnchoringRollbackPolicy} — the same implementation the four
+     * {@link PathStraightener} wrap sites use, so all five share one policy and
+     * not merely one predicate.
+     *
+     * <p><em>The per-end restriction below is answer-preserving, not
+     * load-bearing, and is kept because it states the policy where a reader
+     * looks for it.</em> {@link #tryOffset} writes {@code bpIdx1} and
+     * {@code bpIdx2} and nothing else, so an end this offset did not touch is
+     * byte-identical before and after — which makes both arms of the policy
+     * false for it anyway: it cannot have flipped, and the pin's
+     * "arrived off-face and moved" cannot hold for a point that did not move.
+     * Evaluating an untouched end would therefore return the same verdict.
+     * What actually changed the behaviour is the move from a post-state
+     * conjunction to the flip-and-pin arms; deleting these two conjuncts alone
+     * changes no outcome, and no test can distinguish that mutation.
+     *
+     * <p><strong>This site pins.</strong> Its write range is exactly
+     * {@code bpIdx1} and {@code bpIdx2}, and the terminal gate above is the
+     * statement that those can be terminal indices; nothing else bounds them.
+     * So a terminal that arrived off its faceline is not relocated either. The
+     * division of labour that makes this right is already in the pipeline:
+     * {@link #applyTerminalAnchoredReconciliation} exists to resolve the
+     * coincidences this pass declines, and resolves them by inserting a drop
+     * bendpoint while leaving the terminal byte-identical. Relocating an
+     * off-face terminal here would be this pass doing that stage's job badly.
+     *
+     * <p><strong>No structural arm.</strong> {@code checkAnchoringWrap}'s
+     * {@code after.size() < 4} rejection guards an augmented frame whose
+     * sentinels can collapse and take a real terminal with them. Neither hazard
+     * exists here: both call sites run outside the augmentation applied at
+     * stage 4.7i, so {@code path[0]} and {@code path[size-1]} are the real
+     * perimeter terminals, and {@link #tryOffset} writes through
+     * {@code path.set} only, leaving the size invariant. A size check here could
+     * never fire.
+     *
+     * @param snap1 {@code path[bpIdx1]} as it was before {@link #tryOffset} ran
+     * @param snap2 {@code path[bpIdx2]} as it was before {@link #tryOffset} ran
      */
     private static boolean violatesTerminalAnchoring(
             int connIdx, int bpIdx1, int bpIdx2, List<AbsoluteBendpointDto> path,
+            AbsoluteBendpointDto snap1, AbsoluteBendpointDto snap2,
             Map<Integer, AnchoringContext> anchoringContexts) {
         if (anchoringContexts == null || anchoringContexts.isEmpty()) {
             return false;
         }
-        // Only terminal-touching segments can change the predicate result.
-        boolean touchesTerminal = (bpIdx1 == 0) || (bpIdx2 == path.size() - 1);
-        if (!touchesTerminal) {
+        // Only terminal-touching segments can move a terminal.
+        boolean touchesSource = (bpIdx1 == 0);
+        boolean touchesTarget = (bpIdx2 == path.size() - 1);
+        if (!touchesSource && !touchesTarget) {
             return false;
         }
         AnchoringContext ctx = anchoringContexts.get(connIdx);
         if (ctx == null) {
             return false;
         }
-        return !TerminalAnchoring.preservesEndpoints(
+        List<AbsoluteBendpointDto> before = preMutationPath(path, bpIdx1, bpIdx2, snap1, snap2);
+        if (touchesSource && TerminalAnchoringRollbackPolicy.rejects(
                 ctx.sourceAnchoring(), ctx.connection().source(), ctx.sourceCenter(),
+                before, path, false, true)) {
+            return true;
+        }
+        return touchesTarget && TerminalAnchoringRollbackPolicy.rejects(
                 ctx.targetAnchoring(), ctx.connection().target(), ctx.targetCenter(),
-                path);
+                before, path, true, true);
+    }
+
+    /**
+     * Reconstructs the path as it stood before {@link #tryOffset} ran.
+     *
+     * <p>Exact rather than approximate: {@code tryOffset} writes through
+     * {@code path.set} at {@code bpIdx1} and {@code bpIdx2} and nowhere else,
+     * so restoring those two slots from their snapshots reproduces the
+     * pre-mutation path point for point. The size is invariant across the
+     * mutation, which is also why the before and after terminals occupy the
+     * same slots and can be compared by index without re-deriving anything.
+     */
+    private static List<AbsoluteBendpointDto> preMutationPath(
+            List<AbsoluteBendpointDto> path, int bpIdx1, int bpIdx2,
+            AbsoluteBendpointDto snap1, AbsoluteBendpointDto snap2) {
+        List<AbsoluteBendpointDto> before = new ArrayList<>(path);
+        before.set(bpIdx1, snap1);
+        before.set(bpIdx2, snap2);
+        return before;
     }
 
     /**
@@ -752,7 +825,7 @@ public class CoincidentSegmentDetector {
      * the implicit terminal segment (source.center → bp[0] for source-terminal
      * cases, or bp[last] → target.center for target-terminal cases) —
      * avoiding the "drop then reverse back" zigzag pattern that the assessor's
-     * R3 detector flags.
+     * zigzag detector flags.
      *
      * <p>The unified formula {@code delta_sign = sign(terminalBp - anchor.center)}
      * on the perpendicular axis works for both ends: at the source end the
@@ -800,7 +873,7 @@ public class CoincidentSegmentDetector {
             // the silent fall-through is observable rather than hidden.
             logger.warn("preferredReconcileSign: null anchorCenter for conn[{}] "
                     + "seg[{}] (bp1IsTerminal={}); falling back to +1 — drop "
-                    + "direction may produce R3 zigzag",
+                    + "direction may produce a zigzag",
                     connIdx, seg.segmentIndex(), bp1IsTerminal);
             return 1;
         }
@@ -844,6 +917,28 @@ public class CoincidentSegmentDetector {
      * to the face line. Returns {@code false} (path unchanged) if the
      * inserted path collides with any obstacle, or if both endpoints are
      * terminals (2-BP path).
+     *
+     * <p><strong>This is the one terminal-anchoring check in the family that is
+     * still a whole-path conjunction, and that is deliberate.</strong> The
+     * guard below captures {@link TerminalAnchoring#preservesEndpoints} — which
+     * answers for both ends at once — before and after the insertion, where the
+     * five wrap sites instead decide each end on its own via
+     * {@link TerminalAnchoringRollbackPolicy}.
+     *
+     * <p>The conjunction is sound here <em>only</em> because this method never
+     * moves a terminal bendpoint. It shifts the interior endpoint and inserts a
+     * drop bendpoint beside the terminal, leaving the terminal itself
+     * byte-identical. The verdict must therefore be invariant across the
+     * insertion, and a change of verdict means a logic bug — a stale segment
+     * index, or an insertion that reached further than intended. The check is
+     * <em>defensive</em>, not a policy: it is why the rollback logs at warning
+     * level. A per-end split would buy nothing, because neither end can move.
+     *
+     * <p>The distinction matters because the wrap sites' conjunction was
+     * removed for the opposite reason: there a mutation <em>can</em> move one
+     * terminal, so conjoining the ends let the end it never touched decide the
+     * outcome. If this method is ever changed to relocate a terminal, this
+     * guard stops being defensive and must convert to the shared policy.
      */
     private boolean tryReconcileWithInsertion(
             PathOrderer.Segment seg, boolean horizontal, int delta,

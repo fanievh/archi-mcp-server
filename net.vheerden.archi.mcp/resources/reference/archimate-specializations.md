@@ -109,6 +109,8 @@ Use `bulk-mutate` to pre-register a specialization vocabulary at session start, 
 
 Each operation in `bulk-mutate` has the shape `{ "tool": "<tool-name>", "params": { ... } }` — the tool name is *not* a flat field, and parameters are *nested* under `params`.
 
+An operation may also carry a third top-level key, `as`, naming itself so a later operation in the same call can refer to what it created: write `"as": "orderService"` on the create, then `"$orderService.id"` wherever a later operation needs that id. Those three keys are the whole vocabulary — **an operation carrying any other top-level key is refused, naming the key**, so a name mistyped as `"As"` fails at once instead of leaving the operation silently unnamed. A name must start with a letter or underscore and continue with letters, digits or underscores, and must be unique within the call. The older positional form (`"$4.id"`, counting operations from zero) still works, is not deprecated, and may be mixed with names in the same call; prefer a name when you have a choice, because a mistyped position usually resolves to some *other* legal operation and succeeds against the wrong object, while a mistyped name matches nothing and can only be refused.
+
 ```json
 {
   "operations": [

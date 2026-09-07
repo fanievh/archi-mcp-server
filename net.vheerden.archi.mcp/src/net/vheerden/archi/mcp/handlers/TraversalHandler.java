@@ -180,8 +180,15 @@ public class TraversalHandler {
         fieldsProp.put("description", "Field verbosity preset for expanded element data within relationships. "
                 + "'minimal' returns only id and name. "
                 + "'standard' (default) returns id, name, type, layer, documentation, properties. "
+                + "An element reports documentation and properties only when it has "
+                + "them, so an absent field means the element carries nothing there "
+                + "rather than that it was left out. "
                 + "'full' returns all available fields. "
-                + "Applies to depth 1+ element expansions.");
+                + "Applies to depth 1+ element expansions. At depth 0 it selects the "
+                + "RELATIONSHIP's own fields instead: 'minimal' gives id and name, 'standard' adds "
+                + "type, sourceId, targetId and any semantic attributes, and 'full' adds "
+                + "specialization, documentation, properties and the resolved endpoint names "
+                + "sourceName and targetName.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
         properties.put("fields", fieldsProp);
 
@@ -228,6 +235,9 @@ public class TraversalHandler {
                         + "Set dryRun=true to get a cost estimate without returning results. "
                         + "Set format=graph for deduplicated node/edge structure, format=summary for condensed text overview. "
                         + "Relationships include specialization field showing primary specialization name (null if none). "
+                        + "A relationship reports properties only when the relationship has any, "
+                        + "so an absent properties field means it carries none — not that the "
+                        + "field was left out of the selection. "
                         + "Related: get-element (full element details), "
                         + "search-elements (find elements by name).")
                 .inputSchema(inputSchema)
@@ -315,8 +325,7 @@ public class TraversalHandler {
                                 ErrorCode.INVALID_PARAMETER,
                                 "Invalid exclude field: '" + field + "'",
                                 null,
-                                "Valid exclude fields: documentation, properties, layer, type, "
-                                        + "viewpointType, folderPath, visualMetadata",
+                                "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
                         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                     }
@@ -473,10 +482,16 @@ public class TraversalHandler {
             // Dry-run early return for depth mode
             if (dryRun) {
                 logger.info("Dry-run depth mode: {} relationships after filters, depth={}", relationships.size(), depth);
-                int estimatedTokens = CostEstimator.estimateTokensForDepth(relationships.size(), depth);
+                int estimatedTokens = CostEstimator.estimateTokensForDepth(relationships.size(), depth, fieldPreset);
                 String recommendedPreset = CostEstimator.recommendPreset(estimatedTokens);
+                // Projected with the depth-aware estimator, which follows the preset at every
+                // depth: the elements embedded in an expanded row are filtered by it. A caller
+                // above the minimal preset therefore gets a real saving quoted, and a caller
+                // already at minimal gets the suggestion withheld rather than published as a zero.
                 String recommendation = CostEstimator.buildRecommendation(
-                        relationships.size(), estimatedTokens, fieldPreset);
+                        relationships.size(), estimatedTokens, fieldPreset,
+                        CostEstimator.estimateTokensForDepth(relationships.size(), depth,
+                                FieldSelector.FieldPreset.MINIMAL));
                 List<String> dryRunNextSteps = new ArrayList<>();
                 dryRunNextSteps.add("Execute without dryRun to get full results");
                 if (relationships.size() > 20) {
@@ -933,7 +948,13 @@ public class TraversalHandler {
         Map<String, Object> fullWithRels = (Map<String, Object>) FieldSelector.applyFieldSelection(
                 element, fieldPreset, excludeFields);
         List<RelationshipDto> rels = nestedRelationships.get(element.id());
-        fullWithRels.put("relationships", rels != null ? rels : List.of());
+        // Filter them. Putting the DTOs in raw left their width decided by @JsonInclude(NON_NULL)
+        // alone, so any field the mapper populated appeared here at every preset — including the
+        // ones the default preset exists to withhold. The nested width deliberately is not the
+        // caller's preset: see FieldSelector.applyToNestedRelationships for why narrowing these
+        // rows to the preset would be a second change this one never intended to make.
+        fullWithRels.put("relationships",
+                FieldSelector.applyToNestedRelationships(rels, excludeFields));
         return fullWithRels;
     }
 
@@ -1069,10 +1090,12 @@ public class TraversalHandler {
         if (dryRun) {
             logger.info("Dry-run traverse mode: {} elements, {} relationships discovered", totalElements, totalRels);
             int totalItems = totalElements + totalRels;
-            int estimatedTokens = CostEstimator.estimateTokensMixed(totalElements, totalRels, fieldPreset);
+            int estimatedTokens = CostEstimator.estimateTokensForTraversal(totalElements, totalRels, fieldPreset);
             String recommendedPreset = CostEstimator.recommendPreset(estimatedTokens);
             String recommendation = CostEstimator.buildRecommendation(
-                    totalItems, estimatedTokens, fieldPreset);
+                    totalItems, estimatedTokens, fieldPreset,
+                    CostEstimator.estimateTokensForTraversal(totalElements, totalRels,
+                            FieldSelector.FieldPreset.MINIMAL));
             List<String> dryRunNextSteps = new ArrayList<>();
             dryRunNextSteps.add("Execute without dryRun to get full traversal results");
             if (totalItems > 50) {

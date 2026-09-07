@@ -290,7 +290,7 @@ public record ApprovalCardModel(
     // ---- Agent-intent suppression -------------------------------------
 
     /**
-     * Low-information intent phrases that must never occupy the trust slot (design §4 D6 guardrail).
+     * Low-information intent phrases that must never occupy the trust slot (the effect-only description guardrail).
      * Conservative on purpose — only clearly-empty notes — so a real-but-terse intent is never eaten.
      */
     private static final Set<String> HOLLOW_INTENTS = Set.of(
@@ -504,6 +504,18 @@ public record ApprovalCardModel(
             String text = verb + " \"" + structuredName + "\"" + (type != null ? " (" + type + ")" : "");
             return new ChangeRow(icon, text, destructive, true);
         }
+        // An explicitly blank name is a request to WIPE the name, not an absent one. The lookup
+        // above cannot tell those apart, and every row below names neither — so without this the
+        // human would be asked to approve erasing a name with nothing on the card saying so. Held
+        // above the description fallback because the mechanical description names only the tool and
+        // the id, which is exactly what leaves the wipe invisible.
+        if (isExplicitlyBlank(proposedChanges, "name", "newName", "label")) {
+            String target = firstNonBlank(proposedChanges, "elementId", "relationshipId", "viewId",
+                    "viewObjectId", "folderId", "conceptId", "id");
+            return new ChangeRow(icon,
+                    verb + " " + (target != null ? target : opNoun(tool)) + " — clear the name",
+                    destructive, true);
+        }
         // Deletes/removals carry the name in the mechanical description, not in proposedChanges.
         if (description != null && !description.isBlank()) {
             return new ChangeRow(icon, description.trim(), destructive, true);
@@ -635,6 +647,23 @@ public record ApprovalCardModel(
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    /**
+     * True when one of the keys is present carrying a blank string — an explicit clear, which
+     * {@link #firstNonBlank} discards as though the key had been absent. Blank rather than empty so
+     * the two stay exact complements: whatever that method rejects, this one reports.
+     */
+    private static boolean isExplicitlyBlank(Map<String, Object> map, String... keys) {
+        if (map == null) {
+            return false;
+        }
+        for (String key : keys) {
+            if (map.get(key) instanceof String s && s.isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String firstNonBlank(Map<String, Object> map, String... keys) {

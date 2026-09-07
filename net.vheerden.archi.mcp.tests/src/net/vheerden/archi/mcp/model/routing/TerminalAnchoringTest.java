@@ -88,7 +88,7 @@ public class TerminalAnchoringTest {
 
         assertFalse(
                 "predicate must reject the collapsed centre-collinear off-face shape",
-                TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, center, after));
+                TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, after));
     }
 
     /**
@@ -110,7 +110,7 @@ public class TerminalAnchoringTest {
 
         assertTrue(
                 "predicate must preserve the legitimate off-center perimeter slot",
-                TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, center, before));
+                TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, before));
     }
 
     // -----------------------------------------------------------------
@@ -132,7 +132,7 @@ public class TerminalAnchoringTest {
                 new AbsoluteBendpointDto(220, 299),  // off-center, on TOP face line
                 new AbsoluteBendpointDto(220, 100));
 
-        assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, center, path));
+        assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, path));
     }
 
     // -----------------------------------------------------------------
@@ -154,7 +154,7 @@ public class TerminalAnchoringTest {
                 new AbsoluteBendpointDto(250, 361),  // centerX, BOTTOM face line
                 new AbsoluteBendpointDto(250, 500));
 
-        assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, center, path));
+        assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, path));
     }
 
     // -----------------------------------------------------------------
@@ -177,7 +177,7 @@ public class TerminalAnchoringTest {
                 new AbsoluteBendpointDto(250, 330),  // source center
                 new AbsoluteBendpointDto(0, 330));
 
-        assertFalse(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, center, path));
+        assertFalse(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, path));
     }
 
     // -----------------------------------------------------------------
@@ -188,7 +188,7 @@ public class TerminalAnchoringTest {
     public void emptyPath_returnsTrue() {
         RoutingRect source = new RoutingRect(0, 0, 10, 10, "n");
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
-                new TerminalAnchoring(Face.LEFT), source, new int[]{5, 5}, List.of()));
+                new TerminalAnchoring(Face.LEFT), source, List.of()));
     }
 
     // -----------------------------------------------------------------
@@ -247,5 +247,25 @@ public class TerminalAnchoringTest {
 
         assertTrue(TerminalAnchoring.preservesEndpoints(
                 null, null, null, ta, tgt, tc, path));
+    }
+
+    @Test
+    public void preservesEndpoints_skipsAnEndWhoseCentreIsNull_evenWithAnAnchoring() {
+        // The predicate itself no longer reads a centre. preservesEndpoints still takes one per
+        // end and still treats a null as "leave this end unchecked" — that is the path legacy
+        // wrap-site overloads use, and they must go on skipping. A source terminal well off its
+        // face line therefore passes, because the source end is never examined.
+        RoutingRect src = new RoutingRect(100, 100, 100, 100, "src");
+        TerminalAnchoring sa = new TerminalAnchoring(Face.RIGHT);
+        List<AbsoluteBendpointDto> path = List.of(
+                new AbsoluteBendpointDto(400, 150),   // nowhere near the RIGHT face line (201)
+                new AbsoluteBendpointDto(400, 500));
+
+        assertFalse("Precondition: this terminal would fail the predicate if it were checked",
+                TerminalAnchoring.preservesTerminalAnchoring(sa, src, path));
+
+        assertTrue("A null centre must still disarm that end's check",
+                TerminalAnchoring.preservesEndpoints(
+                        sa, src, null, null, null, null, path));
     }
 }

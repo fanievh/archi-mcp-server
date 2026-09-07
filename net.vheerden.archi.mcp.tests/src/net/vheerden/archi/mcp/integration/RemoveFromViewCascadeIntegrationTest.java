@@ -74,7 +74,7 @@ public class RemoveFromViewCascadeIntegrationTest {
 
         IArchimateModel model = factory.createArchimateModel();
         model.setDefaults();
-        model.setName("Story B Cascade Integration Pin");
+        model.setName("Remove-From-View Cascade Integration Pin");
 
         IFolder diagramsFolder = model.getFolder(FolderType.DIAGRAMS);
         IFolder applicationFolder = model.getFolder(FolderType.APPLICATION);

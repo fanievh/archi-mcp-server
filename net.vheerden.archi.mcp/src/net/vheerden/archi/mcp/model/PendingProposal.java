@@ -7,7 +7,7 @@ import java.util.function.Supplier;
 import org.eclipse.gef.commands.Command;
 
 /**
- * Stores a mutation proposal awaiting human approval (reshaped per Design §4 D5).
+ * Stores a mutation proposal awaiting human approval (stores the request, not a pre-built Command).
  *
  * <p>Package-private — only used within the {@code model/} package by {@link MutationContext},
  * {@link MutationDispatcher}, {@link ProposalBuilder}, and {@link ProposalStalenessGuard}.</p>
@@ -29,7 +29,7 @@ import org.eclipse.gef.commands.Command;
  * {@code validationSummary}, {@code createdAt}, plus the {@code effectDescription} (server-owned,
  * non-spoofable effect text) and {@code intent} (the agent's lower-trust stated reason) — are preserved
  * unchanged so the card renders exactly as before. {@code effectDescription} and {@code intent} are
- * never merged — different trust levels (design §4 D6).</p>
+ * never merged — different trust levels.</p>
  *
  * <p><strong>Command-bridge constructors.</strong> The {@code Command}-carrying constructors below wrap a
  * pre-built command as a trivial no-rebuild handle with an {@linkplain StalenessCapture#EMPTY empty}

@@ -19,7 +19,31 @@ public class ViewFixture {
     public record FixtureElement(String id, String name, int x, int y, int w, int h,
                                   boolean isChild, String parentId) {}
 
-    public record FixtureConnection(String id, String sourceId, String targetId, String label) {}
+    /**
+     * A bendpoint as Archi stores it: offsets relative to the source centre
+     * ({@code startX/startY}) and the target centre ({@code endX/endY}). Resolve to
+     * absolute canvas coordinates via {@link ViewFixture#buildStoredPath}.
+     */
+    public record FixtureBendpoint(int startX, int startY, int endX, int endY) {}
+
+    /**
+     * @param bendpoints the connection's stored geometry; empty when the connection has
+     *                   none (a straight centre-to-centre line). Optional in the JSON —
+     *                   fixtures that predate the field simply carry no stored geometry.
+     */
+    public record FixtureConnection(String id, String sourceId, String targetId, String label,
+                                     List<FixtureBendpoint> bendpoints) {
+
+        /** Compact constructor: null-guard the bendpoint list. */
+        public FixtureConnection {
+            bendpoints = bendpoints != null ? bendpoints : List.of();
+        }
+
+        /** Back-compatible 4-arg form for fixtures with no stored geometry. */
+        public FixtureConnection(String id, String sourceId, String targetId, String label) {
+            this(id, sourceId, targetId, label, List.of());
+        }
+    }
 
     private final String viewName;
     private final List<FixtureElement> elements;
@@ -76,15 +100,72 @@ public class ViewFixture {
 
             List<FixtureConnection> connections = new ArrayList<>();
             for (JsonNode cNode : root.get("connections")) {
+                List<FixtureBendpoint> bendpoints = new ArrayList<>();
+                if (cNode.has("bendpoints")) {
+                    for (JsonNode bNode : cNode.get("bendpoints")) {
+                        bendpoints.add(new FixtureBendpoint(
+                                bNode.get("startX").asInt(), bNode.get("startY").asInt(),
+                                bNode.get("endX").asInt(), bNode.get("endY").asInt()));
+                    }
+                }
                 connections.add(new FixtureConnection(
                         cNode.get("id").asText(),
                         cNode.get("sourceId").asText(),
                         cNode.get("targetId").asText(),
-                        cNode.has("label") ? cNode.get("label").asText() : ""));
+                        cNode.has("label") ? cNode.get("label").asText() : "",
+                        bendpoints));
             }
 
             return new ViewFixture(viewName, elements, connections);
         }
+    }
+
+    /**
+     * Resolves a connection's stored geometry to the absolute path the assessor measures:
+     * source centre → bendpoints → target centre.
+     *
+     * <p>Mirrors {@code AssessmentCollector}'s construction verbatim, including its bendpoint
+     * resolution: each point interpolates between the source-anchored and target-anchored
+     * reconstructions at the weight Archi renders with, {@code (i + 1) / (n + 1)}. The counts this
+     * feeds are only comparable with a routed result because both sides use this same
+     * centre-anchored basis.</p>
+     *
+     * @return the path as {@code [x, y]} points, for
+     *         {@code LayoutQualityAssessor.countPathCrossings}
+     */
+    public List<double[]> buildStoredPath(FixtureConnection conn) {
+        FixtureElement src = elementById.get(conn.sourceId());
+        FixtureElement tgt = elementById.get(conn.targetId());
+        if (src == null || tgt == null) {
+            throw new IllegalArgumentException("Unresolved endpoint on connection: " + conn.id());
+        }
+        double srcCentreX = src.x() + src.w() / 2.0;
+        double srcCentreY = src.y() + src.h() / 2.0;
+        double tgtCentreX = tgt.x() + tgt.w() / 2.0;
+        double tgtCentreY = tgt.y() + tgt.h() / 2.0;
+
+        List<double[]> path = new ArrayList<>();
+        path.add(new double[]{srcCentreX, srcCentreY});
+        int bendpointCount = conn.bendpoints().size();
+        int bendpointIndex = 0;
+        for (FixtureBendpoint bp : conn.bendpoints()) {
+            double weight = (bendpointIndex + 1.0) / (bendpointCount + 1.0);
+            path.add(new double[]{
+                    (bp.startX() + srcCentreX) * (1.0 - weight) + (bp.endX() + tgtCentreX) * weight,
+                    (bp.startY() + srcCentreY) * (1.0 - weight) + (bp.endY() + tgtCentreY) * weight});
+            bendpointIndex++;
+        }
+        path.add(new double[]{tgtCentreX, tgtCentreY});
+        return path;
+    }
+
+    /** Stored-geometry paths for every connection, in fixture order. */
+    public List<List<double[]>> buildStoredPaths() {
+        List<List<double[]>> paths = new ArrayList<>();
+        for (FixtureConnection c : connections) {
+            paths.add(buildStoredPath(c));
+        }
+        return paths;
     }
 
     public String getViewName() { return viewName; }

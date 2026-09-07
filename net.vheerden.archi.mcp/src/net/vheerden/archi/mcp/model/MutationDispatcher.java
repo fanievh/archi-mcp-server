@@ -19,7 +19,15 @@ import org.eclipse.swt.widgets.Display;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.eclipse.emf.ecore.EObject;
+
+import com.archimatetool.model.IArchimateDiagramModel;
+import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IArchimateRelationship;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
+import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelContainer;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.response.dto.BatchStatusDto;
@@ -56,7 +64,26 @@ public class MutationDispatcher {
     private Runnable onImmediateDispatchCallback;
 
     /**
-     * Time-to-live for abandoned pending proposals (Design §4 D5; 30 min).
+     * Per-thread nesting depth of an open "silent measurement" window. While
+     * &gt; 0 <em>on the calling thread</em>, that thread has declared that any
+     * model-content change it performs now is part of a net-zero measurement
+     * (the route-normalized baseline probe routes a throwaway copy to measure
+     * it) and must NOT advance the model-changed signal.
+     *
+     * <p><strong>Thread-scoped deliberately:</strong> the window must never
+     * suppress a REAL mutation performed concurrently by another thread. Since
+     * the ecore change listener fires synchronously on the thread that mutates,
+     * a {@link ThreadLocal} guard is only consulted for changes originating on
+     * the same thread that opened the window — a different thread's live
+     * mutation still bumps the version correctly. Re-entrant because the
+     * composer runs the probe once per arm; clamped at 0 so an unmatched
+     * {@code end} cannot drive it negative.</p>
+     */
+    private final ThreadLocal<Integer> silentMeasurementDepth =
+            ThreadLocal.withInitial(() -> 0);
+
+    /**
+     * Time-to-live for abandoned pending proposals (30 min).
      * Proposals older than this are swept on {@link #listAllPending} and on propose so the per-session
      * queue does not fill to the {@link MutationContext#MAX_PENDING_PROPOSALS hard cap}. Expiry is
      * surfaced (logged + queue-changed), never destructive to the model.
@@ -115,9 +142,27 @@ public class MutationDispatcher {
      * Captures the propose-time staleness snapshot (stack sequence + per-target fingerprints + names) for
      * the given target ids. Called by the accessor at each propose site; the result is stored on the
      * {@link PendingProposal} and compared at approve. Empty/null targets ⇒ an always-fresh capture.
+     *
+     * <p>Targets are resolved against containment and, failing that, against the session's own open
+     * batch. A target the batch has queued is a real object with a real id that a prepare has
+     * already accepted, and it becomes editable the moment the batch commits — which can happen
+     * while the card is still on screen. Fingerprinting it is what lets the approve-time comparison
+     * see an edit made in that window instead of treating the proposal as having nothing to check.</p>
      */
-    StalenessCapture captureStaleness(Set<String> targetIds) {
-        return stalenessGuard.capture(targetIds);
+    StalenessCapture captureStaleness(String sessionId, Set<String> targetIds) {
+        return stalenessGuard.capture(targetIds, id -> queuedAny(sessionId, id));
+    }
+
+    /**
+     * Resolves an id against anything the session's open batch has queued, of any kind.
+     *
+     * <p>Unlike its typed siblings, which exist so that naming the wrong kind still fails. The
+     * staleness snapshot has no expected kind: it is asking whether the id names something this
+     * request has made, so it can fingerprint it and compare later.</p>
+     */
+    private EObject queuedAny(String sessionId, String id) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedAny(id);
     }
 
     /**
@@ -125,7 +170,7 @@ public class MutationDispatcher {
      * with a lambda reading the human-owned {@code ApprovalMode} holder; tests pass a constant.
      *
      * <p>This sets the <em>source</em> of the read-only bit, not the bit itself — there is no
-     * MCP-callable path to flip approval mode (D1: the only robust guard is non-existence).</p>
+     * MCP-callable path to flip approval mode (the only robust guard is non-existence).</p>
      *
      * @param provider the read-only approval-mode source (must not be null)
      */
@@ -142,6 +187,41 @@ public class MutationDispatcher {
      */
     void setOnImmediateDispatchCallback(Runnable callback) {
         this.onImmediateDispatchCallback = callback;
+    }
+
+    // ---- Silent measurement window ----
+
+    /**
+     * Opens a silent measurement window (re-entrant). While any window is open,
+     * {@link #isSilentMeasurementActive()} returns {@code true} and the model
+     * content-change version bump is suppressed for the net-zero measurement.
+     * Must be paired with {@link #endSilentMeasurement()} in a {@code finally}.
+     */
+    public void beginSilentMeasurement() {
+        silentMeasurementDepth.set(silentMeasurementDepth.get() + 1);
+    }
+
+    /**
+     * Closes the innermost silent measurement window on the calling thread.
+     * Clamped at 0 — an unmatched call is a no-op rather than driving the depth
+     * negative. Resets the thread-local to its initial value when the outermost
+     * window closes so pooled threads carry no residue.
+     */
+    public void endSilentMeasurement() {
+        int depth = silentMeasurementDepth.get();
+        if (depth <= 1) {
+            silentMeasurementDepth.remove();
+        } else {
+            silentMeasurementDepth.set(depth - 1);
+        }
+    }
+
+    /**
+     * @return {@code true} while a silent measurement window is open on the
+     *         calling thread. Windows opened by other threads are never visible.
+     */
+    public boolean isSilentMeasurementActive() {
+        return silentMeasurementDepth.get() > 0;
     }
 
     // ---- Approval-queue change notification ----
@@ -198,7 +278,7 @@ public class MutationDispatcher {
     public void dispatchImmediate(Command command) throws MutationException {
         logger.info("Dispatching immediate command: {}", command.getLabel());
         IArchimateModel model = requireModel();
-        // D3: stamp authorship at the single admission chokepoint. Every agent
+        // Stamp authorship at the single admission chokepoint. Every agent
         // mutation — immediate single ops, the batch-commit compound, and approved-proposal
         // executes — funnels here, so wrapping once tags them all. Human GUI edits reach
         // Archi's CommandStack directly and stay untagged. One wrapper == one stack entry,
@@ -227,7 +307,7 @@ public class MutationDispatcher {
     }
 
     /**
-     * Pure, {@code Display}-free decision core for the scoped agent undo (D4 — the
+     * Pure, {@code Display}-free decision core for the scoped agent undo (never crosses a human edit — the
      * "betrayal" guard). Undoes <strong>only</strong> agent-authored top-of-stack entries, LIFO:
      *
      * <ul>
@@ -287,7 +367,7 @@ public class MutationDispatcher {
     }
 
     /**
-     * Pure, {@code Display}-free decision core for the scoped agent redo (D4, symmetric
+     * Pure, {@code Display}-free decision core for the scoped agent redo (symmetric
      * to {@link #scopedUndo}). Re-applies <strong>only</strong> agent-authored redo entries: if the
      * top redo entry is human-authored (e.g. the human used native undo on their own edit), perform
      * zero redos and return {@link #BLOCK_REASON_HUMAN_EDIT}; for {@code steps > 1}, stop without
@@ -319,7 +399,7 @@ public class MutationDispatcher {
 
     /**
      * Block-reason marker meaning "refused because the top-of-stack entry is the human's"
-     * (the betrayal guard, D4). Carried on {@link UndoRedoState#blockedReason()} so the
+     * (the betrayal guard). Carried on {@link UndoRedoState#blockedReason()} so the
      * handler can emit a distinct diagnostic rather than collapsing it into "Nothing to undo".
      */
     public static final String BLOCK_REASON_HUMAN_EDIT = "HUMAN_EDIT";
@@ -362,7 +442,7 @@ public class MutationDispatcher {
     /**
      * As {@link #beginBatch(String, String)} but carrying the optional agent-supplied {@code intent}.
      * The intent is recorded on the session's {@link MutationContext} ({@code batchIntent})
-     * and kept distinct from {@code description} (the undo-history label) — never merged (design §4 D6).
+     * and kept distinct from {@code description} (the undo-history label) — never merged.
      * The server never depends on it; {@code intent} is never logged at INFO (agent free-text).
      */
     public void beginBatch(String sessionId, String description, String intent) {
@@ -398,11 +478,17 @@ public class MutationDispatcher {
         logger.info("Committing batch for session '{}' ({} queued commands)",
                 sessionId, queuedCount);
 
-        BatchSummaryDto summary = context.buildCommitSummary();
-
         if (queuedCount > 0) {
             Command compound = context.buildCompoundCommand();
             dispatchCommand(compound);
+        }
+
+        // Built after dispatch, not before: a command that declines to run at commit time
+        // only reports that once it has actually been given the chance to run.
+        BatchSummaryDto summary = context.buildCommitSummary();
+        if (summary.skippedOperations() != null) {
+            logger.warn("Batch for session '{}' committed with {} skipped operation(s): {}",
+                    sessionId, summary.skippedOperations().size(), summary.skippedOperations());
         }
 
         context.reset();
@@ -449,6 +535,297 @@ public class MutationDispatcher {
         int seq = context.queueCommand(command, description);
         logger.debug("Queued command #{} for session '{}': {}", seq, sessionId, description);
         return seq;
+    }
+
+    /**
+     * Resolves a parent view-object id against the containers a session's open batch has queued
+     * but not yet executed.
+     *
+     * <p>A queued {@code add-group-to-view} / {@code add-to-view} leaves its object detached until
+     * the batch commits, so the id handed back to the caller is not yet findable by walking the
+     * view. Callers preparing a later operation in that same batch use this to pre-resolve the
+     * parent, which is the same bridge the bulk path builds from its batch-created-parent maps.</p>
+     *
+     * <p>Returns null whenever the session is not in batch mode, so every non-batch caller keeps
+     * its existing behaviour by construction rather than by argument. Returns null too when the id
+     * names no queued container — including a queued note, image or view-reference — leaving the
+     * caller's ordinary live lookup (and its not-found error) in charge.</p>
+     *
+     * <p>The batch-mode test is delegated to the context rather than performed here, so that one
+     * map read and one locked context call decide the whole answer. A batch spans several requests
+     * on different Jetty threads, and the transport imposes no per-session serialisation, so a
+     * second lookup of the session could straddle a concurrent {@code endBatch} and return null for
+     * a container the mode check had just proved was queued.</p>
+     *
+     * @param sessionId           the session identifier
+     * @param parentViewObjectId  the requested parent id, may be null
+     * @return the queued container, or null when there is none to resolve
+     */
+    IDiagramModelContainer queuedParentContainer(String sessionId, String parentViewObjectId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedContainer(parentViewObjectId);
+    }
+
+    /**
+     * Resolves a view-object id against the objects a session's open batch has queued but not yet
+     * executed, returning the object together with the container it is destined for.
+     *
+     * <p>Where {@link #queuedParentContainer(String, String)} answers "may this id be a parent",
+     * this answers "which object does this id name" — so it admits notes, images and
+     * view-references as well as groups and elements. Callers preparing an update in the same batch
+     * use it in place of a live lookup, which cannot see an object whose add has not executed.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, for the same reason as its sibling: a mode test
+     * and a queue scan split across two reads could be separated by a concurrent {@code end-batch},
+     * making the second read miss an object the first had just proved was queued. The mode test is
+     * inside {@link MutationContext#queuedViewObject(String)}, under that context's own lock.</p>
+     *
+     * @param sessionId    the session identifier
+     * @param viewObjectId the requested object id, may be null
+     * @return the queued object and its destined parent, or null when there is none to resolve
+     */
+    QueuedViewObject queuedViewObject(String sessionId, String viewObjectId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedViewObject(viewObjectId);
+    }
+
+    /**
+     * Resolves a view id against the views a session's open batch has queued but not yet created.
+     *
+     * <p>Its siblings above answer for objects an {@code add-*-to-view} builds; this answers for the
+     * diagram itself. {@code create-view} hands back a real id at prepare time but attaches the view
+     * to its folder only when the command executes, which inside a batch is at commit, so a later
+     * {@code add-*-to-view} naming that id cannot find it by walking committed containment. Callers
+     * pass the result into the {@code batchView} slot the bulk path already fills from its
+     * back-reference maps.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedCreatedView(String)} under that context's own lock — same TOCTOU
+     * reasoning as its siblings: a mode test and a queue scan split across two reads could be
+     * separated by a concurrent {@code end-batch}, making the second read miss a view the first had
+     * just proved was queued.</p>
+     *
+     * @param sessionId the session identifier
+     * @param viewId    the requested view id, may be null
+     * @return the queued view, or null when there is none to resolve
+     */
+    IArchimateDiagramModel queuedCreatedView(String sessionId, String viewId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedCreatedView(viewId);
+    }
+
+    /**
+     * Resolves an element id against the elements a session's open batch has queued but not yet
+     * created.
+     *
+     * <p>The model-object sibling of {@link #queuedCreatedView(String, String)}: {@code
+     * create-element} also hands back a real id at prepare time while deferring the folder
+     * attachment to commit, so an {@code add-to-view} naming a just-created element could not find
+     * it either. Together the two close the gap that stopped an agent building a view from scratch
+     * inside one batch.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedCreatedElement(String)} under that context's own lock — same
+     * TOCTOU reasoning as its siblings.</p>
+     *
+     * @param sessionId the session identifier
+     * @param elementId the requested element id, may be null
+     * @return the queued element, or null when there is none to resolve
+     */
+    IArchimateElement queuedCreatedElement(String sessionId, String elementId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedCreatedElement(elementId);
+    }
+
+    /**
+     * Resolves a relationship id against the relationships a session's open batch has queued but
+     * not yet created.
+     *
+     * <p>Completes the create-then-use family for connections. {@code create-relationship} defers
+     * its {@code connect()} and its folder attachment to commit, so an {@code add-connection-to-view}
+     * naming a just-created relationship found nothing in containment and refused — a batch could
+     * make a relationship and not draw it.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedCreatedRelationship(String)} under that context's own lock —
+     * same TOCTOU reasoning as its siblings.</p>
+     *
+     * @param sessionId      the session identifier
+     * @param relationshipId the requested relationship id, may be null
+     * @return the queued relationship, or null when there is none to resolve
+     */
+    IArchimateRelationship queuedCreatedRelationship(String sessionId, String relationshipId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedCreatedRelationship(relationshipId);
+    }
+
+    /**
+     * The element at a relationship's source end, whether the relationship is live or still queued.
+     *
+     * <p>A live relationship answers for itself. A queued one cannot: {@code create-relationship}
+     * defers {@code connect()} to commit, so its own source and target read null for the whole
+     * window in which an agent can name it — and a caller reading them directly gets a
+     * {@code NullPointerException} rather than a diagnosis. The ends come off the queued create
+     * instead, which knows exactly what it is going to connect.</p>
+     *
+     * @param sessionId    the session identifier
+     * @param relationship the relationship to read, live or queued
+     * @return the source element, or null when neither the relationship nor a queued create knows it
+     */
+    IArchimateElement relationshipSource(String sessionId, IArchimateRelationship relationship) {
+        if (relationship.getSource() instanceof IArchimateElement live) {
+            return live;
+        }
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedRelationshipEnd(relationship.getId(), true);
+    }
+
+    /** The target end, for the same reason as {@link #relationshipSource(String, IArchimateRelationship)}. */
+    IArchimateElement relationshipTarget(String sessionId, IArchimateRelationship relationship) {
+        if (relationship.getTarget() instanceof IArchimateElement live) {
+            return live;
+        }
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedRelationshipEnd(relationship.getId(), false);
+    }
+
+    /**
+     * Resolves a view-object id against the queued objects that are eligible to be a
+     * <em>connection endpoint on {@code view}</em>.
+     *
+     * <p>{@link #queuedViewObject(String, String)} answers "which object does this id name", and
+     * admits groups, notes, images and view-references along with elements, on any view. An
+     * endpoint has to be an {@link IDiagramModelArchimateObject} — it is the element behind the
+     * object that the relationship is validated against — and it has to be destined for the view
+     * the connection is being drawn on, which is the scope the live lookup this stands in for has
+     * always had.</p>
+     *
+     * <p>Both narrowings live below the call site so a queued group, or an object this batch is
+     * placing on a different view, keeps taking the ordinary not-found path with the message it has
+     * always had. A lookup that quietly widened either the accepted kinds or the accepted view
+     * would be worse than the throw: the second would build a connection whose two ends land on
+     * different diagrams.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedConnectionEnd(String, IArchimateDiagramModel)} under that
+     * context's own lock — same TOCTOU reasoning as its siblings.</p>
+     *
+     * @param sessionId    the session identifier
+     * @param viewObjectId the requested object id, may be null
+     * @param view         the view the connection is being drawn on
+     * @return the queued object when it can be an endpoint on {@code view}, else null
+     */
+    IDiagramModelArchimateObject queuedConnectionEnd(String sessionId, String viewObjectId,
+            IArchimateDiagramModel view) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedConnectionEnd(viewObjectId, view);
+    }
+
+    /**
+     * Resolves a connection id against the connections a session's open batch has queued but not
+     * yet connected.
+     *
+     * <p>The last of the family: {@code add-connection-to-view} hands back a real id at prepare
+     * time but joins the connection to its endpoints only when the command executes, which inside a
+     * batch is at commit, so a later {@code update-view-connection} naming that id cannot find it
+     * by walking committed containment. Callers pass the result into the {@code batchConnection}
+     * slot the bulk path already fills from its back-reference maps.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedViewConnection(String)} under that context's own lock — same
+     * TOCTOU reasoning as its siblings: a mode test and a queue scan split across two reads could
+     * be separated by a concurrent {@code end-batch}, making the second read miss a connection the
+     * first had just proved was queued.</p>
+     *
+     * @param sessionId        the session identifier
+     * @param viewConnectionId the requested connection id, may be null
+     * @return the queued connection, or null when there is none to resolve
+     */
+    IDiagramModelArchimateConnection queuedViewConnection(String sessionId, String viewConnectionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedViewConnection(viewConnectionId);
+    }
+
+    /**
+     * The {@code object id → destined parent} containment a session's open batch has queued but not
+     * yet executed, or null when the session is not in a batch.
+     *
+     * <p>Its siblings above answer about one id; a parent-fit cascade needs the whole picture,
+     * because growing a queued group to fit its child asks the same question again of that group's
+     * own container, and again above it. Handing the walk this map lets it climb through however
+     * many queued hops the batch has built, off one scan.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedParents()} under that context's own lock — same TOCTOU reasoning
+     * as its siblings.</p>
+     *
+     * @param sessionId the session identifier
+     * @return the queued containment, or null when the session has no open batch
+     */
+    Map<String, IDiagramModelContainer> queuedParents(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedParents();
+    }
+
+    /**
+     * The {@code object id → effective bounds} a session's open batch has queued but not yet
+     * executed, or null when the session is not in a batch.
+     *
+     * <p>The geometry counterpart of {@link #queuedParents(String)}. A prepare inside a batch reads
+     * a model where none of the batch's own commands have run, so an object an earlier operation
+     * re-sized still reports its pre-batch bounds; two operations growing one shared container both
+     * measure from that stale value and the later overwrites the earlier. Measuring against this map
+     * instead makes the earlier operation's result a floor for the later one.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedBounds()} under that context's own lock — same TOCTOU reasoning
+     * as its siblings.</p>
+     *
+     * @param sessionId the session identifier
+     * @return the queued geometry, or null when the session has no open batch
+     */
+    Map<String, int[]> queuedBounds(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedBounds();
+    }
+
+    /**
+     * The {@code connection id → label visibility} a session's open batch has queued but not yet
+     * executed, or null when the session is not in a batch.
+     *
+     * <p>The label-visibility counterpart of {@link #queuedBounds(String)}, and it exists for the
+     * same prepare/execute reason: a label an earlier queued operation hides still reads as visible
+     * to a routing pass built later in the same batch.</p>
+     *
+     * @param sessionId the session identifier
+     * @return the queued label visibility, or null when the session has no open batch
+     */
+    Map<String, Boolean> queuedLabelVisibility(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedLabelVisibility();
+    }
+
+    /**
+     * The {@code object id → anchor} a session's open batch has queued but not yet applied, or null
+     * when the session is not in a batch.
+     *
+     * <p>The third of the same family. {@link #queuedBounds(String)} answers where the batch has put
+     * things; this answers what the batch has declared about the things whose position is not a
+     * number but a relationship. An anchor is persisted on the anchored object as feature entries
+     * written by that object's own command at {@code execute()}, so while the batch is open the
+     * commit-time cascade — which reads those features to find who must follow a target it is about
+     * to move — cannot see an anchor the batch has queued and therefore emits no move for it.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedAnchors()} under that context's own lock — same TOCTOU reasoning
+     * as its siblings.</p>
+     *
+     * @param sessionId the session identifier
+     * @return the queued anchors, or null when the session has no open batch
+     */
+    Map<String, String[]> queuedAnchors(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedAnchors();
     }
 
     /**
@@ -500,6 +877,39 @@ public class MutationDispatcher {
      */
     public boolean isApprovalRequired(String sessionId) {
         return approvalModeProvider.isApprovalModeOn();
+    }
+
+    /**
+     * Resolves which dispatch arm a mutation submitted on this session will take.
+     *
+     * <p><strong>The ordering is the contract, not an implementation detail.</strong> Approval is
+     * checked first because the accessor's gates are ordered that way: every tool tests
+     * {@code isApprovalRequired} and returns a proposal <em>before</em> it reaches
+     * {@code dispatchOrQueue}, so a session that is both in approval mode and inside an open batch
+     * proposes rather than queues. Reading the batch mode first would invert that and hand every
+     * such call a disclosure describing a queue entry that was never made.</p>
+     *
+     * <p>Both reads are pure session-mode lookups with no side effects, which is what lets a
+     * disclosure be composed for the right arm at the moment the finding is measured rather than
+     * re-derived at the return.</p>
+     *
+     * <p><strong>This is a read, not a reservation, and the caller owns the gap.</strong> No code
+     * path between a caller's emit and its own dispatch changes the session mode — but the approval
+     * bit is not owned by the code. {@code ApprovalMode} holds it {@code volatile} precisely
+     * because the UI thread writes it while Jetty threads read it, so a human toggling the gate can
+     * move it underneath a computation already in flight; on a large view that window is seconds,
+     * not microseconds. Nothing here pins the value for the duration of a request. A caller that
+     * resolves the arm early and then gates on a second, later read of the same flag is relying on
+     * the human not to touch it mid-call — which is a real, if narrow, way for a disclosure to
+     * describe one arm on a response that took the other. Closing it means snapshotting the arm
+     * once per request and having the dispatch gate consult that snapshot rather than the flag.</p>
+     *
+     * @param sessionId the session identifier
+     * @return the arm a mutation dispatched on this session would take right now
+     */
+    public DispatchArm armFor(String sessionId) {
+        return DispatchArm.of(isApprovalRequired(sessionId),
+                getMode(sessionId) == OperationalMode.BATCH);
     }
 
     /**
@@ -696,6 +1106,16 @@ public class MutationDispatcher {
      * the human to read and Reject, rather than the card vanishing on the queue-changed repaint before the
      * reason can be seen. Only a successful rebuild removes the proposal and dispatches it.</p>
      *
+     * <p><strong>And the rebuilt command must still match the card.</strong> Three artefacts have to agree
+     * for this gate to mean anything: the card the human read, the command that runs, and the model both
+     * were measured against. The staleness guard reconciles the last two; it cannot reconcile the first,
+     * because the card is a propose-time photograph and the guard only fingerprints a target's own
+     * attributes. A destructive proposal whose cascade grew during the review window therefore vets as
+     * fresh while rebuilding into something bigger than the human authorised — so it is checked explicitly
+     * and refused. The gate is only as honest as the narrowest of the three. The check compares counts,
+     * not identities, so a cascade whose membership changed without changing size still passes; see
+     * {@link DeleteApprovalCardText#cascadeDivergence}.</p>
+     *
      * @param sessionId  the session identifier
      * @param proposalId the proposal to approve
      * @return ApprovalResult with entity and optional batch sequence, or null if not found
@@ -714,14 +1134,27 @@ public class MutationDispatcher {
         // card on screen with its named reason). (1) Reject-stale if the human edited/removed a
         // targeted object since propose, naming what they touched. (2) Rebuild fresh against the
         // CURRENT model via the shared ProposalBuilder (same prepareXxx the immediate path runs, so no
-        // drift); an unrebuildable target also surfaces as stale here. (3) Only now remove from the queue
+        // drift); an unrebuildable target also surfaces as stale here. (2b) Refuse if the rebuilt command's
+        // blast radius no longer matches the one printed on the card. (3) Only now remove from the queue
         // and dispatch through the same seam as immediate ops, preserving the agent-authored tag.
-        ProposalStalenessGuard.StaleVerdict verdict = stalenessGuard.vet(proposal.capture());
+        ProposalStalenessGuard.StaleVerdict verdict = stalenessGuard.vet(proposal.capture(),
+                id -> queuedAny(sessionId, id));
         if (verdict.stale()) {
             logger.info("Proposal '{}' rejected as stale (kept in queue): {}", proposalId, verdict.reason());
             throw new MutationException(verdict.reason());
         }
         PreparedMutation<?> fresh = proposalBuilder.rebuild(proposal); // may throw stale — proposal still queued
+        // (2b) The card the human read is a propose-time photograph; the command just rebuilt measured the
+        // model again. For a destructive proposal those two can disagree in the direction that removes more
+        // than was authorised, and the staleness guard cannot see it (an attribute fingerprint does not move
+        // when a folder gains contents). Refuse rather than silently over-delete. Thrown BEFORE
+        // removeProposal for the same reason as the arms above: the card must stay on screen with its reason.
+        String divergence = DeleteApprovalCardText.cascadeDivergence(proposal.proposedChanges(), fresh.entity());
+        if (divergence != null) {
+            logger.info("Proposal '{}' refused (kept in queue): the reviewed card no longer describes what "
+                    + "approving would do: {}", proposalId, divergence);
+            throw new MutationException(divergence);
+        }
         removeProposal(sessionId, proposalId); // commit point: fresh command built, now drain + dispatch
         Integer batchSeq = dispatchApproved(sessionId, fresh.command(), proposal.description());
         // Prefer the freshly re-resolved entity (e.g. a create's real new id) over the propose-time DTO.

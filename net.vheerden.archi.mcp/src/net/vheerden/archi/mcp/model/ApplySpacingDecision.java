@@ -18,9 +18,9 @@ package net.vheerden.archi.mcp.model;
  *
  * <p><strong>Inflation-knee guard.</strong> The clamp values
  * ({@value #ELEMENT_KNEE_LIMIT_PX}px element / {@value #GROUP_KNEE_LIMIT_PX}px
- * inter-group) come from the H1 spacing diagnostic
+ * inter-group) come from the spacing diagnostic
  * ("Post-empirical diagnostic", 2026-05-06):
- * cumulative +80 elem / +100 group / +60 pad drove the H1 view's coincSeg
+ * cumulative +80 elem / +100 group / +60 pad drove the diagnosed view's coincSeg
  * from 10 → 1; beyond that cumulative-from-current point, passThroughs /
  * nonOrthogonalTerminals / xings-per-connection regressed. The composed
  * tool's distinctive value-prop is enforcing the knee per-call; the
@@ -58,9 +58,11 @@ package net.vheerden.archi.mcp.model;
  *                                     proposedGroupDelta} (clamp fired);
  *                                     surfaced in response DTO
  * @param shouldCallAdjustViewSpacing  true on the apply path, false on every
- *                                     short-circuit (both-zero structural-
- *                                     impossibility, both-zero heuristic-
- *                                     already-met, dryRun)
+ *                                     short-circuit: both-zero structural-
+ *                                     impossibility, both-zero corridor-
+ *                                     between-containers-neither-arm-
+ *                                     positions, both-zero heuristic-
+ *                                     already-met, dryRun
  * @param noChangeReason               populated on every short-circuit branch
  *                                     except dryRun (dryRun is a deliberate
  *                                     preview — it has a recommendation but
@@ -78,12 +80,12 @@ public record ApplySpacingDecision(
         String noChangeReason) {
 
     /** Maximum element-spacing delta this tool will apply in a single call
-     *  (from the H1 spacing diagnostic 2026-05-06). Any future
+     *  (from the spacing diagnostic 2026-05-06). Any future
      *  revision MUST edit {@code ApplySpacingRecommendationsToolTest}. */
     public static final int ELEMENT_KNEE_LIMIT_PX = 80;
 
     /** Maximum inter-group-spacing delta this tool will apply in a single
-     *  call (from the H1 spacing diagnostic 2026-05-06). Any
+     *  call (from the spacing diagnostic 2026-05-06). Any
      *  future revision MUST edit {@code ApplySpacingRecommendationsToolTest}. */
     public static final int GROUP_KNEE_LIMIT_PX = 100;
 
@@ -108,7 +110,9 @@ public record ApplySpacingDecision(
      * @param scope                         one of "both" / "element" / "group"
      * @param connectionCount               total view connection count
      * @param interGroupConnectionCount     count of connections crossing a
-     *                                      top-level group boundary
+     *                                      top-level container boundary — a
+     *                                      native view group and an ArchiMate
+     *                                      {@code Grouping} element alike
      * @param currentElementSpacingPx       min per-group element spacing (most-
      *                                      tight wins); irrelevant when
      *                                      {@code !hasGroupWithMultipleChildren}
@@ -135,6 +139,21 @@ public record ApplySpacingDecision(
      *                                      {@code elementTargetSpacing}
      * @param hasGroupTargetOverride        true when caller provided explicit
      *                                      {@code groupTargetSpacing}
+     * @param elementContainersNotPositionedReason the element arm's refusal,
+     *                                      built by
+     *                                      {@code SpacingEntryGuardTermination},
+     *                                      when this tool's element step has
+     *                                      none of the view's own containers
+     *                                      to space inside; null otherwise
+     * @param groupContainersNotPositionedReason the group arm's refusal, built
+     *                                      the same way, when the corridor
+     *                                      lies between containers this tool's
+     *                                      group step does not move; null
+     *                                      otherwise. Per-arm because the two
+     *                                      steps need different numbers of the
+     *                                      view's own containers before they
+     *                                      have work — one to space inside,
+     *                                      two to widen between
      * @return decision describing the chosen branches + clamped deltas
      */
     public static ApplySpacingDecision decide(
@@ -151,7 +170,9 @@ public record ApplySpacingDecision(
             boolean hasAtLeast2TopLevelGroups,
             boolean isConnected,
             boolean hasElementTargetOverride,
-            boolean hasGroupTargetOverride) {
+            boolean hasGroupTargetOverride,
+            String elementContainersNotPositionedReason,
+            String groupContainersNotPositionedReason) {
 
         if (scope == null
                 || (!SCOPE_BOTH.equals(scope)
@@ -174,7 +195,13 @@ public record ApplySpacingDecision(
         String elementReason = null;
 
         if (elementInScope) {
-            if (!hasNonEmptyGroups) {
+            // First in the arm, for the reason ApplyElementSpacingDecision inverts its own order:
+            // both branches below are computed from the view's own populated children and are
+            // therefore already true on a view whose zones all sit inside a host, where they say
+            // something false about it.
+            if (elementContainersNotPositionedReason != null) {
+                elementReason = "element: " + elementContainersNotPositionedReason;
+            } else if (!hasNonEmptyGroups) {
                 elementReason = "element: view has no groups; spacing not "
                         + "applicable on flat views (use update-view-object "
                         + "for surgical edits or arrange-groups to introduce "
@@ -217,6 +244,11 @@ public record ApplySpacingDecision(
                         + "inter-group spacing not adjustable (a view needs "
                         + "at least two top-level groups before there is a "
                         + "between-group corridor to widen)";
+            } else if (groupContainersNotPositionedReason != null) {
+                // After the fewer-than-two test and before the delta, mirroring
+                // ApplyGroupSpacingDecision exactly — the two must not order one view's
+                // structural refusals differently.
+                groupReason = "group: " + groupContainersNotPositionedReason;
             } else {
                 proposedGroupDelta = Math.max(0,
                         groupTargetSpacingPx - currentGroupSpacingPx);

@@ -75,7 +75,7 @@ public class ApplySpacingRecommendationsToolTest {
                 elementTarget, groupTarget, dryRun,
                 hasNonEmptyGroups, hasGroupWithMultipleChildren,
                 hasAtLeast2TopLevelGroups, isConnected,
-                hasElementOverride, hasGroupOverride);
+                hasElementOverride, hasGroupOverride, null, null);
     }
 
     // ============================================================

@@ -539,6 +539,61 @@ public class ParallelConnectionGapMetricTest {
                 2, v.narrowGapCount40());
     }
 
+    /**
+     * The discriminating H-axis case. Every other H assertion in this class is a degenerate zero —
+     * a diagonal that classifies nothing, or an empty connection list — so all of them stay green
+     * whether the H axis is measured correctly, measured wrongly, or not published at all.
+     *
+     * <p>Two horizontal segments 20 px apart and fully overlapping put a nonzero value on both the
+     * detail record and the top-level count, which is the only shape that can tell a real
+     * measurement from a field wired to a constant zero.</p>
+     */
+    @Test
+    public void twoParallelHorizontalSegments_overlapping_populateTheTopLevelHCount() {
+        // Two H segments at y=100 and y=120 (perpendicular distance 20 px), both spanning
+        // x ∈ [0, 200] (full overlap) — the H mirror of the V case above.
+        AssessmentConnection a = conn("hA",
+                new double[]{0, 100},
+                new double[]{200, 100});
+        AssessmentConnection b = conn("hB",
+                new double[]{0, 120},
+                new double[]{200, 120});
+
+        LayoutAssessmentResult result = assessor.assess(
+                twoPlaceholderNodes(), List.of(a, b), true);
+
+        LayoutAssessmentResult.ParallelConnectionGapAxisDetail h =
+                result.parallelConnectionGapDetail().hAxis();
+        assertEquals("Two overlapping parallel H segments: qualifyingSegmentCount = 2",
+                2, h.qualifyingSegmentCount());
+        assertEquals("H narrowGapCount@25 = 2 (gap 20 < 25, both segments contribute)",
+                2, h.narrowGapCount25());
+
+        assertEquals("the top-level H count must carry the same measurement the detail record "
+                        + "already holds — it was measured all along and published nowhere",
+                2, result.hAxisParallelGapNarrow25Count());
+    }
+
+    /**
+     * And the top-level count is zero when the H axis has nothing narrow, so the pin above cannot
+     * pass on a field that always reports a nonzero.
+     */
+    @Test
+    public void twoWidelySpacedHorizontalSegments_leaveTheTopLevelHCountAtZero() {
+        AssessmentConnection a = conn("hA",
+                new double[]{0, 100},
+                new double[]{200, 100});
+        AssessmentConnection b = conn("hB",
+                new double[]{0, 300},
+                new double[]{200, 300});
+
+        LayoutAssessmentResult result = assessor.assess(
+                twoPlaceholderNodes(), List.of(a, b), true);
+
+        assertEquals("a 200 px gap is nowhere near the 25 px threshold",
+                0, result.hAxisParallelGapNarrow25Count());
+    }
+
     @Test
     public void coincidentAxisOverlap_yieldsZeroGap() {
         // Two V segments at IDENTICAL x=100, both spanning y ∈ [0, 200]. Same-fixed-coord

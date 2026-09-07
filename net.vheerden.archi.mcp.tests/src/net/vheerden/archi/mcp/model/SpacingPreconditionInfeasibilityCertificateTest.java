@@ -294,4 +294,200 @@ public class SpacingPreconditionInfeasibilityCertificateTest {
         assertNotNull(infeasible.reflowOffer());
         assertFalse(infeasible.reflowOffer().isBlank());
     }
+
+    // =================================================================
+    // 2.5 — VIEWPOINT-AWARE remedy (the offered next step, NOT the
+    //       infeasibility detection). On a viewpoint whose element ORDER
+    //       carries meaning (a roadmap's chronological axis), a structural
+    //       auto-layout reorders by connectivity and would scramble that
+    //       axis — so the reorder offer must not be made there. Detection
+    //       is byte-untouched; ONLY the remedy branches.
+    // =================================================================
+
+    /**
+     * The EXACT remedy tail shipped before the viewpoint branch existed —
+     * pinned as a literal so "non-timeline views are byte-identical" is a
+     * real byte assertion and not a paraphrase that drifts with the source.
+     */
+    private static final String LEGACY_REMEDY_TAIL =
+            "The control loop was NOT entered (a bounded spacing/hub nudge "
+            + "provably cannot lift this input into the regime) and this "
+            + "layout was NOT auto-reflowed (a structural reflow grows the "
+            + "canvas and moves user-placed elements — an explicit-consent "
+            + "boundary). OFFERED next step (requires your consent): "
+            + "re-layout this view with a structural auto-layout (which "
+            + "grows the canvas), then re-run auto-route-connections. The "
+            + "current view is preserved unchanged (no degraded layout was "
+            + "applied).";
+
+    private static Decision stWithViewpoint(String viewpointType) {
+        return SpacingPreconditionInfeasibilityCertificate.evaluate(
+                23, ST_AREA, ST_AVG_BOX, /*measuredAvgSpacingPx=*/ 60.0,
+                /*hubW=*/ 214, /*hubH=*/ 68, /*hubConns=*/ 7, viewpointType);
+    }
+
+    @Test
+    public void forbidsReordering_isTrue_onlyForTheOrderedAxisViewpoints() {
+        // The set, from Archi's own viewpoints.xml. `migration` holds exactly
+        // {Gap, Plateau} — the chronological plateau spine — so it carries
+        // the identical harm as implementation_migration.
+        assertTrue(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("implementation_migration"));
+        assertTrue(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("migration"));
+        // Everything else reorders safely — incl. absent/blank (a
+        // general-purpose view; undetectable ⇒ today's behaviour, Type-II safe).
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering(null));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering(""));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("layered"));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("implementation_deployment"));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("project"));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("value_stream"));
+    }
+
+    @Test
+    public void forbidsReordering_toleratesCaseAndSurroundingWhitespace() {
+        assertTrue(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("  Implementation_Migration  "));
+        assertTrue(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("MIGRATION"));
+        // Near-misses must NOT fire (no substring matching).
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("migration_planning"));
+        assertFalse(SpacingPreconditionInfeasibilityCertificate
+                .forbidsReordering("pre_migration"));
+    }
+
+    @Test
+    public void offer_onOrderedAxisViewpoint_neverOffersAReorderingReflow() {
+        for (String vp : new String[] {"implementation_migration",
+                "migration"}) {
+            String offer = stWithViewpoint(vp).reflowOffer();
+            assertNotNull(offer);
+            // The bug: this exact reorder offer is what the roadmap modeller
+            // had to reason PAST. It must be gone on these viewpoints.
+            assertFalse("[" + vp + "] must not offer a structural auto-layout"
+                            + " re-layout as the next step",
+                    offer.contains("OFFERED next step (requires your consent):"
+                            + " re-layout this view with a structural "
+                            + "auto-layout"));
+            // ...and it must say WHY, so the agent does not simply go and do
+            // it anyway via another tool.
+            assertTrue("[" + vp + "] must warn that a connectivity reflow "
+                            + "would scramble the ordered axis",
+                    offer.toLowerCase().contains("reorder")
+                            || offer.toLowerCase().contains("order"));
+        }
+    }
+
+    @Test
+    public void offer_onOrderedAxisViewpoint_namesTheAxisPreservingRemedy() {
+        String offer = stWithViewpoint("implementation_migration")
+                .reflowOffer();
+        // The remedy the NovaBank modeller had to find unaided: resize the
+        // dominant hub the diagnosis ALREADY names (214x68 absorbing 7).
+        assertTrue("must still name the dominant hub extent",
+                offer.contains("214") && offer.contains("68"));
+        assertTrue("must still name the hub fan-out", offer.contains("7"));
+        // Shared offer shape is retained (consent-gated, view preserved).
+        assertTrue("must stay consent-gated",
+                offer.toLowerCase().contains("consent"));
+        assertTrue("must state the view is preserved unchanged",
+                offer.toLowerCase().contains("preserved")
+                        || offer.toLowerCase().contains("not auto"));
+        // Still an OFFER of a next step — rewording must not strip the
+        // affordance and leave the modeller at a dead end.
+        assertTrue("must still offer an actionable next step",
+                offer.contains("OFFERED"));
+        assertFalse("must not over-claim success",
+                offer.toLowerCase().contains("reflow will succeed"));
+    }
+
+    @Test
+    public void offer_onOrderedAxisViewpoint_isWellFormed_whenHubIsAbsent() {
+        // Hub is OFFER-wording only and may be null; the axis-preserving
+        // branch must not NPE or emit a dangling "resize the null hub".
+        Decision d = SpacingPreconditionInfeasibilityCertificate.evaluate(
+                23, ST_AREA, ST_AVG_BOX, 60.0, null, null, null,
+                "implementation_migration");
+        assertTrue(d.shortCircuit());
+        String offer = d.reflowOffer();
+        assertNotNull(offer);
+        assertFalse(offer.isBlank());
+        assertFalse("no null leakage into user-facing copy",
+                offer.contains("null"));
+        // The hub sentence is what remedy (1) refers to — with no hub there is
+        // exactly ONE remedy, so the copy must not promise two and deliver one
+        // (that reads as truncated output to the agent consuming it).
+        assertFalse("must not dangle a (2) it never emits",
+                offer.contains("(2)"));
+        assertFalse("must not promise 'both' remedies when only one is offered",
+                offer.toLowerCase().contains("both"));
+        assertTrue("single-remedy copy must stay singular",
+                offer.contains("OFFERED next step (requires your consent)"));
+        // The one remedy that survives is still the order-preserving one.
+        assertTrue("must still offer the axis-preserving grow",
+                offer.contains("grow the view along its ordered axis"));
+    }
+
+    @Test
+    public void offer_onOrderedAxisViewpoint_isCoherentlyPlural_whenHubIsPresent() {
+        // Mirror of the hub-absent pin: with a hub there ARE two remedies, so
+        // the plural intro must agree with an actually-emitted (1) and (2).
+        String offer = stWithViewpoint("implementation_migration")
+                .reflowOffer();
+        assertTrue("must emit remedy (1)", offer.contains("(1)"));
+        assertTrue("must emit remedy (2)", offer.contains("(2)"));
+        assertTrue("plural intro must agree with the two emitted remedies",
+                offer.contains("OFFERED next steps (each requires your "
+                        + "consent), both of which preserve the existing "
+                        + "element order:"));
+    }
+
+    @Test
+    public void offer_onNonOrderedViewpoints_isByteIdenticalToLegacy() {
+        // Zero behaviour change outside the reorder-forbidding set.
+        String legacySevenArg = SpacingPreconditionInfeasibilityCertificate
+                .evaluate(23, ST_AREA, ST_AVG_BOX, 60.0, 214, 68, 7)
+                .reflowOffer();
+        assertTrue("the retained 7-arg overload must still emit the shipped "
+                        + "remedy verbatim",
+                legacySevenArg.endsWith(LEGACY_REMEDY_TAIL));
+
+        for (String vp : new String[] {null, "", "layered", "motivation",
+                "implementation_deployment", "project", "value_stream",
+                "technology_usage"}) {
+            assertEquals("[" + String.valueOf(vp) + "] offer must be "
+                            + "byte-identical to the shipped text",
+                    legacySevenArg, stWithViewpoint(vp).reflowOffer());
+        }
+    }
+
+    @Test
+    public void detection_isUntouchedByViewpoint() {
+        // The geometric infeasibility determination is unchanged — the
+        // viewpoint keys the REMEDY only, never whether we fire.
+        for (String vp : new String[] {null, "implementation_migration",
+                "migration", "layered"}) {
+            // ST fires regardless...
+            assertTrue("[" + String.valueOf(vp) + "] ST must still "
+                            + "short-circuit",
+                    stWithViewpoint(vp).shortCircuit());
+            assertEquals(SpacingPreconditionInfeasibilityCertificate
+                            .REASON_DENSITY_PRECONDITION_REFLOW_REQUIRED,
+                    stWithViewpoint(vp).terminationReason());
+            // ...and feasible HH must NEVER be made to fire by a viewpoint.
+            Decision hh = SpacingPreconditionInfeasibilityCertificate.evaluate(
+                    23, HH_AREA, HH_AVG_BOX, 161.5, null, null, null, vp);
+            assertFalse("[" + String.valueOf(vp) + "] HH must not "
+                    + "short-circuit", hh.shortCircuit());
+            assertNull(hh.reflowOffer());
+        }
+    }
 }

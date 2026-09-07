@@ -42,6 +42,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                            populated, the agent must apply these manually (typically
  *                            by resolving the underlying overlap via layout-within-group
  *                            and re-running auto-route-connections).
+ * @param hiddenLabels        connections whose label the label policy hid because it had no
+ *                            collision-free position, each named by connection ID with a reason;
+ *                            omitted when empty. Never a count and never truncated — a caller that
+ *                            cannot see the canvas must be able to restore or audit each one
+ *                            individually. Empty whenever the policy was not requested.
  * @param nudgeBlockedReason  canonical reason the autoNudge was blocked;
  *                            omitted (null) when nudge was not requested or ran to
  *                            completion. Current value: {@code "sibling_overlap"}.
@@ -89,7 +94,9 @@ public record AutoRouteResultDto(
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
         List<MoveRecommendationDto> blockedRecommendations,
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        String nudgeBlockedReason) {
+        String nudgeBlockedReason,
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<HiddenLabelDto> hiddenLabels) {
 
     /** Compact constructor: null-guard list fields. */
     public AutoRouteResultDto {
@@ -102,6 +109,25 @@ public record AutoRouteResultDto(
         structuredWarnings = structuredWarnings != null ? structuredWarnings : List.of();
         blockedRecommendations = blockedRecommendations != null ? blockedRecommendations : List.of();
         // nudgeBlockedReason may legitimately be null (omitted from JSON); no guard needed.
+        hiddenLabels = hiddenLabels != null ? hiddenLabels : List.of();
+    }
+
+    /**
+     * Returns a copy carrying the given hidden-label list.
+     *
+     * <p>Exists so the list can be attached <em>after</em> the write, once the model has actually
+     * been mutated: on the immediate path the reported set is re-read from the model rather than
+     * echoed from what the policy intended to do. On the deferred paths nothing has been written
+     * yet, so what travels here is a projection — and the response envelope nests the whole entity
+     * under {@code preview} there, which is what marks it as not-yet-effective.</p>
+     */
+    public AutoRouteResultDto withHiddenLabels(List<HiddenLabelDto> hidden) {
+        return new AutoRouteResultDto(viewId, connectionsRouted, connectionsFailed, strategy,
+                routerTypeSwitched, labelsOptimized, crossingsBefore, crossingsAfter,
+                straightLineCrossings, connectionsSkipped, vetoedByObstacle, vetoedByCrossing,
+                vetoedByInterior, vetoedByZigzag, warnings, failed, recommendations, violations,
+                nudgedElements, resizedGroups, structuredWarnings, blockedRecommendations,
+                nudgeBlockedReason, hidden);
     }
 
     /**
@@ -130,7 +156,7 @@ public record AutoRouteResultDto(
                 vetoedByInterior, vetoedByZigzag,
                 warnings, failed, recommendations, violations,
                 nudgedElements, resizedGroups, structuredWarnings,
-                List.of(), null);
+                List.of(), null, List.of());
     }
 
     /**
@@ -170,7 +196,8 @@ public record AutoRouteResultDto(
                 resizedGroups,
                 structuredWarnings,
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -208,7 +235,8 @@ public record AutoRouteResultDto(
                 resizedGroups,
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -244,7 +272,8 @@ public record AutoRouteResultDto(
                 resizedGroups,
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -279,7 +308,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -313,7 +343,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -346,7 +377,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -379,7 +411,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -411,7 +444,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -442,7 +476,8 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 
     /**
@@ -473,7 +508,42 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
+    }
+
+    /**
+     * Convenience constructor for an early-exit result that carries both warning surfaces.
+     * Used where routing aborts before any measurement, but a coded warning has already been
+     * raised and must not be dropped on the way out.
+     */
+    public AutoRouteResultDto(String viewId, int connectionsRouted,
+            String strategy, boolean routerTypeSwitched,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        this(viewId,
+                connectionsRouted,
+                0,
+                strategy,
+                routerTypeSwitched,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                warnings,
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                structuredWarnings,
+                List.of(),
+                null,
+                List.of());
     }
 
     /**
@@ -503,6 +573,7 @@ public record AutoRouteResultDto(
                 List.of(),
                 List.of(),
                 List.of(),
-                null);
+                null,
+                List.of());
     }
 }

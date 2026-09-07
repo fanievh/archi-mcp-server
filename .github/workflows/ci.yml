@@ -1,25 +1,72 @@
 # =============================================================================
-# arch-mcp-server CI  (Story M0-2 — Track-1 CI safety-net)
+# arch-mcp-server CI  (Track-1 CI safety-net)
 #
 # WHAT THIS DOES
 #   Provisions an Archi headless runtime on a Linux GitHub runner and invokes the
-#   M0-1 headless harness (tools/run-tests.sh) UNMODIFIED on every push / PR. A
+#   headless harness (tools/run-tests.sh) UNMODIFIED on every push / PR. A
 #   non-quarantined test failure makes the build go red before it can merge.
 #
-# TWO-LANE DESIGN (declared from day one)
-#   Lane 1 — ci-junit  (ACTIVE): the pure-JUnit headless bucket
-#            (181 classes / 4082 tests). No display needed → no xvfb.
-#   Lane 2 — ci-pde    (ACTIVE since m0-2b — GROUP B subset): the 3 SWT-display
-#            classes in tools/osgi-excluded-tests.txt, run under xvfb via the
-#            UNMODIFIED M0-1 harness (tools/run-tests.sh) in explicit-FQCN mode.
-#            The 6 OSGi/Archi-runtime classes (GROUP A) remain DEFERRED — see
-#            backlog row ci-pde-osgi-pde-testapp-spike. The m0-2b SPIKE found the
+# TWO TEST LANES, PLUS PURE-SHELL GUARDS
+#   The two lanes below run the suite. Two further jobs run no tests at all and need
+#   no Archi, JDK or display — ci-ratchet (facade no-growth) and ci-sync (a generated
+#   copy still matches its source). They are separate checks for the same reason the
+#   lanes are: a failure in one must not be masked by an unrelated failure in another.
+#
+#   Lane 1 — ci-junit  (ACTIVE): the pure-JUnit headless bucket — every *Test.java
+#            MINUS tools/osgi-excluded-tests.txt. No display needed → no xvfb.
+#   Lane 2 — ci-pde    (ACTIVE): the "Group B" SWT-display classes from
+#            tools/osgi-excluded-tests.txt, run under xvfb via the UNMODIFIED
+#            harness (tools/run-tests.sh) in explicit-FQCN mode. This lane DERIVES
+#            its class list from the manifest's "Group B" block at run time, so it
+#            can never drift from the set ci-junit subtracts — add a display class
+#            to the manifest and it is picked up here automatically.
+#            The "Group A" OSGi/Archi-runtime classes remain DEFERRED: the
 #            provisioned Archi RCP ships NO PDE JUnit runtime bundles (no
 #            org.eclipse.pde.junit.runtime / jdt.junit*.runtime / org.junit), so a
 #            headless `coretestapplication` would need extra bundle provisioning
-#            the audit flagged as diminishing returns; those 6 stay owner-gated
-#            via the Eclipse AllPluginTestsRunner. Do NOT add xvfb or OSGi
-#            machinery to ci-junit (it stays the no-display pure-JUnit lane).
+#            that was judged not worth it; those stay owner-gated via the Eclipse
+#            AllPluginTestsRunner. Do NOT add xvfb or OSGi machinery to ci-junit
+#            (it stays the no-display pure-JUnit lane).
+#
+#   WHY BOTH LANES MUST BE GREEN: the two lanes are separate GitHub checks. If one
+#   lane is chronically red for an unrelated reason, a genuine NEW failure in the
+#   OTHER lane no longer changes the overall status and is easily dismissed as
+#   "the build is always red." Keep both lanes green so a red means a regression.
+#
+# ACTION PIN POLICY  (read before bumping an actions/* pin)
+#   THE RULE: every action pinned below sits on a major that runs the Node 24 runtime, and each
+#   is that action's current major as of the bump — not a uniform number, which is why two read
+#   v7 and two read v6. They were all on the v4 line, which declares node20, until GitHub put a
+#   date on that runtime: runners began defaulting to Node 24 on 2026-06-16, and Node 20 is
+#   removed on 2026-09-23. A node20 action would then fail in "Prepare all required actions" —
+#   before any step runs, and in every job at once, since all four check out. See
+#   https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+#
+#   BEFORE MOVING A MAJOR, read that action's release notes for EVERY major you skip, and check
+#   each documented change against the inputs the step below actually passes. That is the whole
+#   procedure; the bump itself is a one-word edit and is not the risky part.
+#
+#   THE TRADE-OFF, STATED HONESTLY. A bare major is a MOVING ref: the tag is repointed over
+#   time, so this file can run different action code tomorrow with no commit here. That IS the
+#   thing the ARCHI_VERSION policy below refuses to accept, and the objection applies equally
+#   here — a repointed tag can turn a lane red with no change on our side, which is exactly the
+#   "red no longer means a regression" failure the header warns about. It is accepted, not
+#   dodged, because the alternative (a commit SHA per pin) stops tracking the runtime and this
+#   file's whole problem is a runtime with an expiry date. The asymmetry is therefore a choice
+#   about WHO bears the drift: Archi is the thing under test and must not move underneath us;
+#   these actions are the harness, and a harness that silently ages out is the worse failure.
+#   IF A LANE GOES RED WITH NO DIFF, SUSPECT A REPOINTED TAG FIRST and check the action's
+#   releases page before hunting in this repository.
+#
+#   Two inputs whose behaviour is version-sensitive, checked at this bump and worth re-checking
+#   at the next one:
+#     * upload-artifact grew an `archive` input, and `archive: false` accepts a SINGLE file.
+#       Both upload steps pass a wildcard resolving to many surefire XML files, so it must stay
+#       unset (its default is true). Setting it would fail the upload, not silently skip it.
+#     * setup-java's own `cache:` input is unused here — ~/.m2 is cached by a separate
+#       actions/cache step — which is why that action's cache-related changes across majors
+#       (the wrapper/dependency cache split) reach nothing in this file. It is passed
+#       `distribution` and `java-version`, and nothing else.
 #
 # ARCHI VERSION POLICY  (read before bumping)
 #   `ARCHI_VERSION` below is the SINGLE source of truth and is PINNED on purpose.
@@ -31,11 +78,22 @@
 #       edits: run this workflow via "Run workflow" (workflow_dispatch) and type
 #       the version into the `archi_version` input.
 #     * To ADOPT it permanently once green: change the one `ARCHI_VERSION` line.
-#   Current public latest is 5.9.0 (github.com/archimatetool/archi.io/releases).
-#   The dev-box gate runs an Archi 5.10.0 NIGHTLY (no public Linux tarball yet);
-#   the M0-1 headless baseline (181/4082/PASS) reproduces byte-for-byte against
-#   public 5.9.0 — verified during M0-2 dev (zero drift). Bump to 5.10.0 here
-#   when archimatetool publishes a 5.10.0 Linux build.
+#   Current public latest is 5.10.0, published 2026-09-03, and it is what is pinned.
+#
+#   TWO THINGS TO KNOW BEFORE THE NEXT BUMP.
+#     1. The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
+#        assets keep the dots. The download step tries both forms and names both on failure.
+#     2. Only ONE release is presently published on that repo. The 5.9.0 URL this file used
+#        to pin now 404s, so the previous pin survived solely on a warm Actions cache and
+#        would have gone red, with no change on our side, the moment that cache was evicted.
+#        A pin is only reproducible while the artefact it names is still downloadable —
+#        if this job starts failing at the download step, check the releases page first.
+#
+#   5.10.0 changed a model API we call: ArchimateModelUtils.getValidRelationships returns
+#   List<EClass> where 5.9.0 returned EClass[]. The one call site is written against neither
+#   — it composes the same result from getRelationsClasses + isValidRelationship, whose
+#   signatures are identical in both — so this project compiles against either. Verified by
+#   running the full two-lane gate against a real 5.10.0 build before this bump landed.
 # =============================================================================
 name: CI
 
@@ -57,7 +115,7 @@ permissions:
 
 env:
   # ---- SINGLE SOURCE OF TRUTH for the pinned Archi version (see policy header) ----
-  ARCHI_VERSION: "5.9.0"
+  ARCHI_VERSION: "5.10.0"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -72,15 +130,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Temurin JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
 
-      # AC-5: the harness needs `zip` to strip prod.jar directory entries so
+      # The harness needs `zip` to strip prod.jar directory entries so
       # getResourceAsStream-on-a-directory matches a deployed bundle. Without it
       # the harness prints "WARN: 'zip' not found" and resource semantics diverge.
       # ubuntu-latest usually ships zip; ensure it deterministically anyway.
@@ -99,12 +157,12 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Provisioning Archi $VERSION"
 
-      # AC-3 / AC-9: cache the extracted Archi distribution, keyed on the version so
+      # Cache the extracted Archi distribution, keyed on the version so
       # a bump auto-busts it. A warm run restores ~/archi-dist and skips the ~166 MB
       # download below (the `if: cache-hit != true` guard).
       - name: Cache Archi distribution
         id: cache-archi
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/archi-dist
           key: archi-${{ runner.os }}-${{ steps.archi.outputs.version }}
@@ -115,14 +173,26 @@ jobs:
           VERSION: ${{ steps.archi.outputs.version }}
         run: |
           set -euo pipefail
-          URL="https://github.com/archimatetool/archi.io/releases/download/${VERSION}/Archi-Linux64-${VERSION}.tgz"
-          echo "Downloading $URL"
+          # The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
+          # asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases were tagged with
+          # dots. Try the underscore form first, then the dotted one, and name both if neither
+          # resolves -- a bare 404 here reads like a network fault rather than a tag rename.
           mkdir -p ~/archi-dist
-          curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"
+          downloaded=""
+          for TAG in "${VERSION//./_}" "${VERSION}"; do
+            URL="https://github.com/archimatetool/archi.io/releases/download/${TAG}/Archi-Linux64-${VERSION}.tgz"
+            echo "Trying $URL"
+            if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; break; fi
+          done
+          [ -n "$downloaded" ] || {
+            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases — check the tag name and that a Linux64 tgz asset exists for this version."
+            exit 1
+          }
+          echo "Downloaded $downloaded"
           tar xzf /tmp/archi.tgz -C ~/archi-dist
           rm -f /tmp/archi.tgz
 
-      # AC-3: ARCHI_HOME is the dir containing plugins/ (Linux layout: <extract>/Archi).
+      # ARCHI_HOME is the dir containing plugins/ (Linux layout: <extract>/Archi).
       - name: Locate ARCHI_HOME
         id: archihome
         run: |
@@ -134,21 +204,21 @@ jobs:
           echo "ARCHI_HOME=$ARCHI_HOME" >> "$GITHUB_ENV"
           echo "Archi plugin jars: $(find "$ARCHI_HOME/plugins" -name '*.jar' | wc -l) (ARCHI_HOME=$ARCHI_HOME)"
 
-      # AC-4 / AC-9: cache ~/.m2, keyed on the pinned-coordinate pom so a pin change busts it.
+      # Cache ~/.m2, keyed on the pinned-coordinate pom so a pin change busts it.
       - name: Cache Maven repository (Mockito + JUnit/Hamcrest)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository
           key: m2-${{ runner.os }}-${{ hashFiles('tools/ci/pom.xml') }}
           restore-keys: |
             m2-${{ runner.os }}-
 
-      # AC-4: populate ~/.m2 with the version-pinned Mockito stack + JUnit/Hamcrest, then
+      # Populate ~/.m2 with the version-pinned Mockito stack + JUnit/Hamcrest, then
       # provision an ECLIPSE_HOME/plugins dir holding the JUnit/Hamcrest jars under the
       # Eclipse OSGi-qualified names the harness globs (org.junit_4*.jar / org.hamcrest_*.jar).
-      # This is OQ-2 path (a): the glob is satisfied by provisioning Eclipse-named jars, so
-      # tools/run-tests.sh stays BYTE-IDENTICAL to the macOS dev box (M0-1 AC-8). Maven-Central
-      # names (junit-4.13.2.jar) would NOT match the glob — hence the copy-and-rename.
+      # The glob is satisfied by provisioning Eclipse-named jars, so tools/run-tests.sh stays
+      # BYTE-IDENTICAL to the macOS dev box. Maven-Central names (junit-4.13.2.jar) would
+      # NOT match the glob — hence the copy-and-rename.
       - name: Provision test dependencies (Mockito + Eclipse-named JUnit/Hamcrest)
         id: deps
         run: |
@@ -163,12 +233,13 @@ jobs:
           echo "ECLIPSE_HOME=$ECLIPSE_HOME" >> "$GITHUB_ENV"
           ls -1 "$ECLIPSE_HOME/plugins"
 
-      # AC-2 / AC-6 / AC-7 / AC-10: run the M0-1 harness UNMODIFIED. The script auto-discovers
+      # Run the harness UNMODIFIED. The script auto-discovers
       # every *Test.java (minus tools/osgi-excluded-tests.txt) and emits surefire XML; its exit
       # code IS the gate (non-zero on any non-quarantined failure or a testsRun==0 violation).
       #
-      # M1/S1-READY: because the harness auto-discovers *Test.java, the M1/S1 security regression
-      # test will be picked up and run here with ZERO edits to this workflow the moment it lands.
+      # SECURITY-REGRESSION-READY: because the harness auto-discovers *Test.java, the security
+      # regression test will be picked up and run here with ZERO edits to this workflow the
+      # moment it lands.
       #
       # NOTE: no -XstartOnFirstThread / no --swt / no xvfb — the Linux default path is exactly the
       # no-display pure-JUnit bucket. Do not swallow the exit code (no `|| true`).
@@ -185,20 +256,20 @@ jobs:
           RESULTS_DIR="$GITHUB_WORKSPACE/build/test-results" \
           bash tools/run-tests.sh | tee "$RUNNER_TEMP/harness.log"
 
-      # AC-8: publish the surefire XML as an artifact even when the suite is red.
+      # Publish the surefire XML as an artifact even when the suite is red.
       - name: Upload JUnit XML
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-xml
           path: build/test-results/*.xml
           if-no-files-found: warn
 
-      # AC-8: human-readable summary on the run's own (correctly green/red) job, via the job
+      # Human-readable summary on the run's own (correctly green/red) job, via the job
       # summary tab — NOT a separate check run. A third-party XML reporter (e.g. mikepenz) would
       # mark its OWN check failure on the quarantined pins (tools/known-failing-tests.txt), which
       # are emitted to XML as failing but are NON-gating — that false-red check would violate
-      # AC-7 ("must not go red merely because a class is quarantined"). The harness's own output
+      # The suite must not go red merely because a class is quarantined. The harness's own output
       # already labels [KNOWN] (quarantined) vs real failures and prints the authoritative
       # SUMMARY/RESULT lines, so we surface those. The job's red/green is the harness exit code.
       - name: Test summary
@@ -227,33 +298,32 @@ jobs:
   # ===========================================================================
   # Lane 2 — ci-pde : the SWT-display bucket under xvfb  (ACTIVE — Group B)
   # ---------------------------------------------------------------------------
-  # Runs the 3 display-required classes from tools/osgi-excluded-tests.txt that
-  # ci-junit cannot: they need a live SWT Display (NOT an OSGi platform). The
-  # mechanism is the SAME M0-1 harness (tools/run-tests.sh), UNMODIFIED, in
-  # explicit-FQCN mode, wrapped in `xvfb-run` so SWT binds to a virtual display.
-  # `--swt` is a macOS-only no-op (it just adds -XstartOnFirstThread), so it is
-  # NOT passed here — on Linux the display comes from xvfb, not a JVM flag.
+  # Runs the display-required classes from tools/osgi-excluded-tests.txt ("Group B"
+  # block) that ci-junit cannot: they need a live SWT Display (NOT an OSGi platform).
+  # The class list is DERIVED from that manifest block at run time (see the run step)
+  # so this lane cannot drift from the set ci-junit subtracts. The mechanism is the
+  # SAME harness (tools/run-tests.sh), UNMODIFIED, in explicit-FQCN mode, wrapped
+  # in `xvfb-run` so SWT binds to a virtual display. `--swt` is a macOS-only no-op (it
+  # just adds -XstartOnFirstThread), so it is NOT passed here — on Linux the display
+  # comes from xvfb, not a JVM flag.
   #
-  # GROUP A (6 OSGi/Archi-runtime classes: McpServerManagerTest,
-  # McpPreferenceInitializerTest, ViewExportServiceTest, ImagePathArchiveValidationTest,
-  # DeleteViewCascadeIntegrationTest, RemoveFromViewCascadeIntegrationTest) is
-  # DEFERRED — backlog row ci-pde-osgi-pde-testapp-spike. The m0-2b SPIKE proved
-  # the provisioned Archi RCP ships no PDE JUnit runtime bundles, so a headless
-  # coretestapplication needs extra bundle provisioning (audit: "diminishing
-  # returns"); those 6 stay owner-gated via the Eclipse AllPluginTestsRunner.
+  # The "Group A" OSGi/Archi-runtime classes in the manifest are DEFERRED: the
+  # provisioned Archi RCP ships no PDE JUnit runtime bundles, so a headless
+  # coretestapplication would need extra bundle provisioning that was judged not
+  # worth it; those stay owner-gated via the Eclipse AllPluginTestsRunner.
   #
-  # Reuses ci-junit's Archi + ~/.m2 provisioning with the SAME cache keys (AC-6),
-  # so the ~166 MB Archi tarball and the Mockito/JUnit stack are not re-fetched.
+  # Reuses ci-junit's Archi + ~/.m2 provisioning with the SAME cache keys, so the
+  # ~166 MB Archi tarball and the Mockito/JUnit stack are not re-fetched.
   # ===========================================================================
   ci-pde:
     name: ci-pde (display bucket under xvfb)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Temurin JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -281,11 +351,11 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Provisioning Archi $VERSION"
 
-      # AC-6: SAME cache key as ci-junit so a warm run restores ~/archi-dist and
+      # SAME cache key as ci-junit so a warm run restores ~/archi-dist and
       # skips the ~166 MB download (the `if: cache-hit != true` guard below).
       - name: Cache Archi distribution
         id: cache-archi
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/archi-dist
           key: archi-${{ runner.os }}-${{ steps.archi.outputs.version }}
@@ -296,10 +366,22 @@ jobs:
           VERSION: ${{ steps.archi.outputs.version }}
         run: |
           set -euo pipefail
-          URL="https://github.com/archimatetool/archi.io/releases/download/${VERSION}/Archi-Linux64-${VERSION}.tgz"
-          echo "Downloading $URL"
+          # The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
+          # asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases were tagged with
+          # dots. Try the underscore form first, then the dotted one, and name both if neither
+          # resolves -- a bare 404 here reads like a network fault rather than a tag rename.
           mkdir -p ~/archi-dist
-          curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"
+          downloaded=""
+          for TAG in "${VERSION//./_}" "${VERSION}"; do
+            URL="https://github.com/archimatetool/archi.io/releases/download/${TAG}/Archi-Linux64-${VERSION}.tgz"
+            echo "Trying $URL"
+            if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; break; fi
+          done
+          [ -n "$downloaded" ] || {
+            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases — check the tag name and that a Linux64 tgz asset exists for this version."
+            exit 1
+          }
+          echo "Downloaded $downloaded"
           tar xzf /tmp/archi.tgz -C ~/archi-dist
           rm -f /tmp/archi.tgz
 
@@ -315,9 +397,9 @@ jobs:
           echo "ARCHI_HOME=$ARCHI_HOME" >> "$GITHUB_ENV"
           echo "Archi plugin jars: $(find "$ARCHI_HOME/plugins" -name '*.jar' | wc -l) (ARCHI_HOME=$ARCHI_HOME)"
 
-      # AC-6: SAME cache key as ci-junit, keyed on the pinned-coordinate pom.
+      # SAME cache key as ci-junit, keyed on the pinned-coordinate pom.
       - name: Cache Maven repository (Mockito + JUnit/Hamcrest)
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository
           key: m2-${{ runner.os }}-${{ hashFiles('tools/ci/pom.xml') }}
@@ -339,39 +421,49 @@ jobs:
           echo "ECLIPSE_HOME=$ECLIPSE_HOME" >> "$GITHUB_ENV"
           ls -1 "$ECLIPSE_HOME/plugins"
 
-      # AC-1: the 3 display classes via the UNMODIFIED harness in explicit-FQCN
-      # mode, wrapped in `xvfb-run` so SWT binds to a virtual display. DISTINCT
-      # BUILD_DIR/RESULTS_DIR so this lane's artifacts never collide with ci-junit's.
-      # The harness exit code is the sole gate (no `|| true`); `set -euo pipefail`
-      # propagates a non-zero harness exit over tee's 0 (M0-2 LOW-1). An explicit
-      # 24-bit screen geometry makes the virtual display deterministic across
-      # runner images (some default to a depth GEF/SWT image ops dislike).
-      - name: Run display trio under xvfb
+      # The display classes via the UNMODIFIED harness in explicit-FQCN mode, wrapped
+      # in `xvfb-run` so SWT binds to a virtual display. DISTINCT BUILD_DIR/RESULTS_DIR
+      # so this lane's artifacts never collide with ci-junit's. The harness exit code
+      # is the sole gate (no `|| true`); `set -euo pipefail` propagates a non-zero
+      # harness exit over tee's 0. An explicit 24-bit screen geometry makes the virtual
+      # display deterministic across runner images (some default to a depth GEF/SWT
+      # image ops dislike).
+      #
+      # The class list is DERIVED from tools/osgi-excluded-tests.txt at run time — the
+      # FQCNs under the "# --- Group B" header, up to the next "# --- Group" header —
+      # so it is impossible for this lane to drift from the manifest ci-junit subtracts.
+      # A class added to the manifest's Group B is picked up here with no edit to this
+      # workflow. Fail loudly if the parse yields nothing (a malformed manifest must not
+      # silently run zero display tests and pass).
+      - name: Run SWT-display bucket under xvfb
         run: |
           set -euo pipefail
+          mapfile -t GROUP_B < <(
+            awk '/^# --- Group B/{g=1; next} /^# --- Group/{g=0} g && $1 !~ /^#/ && NF {print $1}' \
+              tools/osgi-excluded-tests.txt
+          )
+          [ "${#GROUP_B[@]}" -gt 0 ] || { echo "::error::no Group B (display) classes parsed from tools/osgi-excluded-tests.txt"; exit 1; }
+          printf 'Display-required class (from manifest Group B): %s\n' "${GROUP_B[@]}"
           ARCHI_HOME="$ARCHI_HOME" \
           ECLIPSE_HOME="$ECLIPSE_HOME" \
           M2_REPO="$HOME/.m2/repository" \
           BUILD_DIR="$GITHUB_WORKSPACE/build/test-harness-pde" \
           RESULTS_DIR="$GITHUB_WORKSPACE/build/test-results-pde-display" \
-          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" bash tools/run-tests.sh \
-            net.vheerden.archi.mcp.model.SwtUiThreadDispatcherTest \
-            net.vheerden.archi.mcp.model.SpacingControlLoopPartialCommitRegressionTest \
-            net.vheerden.archi.mcp.model.ArchiModelAccessorImplTest \
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" bash tools/run-tests.sh "${GROUP_B[@]}" \
             | tee "$RUNNER_TEMP/harness-pde.log"
 
-      # AC-5: publish the surefire XML even when the suite is red. DISTINCT
+      # Publish the surefire XML even when the suite is red. DISTINCT
       # artifact name (junit-xml-pde) — same name as ci-junit's would collide.
       - name: Upload JUnit XML (display bucket)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: junit-xml-pde
           path: build/test-results-pde-display/*.xml
           if-no-files-found: warn
 
-      # AC-5: human-readable summary on the job's own (correctly green/red) summary
-      # tab — NOT a separate check run (M0-2's false-red lesson). The job's red/green
+      # Human-readable summary on the job's own (correctly green/red) summary
+      # tab — NOT a separate check run (a separate check run reports false red). The job's red/green
       # is the harness exit code. Group B runs explicit FQCNs (no manifest scan, no
       # quarantine), so there are no [KNOWN] lines to surface.
       - name: Test summary
@@ -381,8 +473,8 @@ jobs:
           {
             echo "### ci-pde — display bucket (xvfb) results"
             echo ""
-            echo "_Group B (3 SWT-display classes) via the unmodified M0-1 harness under xvfb._"
-            echo "_Group A (6 OSGi/Archi-runtime classes) is deferred — backlog row ci-pde-osgi-pde-testapp-spike._"
+            echo "_Group B (SWT-display classes, derived from tools/osgi-excluded-tests.txt) via the unmodified harness under xvfb._"
+            echo "_Group A (OSGi/Archi-runtime classes) is deferred — owner-gated via the Eclipse AllPluginTestsRunner._"
             echo ""
             if [ -f "$LOG" ]; then
               echo '```'
@@ -409,7 +501,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Enforce size + interface-signature ratchet
         run: bash tools/size-ratchet.sh
+
+  # ===========================================================================
+  # Lane 4 — ci-sync : a generated copy still matches its source (ACTIVE)
+  # ===========================================================================
+  # .claude/commands/drawio-to-archi.md is a SELF-CONTAINED COPY of
+  # prompts/drawio-to-archimate-model.md, produced by tools/sync-drawio-command.sh.
+  # It cannot be a pointer: a slash command has to work without this repository
+  # present. Two copies of one document drift, and a drifted copy is worse than no
+  # copy, because the user runs the command believing it matches the prompt they
+  # reviewed.
+  #
+  # The script has carried a --check mode built for exactly this since it was
+  # written, and nothing ever called it. Measured: an edit to the source prompt on
+  # 2026-08-25 left the generated copy stale for 55 commits and eight days, on main,
+  # with no signal anywhere — it was found by accident when an unrelated change
+  # happened to re-run the script and swept the drift into its own diff. Re-syncing
+  # by hand is the step that gets skipped; that is why the script exists, and it is
+  # equally why calling it has to be mechanical rather than a convention.
+  #
+  # Pure shell, no build. Kept a SEPARATE check from ci-ratchet rather than a second
+  # step inside it: a stale document and a grown facade are unrelated failures, and
+  # folding them into one red check makes each easier to dismiss as "the other one".
+  ci-sync:
+    name: ci-sync (generated copies match their source)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Exit 1 when the copy is stale. The remedy is in the failure output: run
+      # tools/sync-drawio-command.sh and commit the regenerated file — never hand-edit
+      # the copy, which would drift again on the next regeneration.
+      - name: Verify the slash-command copy matches its source prompt
+        run: bash tools/sync-drawio-command.sh --check

@@ -139,6 +139,43 @@ class GroupLayoutCalculator {
     static GridLayoutResult computeGridLayout(List<int[]> elementSizes,
             int startX, int startY, int spacing, int padding, int groupWidth,
             Integer columns) {
+        return computeGridLayout(elementSizes, startX, startY, spacing, padding, groupWidth,
+                columns, true);
+    }
+
+    /**
+     * As {@link #computeGridLayout(List, int, int, int, int, int, Integer)}, with control over how
+     * a cell's width is chosen.
+     *
+     * <p>With {@code uniformCellWidth} true — the default every existing caller keeps — every cell
+     * takes the width of the widest element anywhere in the grid. That is easy to reason about when
+     * a caller lays out one container and reads the result back. It is not when the same grid is
+     * applied at several nesting levels in one call: the widest element inflates its siblings,
+     * their container fits to the inflated row, and that container then inflates <em>its</em>
+     * siblings one level up. A single over-wide grandchild can multiply a top-level band's width.
+     *
+     * <p>With it false, each column takes the width of the widest element <em>in that column</em>.
+     * Columns still line up across rows — column <i>j</i> has one width in every row — so this
+     * costs no grid alignment; only the inflation is dropped.
+     *
+     * <p>Row height is left uniform on BOTH paths — {@code uniformCellWidth} touches
+     * {@code columnWidths} alone, while {@code maxH} and the row advance below are unconditional —
+     * and that is now a RETAINED behaviour rather than a costless one. The compounding half of the
+     * original reasoning still holds: a container's height is the sum of its rows either way. The
+     * second half, that no observed defect asked for it, has been falsified. An end-to-end run
+     * measured a single-column grid of mixed-height containers coming out close to twice the height
+     * of the same content arranged as a column, because every row advances by the tallest element
+     * anywhere in the grid regardless of what is in that row. Changing the advance is a behaviour
+     * change with its own callers to re-measure and is deliberately not made here; the inflation is
+     * documented on the {@code columns} parameter instead, so a caller can see the cost and pick
+     * the column arrangement. Do not read this paragraph as a reason to leave the question
+     * closed.
+     *
+     * @param uniformCellWidth true for one width across the whole grid, false for per-column widths
+     */
+    static GridLayoutResult computeGridLayout(List<int[]> elementSizes,
+            int startX, int startY, int spacing, int padding, int groupWidth,
+            Integer columns, boolean uniformCellWidth) {
         List<int[]> positions = new ArrayList<>();
 
         // Determine max element dimensions for uniform grid cells
@@ -154,8 +191,17 @@ class GroupLayoutCalculator {
         if (columns != null) {
             cols = Math.min(columns, elementSizes.size());
         } else {
+            // Auto-detection asks "how many of the widest element fit", which is a question about
+            // the whole grid regardless of how individual cells are then sized.
             int availableWidth = groupWidth - 2 * padding;
             cols = Math.max(1, (availableWidth + spacing) / (maxW + spacing));
+        }
+
+        int[] columnWidths = new int[Math.max(1, cols)];
+        for (int i = 0; i < elementSizes.size(); i++) {
+            int c = (cols > 0) ? i % cols : 0;
+            columnWidths[c] = uniformCellWidth ? maxW
+                    : Math.max(columnWidths[c], elementSizes.get(i)[0]);
         }
 
         int currentX = startX;
@@ -164,7 +210,8 @@ class GroupLayoutCalculator {
 
         for (int[] size : elementSizes) {
             int h = size[1];
-            positions.add(new int[]{currentX, currentY, maxW, h});
+            int w = columnWidths[col];
+            positions.add(new int[]{currentX, currentY, w, h});
 
             col++;
             if (col >= cols) {
@@ -172,7 +219,7 @@ class GroupLayoutCalculator {
                 currentX = startX;
                 currentY += maxH + spacing;
             } else {
-                currentX += maxW + spacing;
+                currentX += w + spacing;
             }
         }
         return new GridLayoutResult(positions, cols);

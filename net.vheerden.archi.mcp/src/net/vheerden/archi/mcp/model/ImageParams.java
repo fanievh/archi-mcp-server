@@ -3,7 +3,7 @@ package net.vheerden.archi.mcp.model;
 import java.util.Map;
 
 /**
- * Value object bundling optional image parameters (Story C4).
+ * Value object bundling optional image parameters.
  *
  * <p>Used to pass image parameters through accessor method signatures
  * without bloating individual parameter lists. All fields are nullable:

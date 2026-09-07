@@ -242,6 +242,48 @@ public class ViewHandlerGraphFormatTest {
                 desc.contains("viewObjectId"));
     }
 
+    // ---- Container marking ----
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldMarkBothContainerKinds_soOnePredicateFindsEveryContainer() throws Exception {
+        // An agent scanning _nodeType == "group" sees only the native-group bucket, so a view built
+        // from ArchiMate Grouping containers read as having none — the tree format's old blind spot,
+        // reachable by changing one parameter. isGroup marks both kinds.
+        Map<String, Object> graph = invokeGraph("view-grouping-containers");
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+
+        Map<String, Object> groupingNode = nodes.stream()
+                .filter(n -> "zone-1".equals(n.get("id")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Grouping element missing from graph nodes"));
+        assertEquals("an ArchiMate Grouping is a container even though it is an element node",
+                Boolean.TRUE, groupingNode.get("isGroup"));
+
+        Map<String, Object> nativeGroupNode = nodes.stream()
+                .filter(n -> "group".equals(n.get("_nodeType")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("native group missing from graph nodes"));
+        assertEquals(Boolean.TRUE, nativeGroupNode.get("isGroup"));
+
+        assertEquals("exactly the two containers are marked — the Node is a leaf", 2,
+                nodes.stream().filter(n -> Boolean.TRUE.equals(n.get("isGroup"))).count());
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldNotMarkAPlainElementNode_whenItIsNotAContainer() throws Exception {
+        Map<String, Object> graph = invokeGraph("view-grouping-containers");
+        List<Map<String, Object>> nodes = (List<Map<String, Object>>) graph.get("nodes");
+
+        Map<String, Object> leaf = nodes.stream()
+                .filter(n -> "elem-1".equals(n.get("id")))
+                .findFirst()
+                .orElseThrow();
+        assertFalse("a non-container element must not carry the marker at all",
+                leaf.containsKey("isGroup"));
+    }
+
     // ---- Helper Methods ----
 
     @SuppressWarnings("unchecked")
@@ -291,7 +333,8 @@ public class ViewHandlerGraphFormatTest {
                     new ViewDto("view-simple", "Simple View", null, "Views"),
                     new ViewDto("view-multidraw", "Multi-draw View", null, "Views"),
                     new ViewDto("view-groups-notes", "Groups and Notes View", null, "Views"),
-                    new ViewDto("view-no-visuals", "No Visuals View", null, "Views"));
+                    new ViewDto("view-no-visuals", "No Visuals View", null, "Views"),
+                    new ViewDto("view-grouping-containers", "Grouping Containers View", null, "Views"));
         }
 
         @Override
@@ -306,8 +349,27 @@ public class ViewHandlerGraphFormatTest {
                 case "view-multidraw" -> Optional.of(multiDrawView());
                 case "view-groups-notes" -> Optional.of(groupsAndNotesView());
                 case "view-no-visuals" -> Optional.of(noVisualsView());
+                case "view-grouping-containers" -> Optional.of(groupingContainersView());
                 default -> Optional.empty();
             };
+        }
+
+        /**
+         * One ArchiMate Grouping container holding a Node, plus a native group. Both are containers
+         * but they reach the graph through different buckets, so this is the shape that shows
+         * whether one predicate finds both.
+         */
+        private ViewContentsDto groupingContainersView() {
+            List<ElementDto> elements = List.of(
+                    ElementDto.standard("zone-1", "Ingress Zone", "Grouping", null, "Other", null, null),
+                    ElementDto.standard("elem-1", "Load Balancer", "Node", null, "Technology", null, null));
+            List<ViewNodeDto> visualMetadata = List.of(
+                    new ViewNodeDto("vo-zone-1", "zone-1", 40, 40, 260, 180, null),
+                    new ViewNodeDto("vo-elem-1", "elem-1", 30, 60, 120, 55, "vo-zone-1"));
+            List<ViewGroupDto> groups = List.of(
+                    new ViewGroupDto("grp-1", "Observability", 340, 40, 250, 160, null, List.of()));
+            return new ViewContentsDto("view-grouping-containers", "Grouping Containers View", null, null,
+                    elements, List.of(), visualMetadata, List.of(), groups, List.of());
         }
 
         /** 2 elements, 1 relationship drawn exactly once (the 1:1 common case). */
