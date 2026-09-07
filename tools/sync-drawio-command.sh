@@ -19,11 +19,24 @@
 #   tools/sync-drawio-command.sh          # rewrite the command copy
 #   tools/sync-drawio-command.sh --check  # exit 1 if the copy is stale (for CI)
 #
+# --check AND THE PUBLISHED TREE
+#   `.claude/` is culled wholesale from the public repository at publish time
+#   (the release runbook's `rm -rf "$PUBLIC/.claude"`), while `.github/workflows/ci.yml`
+#   and `prompts/` both ship. A published checkout therefore carries the SOURCE prompt and,
+#   by construction, can never carry the copy — so --check there was asserting a condition
+#   the publish step itself guarantees false, and the ci-sync lane went red on the v1.9.0
+#   push for that reason alone (run 34142915315) with the other three lanes green.
+#   --check now reports NOT APPLICABLE when the `.claude/` tree is absent ENTIRELY.
+#   That absence is the exact thing the publish step produces, which is why it — and not
+#   a missing `.claude/commands/` or a missing target file — is the discriminator: in any
+#   checkout that DOES carry `.claude/`, a missing or drifted copy still fails, unchanged.
+#
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="$REPO_ROOT/prompts/drawio-to-archimate-model.md"
-TARGET="$REPO_ROOT/.claude/commands/drawio-to-archi.md"
+COMMAND_TREE="$REPO_ROOT/.claude"
+TARGET="$COMMAND_TREE/commands/drawio-to-archi.md"
 
 CHECK_ONLY=0
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
@@ -75,6 +88,16 @@ HEADER
 }
 
 if [[ $CHECK_ONLY -eq 1 ]]; then
+    # NOT APPLICABLE, not "pass": no `.claude/` tree at all means this checkout does not
+    # distribute the command copy (the published repository — see the header). Keyed on the
+    # tree, never on $TARGET: were this `[[ ! -f "$TARGET" ]]`, deleting the copy in a
+    # checkout that DOES carry `.claude/` would silence the guard instead of failing it,
+    # which is the whole defect this script exists to prevent. Do not widen it.
+    if [[ ! -d "$COMMAND_TREE" ]]; then
+        echo "SKIP: no $COMMAND_TREE in this checkout — the command copy is not distributed here."
+        echo "      Nothing to compare against $SOURCE; the sync gate does not apply."
+        exit 0
+    fi
     if [[ ! -f "$TARGET" ]]; then
         echo "FAIL: command copy missing: $TARGET" >&2
         echo "      Run tools/sync-drawio-command.sh to generate it." >&2

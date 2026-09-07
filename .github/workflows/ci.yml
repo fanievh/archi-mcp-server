@@ -537,5 +537,15 @@ jobs:
       # Exit 1 when the copy is stale. The remedy is in the failure output: run
       # tools/sync-drawio-command.sh and commit the regenerated file — never hand-edit
       # the copy, which would drift again on the next regeneration.
+      #
+      # THIS LANE IS A NO-OP ON THE PUBLISHED REPOSITORY, AND THAT IS DELIBERATE — it is not
+      # a guard that has quietly stopped working. `.claude/` is culled wholesale at publish
+      # time while this workflow and prompts/ both ship, so a published checkout carries the
+      # SOURCE and can never carry the copy. The check asserted a condition the publish step
+      # guarantees false, and this lane was the ONLY red one on the v1.9.0 public push
+      # (run 34142915315; ci-junit, ci-pde and ci-ratchet all green). The script now reports
+      # NOT APPLICABLE when the `.claude/` tree is absent ENTIRELY, and still fails whenever
+      # that tree exists and the copy is missing or drifted — which is every run in the
+      # repository where the copy actually lives, i.e. the only place drift can occur.
       - name: Verify the slash-command copy matches its source prompt
         run: bash tools/sync-drawio-command.sh --check
