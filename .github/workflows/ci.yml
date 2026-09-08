@@ -509,8 +509,9 @@ jobs:
   # ===========================================================================
   # Lane 4 — ci-sync : a generated copy still matches its source (ACTIVE)
   # ===========================================================================
-  # .claude/commands/drawio-to-archi.md is a SELF-CONTAINED COPY of
-  # prompts/drawio-to-archimate-model.md, produced by tools/sync-drawio-command.sh.
+  # .claude/commands/{drawio,repo}-to-archi.md are SELF-CONTAINED COPIES of
+  # prompts/{drawio,repo}-to-archimate-model.md, produced by tools/sync-{drawio,repo}-command.sh
+  # over the shared harness in tools/lib/sync-command.sh.
   # It cannot be a pointer: a slash command has to work without this repository
   # present. Two copies of one document drift, and a drifted copy is worse than no
   # copy, because the user runs the command believing it matches the prompt they
@@ -547,5 +548,9 @@ jobs:
       # NOT APPLICABLE when the `.claude/` tree is absent ENTIRELY, and still fails whenever
       # that tree exists and the copy is missing or drifted — which is every run in the
       # repository where the copy actually lives, i.e. the only place drift can occur.
-      - name: Verify the slash-command copy matches its source prompt
+      # Both command copies, as separate steps so the failure names which one drifted.
+      - name: Verify the drawio-to-archi copy matches its source prompt
         run: bash tools/sync-drawio-command.sh --check
+
+      - name: Verify the repo-to-archi copy matches its source prompt
+        run: bash tools/sync-repo-command.sh --check

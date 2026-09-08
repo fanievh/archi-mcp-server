@@ -2,59 +2,27 @@
 #
 # Regenerate the drawio-to-archi slash command from its source prompt.
 #
-# WHY THIS EXISTS
-#   The slash command is a SELF-CONTAINED COPY of prompts/drawio-to-archimate-model.md,
-#   not a pointer to it — a slash command has to work without the repository present.
-#   Two copies of one document drift, and a drifted copy is worse than no copy: the
-#   user runs the command believing it matches the prompt they reviewed. Hand-syncing
-#   is exactly the step that gets skipped, so this script does it mechanically.
-#
 # WHAT IT PRODUCES
 #   .claude/commands/drawio-to-archi.md = frontmatter + argument-parsing preamble
 #   + the source prompt from its "## ROLE" heading onward. The source prompt's own
 #   top-level heading and paste-instruction comment are dropped: the frontmatter
 #   supplies the title, and the arguments arrive via $ARGUMENTS rather than by paste.
+#   The body is carried VERBATIM — this command needs no transform.
 #
 # USAGE
 #   tools/sync-drawio-command.sh          # rewrite the command copy
 #   tools/sync-drawio-command.sh --check  # exit 1 if the copy is stale (for CI)
 #
-# --check AND THE PUBLISHED TREE
-#   `.claude/` is culled wholesale from the public repository at publish time
-#   (the release runbook's `rm -rf "$PUBLIC/.claude"`), while `.github/workflows/ci.yml`
-#   and `prompts/` both ship. A published checkout therefore carries the SOURCE prompt and,
-#   by construction, can never carry the copy — so --check there was asserting a condition
-#   the publish step itself guarantees false, and the ci-sync lane went red on the v1.9.0
-#   push for that reason alone (run 34142915315) with the other three lanes green.
-#   --check now reports NOT APPLICABLE when the `.claude/` tree is absent ENTIRELY.
-#   That absence is the exact thing the publish step produces, which is why it — and not
-#   a missing `.claude/commands/` or a missing target file — is the discriminator: in any
-#   checkout that DOES carry `.claude/`, a missing or drifted copy still fails, unchanged.
+# The generate/check logic, and the reason --check reports NOT APPLICABLE on the
+# published tree, live in the shared harness: tools/lib/sync-command.sh.
 #
 set -euo pipefail
+. "$(dirname "${BASH_SOURCE[0]}")/lib/sync-command.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE="$REPO_ROOT/prompts/drawio-to-archimate-model.md"
-COMMAND_TREE="$REPO_ROOT/.claude"
-TARGET="$COMMAND_TREE/commands/drawio-to-archi.md"
+SOURCE_REL="prompts/drawio-to-archimate-model.md"
+TARGET_REL=".claude/commands/drawio-to-archi.md"
 
-CHECK_ONLY=0
-[[ "${1:-}" == "--check" ]] && CHECK_ONLY=1
-
-if [[ ! -f "$SOURCE" ]]; then
-    echo "FAIL: source prompt not found: $SOURCE" >&2
-    exit 1
-fi
-
-# The source prompt must still carry the anchor this script splits on. If the
-# heading is ever renamed, fail loudly rather than emit a truncated command file.
-if ! grep -q '^## ROLE$' "$SOURCE"; then
-    echo "FAIL: '## ROLE' anchor not found in $SOURCE — the split point moved." >&2
-    echo "      Update this script's anchor before regenerating." >&2
-    exit 1
-fi
-
-generate() {
+emit_header() {
     cat <<'HEADER'
 ---
 description: Replicate a draw.io architecture diagram as an ArchiMate model — elements, relationships and a view — via the Archi MCP server
@@ -84,34 +52,6 @@ argument-hint: "<path-to.drawio> [semantic|mirror|both] [path-to-companion-doc] 
 ---
 
 HEADER
-    awk '/^## ROLE$/{found=1} found' "$SOURCE"
 }
 
-if [[ $CHECK_ONLY -eq 1 ]]; then
-    # NOT APPLICABLE, not "pass": no `.claude/` tree at all means this checkout does not
-    # distribute the command copy (the published repository — see the header). Keyed on the
-    # tree, never on $TARGET: were this `[[ ! -f "$TARGET" ]]`, deleting the copy in a
-    # checkout that DOES carry `.claude/` would silence the guard instead of failing it,
-    # which is the whole defect this script exists to prevent. Do not widen it.
-    if [[ ! -d "$COMMAND_TREE" ]]; then
-        echo "SKIP: no $COMMAND_TREE in this checkout — the command copy is not distributed here."
-        echo "      Nothing to compare against $SOURCE; the sync gate does not apply."
-        exit 0
-    fi
-    if [[ ! -f "$TARGET" ]]; then
-        echo "FAIL: command copy missing: $TARGET" >&2
-        echo "      Run tools/sync-drawio-command.sh to generate it." >&2
-        exit 1
-    fi
-    if ! diff -q <(generate) "$TARGET" >/dev/null; then
-        echo "FAIL: $TARGET is out of sync with $SOURCE" >&2
-        echo "      Run tools/sync-drawio-command.sh to regenerate it." >&2
-        exit 1
-    fi
-    echo "OK: command copy is in sync with the source prompt."
-    exit 0
-fi
-
-mkdir -p "$(dirname "$TARGET")"
-generate > "$TARGET"
-echo "Wrote $TARGET ($(wc -l < "$TARGET" | tr -d ' ') lines) from $(basename "$SOURCE")."
+sync_command_main "$@"
