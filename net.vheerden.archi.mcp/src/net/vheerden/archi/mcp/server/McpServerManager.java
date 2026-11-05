@@ -36,6 +36,18 @@ public class McpServerManager implements ModelChangeListener {
 
     private static McpServerManager instance;
 
+    /** Added to a failed start's message when its clean-up could not stop the server in time. */
+    static final String STILL_RUNNING_AFTER_FAILED_START =
+            " The server did not finish stopping and may still be running.";
+
+    /** What a stop that was given up on was part of. */
+    private enum GivenUpStop {
+        /** {@link #stop()}. */
+        STOP,
+        /** The clean-up after a failed start. */
+        FAILED_START_CLEANUP
+    }
+
     private final TransportConfig transportConfig;
     private final List<McpServerStateListener> listeners = new CopyOnWriteArrayList<>();
 
@@ -52,6 +64,10 @@ public class McpServerManager implements ModelChangeListener {
     private volatile ApprovalService approvalService;
     private final CommandRegistry commandRegistry;
     private final ResourceRegistry resourceRegistry;
+    /** The stop given up on that the state and message report, or null when they report none. */
+    private GivenUpStop givenUpStop;
+    /** The failed start's own message, shown again once its clean-up's stop has finished. */
+    private String failedStartMessage;
 
     /**
      * Creates a McpServerManager with the given TransportConfig.
@@ -63,6 +79,8 @@ public class McpServerManager implements ModelChangeListener {
         this.transportConfig = transportConfig;
         this.commandRegistry = new CommandRegistry();
         this.resourceRegistry = new ResourceRegistry();
+        // only a stop started later tells it, so nothing reaches this manager before it is built
+        transportConfig.addStopEndedListener(this::onStopEnded);
     }
 
     /**
@@ -88,7 +106,13 @@ public class McpServerManager implements ModelChangeListener {
      * Starts the MCP server using preferences from {@link net.vheerden.archi.mcp.McpPlugin}.
      *
      * <p>If the server is already running, this is a no-op. On failure, the server
-     * transitions to {@link ServerState#ERROR} and the error message is stored.</p>
+     * transitions to {@link ServerState#ERROR} and the error message is stored. An {@link Error}
+     * other than a {@link LinkageError} is then rethrown. An exception thrown while cleaning up
+     * after the failure is logged, not thrown; an {@link Error} thrown there leaves here instead,
+     * once the clean-up has tried to stop the server. An {@link Error} thrown by a state listener
+     * told of {@link ServerState#STARTING} leaves here in its place, with that state already set
+     * and nothing after it done. One thrown by a listener told of {@link ServerState#ERROR} also
+     * leaves in its place, but only after the clean-up has run.</p>
      *
      * <p>Synchronized to prevent concurrent start/stop calls from corrupting state
      * (earlyStartup runs on a background thread while UI handlers run on the SWT thread).</p>
@@ -109,18 +133,32 @@ public class McpServerManager implements ModelChangeListener {
 
         setState(ServerState.STARTING);
         lastErrorMessage = null;
+        givenUpStop = null;
+        failedStartMessage = null;
 
         try {
+            // Read once per start: the same value decides which tools are registered and what the
+            // server announces, and nothing re-reads it while the server runs.
+            boolean readOnly = net.vheerden.archi.mcp.McpPlugin.getDefault().isReadOnly();
+            boolean allowServerImageSources = net.vheerden.archi.mcp.McpPlugin.getDefault()
+                    .isServerImageSourcesAllowed();
             initializeResources();
             transportConfig.setToolSpecifications(commandRegistry.getToolSpecifications());
             transportConfig.setResourceSpecifications(resourceRegistry.getResourceSpecifications());
             transportConfig.setResourceTemplateSpecifications(
                     resourceRegistry.getResourceTemplateSpecifications());
+            transportConfig.setInstructions(readOnly ? TransportConfig.READ_ONLY_INSTRUCTIONS : null);
             transportConfig.startServer();
+            // Judged on the bind the server took, by the one classification the server made as it bound it (the
+            // Origin/Host guard reads the same value). Only a loopback bind allows server file access without the
+            // setting: an exposed bind, one that could not be classified, or no answer at all refuses.
+            BindExposure boundTo = transportConfig.getBindExposure();
+            boolean refuseServerImageSources = !allowServerImageSources
+                    && (boundTo == null || !boundTo.allowsServerFileAccess());
             wireCommandRegistryServers();
             wireResourceRegistryServers();
             initializeModelAccessor();
-            initializeHandlers();
+            initializeHandlers(readOnly, refuseServerImageSources);
             // Startup invariant: the server must never advertise itself as RUNNING with zero
             // tools. If handler registration was skipped (e.g. a LinkageError earlier in this
             // try block), this turns an invisible "server up, tools/list empty" state into a
@@ -145,11 +183,28 @@ public class McpServerManager implements ModelChangeListener {
             // catch(Exception) let it escape to the SWT event loop, leaving the HTTP server up
             // with zero tools and no ERROR state set. Catch it here so every startup failure is
             // captured, logged, and surfaced as ERROR state.
-            lastErrorMessage = "Server initialization failed: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage();
-            setState(ServerState.ERROR);
-            logger.error("Failed to initialize MCP Server", e);
-            cleanupAfterFailedStart();
+            try {
+                lastErrorMessage = "Server initialization failed: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage();
+                setState(ServerState.ERROR);
+                logger.error("Failed to initialize MCP Server", e);
+            } finally {
+                cleanupAfterFailedStart();
+            }
+        } catch (Error e) {
+            // Any other Error (AssertionError, StackOverflowError, OutOfMemoryError, ...) would leave
+            // the state STARTING, which every later start ignores, so Start could not be retried; and
+            // a server already up would keep serving half-wired. Record and clean up as above, then
+            // rethrow the same instance so the caller sees the Error as before.
+            try {
+                lastErrorMessage = "Server initialization failed: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage();
+                setState(ServerState.ERROR);
+                logger.error("Failed to initialize MCP Server", e);
+            } finally {
+                cleanupAfterFailedStart();
+            }
+            throw e;
         }
     }
 
@@ -168,6 +223,8 @@ public class McpServerManager implements ModelChangeListener {
 
         setState(ServerState.STARTING);
         lastErrorMessage = null;
+        givenUpStop = null;
+        failedStartMessage = null;
 
         try {
             initializeResources();
@@ -175,11 +232,12 @@ public class McpServerManager implements ModelChangeListener {
             transportConfig.setResourceSpecifications(resourceRegistry.getResourceSpecifications());
             transportConfig.setResourceTemplateSpecifications(
                     resourceRegistry.getResourceTemplateSpecifications());
+            transportConfig.setInstructions(null);
             transportConfig.startServer(port, bindAddress);
             wireCommandRegistryServers();
             wireResourceRegistryServers();
             initializeModelAccessor();
-            initializeHandlers();
+            initializeHandlers(false, false);
             // Startup invariant: the server must never advertise itself as RUNNING with zero
             // tools. If handler registration was skipped (e.g. a LinkageError earlier in this
             // try block), this turns an invisible "server up, tools/list empty" state into a
@@ -204,18 +262,37 @@ public class McpServerManager implements ModelChangeListener {
             // catch(Exception) let it escape to the SWT event loop, leaving the HTTP server up
             // with zero tools and no ERROR state set. Catch it here so every startup failure is
             // captured, logged, and surfaced as ERROR state.
-            lastErrorMessage = "Server initialization failed: "
-                    + e.getClass().getSimpleName() + ": " + e.getMessage();
-            setState(ServerState.ERROR);
-            logger.error("Failed to initialize MCP Server", e);
-            cleanupAfterFailedStart();
+            try {
+                lastErrorMessage = "Server initialization failed: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage();
+                setState(ServerState.ERROR);
+                logger.error("Failed to initialize MCP Server", e);
+            } finally {
+                cleanupAfterFailedStart();
+            }
+        } catch (Error e) {
+            // Any other Error (AssertionError, StackOverflowError, OutOfMemoryError, ...) would leave
+            // the state STARTING, which every later start ignores, so Start could not be retried; and
+            // a server already up would keep serving half-wired. Record and clean up as above, then
+            // rethrow the same instance so the caller sees the Error as before.
+            try {
+                lastErrorMessage = "Server initialization failed: "
+                        + e.getClass().getSimpleName() + ": " + e.getMessage();
+                setState(ServerState.ERROR);
+                logger.error("Failed to initialize MCP Server", e);
+            } finally {
+                cleanupAfterFailedStart();
+            }
+            throw e;
         }
     }
 
     /**
      * Stops the MCP server gracefully.
      *
-     * <p>If the server is not running, this is a no-op.</p>
+     * <p>If the server is not running, this is a no-op. A stop that the transport gives up on leaves
+     * the state {@link ServerState#ERROR}; if that stop finishes later, the state becomes
+     * {@link ServerState#STOPPED} then, without another call.</p>
      *
      * <p>Synchronized to prevent concurrent start/stop calls from corrupting state.</p>
      */
@@ -227,25 +304,54 @@ public class McpServerManager implements ModelChangeListener {
 
         setState(ServerState.STOPPING);
 
-        commandRegistry.clearMcpServers();
-        commandRegistry.clearTools();
-        resourceRegistry.clearMcpServers();
-        resourceRegistry.clearResources();
-        disposeSessionManager();
-        disposeModelAccessor();
-
         try {
-            transportConfig.stopServer();
-        } catch (Exception e) {
-            logger.error("Error during server stop", e);
+            clearAndStopServer("Error during server stop");
         } finally {
+            failedStartMessage = null;
             if (transportConfig.isRunning()) {
+                givenUpStop = GivenUpStop.STOP;
                 lastErrorMessage = "Server stop failed — Jetty may still be running.";
                 setState(ServerState.ERROR);
                 logger.error("Server stop incomplete: Jetty still running");
             } else {
+                givenUpStop = null;
                 setState(ServerState.STOPPED);
                 lastErrorMessage = null;
+            }
+        }
+    }
+
+    /**
+     * Told by the transport, on the stop's own thread, that a stop has ended. If it is a stop the
+     * transport gave up on, the server is released now. When the state reports that stop, a Stop's
+     * {@link ServerState#ERROR} becomes {@link ServerState#STOPPED}, and a failed start's message loses
+     * the sentence saying the server may still be running (the state stays ERROR: the start still
+     * failed). Otherwise the state and the message are left as they are: for a stop that finished in
+     * time nothing is released either, and a stop given up on that the state no longer reports (a start
+     * has run since) is still released.
+     *
+     * <p>Synchronized like {@link #stop()}, which may be waiting for this very stop: the transport tells
+     * this only once the stop counts as ended, so that wait is over before this runs. The state is
+     * decided from the transport afterwards even when the release throws, so a released server is not
+     * left reported as possibly running.</p>
+     */
+    private synchronized void onStopEnded() {
+        GivenUpStop pending = givenUpStop;
+        try {
+            transportConfig.releaseFinishedStop();
+        } finally {
+            if (pending != null && state == ServerState.ERROR && !transportConfig.isRunning()) {
+                givenUpStop = null;
+                String startFailure = failedStartMessage;
+                failedStartMessage = null;
+                logger.info("The MCP Server's stop finished after it was given up on; the server is stopped");
+                // last, so an Error from a state listener leaves nothing above undone
+                if (pending == GivenUpStop.STOP) {
+                    lastErrorMessage = null;
+                    setState(ServerState.STOPPED);
+                } else {
+                    lastErrorMessage = startFailure;
+                }
             }
         }
     }
@@ -459,8 +565,12 @@ public class McpServerManager implements ModelChangeListener {
      * Creates and initializes tool handlers, registering their tools with the
      * command registry. Called after model accessor and command registry servers
      * are wired, so runtime tool additions notify connected clients.
+     *
+     * @param readOnly true to register only the tools that cannot change anything
+     * @param refuseServerImageSources true to refuse an image from a file path on the server or a URL, and
+     *        export-view's file output
      */
-    private void initializeHandlers() {
+    private void initializeHandlers(boolean readOnly, boolean refuseServerImageSources) {
         // Create SessionManager and register as model change listener
         SessionManager sm = new SessionManager(
                 SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS);
@@ -471,33 +581,66 @@ public class McpServerManager implements ModelChangeListener {
 
         // Single source of truth — the same wiring the tool-discovery integration
         // test consumes, so the test can never silently drift from production.
-        HandlerRegistrar.registerAll(modelAccessor, formatter, commandRegistry, sm);
+        HandlerRegistrar.registerAll(modelAccessor, formatter, commandRegistry, sm, readOnly,
+                refuseServerImageSources);
 
         logger.info("MCP tool handlers initialized (session management enabled)");
-    }
-
-    private void disposeSessionManager() {
-        SessionManager sm = this.sessionManager;
-        if (sm != null) {
-            if (modelAccessor != null) {
-                modelAccessor.removeModelChangeListener(sm);
-            }
-            sm.dispose();
-            this.sessionManager = null;
+        if (readOnly) {
+            logger.info("Read-only mode: {} tools that are not read tools are not offered",
+                    commandRegistry.getWithheldToolNames().size());
+        }
+        if (refuseServerImageSources) {
+            logger.info("The server is reachable from other machines: add-image-to-model takes images only "
+                    + "as imageData, and export-view returns images only inline (set "
+                    + "mcp.server.allowServerImageSources to allow file paths, URLs and file output)");
         }
     }
 
+    /**
+     * Disposes the session manager and lets go of it, even when removing its listener from the model
+     * accessor throws or the dispose itself does. If both throw, the dispose's throw leaves and the
+     * other is lost.
+     */
+    private void disposeSessionManager() {
+        SessionManager sm = this.sessionManager;
+        if (sm != null) {
+            try {
+                if (modelAccessor != null) {
+                    modelAccessor.removeModelChangeListener(sm);
+                }
+            } finally {
+                try {
+                    sm.dispose();
+                } finally {
+                    this.sessionManager = null;
+                }
+            }
+        }
+    }
+
+    /**
+     * Disposes the model accessor and lets go of it and the approval service, even when removing the
+     * manager's listener, clearing the dispatcher's sessions or the dispose itself throws. A throw from
+     * removing the listener skips clearing the sessions. If the dispose throws after an earlier call
+     * did, the dispose's throw leaves and the earlier one is lost.
+     */
     private void disposeModelAccessor() {
         ArchiModelAccessor accessor = this.modelAccessor;
         if (accessor != null) {
-            accessor.removeModelChangeListener(this);
-            MutationDispatcher dispatcher = accessor.getMutationDispatcher();
-            if (dispatcher != null) {
-                dispatcher.clearAllSessions();
+            try {
+                accessor.removeModelChangeListener(this);
+                MutationDispatcher dispatcher = accessor.getMutationDispatcher();
+                if (dispatcher != null) {
+                    dispatcher.clearAllSessions();
+                }
+            } finally {
+                try {
+                    accessor.dispose();
+                } finally {
+                    this.modelAccessor = null;
+                    this.approvalService = null;
+                }
             }
-            accessor.dispose();
-            this.modelAccessor = null;
-            this.approvalService = null;
         }
     }
 
@@ -550,19 +693,58 @@ public class McpServerManager implements ModelChangeListener {
 
     /**
      * Cleans up resources after a failed start (e.g., model accessor init failure
-     * when Jetty is already running).
+     * when Jetty is already running). Called from a {@code finally} around the failure's
+     * bookkeeping, so that an {@link Error} from a state listener told of
+     * {@link ServerState#ERROR} does not skip it.
+     *
+     * <p>When the transport gives up on stopping the server, the failure's message gains
+     * {@link #STILL_RUNNING_AFTER_FAILED_START}; listeners, already told of
+     * {@link ServerState#ERROR}, are not told again. The sentence is removed when that stop
+     * finishes.</p>
      */
     private void cleanupAfterFailedStart() {
-        commandRegistry.clearMcpServers();
-        commandRegistry.clearTools();
-        resourceRegistry.clearMcpServers();
-        resourceRegistry.clearResources();
-        disposeSessionManager();
-        disposeModelAccessor();
         try {
-            transportConfig.stopServer();
-        } catch (Exception stopEx) {
-            logger.error("Failed to stop transport during cleanup", stopEx);
+            clearAndStopServer("Failed to stop transport during cleanup");
+        } finally {
+            if (transportConfig.isRunning()) {
+                givenUpStop = GivenUpStop.FAILED_START_CLEANUP;
+                failedStartMessage = lastErrorMessage;
+                lastErrorMessage = lastErrorMessage + STILL_RUNNING_AFTER_FAILED_START;
+            }
+        }
+    }
+
+    /**
+     * Clears the registries, disposes the session manager and model accessor, then stops the
+     * transport. An exception from a step is logged and the next step runs. An {@link Error} from a
+     * step skips the steps after it but not the stop, and then propagates. Within its own step, disposing
+     * the session manager or the model accessor finishes, and lets go of it, whatever one of its calls
+     * throws; an {@link Error} from the session manager's step still skips the model accessor's step.
+     *
+     * @param stopFailureMessage what to log if the stop itself throws an exception
+     */
+    private void clearAndStopServer(String stopFailureMessage) {
+        try {
+            runCleanupStep("clear the command registry's servers", commandRegistry::clearMcpServers);
+            runCleanupStep("clear the command registry's tools", commandRegistry::clearTools);
+            runCleanupStep("clear the resource registry's servers", resourceRegistry::clearMcpServers);
+            runCleanupStep("clear the resource registry's resources", resourceRegistry::clearResources);
+            runCleanupStep("dispose the session manager", this::disposeSessionManager);
+            runCleanupStep("dispose the model accessor", this::disposeModelAccessor);
+        } finally {
+            try {
+                transportConfig.stopServer();
+            } catch (Exception stopEx) {
+                logger.error(stopFailureMessage, stopEx);
+            }
+        }
+    }
+
+    private void runCleanupStep(String step, Runnable action) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            logger.error("Failed to {} during server clean-up", step, e);
         }
     }
 

@@ -70,7 +70,7 @@ public class ApplySpecializationCommand extends Command {
 
     /**
      * Returns the profile being assigned.
-     * Package-visible for testing.
+     * Package-visible for testing. Also read by {@link StagedProfiles}.
      */
     IProfile getProfile() {
         return profile;
@@ -78,7 +78,7 @@ public class ApplySpecializationCommand extends Command {
 
     /**
      * Returns whether this is a newly created profile.
-     * Package-visible for testing.
+     * Package-visible for testing. Also read by {@link StagedProfiles}.
      */
     boolean isNewProfile() {
         return isNewProfile;

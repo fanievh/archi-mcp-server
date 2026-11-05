@@ -1,9 +1,11 @@
 package net.vheerden.archi.mcp.handlers;
 
+import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -19,9 +21,11 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.CostEstimator;
@@ -34,7 +38,11 @@ import net.vheerden.archi.mcp.response.ResponseFormat;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.SummaryFormatter;
 import net.vheerden.archi.mcp.response.ViewContainers;
+import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
+import net.vheerden.archi.mcp.response.dto.NonArchimateConnectionDto;
+import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
@@ -198,15 +206,15 @@ public class ViewHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (request.arguments() != null) {
-                Object vpObj = request.arguments().get("viewpoint");
+                Object vpObj = ToolArguments.optionalText(request.arguments(), "viewpoint", false);
                 if (vpObj instanceof String vp && !vp.isBlank()) {
                     viewpointFilter = vp;
                 }
-                Object nameObj = request.arguments().get("name");
+                Object nameObj = ToolArguments.optionalText(request.arguments(), "name", false);
                 if (nameObj instanceof String n && !n.isBlank()) {
                     nameFilter = n;
                 }
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -214,7 +222,7 @@ public class ViewHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -226,7 +234,7 @@ public class ViewHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -236,24 +244,18 @@ public class ViewHandler {
             }
 
             // Extract dryRun parameter
-            boolean dryRun = false;
-            if (request.arguments() != null) {
-                Object dryRunObj = request.arguments().get("dryRun");
-                if (dryRunObj instanceof Boolean b) {
-                    dryRun = b;
-                }
-            }
+            boolean dryRun = ToolArguments.flag(request.arguments(), "dryRun", false);
 
             // Extract and validate format parameter
             ResponseFormat format = ResponseFormat.JSON;
             if (request.arguments() != null) {
-                Object formatObj = request.arguments().get("format");
+                Object formatObj = ToolArguments.optionalText(request.arguments(), "format", false);
                 if (formatObj instanceof String f && !f.isBlank()) {
                     ResponseFormat parsed = ResponseFormat.fromString(f);
                     if (parsed == null) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid format: '" + f + "'",
+                                "Invalid format: " + CallerText.quoted(f),
                                 null,
                                 "Valid formats: json, graph, summary, tree",
                                 null);
@@ -267,14 +269,11 @@ public class ViewHandler {
             String cursorParam = null;
             Integer limitParam = null;
             if (request.arguments() != null) {
-                Object cursorObj = request.arguments().get("cursor");
+                Object cursorObj = ToolArguments.optionalText(request.arguments(), "cursor", false);
                 if (cursorObj instanceof String c && !c.isBlank()) {
                     cursorParam = c;
                 }
-                Object limitObj = request.arguments().get("limit");
-                if (limitObj instanceof Number n) {
-                    limitParam = n.intValue();
-                }
+                limitParam = ToolArguments.wholeInt(request.arguments(), "limit");
             }
 
             // Validate limit parameter
@@ -296,30 +295,12 @@ public class ViewHandler {
             String effectiveName = nameFilter;
 
             if (cursorParam != null && !dryRun) {
-                PaginationCursor.CursorData cursorData;
-                try {
-                    cursorData = PaginationCursor.decode(cursorParam);
-                } catch (PaginationCursor.InvalidCursorException e) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            e.getMessage(),
-                            null,
-                            "Re-run the original query without a cursor parameter",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                // Well formed, same model instance, same version (the helper owns all three checks)
+                CursorModelCheck.Decoded decoded = CursorModelCheck.decode(cursorParam, accessor);
+                if (decoded.refusal() != null) {
+                    return buildResult(formatter.toJsonString(formatter.formatError(decoded.refusal())), true);
                 }
-
-                // Validate model version
-                String currentModelVersion = accessor.getModelVersion();
-                if (!cursorData.modelVersion().equals(currentModelVersion)) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            "The model has been modified since this cursor was created",
-                            null,
-                            "Re-run the original query without a cursor parameter to get fresh results",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
-                }
+                PaginationCursor.CursorData cursorData = decoded.cursor();
 
                 // Use cursor params
                 offset = cursorData.offset();
@@ -350,12 +331,12 @@ public class ViewHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
             logger.debug("Viewpoint filter: {}, name filter: {}, field selection — preset: {}, exclude: {}",
-                    effectiveViewpoint, effectiveName, preset, effectiveExclude);
+                    CallerText.logged(effectiveViewpoint), CallerText.logged(effectiveName), preset, CallerText.logged(effectiveExclude));
 
             String modelVersion = accessor.getModelVersion();
 
@@ -373,7 +354,8 @@ public class ViewHandler {
             // Summary format ignores pagination, so use 0 for offset/limit to share cache entries
             String cacheKey = CacheKeyBuilder.buildCacheKey("views", "vp", effectiveViewpoint,
                     "name", effectiveName,
-                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "fields", preset, "warning", warningMessage,
+                    "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
                     "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
                     "format", format.value());
@@ -381,7 +363,7 @@ public class ViewHandler {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -396,12 +378,13 @@ public class ViewHandler {
 
             // Apply name post-filter
             if (effectiveName != null && !effectiveName.isEmpty()) {
-                logger.info("Handling get-views with name='{}', viewpoint='{}'", effectiveName, effectiveViewpoint);
-                String lowerName = effectiveName.toLowerCase();
+                logger.info("Handling get-views with name='{}', viewpoint='{}'", CallerText.logged(effectiveName), CallerText.logged(effectiveViewpoint));
+                // Names are the user's own text: folded in the user's locale on purpose, not in Locale.ROOT.
+                String lowerName = effectiveName.toLowerCase(Locale.getDefault());
                 allViews = allViews.stream()
-                        .filter(v -> v.name() != null && v.name().toLowerCase().contains(lowerName))
+                        .filter(v -> v.name() != null && v.name().toLowerCase(Locale.getDefault()).contains(lowerName))
                         .collect(Collectors.toList());
-                logger.debug("Name filter '{}' reduced views to {}", effectiveName, allViews.size());
+                logger.debug("Name filter '{}' reduced views to {}", CallerText.logged(effectiveName), allViews.size());
             }
 
             int totalCount = allViews.size();
@@ -545,8 +528,8 @@ public class ViewHandler {
                 Map<String, String> cursorParams = new LinkedHashMap<>();
                 cursorParams.put("viewpoint", effectiveViewpoint);
                 cursorParams.put("name", effectiveName);
-                String nextCursor = PaginationCursor.encode(
-                        modelVersion, offset + limit, limit, totalCount, cursorParams);
+                String nextCursor = PaginationCursor.encode(modelVersion, CursorModelCheck.current(accessor),
+                        offset + limit, limit, totalCount, cursorParams);
                 ResponseFormatter.addCursorToken(envelope, nextCursor);
             }
 
@@ -566,7 +549,7 @@ public class ViewHandler {
             // Store in cache — skip when model changed (cache already invalidated)
             if (sessionManager != null && sessionId != null && !modelChanged) {
                 sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
             }
 
             return buildResult(jsonResult, false);
@@ -579,6 +562,10 @@ public class ViewHandler {
                     "Open an ArchiMate model in ArchimateTool",
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
 
         } catch (Exception e) {
             logger.error("Unexpected error handling get-views", e);
@@ -606,9 +593,11 @@ public class ViewHandler {
                 + "'standard' (default) returns standard fields. "
                 + "'full' returns all available fields. "
                 + "In the default json response the preset reaches the element and relationship rows "
-                + "only. The visualMetadata, connections, groups, notes and images arrays are returned "
-                + "in full at every preset, so narrowing the preset leaves them untouched. Use exclude "
-                + "to drop those arrays by name, or dryRun to size the response before you fetch it. "
+                + "only. The visualMetadata, connections, groups, notes, images, viewReferences and "
+                + "nonArchimateConnections arrays are returned in full at every preset, so narrowing the "
+                + "preset leaves them untouched. "
+                + "Use exclude to drop those arrays by name, or dryRun to size the response before you "
+                + "fetch it. "
                 + "This parameter and exclude apply to format=json and format=graph; format=summary "
                 + "and format=tree ignore both.");
         fieldsProp.put("enum", List.of("minimal", "standard", "full"));
@@ -629,13 +618,17 @@ public class ViewHandler {
         Map<String, Object> dryRunProp = new LinkedHashMap<>();
         dryRunProp.put("type", "boolean");
         dryRunProp.put("description", "Set to true to get a cost estimate without returning results. "
-                + "Returns estimated element and relationship counts, token size, and recommended field preset.");
+                + "Returns estimated element and relationship counts, token size, and recommended field preset. "
+                + "The estimate is for the format asked for: json and summary are charged the json estimate, "
+                + "and graph and tree add what their responses carry beyond the json one. A tree carries every "
+                + "array whatever exclude names, so its estimate does too.");
         properties.put("dryRun", dryRunProp);
 
         Map<String, Object> formatProp = new LinkedHashMap<>();
         formatProp.put("type", "string");
         formatProp.put("description", "Response format. 'json' (default) returns standard result object. "
-                + "'graph' returns deduplicated nodes/edges structure (elements as nodes, relationships as edges). "
+                + "'graph' returns deduplicated nodes/edges structure (elements as nodes, relationships as edges); "
+                + "every edge carries type, sourceId and targetId at every fields preset, minimal included. "
                 + "'summary' returns condensed natural language overview with element/relationship distributions. "
                 + "'tree' returns compact containment hierarchy showing groups and their children — "
                 + "ideal for discovering group viewObjectIds before calling layout-within-group, arrange-groups, or optimize-group-order. "
@@ -677,11 +670,8 @@ public class ViewHandler {
                         + "any odd dimension). The reference is the outermost stored bendpoint when the "
                         + "connection has one and the other element's center when it does not — and always the "
                         + "other element's center on a manhattan-routed view, which ignores stored bendpoints. "
-                        + "That reference is the absoluteBendpoints value published here, whose single division "
-                        + "truncates toward zero, while the renderer blends in floating point and floors; the "
-                        + "two agree on every non-negative coordinate and can differ by one pixel on a negative "
-                        + "one, which at a band boundary is enough to change the face. The field takes the "
-                        + "published value, so on those coordinates it under-claims rather than guesses. "
+                        + "That reference is the absoluteBendpoints value published here, which is the pixel the "
+                        + "renderer draws the bendpoint at, so the face follows the line as drawn. "
                         + "EITHER FIELD IS OMITTED WHEN NO SINGLE FACE IS TRUE, WHICH NEVER MEANS 'no face': the "
                         + "line attaches at a corner (on two face lines at once), the reference lands inside the "
                         + "box, a rounded figure puts the attachment on its corner arc, the endpoint is a "
@@ -697,9 +687,10 @@ public class ViewHandler {
                         + "the reported point interpolates between those two reconstructions at the weight "
                         + "Archi draws with — bendpoint i of n sits (i+1)/(n+1) of the way from the "
                         + "source-anchored reconstruction to the target-anchored one — in integer canvas "
-                        + "pixels against whole-pixel element centres — the rendered point, rounded "
-                        + "once to the whole pixel this field carries, never a whole pixel away from "
-                        + "where the line is drawn. When the two reconstructions disagree — which "
+                        + "pixels against whole-pixel element centres, with the renderer's own arithmetic (a "
+                        + "float weight, a double blend, then floor) — the whole pixel the line is drawn "
+                        + "through, on a connection whose endpoints have moved as well. When the two "
+                        + "reconstructions disagree — which "
                         + "happens whenever an "
                         + "endpoint moved or was resized after the route was written, and is what "
                         + "assess-layout reports as anchorDriftCount — the drawn polyline is sheared, most "
@@ -710,10 +701,12 @@ public class ViewHandler {
                         + "there. "
                         + "Use 'fields' to control response verbosity and 'exclude' to omit specific fields. "
                         + "The two are not interchangeable levers on one axis: 'fields' narrows the element "
-                        + "and relationship rows only, while the visualMetadata, connections, groups, notes "
-                        + "and images arrays come back whole at every preset. On a view carrying connections "
-                        + "those five are usually the larger half of the payload, so 'exclude' is usually the "
-                        + "parameter that moves the response size and narrowing the preset alone will not. "
+                        + "and relationship rows only, while the visualMetadata, connections, groups, notes, "
+                        + "images, viewReferences and nonArchimateConnections arrays come back whole at every "
+                        + "preset. On a view carrying "
+                        + "connections those arrays are usually the larger half of the payload, so 'exclude' is "
+                        + "usually the parameter that moves the response size and narrowing the preset alone "
+                        + "will not. "
                         + "Both parameters are ignored by format=summary and format=tree. "
                         + "Use exclude=['visualMetadata','connections'] to omit position and routing data. "
                         + "Set dryRun=true to get a cost estimate without returning results. "
@@ -728,16 +721,46 @@ public class ViewHandler {
                         + "host's own coordinate space, reporting it in nestedContainersArranged. totalElements still "
                         + "counts a Grouping as the element it is; ungroupedElements counts only elements sitting loose "
                         + "on the canvas, so a top-level container is excluded from it. "
+                        + "A container's children in the tree include the images and view references it holds "
+                        + "(type 'image', and type 'viewReference' with referencedViewId), which layout-within-group "
+                        + "positions along with the elements; notes are listed too, and that tool leaves them where "
+                        + "they are. The tree stats count every kind of node the tree carries: totalImages and "
+                        + "totalViewReferences sit beside totalNotes, at every depth, and read 0 when there are none. "
                         + "The other formats agree on what a container is: format=summary counts both kinds under "
                         + "'Containers: N groups', and in format=graph every container node carries isGroup: true — "
                         + "the Grouping element nodes as well as the nodes tagged _nodeType: 'group'. "
-                        + "Set format=graph for deduplicated node/edge structure — edges carry viewConnectionId and nodes carry "
+                        + "The graph format also carries a node for each note, image and view reference (_nodeType "
+                        + "'note', 'image', 'viewReference'), and format=summary counts all three under "
+                        + "'Visual annotations'. A connection that is not an ArchiMate one is a format=graph edge "
+                        + "tagged _edgeType: 'connection' carrying its viewConnectionId, sourceViewObjectId and "
+                        + "targetViewObjectId, and format=summary counts those apart from the connections. "
+                        + "Set format=graph for deduplicated node/edge structure — edges carry type, sourceId, targetId (at "
+                        + "every fields preset) and viewConnectionId, and nodes carry "
                         + "viewObjectId (the visual ids to pass to remove-from-view / update-view-object; the edge/node id "
                         + "are model ids those tools reject), format=summary for condensed text overview. "
                         + "Elements in results include specialization field showing the primary specialization name (null if none). "
+                        + "The viewReferences array lists every view reference the view holds, at any depth, "
+                        + "as the same row add-view-reference-to-view answers with: its viewObjectId, bounds, "
+                        + "parentViewObjectId when a group or element holds it, styling (its verticalTextAlignment "
+                        + "is Archi's text position), the icon a user gave it (imagePath, imagePosition and showIcon, "
+                        + "each omitted at Archi's default), its labelExpression when it has one, and "
+                        + "referencedViewId, "
+                        + "the id of the view it points at. That id is what the model stores and can name a "
+                        + "view no longer in the model; it is omitted when the reference stores none. "
+                        + "The nonArchimateConnections array lists every connection that is not an ArchiMate one "
+                        + "(no relationship stands behind it: one drawn to or from a note, group, image or view "
+                        + "reference, or with Archi's plain Connection tool, including an ArchiMate connection "
+                        + "whose relationship is missing, which only a damaged model holds), each with its viewConnectionId, "
+                        + "sourceViewObjectId and targetViewObjectId, name, documentation, bendpoints, "
+                        + "absoluteBendpoints, styling, labelExpression, relativePosition, lineStyle, "
+                        + "sourceArrowhead/targetArrowhead, textAlignment and properties; it has no anchors or "
+                        + "render faces, and it is read-only: no tool writes a plain connection's styling. Either end can be another connection, which Archi allows: an "
+                        + "end id then names that connection, absoluteBendpoints is omitted, and an ArchiMate "
+                        + "connection drawn that way is listed in connections with no anchors or render faces at "
+                        + "either end. "
                         + "On Archi 5.10, a connection also carries relativePosition — the \"Label Offset\" anchor set by "
                         + "auto-route-connections to lift a Middle label off its own box — which is the only programmatic read-back "
-                        + "for the offset (omitted on Archi 5.7 and for the un-offset default; export-view does not render it). "
+                        + "for the offset (omitted before Archi 5.10 and for the un-offset default; export-view draws the label where the offset puts it). "
                         + "An element reports documentation and properties only when it has "
                         + "them, so an absent field means the element carries nothing there "
                         + "rather than that it was left out. "
@@ -758,6 +781,7 @@ public class ViewHandler {
         logger.info("Handling get-view-contents request");
         try {
             // Extract and validate required viewId parameter
+            ToolArguments.requireTextType(request.arguments(), "viewId");
             Object viewIdObj = (request.arguments() != null) ? request.arguments().get("viewId") : null;
             if (!(viewIdObj instanceof String viewId) || viewId.isBlank()) {
                 ErrorResponse error = new ErrorResponse(
@@ -773,7 +797,7 @@ public class ViewHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (request.arguments() != null) {
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -781,31 +805,25 @@ public class ViewHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
             }
 
             // Extract dryRun parameter
-            boolean dryRun = false;
-            if (request.arguments() != null) {
-                Object dryRunObj = request.arguments().get("dryRun");
-                if (dryRunObj instanceof Boolean b) {
-                    dryRun = b;
-                }
-            }
+            boolean dryRun = ToolArguments.flag(request.arguments(), "dryRun", false);
 
             // Extract and validate format parameter
             ResponseFormat format = ResponseFormat.JSON;
             if (request.arguments() != null) {
-                Object formatObj = request.arguments().get("format");
+                Object formatObj = ToolArguments.optionalText(request.arguments(), "format", false);
                 if (formatObj instanceof String f && !f.isBlank()) {
                     ResponseFormat parsed = ResponseFormat.fromString(f);
                     if (parsed == null) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid format: '" + f + "'",
+                                "Invalid format: " + CallerText.quoted(f),
                                 null,
                                 "Valid formats: json, graph, summary, tree",
                                 null);
@@ -821,7 +839,7 @@ public class ViewHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -850,11 +868,11 @@ public class ViewHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
-            logger.debug("View ID: {}, field selection — preset: {}, exclude: {}", viewId, preset, effectiveExclude);
+            logger.debug("View ID: {}, field selection — preset: {}, exclude: {}", CallerText.logged(viewId), preset, CallerText.logged(effectiveExclude));
 
             String modelVersion = accessor.getModelVersion();
 
@@ -870,13 +888,14 @@ public class ViewHandler {
 
             // Cache check — includes format for different envelopes
             String cacheKey = CacheKeyBuilder.buildCacheKey("view-contents", viewId,
-                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "fields", preset, "warning", warningMessage,
+                    "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "format", format.value());
             if (sessionManager != null && sessionId != null && !modelChanged && !dryRun) {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -897,30 +916,38 @@ public class ViewHandler {
                     logger.info("Handling get-view-contents with dryRun=true");
                     int elementCount = contents.elements().size();
                     int relationshipCount = contents.relationships().size();
-                    // Priced on all seven arrays the response carries, not just the two the
-                    // caller asked about. The five visual arrays do not follow the preset and are
-                    // usually the larger half of the payload, so an estimate that omitted them
-                    // under-reported every view and under-reported hardest at fields=minimal,
-                    // where the two preset-aware terms shrink and the other five do not.
+                    // Priced on every array the response carries, not just the two the caller
+                    // asked about. The visual arrays do not follow the preset and are usually the
+                    // larger half of the payload, so an estimate that omitted them under-reported
+                    // every view and under-reported hardest at fields=minimal, where the two
+                    // preset-aware terms shrink and the others do not.
+                    // A tree is built from every array whatever exclude names, so it is priced on all
+                    // of them: an excluded array still arrives there as nodes.
+                    Set<String> chargedExclude = format == ResponseFormat.TREE ? null : effectiveExclude;
                     CostEstimator.ViewContentsCounts counts = new CostEstimator.ViewContentsCounts(
                             elementCount,
                             relationshipCount,
-                            chargedRowCount(contents.visualMetadata(), effectiveExclude, "visualMetadata"),
-                            chargedRowCount(contents.connections(), effectiveExclude, "connections"),
-                            chargedRowCount(contents.groups(), effectiveExclude, "groups"),
-                            chargedRowCount(contents.notes(), effectiveExclude, "notes"),
-                            chargedRowCount(contents.images(), effectiveExclude, "images"));
-                    int estimatedTokens = CostEstimator.estimateTokensForViewContents(counts, preset);
+                            chargedRowCount(contents.visualMetadata(), chargedExclude, "visualMetadata"),
+                            chargedRowCount(contents.connections(), chargedExclude, "connections"),
+                            chargedRowCount(contents.groups(), chargedExclude, "groups"),
+                            chargedRowCount(contents.notes(), chargedExclude, "notes"),
+                            chargedRowCount(contents.images(), chargedExclude, "images"),
+                            chargedRowCount(contents.viewReferences(), chargedExclude, "viewReferences"),
+                            chargedRowCount(contents.nonArchimateConnections(), chargedExclude,
+                                    "nonArchimateConnections"));
+                    // Priced for the format asked for: a graph or tree response can be longer than the
+                    // json one, so the json estimate is not an upper bound for them.
+                    int estimatedTokens = CostEstimator.estimateTokensForViewContents(counts, preset, format);
                     int tokensAtStandard = CostEstimator.estimateTokensForViewContents(counts,
-                            FieldSelector.FieldPreset.STANDARD);
+                            FieldSelector.FieldPreset.STANDARD, format);
                     String recommendedPreset = CostEstimator.recommendPreset(tokensAtStandard);
                     // The saving is projected with the same estimator that produced
-                    // estimatedTokens, so it accounts for all seven arrays rather than
+                    // estimatedTokens, so it accounts for every array rather than
                     // approximating the whole result as elements.
                     String recommendation = CostEstimator.buildRecommendation(
                             elementCount + relationshipCount, estimatedTokens, preset,
                             CostEstimator.estimateTokensForViewContents(counts,
-                                    FieldSelector.FieldPreset.MINIMAL));
+                                    FieldSelector.FieldPreset.MINIMAL, format));
                     logger.debug("DryRun estimate: {} elements + {} relationships, ~{} tokens at {} preset",
                             elementCount, relationshipCount, estimatedTokens, preset);
 
@@ -1080,6 +1107,31 @@ public class ViewHandler {
                     List<Map<String, Object>> relationships =
                             (List<Map<String, Object>>) filteredMap.get("relationships");
 
+                    // Every edge names its type and its ends at every field level, so one minimal
+                    // graph call can select a view's connections of one type and see what each
+                    // joins. Read from the RAW contents by id, before the graph is built, so the
+                    // "(referenced)" endpoint nodes dedupe as at standard; a field the caller
+                    // excludes stays out.
+                    if (relationships != null && contents.relationships() != null) {
+                        Map<String, RelationshipDto> rawById = new HashMap<>();
+                        contents.relationships().forEach(r -> rawById.put(r.id(), r));
+                        for (Map<String, Object> rel : relationships) {
+                            RelationshipDto raw = rawById.get(rel.get("id"));
+                            if (raw == null) {
+                                continue;
+                            }
+                            // A relationship missing an end has a null id there, which Map.entry refuses.
+                            for (Map.Entry<String, String> end : List.of(
+                                    new AbstractMap.SimpleEntry<>("type", raw.type()),
+                                    new AbstractMap.SimpleEntry<>("sourceId", raw.sourceId()),
+                                    new AbstractMap.SimpleEntry<>("targetId", raw.targetId()))) {
+                                if (end.getValue() != null
+                                        && (effectiveExclude == null || !effectiveExclude.contains(end.getKey()))) {
+                                    rel.putIfAbsent(end.getKey(), end.getValue());
+                                }
+                            }
+                        }
+                    }
                     Map<String, Object> graphData = GraphFormatter.formatAsGraph(elements, relationships);
                     @SuppressWarnings("unchecked")
                     List<Map<String, Object>> graphNodes =
@@ -1172,6 +1224,38 @@ public class ViewHandler {
                             graphNodes.add(node);
                         }
                     }
+                    // Images and view references the same way: each is a view object a caller
+                    // moves, restyles or removes by the viewObjectId its row carries.
+                    List<?> images = (List<?>) filteredMap.get("images");
+                    if (images != null) {
+                        for (Object image : images) {
+                            Map<String, Object> node = new LinkedHashMap<>(formatter.toMap(image));
+                            node.put("_nodeType", "image");
+                            graphNodes.add(node);
+                        }
+                    }
+                    List<?> viewReferences = (List<?>) filteredMap.get("viewReferences");
+                    if (viewReferences != null) {
+                        for (Object reference : viewReferences) {
+                            Map<String, Object> node = new LinkedHashMap<>(formatter.toMap(reference));
+                            node.put("_nodeType", "viewReference");
+                            graphNodes.add(node);
+                        }
+                    }
+                    // A connection that is not an ArchiMate one has no relationship, so no model id:
+                    // its edge carries the visual ids alone, tagged apart from the relationship edges.
+                    List<?> plainConnections = (List<?>) filteredMap.get("nonArchimateConnections");
+                    if (plainConnections != null) {
+                        for (Object row : plainConnections) {
+                            NonArchimateConnectionDto conn = (NonArchimateConnectionDto) row;
+                            Map<String, Object> edge = new LinkedHashMap<>();
+                            edge.put("viewConnectionId", conn.viewConnectionId());
+                            edge.put("sourceViewObjectId", conn.sourceViewObjectId());
+                            edge.put("targetViewObjectId", conn.targetViewObjectId());
+                            edge.put("_edgeType", "connection");
+                            graphEdges.add(edge);
+                        }
+                    }
 
                     nextSteps = List.of(
                             "Use get-element with a node ID for detailed information",
@@ -1210,7 +1294,7 @@ public class ViewHandler {
                 // Store in cache — skip when model changed (cache already invalidated)
                 if (sessionManager != null && sessionId != null && !modelChanged) {
                     sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                    logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                    logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
                 }
 
                 return buildResult(jsonResult, false);
@@ -1219,10 +1303,10 @@ public class ViewHandler {
                 String details;
                 try {
                     int totalViews = accessor.getViews(null).size();
-                    details = "No view found with ID '" + viewId + "'. The model contains " + totalViews + " views.";
+                    details = "No view found with ID " + CallerText.quoted(viewId) + ". The model contains " + totalViews + " views.";
                 } catch (Exception ex) {
                     logger.debug("Failed to get view count for error context", ex);
-                    details = "No view found with ID '" + viewId + "'.";
+                    details = "No view found with ID " + CallerText.quoted(viewId) + ".";
                 }
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.VIEW_NOT_FOUND,
@@ -1242,6 +1326,10 @@ public class ViewHandler {
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
 
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
+
         } catch (Exception e) {
             logger.error("Unexpected error handling get-view-contents", e);
             ErrorResponse error = new ErrorResponse(
@@ -1256,9 +1344,9 @@ public class ViewHandler {
      *
      * <p>Zero in the two cases where the client receives nothing: the array is absent from the
      * response because the caller excluded it by name, or the accessor left it null because the
-     * view contains none of that kind of object. The groups, notes and images arrays are the ones
-     * that arrive null when empty, and calling {@code size()} on them unguarded would fail the
-     * dry-run branch on every view that has no groups.</p>
+     * view contains none of that kind of object. The groups, notes, images, viewReferences and
+     * nonArchimateConnections arrays are the ones that arrive null when empty, and calling {@code size()} on them unguarded would
+     * fail the dry-run branch on every view that has no groups.</p>
      */
     private static int chargedRowCount(List<?> rows, Set<String> excludeFields, String excludeKey) {
         if (rows == null || (excludeFields != null && excludeFields.contains(excludeKey))) {
@@ -1273,7 +1361,7 @@ public class ViewHandler {
     private List<String> buildEmptyViewsNextSteps(String effectiveName) {
         if (effectiveName != null && !effectiveName.isEmpty()) {
             return List.of(
-                    "No views matching '" + effectiveName + "'. Try a broader name, "
+                    "No views matching " + CallerText.quoted(effectiveName) + ". Try a broader name, "
                     + "remove the name filter, or use search-elements to find elements by name.");
         }
         return List.of(
@@ -1310,6 +1398,8 @@ public class ViewHandler {
         // Stats counters
         int totalElements = 0;
         int totalNotes = 0;
+        int totalImages = 0;
+        int totalViewReferences = 0;
         int ungroupedElements = 0;
 
         // Container counters. Two different Archi objects render as an arrangeable labelled box,
@@ -1388,6 +1478,35 @@ public class ViewHandler {
             }
         }
 
+        // Images and view references, attached under their parent like notes so a group's
+        // childCount counts every child layout-within-group positions. An image carries no label:
+        // its documentation is free text, not a caption the canvas draws.
+        if (contents.images() != null) {
+            for (DiagramImageDto image : contents.images()) {
+                Map<String, Object> treeNode = new LinkedHashMap<>();
+                treeNode.put("viewObjectId", image.viewObjectId());
+                treeNode.put("type", "image");
+                String parent = image.parentViewObjectId();
+                childrenByParent.computeIfAbsent(
+                        parent != null ? parent : TREE_ROOT_KEY, k -> new ArrayList<>()).add(treeNode);
+                totalImages++;
+            }
+        }
+        if (contents.viewReferences() != null) {
+            for (EmbeddedViewDto reference : contents.viewReferences()) {
+                Map<String, Object> treeNode = new LinkedHashMap<>();
+                treeNode.put("viewObjectId", reference.viewObjectId());
+                treeNode.put("type", "viewReference");
+                if (reference.referencedViewId() != null) {
+                    treeNode.put("referencedViewId", reference.referencedViewId());
+                }
+                String parent = reference.parentViewObjectId();
+                childrenByParent.computeIfAbsent(
+                        parent != null ? parent : TREE_ROOT_KEY, k -> new ArrayList<>()).add(treeNode);
+                totalViewReferences++;
+            }
+        }
+
         // Process groups — build group nodes with children
         if (contents.groups() != null) {
             // First pass: create group nodes
@@ -1408,7 +1527,7 @@ public class ViewHandler {
             for (ViewGroupDto group : contents.groups()) {
                 Map<String, Object> groupNode = groupNodes.get(group.viewObjectId());
 
-                // Get children for this group (elements and notes already indexed)
+                // Get children for this group (elements, notes, images and references already indexed)
                 List<Map<String, Object>> children =
                         childrenByParent.getOrDefault(group.viewObjectId(), new ArrayList<>());
 
@@ -1483,6 +1602,10 @@ public class ViewHandler {
         stats.put("nestedGroups", nestedGroups);
         stats.put("totalElements", totalElements);
         stats.put("totalNotes", totalNotes);
+        // Always emitted, zero included: every node the tree carries is counted, and an omitted key
+        // would read as "not counted" rather than "none".
+        stats.put("totalImages", totalImages);
+        stats.put("totalViewReferences", totalViewReferences);
         stats.put("ungroupedElements", ungroupedElements);
 
         // Build result
@@ -1517,8 +1640,9 @@ public class ViewHandler {
         Map<String, Object> viewpointProp = new LinkedHashMap<>();
         viewpointProp.put("type", "string");
         viewpointProp.put("description",
-                "New viewpoint type (e.g., 'layered', 'application_cooperation'). "
-                + "Omit to leave unchanged. Set to empty string to clear the viewpoint.");
+                "New viewpoint id (e.g., 'layered', 'application_cooperation'), one Archi defines; an "
+                + "unknown id is refused, listing the valid ones. Omit to leave unchanged. Set to empty "
+                + "string to clear the viewpoint.");
 
         Map<String, Object> documentationProp = new LinkedHashMap<>();
         documentationProp.put("type", "string");
@@ -1565,8 +1689,8 @@ public class ViewHandler {
                         + "Only provided fields are modified; omitted fields remain unchanged. "
                         + "If a property key appears multiple times on the view, only the first "
                         + "occurrence is updated (the response DTO may show the last value for "
-                        + "that key). Warning: unrecognized viewpoint values are silently accepted "
-                        + "by Archi but render as no viewpoint in the UI. "
+                        + "that key). A viewpoint must be an id Archi defines: an unknown one is "
+                        + "refused, with the valid ids listed, rather than stored. "
                         + "Related: get-views (list existing), get-view-contents (inspect created view).")
                 .inputSchema(inputSchema)
                 .build();
@@ -1587,25 +1711,12 @@ public class ViewHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String name = HandlerUtils.optionalStringParam(args, "name");
-            String viewpoint = HandlerUtils.optionalStringParam(args, "viewpoint");
+            // "" clears; a blank or non-string value is refused, never read as absent. Ids are checked in model/.
+            String viewpoint = ToolArguments.text(args, "viewpoint", true);
             String documentation = HandlerUtils.optionalStringParam(args, "documentation");
             Map<String, String> props = HandlerUtils.optionalMapParamWithNulls(args, "properties");
-            String connectionRouterType = HandlerUtils.optionalStringParam(args,
-                    "connectionRouterType");
-
-            // Viewpoint clear semantics: empty string means "clear viewpoint".
-            // optionalStringParam returns null for missing/null, but we need to preserve "".
-            // Cross-ref: same logic in ArchiModelAccessorImpl.prepareBulkOperation("update-view")
-            // and ArchiModelAccessorImpl.prepareUpdateView() which converts "" to clearViewpoint=true.
-            if (args.containsKey("viewpoint") && "".equals(args.get("viewpoint"))) {
-                viewpoint = "";
-            }
-
-            // ConnectionRouterType clear semantics: empty string means "revert to manual".
-            if (args.containsKey("connectionRouterType")
-                    && "".equals(args.get("connectionRouterType"))) {
-                connectionRouterType = "";
-            }
+            // "" reverts to manual; a blank or non-string value is refused, never read as absent.
+            String connectionRouterType = ToolArguments.text(args, "connectionRouterType", true);
 
             MutationResult<ViewDto> result = accessor.updateView(
                     sessionId, viewId, name, viewpoint, documentation, props,

@@ -46,6 +46,7 @@ import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
+import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
  * Integration test verifying error response consistency across all tools.
@@ -57,6 +58,7 @@ import net.vheerden.archi.mcp.response.dto.ViewDto;
 public class ErrorConsistencyTest {
 
     private CommandRegistry registryNoModel;
+    private CommandRegistry registryNoModelWithSession;
     private CommandRegistry registryWithModel;
     private CommandRegistry registryExploding;
     private ObjectMapper objectMapper;
@@ -80,6 +82,23 @@ public class ErrorConsistencyTest {
         new DiscoveryHandler(noModelAccessor, formatter, registryNoModel, null).registerTools();
         new ApprovalHandler(noModelAccessor, formatter, registryNoModel, null).registerTools();
         new ViewPlacementHandler(noModelAccessor, formatter, registryNoModel, null).registerTools();
+
+        // Setup 1b: No model loaded, handlers given a session manager whose model key is what production
+        // resolves with no model open (null: nothing to key session state to)
+        registryNoModelWithSession = new CommandRegistry();
+        SessionManager sessions = new SessionManager(SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS);
+        sessions.setModelKeySupplier(() -> null);
+        new ModelQueryHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new ViewHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new SearchHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new TraversalHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new FolderHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new MutationHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new ElementCreationHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new ElementUpdateHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new DiscoveryHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new ApprovalHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
+        new ViewPlacementHandler(noModelAccessor, formatter, registryNoModelWithSession, sessions).registerTools();
 
         // Setup 2: Model loaded (for not-found errors — returns empty for unknown IDs)
         registryWithModel = new CommandRegistry();
@@ -112,12 +131,25 @@ public class ErrorConsistencyTest {
         new ViewPlacementHandler(explodingAccessor, formatter, registryExploding, null).registerTools();
     }
 
-    @SuppressWarnings("unchecked")
     @Test
     public void shouldReturnConsistentModelNotLoadedError() throws Exception {
         // All non-session tools with no model loaded should return MODEL_NOT_LOADED
+        assertModelNotLoadedForEveryTool(registryNoModel);
+    }
+
+    /**
+     * The same contract when the handlers have a session manager, as production always gives them:
+     * the session's model-version check must not turn "no model" into an internal error.
+     */
+    @Test
+    public void shouldReturnConsistentModelNotLoadedError_whenTheCallHasASession() throws Exception {
+        assertModelNotLoadedForEveryTool(registryNoModelWithSession);
+    }
+
+    /** Every non-session tool, with arguments that would otherwise be valid. */
+    private static Map<String, Map<String, Object>> noModelToolArgs() {
         // Note: Map.of() maxes at 10 entries, use Map.ofEntries for larger maps
-        Map<String, Map<String, Object>> toolArgs = Map.ofEntries(
+        return Map.ofEntries(
                 Map.entry("get-model-info", Collections.emptyMap()),
                 Map.entry("get-element", Map.of("id", "any-id")),
                 Map.entry("get-views", Collections.emptyMap()),
@@ -142,21 +174,34 @@ public class ErrorConsistencyTest {
                 Map.entry("update-view-object", Map.of("viewObjectId", "vo-1", "x", 100)),
                 Map.entry("update-view-connection", Map.of("viewConnectionId", "vc-1", "bendpoints", List.of())),
                 Map.entry("remove-from-view", Map.of("viewId", "v-1", "viewObjectId", "vo-1")));
+    }
 
+    @SuppressWarnings("unchecked")
+    private void assertModelNotLoadedForEveryTool(CommandRegistry registry) throws Exception {
+        Map<String, Map<String, Object>> toolArgs = noModelToolArgs();
+        List<String> failures = new ArrayList<>(); // every failing tool, not just the first
         for (Map.Entry<String, Map<String, Object>> entry : toolArgs.entrySet()) {
             String toolName = entry.getKey();
-            McpSchema.CallToolResult result = invokeTool(registryNoModel, toolName, entry.getValue());
-            assertTrue(toolName + " should be an error", result.isError());
+            try {
+                McpSchema.CallToolResult result = invokeTool(registry, toolName, entry.getValue());
+                assertTrue(toolName + " should be an error", result.isError());
 
-            Map<String, Object> envelope = parseJson(result);
-            Map<String, Object> error = (Map<String, Object>) envelope.get("error");
-            assertNotNull(toolName + " should have error object", error);
-            assertEquals(toolName + " should have MODEL_NOT_LOADED code",
-                    "MODEL_NOT_LOADED", error.get("code"));
-            assertNotNull(toolName + " should have message", error.get("message"));
-            assertEquals(toolName + " should have consistent suggestedCorrection",
-                    "Open an ArchiMate model in ArchimateTool", error.get("suggestedCorrection"));
+                Map<String, Object> envelope = parseJson(result);
+                Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+                assertNotNull(toolName + " should have error object", error);
+                assertEquals(toolName + " should have MODEL_NOT_LOADED code",
+                        "MODEL_NOT_LOADED", error.get("code"));
+                assertNotNull(toolName + " should have message", error.get("message"));
+                assertEquals(toolName + " should have consistent suggestedCorrection",
+                        "Open an ArchiMate model in ArchimateTool", error.get("suggestedCorrection"));
+            } catch (AssertionError e) {
+                failures.add(e.getMessage());
+            } catch (Exception e) {
+                failures.add(toolName + " threw " + e);
+            }
         }
+        Collections.sort(failures);
+        assertTrue(failures.size() + " tool(s) broke the contract: " + failures, failures.isEmpty());
     }
 
     @SuppressWarnings("unchecked")
@@ -505,9 +550,9 @@ public class ErrorConsistencyTest {
                 endError.get("suggestedCorrection"));
 
         // begin-batch → then begin-batch again → BATCH_ALREADY_ACTIVE
-        invokeTool(registryWithModel, "begin-batch", Collections.emptyMap());
+        invokeTool(registryWithModel, "begin-batch", Map.of("modelId", "model-1"));
         McpSchema.CallToolResult beginResult = invokeTool(registryWithModel, "begin-batch",
-                Collections.emptyMap());
+                Map.of("modelId", "model-1"));
         assertTrue("begin-batch should be an error", beginResult.isError());
         Map<String, Object> beginEnvelope = parseJson(beginResult);
         Map<String, Object> beginError = (Map<String, Object>) beginEnvelope.get("error");

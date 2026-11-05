@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.geometry.GeometryUtils;
 
 import org.slf4j.Logger;
@@ -33,6 +34,86 @@ public class EdgeAttachmentCalculator {
 
     static final int DEFAULT_CORNER_MARGIN = 5;
     static final int DEFAULT_MIN_SPACING = 8;
+
+    /**
+     * Distance in pixels between an element's model rectangle and the <em>face line</em> — the
+     * line on which this class places terminal bendpoints, and against which every downstream
+     * stage tests whether a terminal is still on its face.
+     *
+     * <p>This margin is what keeps a terminal bendpoint <strong>outside</strong> the figure box
+     * Archi's connection anchor classifies against. That classifier is not continuous: Archi's
+     * {@code OrthogonalAnchor} sorts the anchor's reference point — the outermost stored
+     * bendpoint — into a 5x5 zone grid, and every combination in which the reference lands
+     * <em>inside</em> the box falls through to a {@code default} arm that returns the box centre.
+     * A terminal one pixel the wrong side of that boundary therefore does not shift the drawn
+     * endpoint by a pixel; it moves it to the middle of the element.
+     *
+     * <p><strong>Why this carries headroom instead of being the smallest integer that is
+     * "outside": a one-pixel gap does not survive diagram zoom.</strong> Measured on a nine-column
+     * probe matrix — rounded and square targets, terminal at 1 / 4 / 8 px outside the face, in the
+     * corner arc band and at mid-face — rendered on macOS at 100% display scaling, where no
+     * platform device-scaling effect is in play and zoom is the only variable:
+     *
+     * <pre>
+     *   diagram zoom | margin 1 | margin 4 | margin 8
+     *   -------------+----------+----------+---------
+     *       100%     |  correct |  correct |  correct
+     *        50%     |  BROKEN  |  correct |  correct
+     *        25%     |  BROKEN  |  correct |  correct
+     * </pre>
+     *
+     * Every margin-1 column collapses to the element centre at both reduced zooms and every
+     * margin-4 and margin-8 column is correct; figure shape and position along the face make no
+     * difference, and the source terminals, fixed at 8px throughout as controls, never collapse.
+     * <strong>This is ordinary working zoom on every platform, not a display-scaling edge case</strong>
+     * — the renderer never sees the pixel the zoom transform divided away. That is what this
+     * constant is bought with.
+     *
+     * <p>A narrower defect with the same signature — Archi 5.10 on a <em>fractionally</em> scaled
+     * Windows display (125%, 150%) losing the gap in the model-to-device transform even at 100%
+     * zoom — is archimatetool/archi issue 1269, fixed upstream in two commits: a {@code
+     * PrecisionRectangle} in the anchor's bounding-box arithmetic, and an adjustment moving a
+     * centre-classified endpoint out to the figure edges.
+     *
+     * <p><strong>That upstream fix also closes the zoom path above — measured, not assumed.</strong>
+     * The two commits were compiled into an otherwise identical Archi 5.10.0 and run against the
+     * same model in the same workspace, with the orthogonal-anchor preference confirmed on in both:
+     * unpatched, margin 1 collapses at 50%; patched, every column is correct at 50% and at 25%. A
+     * single variable, so this constant has a defined end condition rather than being indefinite.
+     *
+     * <p><strong>It is still needed, for two reasons.</strong> Archi 5.10.0 is the released version
+     * and carries neither commit, so on it margin 1 is broken at ordinary working zoom on every
+     * platform. And <em>older</em> versions are untested: the {@code default} arm that returns the
+     * box centre long predates 5.10, so the zoom exposure plausibly predates it too, and nothing
+     * here measures 5.9 or earlier. Narrow this constant only when both are addressed — not on
+     * 5.10.1 shipping alone. Re-measure with {@code tools/build-terminal-probe-matrix.py}, which
+     * rebuilds the matrix from nothing over MCP and needs no particular platform and no fractional
+     * display scale, only the zoom control.
+     *
+     * <p>The margin is single-sourced through {@link #faceLineCoordinate} precisely because it is
+     * both a <em>producer</em> constant (where terminals are put) and a <em>classifier</em>
+     * constant (how a face is recognised afterwards, in
+     * {@code RoutingPipeline.determineFaceFromTerminal} and {@code isOnElementPerimeter}).
+     * Widening one without the other makes every terminal read as off its face line and changes
+     * what the terminal-restoration stages do.
+     */
+    public static final int TERMINAL_FACE_MARGIN = 4;
+
+    /**
+     * Absolute-canvas coordinate of {@code element}'s face line for {@code face} — the single
+     * source of truth for the {@link #TERMINAL_FACE_MARGIN} offset.
+     *
+     * <p>For {@code LEFT} and {@code RIGHT} this is an x coordinate; for {@code TOP} and
+     * {@code BOTTOM}, a y coordinate.
+     */
+    public static int faceLineCoordinate(RoutingRect element, Face face) {
+        return switch (face) {
+            case LEFT   -> element.x() - TERMINAL_FACE_MARGIN;
+            case RIGHT  -> element.x() + element.width() + TERMINAL_FACE_MARGIN;
+            case TOP    -> element.y() - TERMINAL_FACE_MARGIN;
+            case BOTTOM -> element.y() + element.height() + TERMINAL_FACE_MARGIN;
+        };
+    }
 
     /**
      * Internal threshold for Phase 1.1 hub face redistribution — at or above this
@@ -113,7 +194,8 @@ public class EdgeAttachmentCalculator {
      * @param face        which face to attach to
      * @param index       0-based index of this connection on the face
      * @param totalOnFace total number of connections on this face
-     * @return [x, y] coordinates on the element edge
+     * @return [x, y] coordinates on the element's face line — {@link #TERMINAL_FACE_MARGIN}
+     *         pixels outside the element rectangle
      */
     public int[] computeAttachmentPoint(RoutingRect element, Face face, int index, int totalOnFace) {
         int x = element.x();
@@ -123,7 +205,7 @@ public class EdgeAttachmentCalculator {
 
         switch (face) {
             case TOP: {
-                int attachY = y - 1;
+                int attachY = faceLineCoordinate(element, Face.TOP);
                 int attachX = computeDistributedPosition(x, w, index, totalOnFace);
                 // Nudge slot off centerX to break ChopboxAnchor ray collinearity
                 if (totalOnFace > 1 && attachX == x + w / 2) {
@@ -132,7 +214,7 @@ public class EdgeAttachmentCalculator {
                 return new int[]{attachX, attachY};
             }
             case BOTTOM: {
-                int attachY = y + h + 1;
+                int attachY = faceLineCoordinate(element, Face.BOTTOM);
                 int attachX = computeDistributedPosition(x, w, index, totalOnFace);
                 if (totalOnFace > 1 && attachX == x + w / 2) {
                     attachX += 1;
@@ -140,7 +222,7 @@ public class EdgeAttachmentCalculator {
                 return new int[]{attachX, attachY};
             }
             case LEFT: {
-                int attachX = x - 1;
+                int attachX = faceLineCoordinate(element, Face.LEFT);
                 int attachY = computeDistributedPosition(y, h, index, totalOnFace);
                 // Nudge slot off centerY to break ChopboxAnchor ray collinearity
                 if (totalOnFace > 1 && attachY == y + h / 2) {
@@ -149,7 +231,7 @@ public class EdgeAttachmentCalculator {
                 return new int[]{attachX, attachY};
             }
             case RIGHT: {
-                int attachX = x + w + 1;
+                int attachX = faceLineCoordinate(element, Face.RIGHT);
                 int attachY = computeDistributedPosition(y, h, index, totalOnFace);
                 if (totalOnFace > 1 && attachY == y + h / 2) {
                     attachY += 1;
@@ -673,7 +755,7 @@ public class EdgeAttachmentCalculator {
                     dynamicCounts.merge(newFace, 1, Integer::sum);
 
                     logger.debug("Hub redistribution: conn {} moved from {} to {} on element {}",
-                            connectionIds.get(connIdx), face, newFace, elementId);
+                            connectionIds.get(connIdx), face, newFace, CallerText.logged(elementId));
 
                     alternateCounter++;
                 }

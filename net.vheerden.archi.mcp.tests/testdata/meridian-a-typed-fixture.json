@@ -1,0 +1,1136 @@
+{
+ "viewId": "id-f94bf904615944b6900f89740f6ba9e9",
+ "viewName": "A · Business Architecture",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "name": "Retail Banking Customer",
+   "x": 538,
+   "y": 1357,
+   "w": 214,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-98efdcaa2a9b4c37826ba707457c3296"
+  },
+  {
+   "id": "id-b23a39e157294614a84ca9edff223214",
+   "name": "Prospect / Applicant",
+   "x": 30,
+   "y": 1357,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-98efdcaa2a9b4c37826ba707457c3296"
+  },
+  {
+   "id": "id-e9fb2a6a652e45eb84cfbec1b510421f",
+   "name": "Third-Party Provider (TPP)",
+   "x": 260,
+   "y": 1357,
+   "w": 238,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-98efdcaa2a9b4c37826ba707457c3296"
+  },
+  {
+   "id": "id-a7b4deeb5a4646f5a0420910857ed115",
+   "name": "Account Opening Service",
+   "x": 30,
+   "y": 812,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-073633183eb94651973537fe00ff6a61",
+   "name": "Payments & Transfers Service",
+   "x": 356,
+   "y": 812,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-9acb509580014573b721e5af3fc362bd",
+   "name": "Lending & Mortgage Service",
+   "x": 1008,
+   "y": 812,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-affd665a12f4445ab9546139f6e4c83b",
+   "name": "Card Issuing & Servicing Service",
+   "x": 682,
+   "y": 812,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-c37859a2ea6c4adfa010dc0dce52f02e",
+   "name": "Digital Banking Service",
+   "x": 30,
+   "y": 920,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-7dc74e1e57cf40be8beadba4cfc4f549",
+   "name": "Branch Banking Service",
+   "x": 682,
+   "y": 920,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-48f3f5f34eb2445c8ffed5dbf198d79e",
+   "name": "Financial Advisory Service",
+   "x": 1008,
+   "y": 920,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-693f18011b98434a8f707efe814eab5c",
+   "name": "Customer Support Service",
+   "x": 356,
+   "y": 920,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-85e8f706e5c447ac89a53aa9850f33d1",
+   "name": "Open Banking Access Service",
+   "x": 30,
+   "y": 1028,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-4a651afe297842e9bcb61522cb79e008",
+   "name": "Savings & Deposits Service",
+   "x": 356,
+   "y": 1028,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-a59939d82226445aa3ba079b39f6637e"
+  },
+  {
+   "id": "id-4a10abb4109d4f11be1a9bc2a5781ca8",
+   "name": "Customer Onboarding",
+   "x": 30,
+   "y": 420,
+   "w": 238,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessFunction",
+   "figureType": 0,
+   "parentId": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e"
+  },
+  {
+   "id": "id-f740fa091b0d40488d192df77555a90e",
+   "name": "Payments Operations",
+   "x": 353,
+   "y": 420,
+   "w": 238,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessFunction",
+   "figureType": 0,
+   "parentId": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e"
+  },
+  {
+   "id": "id-d3de20563a0d43f7ba1cdb2a5f98198b",
+   "name": "Credit Risk Management",
+   "x": 676,
+   "y": 420,
+   "w": 238,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessFunction",
+   "figureType": 0,
+   "parentId": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e"
+  },
+  {
+   "id": "id-04d458043dec4212921d735de7a78054",
+   "name": "Financial Crime Compliance",
+   "x": 30,
+   "y": 573,
+   "w": 238,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessFunction",
+   "figureType": 0,
+   "parentId": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e"
+  },
+  {
+   "id": "id-c289253208004a8fb4b7786feff9c0db",
+   "name": "Customer Servicing",
+   "x": 353,
+   "y": 573,
+   "w": 238,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessFunction",
+   "figureType": 0,
+   "parentId": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e"
+  },
+  {
+   "id": "id-00db8212fff6482e83c303bd3c228ec9",
+   "name": "Meridian Retail Bank",
+   "x": 30,
+   "y": 54,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessActor",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-27ec487bb20846699be719e4beba79f8",
+   "name": "Relationship Manager",
+   "x": 305,
+   "y": 54,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-d734554903c54ff39ae18d13c6a5d0e1",
+   "name": "Branch Teller",
+   "x": 580,
+   "y": 54,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-cb8b0c25850c4fef949aac8803f2388f",
+   "name": "Loan Officer",
+   "x": 855,
+   "y": 54,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-065292a849794f60a8e6182aa49d06a3",
+   "name": "KYC / AML Analyst",
+   "x": 30,
+   "y": 194,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-0419365c05a444ee8f3ab700a6b449c4",
+   "name": "Fraud Analyst",
+   "x": 305,
+   "y": 194,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-e4d3ac58058244e494e4ad54f01965f1",
+   "name": "Contact Centre Agent",
+   "x": 580,
+   "y": 194,
+   "w": 190,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessRole",
+   "figureType": 0,
+   "parentId": "id-90d88da0051b424996285faef9295d18"
+  },
+  {
+   "id": "id-98efdcaa2a9b4c37826ba707457c3296",
+   "name": "Customers & Partners",
+   "x": 20,
+   "y": 1323,
+   "w": 742,
+   "h": 99,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-a59939d82226445aa3ba079b39f6637e",
+   "name": "Business Services",
+   "x": 20,
+   "y": 778,
+   "w": 1284,
+   "h": 328,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-049e63e2ca1c49d5a3ef0903ba5f0c6e",
+   "name": "Business Functions (Capabilities)",
+   "x": 20,
+   "y": 386,
+   "w": 904,
+   "h": 265,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-90d88da0051b424996285faef9295d18",
+   "name": "Organisation — Actors & Roles",
+   "x": 20,
+   "y": 20,
+   "w": 1035,
+   "h": 239,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-462b026f5e3e45bbb3cdbe33dc1e072a",
+   "name": "A · Business Architecture — Meridian Ret",
+   "x": 20,
+   "y": -80,
+   "w": 760,
+   "h": 60,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-a72d583e848847dca6d02314dfa74a74",
+   "sourceId": "id-a7b4deeb5a4646f5a0420910857ed115",
+   "targetId": "id-b23a39e157294614a84ca9edff223214",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -197,
+     "startY": 0,
+     "endX": -149,
+     "endY": -538
+    },
+    {
+     "startX": -197,
+     "startY": 538,
+     "endX": -149,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-2181d95289d3482c866885f4c1d3cc23",
+   "sourceId": "id-073633183eb94651973537fe00ff6a61",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 144,
+     "startY": 0,
+     "endX": -2,
+     "endY": -538
+    }
+   ]
+  },
+  {
+   "id": "id-bc84151024a345ee9545f76eba8fe525",
+   "sourceId": "id-9acb509580014573b721e5af3fc362bd",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -153,
+     "startY": 0,
+     "endX": 353,
+     "endY": -538
+    },
+    {
+     "startX": -153,
+     "startY": 531,
+     "endX": 353,
+     "endY": -7
+    },
+    {
+     "startX": -398,
+     "startY": 531,
+     "endX": 108,
+     "endY": -7
+    }
+   ]
+  },
+  {
+   "id": "id-2dcdd64f13cd4b1599624e11b6489748",
+   "sourceId": "id-affd665a12f4445ab9546139f6e4c83b",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -150,
+     "startY": 0,
+     "endX": 30,
+     "endY": -538
+    },
+    {
+     "startX": -150,
+     "startY": 380,
+     "endX": 30,
+     "endY": -158
+    },
+    {
+     "startX": -214,
+     "startY": 380,
+     "endX": -34,
+     "endY": -158
+    },
+    {
+     "startX": -214,
+     "startY": 510,
+     "endX": -34,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-73bd6654de334486907eff369226aa87",
+   "sourceId": "id-c37859a2ea6c4adfa010dc0dce52f02e",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 144,
+     "startY": -10,
+     "endX": -328,
+     "endY": -440
+    },
+    {
+     "startX": 162,
+     "startY": -10,
+     "endX": -310,
+     "endY": -440
+    },
+    {
+     "startX": 162,
+     "startY": 393,
+     "endX": -310,
+     "endY": -37
+    },
+    {
+     "startX": 353,
+     "startY": 393,
+     "endX": -119,
+     "endY": -37
+    },
+    {
+     "startX": 353,
+     "startY": 430,
+     "endX": -119,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-08161527998441eb9747b0743de86d60",
+   "sourceId": "id-7dc74e1e57cf40be8beadba4cfc4f549",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -144,
+     "startY": 0,
+     "endX": 36,
+     "endY": -430
+    },
+    {
+     "startX": -159,
+     "startY": 0,
+     "endX": 21,
+     "endY": -430
+    },
+    {
+     "startX": -159,
+     "startY": 272,
+     "endX": 21,
+     "endY": -158
+    },
+    {
+     "startX": -112,
+     "startY": 272,
+     "endX": 68,
+     "endY": -158
+    },
+    {
+     "startX": -112,
+     "startY": 402,
+     "endX": 68,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-38fa0b6edc1646f78757927030281064",
+   "sourceId": "id-48f3f5f34eb2445c8ffed5dbf198d79e",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 84,
+     "endX": 506,
+     "endY": -346
+    },
+    {
+     "startX": -349,
+     "startY": 84,
+     "endX": 157,
+     "endY": -346
+    },
+    {
+     "startX": -349,
+     "startY": 430,
+     "endX": 157,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-7e30b2962f6d49ad9400318540ab6bb1",
+   "sourceId": "id-693f18011b98434a8f707efe814eab5c",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 144,
+     "startY": 0,
+     "endX": -2,
+     "endY": -430
+    },
+    {
+     "startX": 156,
+     "startY": 0,
+     "endX": 10,
+     "endY": -430
+    },
+    {
+     "startX": 156,
+     "startY": 402,
+     "endX": 10,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-1fa24770304545e5ba193cc37d07839d",
+   "sourceId": "id-85e8f706e5c447ac89a53aa9850f33d1",
+   "targetId": "id-e9fb2a6a652e45eb84cfbec1b510421f",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 146,
+     "endX": -206,
+     "endY": -176
+    },
+    {
+     "startX": 206,
+     "startY": 146,
+     "endX": 0,
+     "endY": -176
+    },
+    {
+     "startX": 206,
+     "startY": 294,
+     "endX": 0,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-c0b87af275344862a52b099490f9b703",
+   "sourceId": "id-4a651afe297842e9bcb61522cb79e008",
+   "targetId": "id-910321f3cd6241e38312be6dfe9a2b43",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 147,
+     "startY": 0,
+     "endX": 1,
+     "endY": -322
+    },
+    {
+     "startX": 147,
+     "startY": 294,
+     "endX": 1,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-a39c42a2f1c1477f8872b04892107f4d",
+   "sourceId": "id-4a10abb4109d4f11be1a9bc2a5781ca8",
+   "targetId": "id-a7b4deeb5a4646f5a0420910857ed115",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -203,
+     "startY": 0,
+     "endX": -227,
+     "endY": -399
+    },
+    {
+     "startX": -203,
+     "startY": 399,
+     "endX": -227,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-c91b98799f6c440daec35f8aa9899d0d",
+   "sourceId": "id-f740fa091b0d40488d192df77555a90e",
+   "targetId": "id-073633183eb94651973537fe00ff6a61",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -162,
+     "startY": 0,
+     "endX": -189,
+     "endY": -399
+    },
+    {
+     "startX": -162,
+     "startY": 288,
+     "endX": -189,
+     "endY": -111
+    },
+    {
+     "startX": 27,
+     "startY": 288,
+     "endX": 0,
+     "endY": -111
+    }
+   ]
+  },
+  {
+   "id": "id-3dd1493a19034dd7aba31a5bbf702663",
+   "sourceId": "id-f740fa091b0d40488d192df77555a90e",
+   "targetId": "id-affd665a12f4445ab9546139f6e4c83b",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 77,
+     "endX": -353,
+     "endY": -322
+    },
+    {
+     "startX": 353,
+     "startY": 77,
+     "endX": 0,
+     "endY": -322
+    },
+    {
+     "startX": 353,
+     "startY": 364,
+     "endX": 0,
+     "endY": -35
+    }
+   ]
+  },
+  {
+   "id": "id-5ce7a836c9514a129e1fcba3da445267",
+   "sourceId": "id-d3de20563a0d43f7ba1cdb2a5f98198b",
+   "targetId": "id-9acb509580014573b721e5af3fc362bd",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -236,
+     "endY": -399
+    },
+    {
+     "startX": 356,
+     "startY": 0,
+     "endX": 0,
+     "endY": -399
+    },
+    {
+     "startX": 356,
+     "startY": 364,
+     "endX": 0,
+     "endY": -35
+    }
+   ]
+  },
+  {
+   "id": "id-06b0ec1b30434ef3843b10f2dbe6eaa7",
+   "sourceId": "id-c289253208004a8fb4b7786feff9c0db",
+   "targetId": "id-c37859a2ea6c4adfa010dc0dce52f02e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -120,
+     "startY": 0,
+     "endX": 179,
+     "endY": -354
+    },
+    {
+     "startX": -146,
+     "startY": 0,
+     "endX": 153,
+     "endY": -354
+    },
+    {
+     "startX": -146,
+     "startY": 354,
+     "endX": 153,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-6453b3d3cf0f4a8ab687d3ba9b937ff0",
+   "sourceId": "id-c289253208004a8fb4b7786feff9c0db",
+   "targetId": "id-693f18011b98434a8f707efe814eab5c",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -129,
+     "startY": 0,
+     "endX": -156,
+     "endY": -354
+    },
+    {
+     "startX": -129,
+     "startY": 300,
+     "endX": -156,
+     "endY": -54
+    },
+    {
+     "startX": 27,
+     "startY": 300,
+     "endX": 0,
+     "endY": -54
+    }
+   ]
+  },
+  {
+   "id": "id-aa6dde05653b46f79d978674ba3eb853",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-27ec487bb20846699be719e4beba79f8",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 96,
+     "startY": 41,
+     "endX": -179,
+     "endY": 41
+    },
+    {
+     "startX": 179,
+     "startY": 41,
+     "endX": -96,
+     "endY": 41
+    }
+   ]
+  },
+  {
+   "id": "id-fdf7fe594e8148ab9db9024d033b50f2",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-d734554903c54ff39ae18d13c6a5d0e1",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 96,
+     "startY": 8,
+     "endX": -454,
+     "endY": 8
+    },
+    {
+     "startX": 96,
+     "startY": 38,
+     "endX": -454,
+     "endY": 38
+    },
+    {
+     "startX": 550,
+     "startY": 38,
+     "endX": 0,
+     "endY": 38
+    }
+   ]
+  },
+  {
+   "id": "id-7eefb9ffb52d45e79b455062c6cdbc51",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-cb8b0c25850c4fef949aac8803f2388f",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 96,
+     "startY": -7,
+     "endX": -729,
+     "endY": -7
+    },
+    {
+     "startX": 103,
+     "startY": -7,
+     "endX": -722,
+     "endY": -7
+    },
+    {
+     "startX": 103,
+     "startY": -37,
+     "endX": -722,
+     "endY": -37
+    },
+    {
+     "startX": 825,
+     "startY": -37,
+     "endX": 0,
+     "endY": -37
+    }
+   ]
+  },
+  {
+   "id": "id-412a29cecb244fa6b5d6f0bab88fd5ee",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-065292a849794f60a8e6182aa49d06a3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 29,
+     "endX": 0,
+     "endY": -111
+    },
+    {
+     "startX": 0,
+     "startY": 112,
+     "endX": 0,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-bbedee7bd56b4825894c157c81c4966b",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-0419365c05a444ee8f3ab700a6b449c4",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 96,
+     "startY": 0,
+     "endX": -179,
+     "endY": -140
+    },
+    {
+     "startX": 153,
+     "startY": 0,
+     "endX": -122,
+     "endY": -140
+    },
+    {
+     "startX": 153,
+     "startY": 140,
+     "endX": -122,
+     "endY": 0
+    },
+    {
+     "startX": 179,
+     "startY": 140,
+     "endX": -96,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-3298988a9d2f48d2912211ca378a2ef5",
+   "sourceId": "id-00db8212fff6482e83c303bd3c228ec9",
+   "targetId": "id-e4d3ac58058244e494e4ad54f01965f1",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 96,
+     "startY": 8,
+     "endX": -454,
+     "endY": -132
+    },
+    {
+     "startX": 104,
+     "startY": 8,
+     "endX": -446,
+     "endY": -132
+    },
+    {
+     "startX": 104,
+     "startY": 103,
+     "endX": -446,
+     "endY": -37
+    },
+    {
+     "startX": 550,
+     "startY": 103,
+     "endX": 0,
+     "endY": -37
+    }
+   ]
+  },
+  {
+   "id": "id-bba4f0a6b6f24e3ea01ecf0cd001ee39",
+   "sourceId": "id-27ec487bb20846699be719e4beba79f8",
+   "targetId": "id-c289253208004a8fb4b7786feff9c0db",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -105,
+     "startY": 0,
+     "endX": -177,
+     "endY": -519
+    },
+    {
+     "startX": -105,
+     "startY": 624,
+     "endX": -177,
+     "endY": 105
+    },
+    {
+     "startX": 72,
+     "startY": 624,
+     "endX": 0,
+     "endY": 105
+    }
+   ]
+  },
+  {
+   "id": "id-11ed1cd5d3e4458f85855d96c2cf4884",
+   "sourceId": "id-d734554903c54ff39ae18d13c6a5d0e1",
+   "targetId": "id-c289253208004a8fb4b7786feff9c0db",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -138,
+     "startY": 0,
+     "endX": 65,
+     "endY": -519
+    },
+    {
+     "startX": -138,
+     "startY": 329,
+     "endX": 65,
+     "endY": -190
+    },
+    {
+     "startX": -57,
+     "startY": 329,
+     "endX": 146,
+     "endY": -190
+    },
+    {
+     "startX": -57,
+     "startY": 519,
+     "endX": 146,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-9a68c817c09e428f926c2b92c5620453",
+   "sourceId": "id-cb8b0c25850c4fef949aac8803f2388f",
+   "targetId": "id-d3de20563a0d43f7ba1cdb2a5f98198b",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -96,
+     "startY": 0,
+     "endX": 59,
+     "endY": -366
+    },
+    {
+     "startX": -155,
+     "startY": 0,
+     "endX": 0,
+     "endY": -366
+    },
+    {
+     "startX": -155,
+     "startY": 338,
+     "endX": 0,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-534c84be6ae64d7982aa472c6e7b73c2",
+   "sourceId": "id-065292a849794f60a8e6182aa49d06a3",
+   "targetId": "id-4a10abb4109d4f11be1a9bc2a5781ca8",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 29,
+     "endX": -24,
+     "endY": -197
+    },
+    {
+     "startX": 0,
+     "startY": 113,
+     "endX": -24,
+     "endY": -113
+    },
+    {
+     "startX": 24,
+     "startY": 113,
+     "endX": 0,
+     "endY": -113
+    },
+    {
+     "startX": 24,
+     "startY": 198,
+     "endX": 0,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-f6f2c01c34ec40b5a9523e2f41b1d10a",
+   "sourceId": "id-065292a849794f60a8e6182aa49d06a3",
+   "targetId": "id-04d458043dec4212921d735de7a78054",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -119,
+     "startY": 0,
+     "endX": -143,
+     "endY": -386
+    },
+    {
+     "startX": -119,
+     "startY": 386,
+     "endX": -143,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-ba6868feb8ef4389a0a225c6b79f0a84",
+   "sourceId": "id-0419365c05a444ee8f3ab700a6b449c4",
+   "targetId": "id-04d458043dec4212921d735de7a78054",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -96,
+     "startY": -7,
+     "endX": 155,
+     "endY": -393
+    },
+    {
+     "startX": -122,
+     "startY": -7,
+     "endX": 129,
+     "endY": -393
+    },
+    {
+     "startX": -122,
+     "startY": 386,
+     "endX": 129,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-edd2560e2dfa47caa7f049d0f3bb1c75",
+   "sourceId": "id-e4d3ac58058244e494e4ad54f01965f1",
+   "targetId": "id-c289253208004a8fb4b7786feff9c0db",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 29,
+     "endX": 203,
+     "endY": -350
+    },
+    {
+     "startX": 0,
+     "startY": 114,
+     "endX": 203,
+     "endY": -265
+    },
+    {
+     "startX": -27,
+     "startY": 114,
+     "endX": 176,
+     "endY": -265
+    },
+    {
+     "startX": -27,
+     "startY": 379,
+     "endX": 176,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

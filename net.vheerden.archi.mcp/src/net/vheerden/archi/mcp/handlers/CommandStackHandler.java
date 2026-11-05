@@ -14,11 +14,13 @@ import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.UndoRedoResultDto;
+import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
  * Handler for command stack undo/redo MCP tools.
@@ -38,6 +40,7 @@ public class CommandStackHandler {
 	private final ArchiModelAccessor accessor;
 	private final ResponseFormatter formatter;
 	private final CommandRegistry registry;
+	private final SessionManager sessionManager;
 
 	/**
 	 * Creates a CommandStackHandler with its required dependencies.
@@ -49,9 +52,23 @@ public class CommandStackHandler {
 	public CommandStackHandler(ArchiModelAccessor accessor,
 							   ResponseFormatter formatter,
 							   CommandRegistry registry) {
+		this(accessor, formatter, registry, null);
+	}
+
+	/**
+	 * Creates a CommandStackHandler that resolves the calling session, so undo and redo are held
+	 * to that session's open batch.
+	 *
+	 * @param sessionManager the session manager, nullable (every call then uses the default session)
+	 */
+	public CommandStackHandler(ArchiModelAccessor accessor,
+							   ResponseFormatter formatter,
+							   CommandRegistry registry,
+							   SessionManager sessionManager) {
 		this.accessor = Objects.requireNonNull(accessor, "accessor must not be null");
 		this.formatter = Objects.requireNonNull(formatter, "formatter must not be null");
 		this.registry = Objects.requireNonNull(registry, "registry must not be null");
+		this.sessionManager = sessionManager;
 	}
 
 	/**
@@ -69,7 +86,8 @@ public class CommandStackHandler {
 		properties.put("steps", Map.of(
 				"type", "integer",
 				"description", "Number of operations to undo (default: 1). Each step undoes one top-level "
-						+ "CommandStack entry — a bulk-mutate with 10 sub-operations is still ONE undo step.",
+						+ "CommandStack entry — a bulk-mutate with 10 sub-operations is still ONE undo step. "
+						+ "A count larger than the history undoes what there is, and stops at a change made by hand.",
 				"minimum", 1));
 
 		McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
@@ -83,7 +101,13 @@ public class CommandStackHandler {
 						+ "together with steps=2). Standard sequential undo — most recent operation first. "
 						+ "SPECULATIVE EXECUTION: Use undo as a deliberate experimentation strategy — apply "
 						+ "layout or routing, run assess-layout to evaluate the result, then undo if "
-						+ "unsatisfied. This is the recommended way to 'preview' the effect of any mutation.")
+						+ "unsatisfied. This is the recommended way to 'preview' the effect of any mutation. "
+						+ "Undo stops at, and does not cross, a change made by hand in Archi. If an operation "
+						+ "fails while it is undone, the rest of it is still reversed, it leaves the undo "
+						+ "history, and the call fails with MUTATION_FAILED naming what was undone before it "
+						+ "and saying part of it may still be in the model. Refused with "
+						+ "MODEL_SHARED while another session is working on the same model, because Archi keeps "
+						+ "one undo history per model, not per session.")
 				.inputSchema(inputSchema)
 				.build();
 
@@ -97,7 +121,8 @@ public class CommandStackHandler {
 		Map<String, Object> properties = new LinkedHashMap<>();
 		properties.put("steps", Map.of(
 				"type", "integer",
-				"description", "Number of operations to redo (default: 1). Re-applies previously undone operations.",
+				"description", "Number of operations to redo (default: 1). Re-applies previously undone operations. "
+						+ "A count larger than the history redoes what there is, and stops at a change made by hand.",
 				"minimum", 1));
 
 		McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
@@ -107,7 +132,11 @@ public class CommandStackHandler {
 				.name("redo")
 				.description("[Mutation] Redo previously undone operation(s). Re-applies changes that were rolled back "
 						+ "by undo. The redo stack is cleared when a new mutation is performed after an undo "
-						+ "(standard undo/redo semantics).")
+						+ "(standard undo/redo semantics). If an operation fails while it is redone, what it "
+						+ "had redone is put back, it leaves the history, and the call fails with "
+						+ "MUTATION_FAILED naming what was redone before it and saying part of it may still be "
+						+ "in the model. Refused with MODEL_SHARED while another session is "
+						+ "working on the same model, as undo is.")
 				.inputSchema(inputSchema)
 				.build();
 
@@ -125,15 +154,12 @@ public class CommandStackHandler {
 		try {
 			HandlerUtils.requireModelLoaded(accessor);
 
-			int steps = 1;
-			if (request.arguments() != null) {
-				Object stepsObj = request.arguments().get("steps");
-				if (stepsObj instanceof Number n) {
-					steps = Math.max(1, n.intValue());
-				}
-			}
+			// A step count below 1 is refused rather than raised to 1.
+			Integer stepsParam = ToolArguments.wholeNumberWithin(request.arguments(), "steps", 1, Integer.MAX_VALUE);
+			int steps = stepsParam != null ? stepsParam : 1;
 
-			UndoRedoResultDto result = accessor.undo(steps);
+			UndoRedoResultDto result = accessor.undo(
+					HandlerUtils.extractSessionId(sessionManager, exchange), steps);
 
 			if (result.operationsPerformed() == 0 && result.blockedReason() != null) {
 				// Betrayal guard: the top of the stack is the human's change.
@@ -185,15 +211,12 @@ public class CommandStackHandler {
 		try {
 			HandlerUtils.requireModelLoaded(accessor);
 
-			int steps = 1;
-			if (request.arguments() != null) {
-				Object stepsObj = request.arguments().get("steps");
-				if (stepsObj instanceof Number n) {
-					steps = Math.max(1, n.intValue());
-				}
-			}
+			// A step count below 1 is refused rather than raised to 1.
+			Integer stepsParam = ToolArguments.wholeNumberWithin(request.arguments(), "steps", 1, Integer.MAX_VALUE);
+			int steps = stepsParam != null ? stepsParam : 1;
 
-			UndoRedoResultDto result = accessor.redo(steps);
+			UndoRedoResultDto result = accessor.redo(
+					HandlerUtils.extractSessionId(sessionManager, exchange), steps);
 
 			if (result.operationsPerformed() == 0 && result.blockedReason() != null) {
 				// Betrayal guard: the top redo entry is the human's change.

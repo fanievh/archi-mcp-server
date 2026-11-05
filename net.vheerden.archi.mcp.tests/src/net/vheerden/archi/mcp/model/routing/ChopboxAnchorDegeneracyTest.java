@@ -98,6 +98,13 @@ public class ChopboxAnchorDegeneracyTest {
         return rows;
     }
 
+
+    /** The face-line coordinate, read from production; its value is pinned by
+     * {@code EdgeAttachmentCalculatorTest}. */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
     private Row buildGeneratorRow(Face face, Shape shape, int offset) {
         // Anchor each rect at (200, 200) for the parallel-axis arithmetic
         int rx = 200;
@@ -111,28 +118,28 @@ public class ChopboxAnchorDegeneracyTest {
         AbsoluteBendpointDto far; // arbitrary second BP — the predicate looks only at bp[0]
         switch (face) {
             case LEFT: {
-                int x = source.x() - 1;
+                int x = faceLine(source, Face.LEFT);
                 int y = source.centerY() + offset;
                 slot = new AbsoluteBendpointDto(x, y);
                 far = new AbsoluteBendpointDto(0, y);
                 break;
             }
             case RIGHT: {
-                int x = source.x() + source.width() + 1;
+                int x = faceLine(source, Face.RIGHT);
                 int y = source.centerY() + offset;
                 slot = new AbsoluteBendpointDto(x, y);
                 far = new AbsoluteBendpointDto(1000, y);
                 break;
             }
             case TOP: {
-                int y = source.y() - 1;
+                int y = faceLine(source, Face.TOP);
                 int x = source.centerX() + offset;
                 slot = new AbsoluteBendpointDto(x, y);
                 far = new AbsoluteBendpointDto(x, 0);
                 break;
             }
             case BOTTOM: {
-                int y = source.y() + source.height() + 1;
+                int y = faceLine(source, Face.BOTTOM);
                 int x = source.centerX() + offset;
                 slot = new AbsoluteBendpointDto(x, y);
                 far = new AbsoluteBendpointDto(x, 1000);

@@ -8,6 +8,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.vheerden.archi.mcp.model.CallerText;
+
 /**
  * Per-session LRU cache for query results.
  *
@@ -78,6 +80,15 @@ public class SessionCache {
     }
 
     /**
+     * Removes every entry whose key starts with {@code prefix}.
+     *
+     * @param prefix the key prefix
+     */
+    public void removeKeysStartingWith(String prefix) {
+        entries.keySet().removeIf(key -> key.startsWith(prefix));
+    }
+
+    /**
      * Clears all entries from the cache.
      */
     public void clear() {
@@ -110,7 +121,7 @@ public class SessionCache {
                     .orElse(null);
             if (lruKey != null) {
                 entries.remove(lruKey);
-                logger.debug("LRU eviction: removed entry for key: {}", lruKey);
+                logger.debug("LRU eviction: removed entry for key: {}", CallerText.logged(lruKey));
             } else {
                 break;
             }

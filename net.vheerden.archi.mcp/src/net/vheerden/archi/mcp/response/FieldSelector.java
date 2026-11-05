@@ -87,7 +87,8 @@ public final class FieldSelector {
     public static final Set<String> VALID_EXCLUDE_FIELDS = Set.of(
             "documentation", "properties", "layer", "type", "specialization",
             "viewpointType", "connectionRouterType", "folderPath",
-            "visualMetadata", "connections", "groups", "notes", "images");
+            "visualMetadata", "connections", "groups", "notes", "images", "viewReferences",
+            "nonArchimateConnections");
 
     // ---- Preset field sets per DTO type ----
 
@@ -460,6 +461,20 @@ public final class FieldSelector {
         if (dto.images() != null) {
             if (excludeFields == null || !excludeFields.contains("images")) {
                 map.put("images", dto.images());
+            }
+        }
+
+        // View references — include unless excluded
+        if (dto.viewReferences() != null) {
+            if (excludeFields == null || !excludeFields.contains("viewReferences")) {
+                map.put("viewReferences", dto.viewReferences());
+            }
+        }
+
+        // Connections that are not ArchiMate ones — include unless excluded
+        if (dto.nonArchimateConnections() != null) {
+            if (excludeFields == null || !excludeFields.contains("nonArchimateConnections")) {
+                map.put("nonArchimateConnections", dto.nonArchimateConnections());
             }
         }
 

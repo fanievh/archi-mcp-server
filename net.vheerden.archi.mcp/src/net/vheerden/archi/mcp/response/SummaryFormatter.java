@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
@@ -36,14 +37,14 @@ public final class SummaryFormatter {
     public static String summarizeElements(List<ElementDto> elements, String searchContext) {
         if (elements == null || elements.isEmpty()) {
             if (searchContext != null) {
-                return "No elements found matching '" + searchContext + "'.";
+                return "No elements found matching " + CallerText.quoted(searchContext) + ".";
             }
             return "No elements found.";
         }
 
         int count = elements.size();
         String contextPart = (searchContext != null)
-                ? " matching '" + searchContext + "'" : "";
+                ? " matching " + CallerText.quoted(searchContext) : "";
 
         // Type distribution
         Map<String, Integer> typeCounts = new LinkedHashMap<>();
@@ -97,14 +98,14 @@ public final class SummaryFormatter {
     public static String summarizeViews(List<ViewDto> views, String nameContext) {
         if (views == null || views.isEmpty()) {
             if (nameContext != null && !nameContext.isEmpty()) {
-                return "No views found matching '" + nameContext + "'.";
+                return "No views found matching " + CallerText.quoted(nameContext) + ".";
             }
             return "No views found in model.";
         }
 
         int count = views.size();
         String contextPart = (nameContext != null && !nameContext.isEmpty())
-                ? " matching '" + nameContext + "'" : " in model";
+                ? " matching " + CallerText.quoted(nameContext) : " in model";
 
         Map<String, Integer> viewpointCounts = new LinkedHashMap<>();
         for (ViewDto v : views) {
@@ -137,12 +138,16 @@ public final class SummaryFormatter {
         int elementCount = viewContents.elements() != null ? viewContents.elements().size() : 0;
         int relCount = viewContents.relationships() != null ? viewContents.relationships().size() : 0;
         int connCount = viewContents.connections() != null ? viewContents.connections().size() : 0;
+        int plainConnCount = viewContents.nonArchimateConnections() != null
+                ? viewContents.nonArchimateConnections().size() : 0;
         // Both container kinds, per placement — the same number format=tree reports as totalGroups.
         // Sizing this from the groups() bucket alone counted native view groups only, so a view
         // built from ArchiMate Grouping containers reported no groups at all: the same false zero
         // the tree format used to give, reached by changing one parameter.
         int groupCount = ViewContainers.countContainers(viewContents);
         int noteCount = viewContents.notes() != null ? viewContents.notes().size() : 0;
+        int imageCount = viewContents.images() != null ? viewContents.images().size() : 0;
+        int referenceCount = viewContents.viewReferences() != null ? viewContents.viewReferences().size() : 0;
 
         StringBuilder sb = new StringBuilder();
         sb.append("View '").append(viewName).append("'");
@@ -152,6 +157,13 @@ public final class SummaryFormatter {
         sb.append(": ").append(elementCount).append(" elements, ")
                 .append(relCount).append(" relationships, ")
                 .append(connCount).append(" connections.");
+        // Counted apart, and only when the view holds one, so a view without reads as it did: these
+        // stand for no relationship, and the count before them is of the ones that do.
+        if (plainConnCount > 0) {
+            sb.append(" Other connections: ").append(plainConnCount)
+                    .append(plainConnCount == 1 ? " connection that is not an ArchiMate relationship."
+                            : " connections that are not ArchiMate relationships.");
+        }
         // Containers are reported apart from notes now that the count includes ArchiMate Grouping
         // elements. A Grouping is a model concept that participates in relationships, so filing it
         // under "visual annotations" beside a sticky note would misdescribe half the number.
@@ -159,9 +171,21 @@ public final class SummaryFormatter {
             sb.append(" Containers: ").append(groupCount)
                     .append(groupCount == 1 ? " group" : " groups").append(".");
         }
+        // Images and view references are drawn objects with no model concept behind them, as a
+        // note is, so they are counted in the same clause. Only the kinds the view holds are named,
+        // which keeps the clause as it was on a view holding notes alone.
+        List<String> annotations = new ArrayList<>();
         if (noteCount > 0) {
-            sb.append(" Visual annotations: ").append(noteCount)
-                    .append(noteCount == 1 ? " note" : " notes").append(".");
+            annotations.add(noteCount + (noteCount == 1 ? " note" : " notes"));
+        }
+        if (imageCount > 0) {
+            annotations.add(imageCount + (imageCount == 1 ? " image" : " images"));
+        }
+        if (referenceCount > 0) {
+            annotations.add(referenceCount + (referenceCount == 1 ? " view reference" : " view references"));
+        }
+        if (!annotations.isEmpty()) {
+            sb.append(" Visual annotations: ").append(String.join(", ", annotations)).append(".");
         }
 
         // Element type distribution
@@ -289,14 +313,14 @@ public final class SummaryFormatter {
             List<RelationshipDto> relationships, String searchContext) {
         if (relationships == null || relationships.isEmpty()) {
             if (searchContext != null && !searchContext.isEmpty()) {
-                return "No relationships found matching '" + searchContext + "'.";
+                return "No relationships found matching " + CallerText.quoted(searchContext) + ".";
             }
             return "No relationships found.";
         }
 
         int count = relationships.size();
         String contextPart = (searchContext != null && !searchContext.isEmpty())
-                ? " matching '" + searchContext + "'" : "";
+                ? " matching " + CallerText.quoted(searchContext) : "";
 
         // Type distribution
         Map<String, Integer> typeCounts = new LinkedHashMap<>();

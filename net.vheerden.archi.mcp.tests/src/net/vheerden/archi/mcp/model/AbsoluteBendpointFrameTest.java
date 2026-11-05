@@ -12,6 +12,7 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.model.geometry.GeometryUtils;
 import net.vheerden.archi.mcp.model.routing.ViewFixture;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
@@ -21,16 +22,21 @@ import net.vheerden.archi.mcp.response.dto.BendpointDto;
  * surfaces that report one.
  *
  * <p>A stored bendpoint carries two reconstructions of the same point, one anchored on the source
- * centre and one on the target centre. Three arithmetics over those two numbers appear in this
- * project and in Archi, and they do not agree:
+ * centre and one on the target centre. Two arithmetics over those two numbers appear in this
+ * project, and they do not agree:
  *
  * <ul>
- *   <li>{@code ConnectionResponseBuilder} — whole-pixel centres, interpolated at the render weight
- *       in exact integer arithmetic. This is what a connection response reports.</li>
+ *   <li>{@code ConnectionResponseBuilder} — whole-pixel centres, blended with the renderer's own
+ *       arithmetic through {@code GeometryUtils.drawnBendpointCoordinate}. This is what a connection
+ *       response reports, and it is the pixel Archi draws.</li>
  *   <li>{@code AssessmentCollector} — the same weight, but against untruncated {@code double}
  *       centres and with no final rounding. This is what the layout assessor measures over.</li>
- *   <li>Archi's renderer — whole-pixel {@code ChopboxAnchor} reference points, interpolated at
- *       weight {@code (i + 1) / (n + 1)} in floating point. This is what a reader sees.</li>
+ *   <li>Archi's renderer (draw2d's {@code RelativeBendpoint}) — whole-pixel {@code ChopboxAnchor}
+ *       reference points, weight {@code (i + 1) / (n + 1)} kept as a {@code float} but widened to
+ *       {@code double} for both products, and the result floored as {@code (int) Math.floor(d +
+ *       1e-9)}. This is what a reader sees. It is reproduced once, by {@code
+ *       GeometryUtils.drawnBendpointCoordinate}, and both the builder and this class use that rather
+ *       than a copy.</li>
  * </ul>
  *
  * <p>The builder is driven directly — every reported coordinate below comes out of the production
@@ -65,19 +71,26 @@ public class AbsoluteBendpointFrameTest {
      * assessor's anchor-drift noise floor — both are the largest error a half-integral centre
      * stored through an integer offset can introduce — and it does not depend on {@code n}.
      *
-     * <p><strong>The final division contributes up to {@code n / (n + 1)}.</strong> A connection
-     * response divides once by {@code n + 1} and truncates toward zero, discarding a remainder of
-     * at most {@code n / (n + 1)} of a pixel. This component <em>does</em> depend on {@code n}, and
-     * it is what a flat one-half blend hid: dividing by two always discarded at most one half.
+     * <p><strong>The floor contributes up to {@code n / (n + 1)}, or one whole pixel.</strong> A
+     * connection response floors the blend, as the renderer does. The exact blend is a multiple of
+     * {@code 1 / (n + 1)}, so flooring it discards at most {@code n / (n + 1)} of a pixel. That is
+     * the whole story only when every weight {@code (i + 1) / (n + 1)} is exact in a {@code float},
+     * which is when {@code n + 1} is a power of two. At any other count the float weight can land a
+     * whole-number blend a few millionths low, past the renderer's {@code 1e-9} nudge, and the floor
+     * then discards a whole pixel.
      *
-     * <p>So the bound is {@code 0.5 + n / (n + 1)} — exactly 1.0 px for a single bendpoint, rising
-     * to 1.167 at two, 1.25 at three, and approaching but never reaching 1.5. Reporting a flat
-     * "1.0 px" for every {@code n}, as this constant once did, is only true of the single-bendpoint
-     * case that the sweep below happened to cover.
+     * <p>So the bound is {@code 0.5 + n / (n + 1)} at one, three and seven bendpoints (1.0, 1.25 and
+     * 1.375 px), and one and a half pixels at every other count, exceeded only by the last bits of
+     * the {@code double} the assessor blends in. Both surfaces agree with what is drawn as often as
+     * they can: the second component is the renderer's own rounding, reported faithfully.
      */
     private static double maxSurfaceResidualPx(int bendpointCount) {
-        return 0.5 + (double) bendpointCount / (bendpointCount + 1);
+        boolean exactFloatWeights = Integer.bitCount(bendpointCount + 1) == 1;
+        return exactFloatWeights ? 0.5 + (double) bendpointCount / (bendpointCount + 1) : 1.5;
     }
+
+    /** The last bits a {@code double} blend of whole pixels can carry past the bound. */
+    private static final double BLEND_ULPS = 1e-9;
 
     // ---------------------------------------------------------------- the reporting surfaces
 
@@ -91,14 +104,6 @@ public class AbsoluteBendpointFrameTest {
         double weight = (index + 1.0) / (count + 1.0);
         return (storedFromSource + srcCentre) * (1.0 - weight)
                 + (storedFromTarget + tgtCentre) * weight;
-    }
-
-    /** Archi's renderer: whole-pixel centres, weight {@code (i + 1) / (n + 1)}, floating point. */
-    private static double renderedPoint(int storedFromSource, int storedFromTarget,
-                                        int srcCentre, int tgtCentre, int index, int count) {
-        float weight = (index + 1) / ((float) count + 1);
-        return (srcCentre + storedFromSource) * (1.0 - weight)
-                + weight * (tgtCentre + storedFromTarget);
     }
 
     /** Drives the production builder for a single bendpoint and returns the reported x. */
@@ -131,9 +136,10 @@ public class AbsoluteBendpointFrameTest {
      * <p>Write {@code a = 0.5} when the source box dimension is odd and {@code 0} otherwise, {@code
      * b} likewise for the target, and {@code T} for the sum of both whole-pixel reconstructions.
      * Then the assessor reads higher than a connection response by exactly
-     * {@code (a + b) / 2 + (T / 2.0 - T / 2)}, where the second term is what the integer division
-     * discards. Asserted against the real producers over every combination, so it is a statement
-     * about the code and not about a model of it.
+     * {@code (a + b) / 2 + (T / 2.0 - floor(T / 2.0))}, where the second term is what the floor
+     * discards. A lone bendpoint's weight of one half is exact in a {@code float}, so nothing else
+     * enters. Asserted against the real producers over every combination, so it is a statement about
+     * the code and not about a model of it.
      */
     @Test
     public void shouldMatchTheClosedFormResidual_acrossEverySingleBendpointCombination() {
@@ -158,7 +164,7 @@ public class AbsoluteBendpointFrameTest {
                                 double oddSource = (srcW % 2 != 0) ? 0.5 : 0.0;
                                 double oddTarget = (tgtW % 2 != 0) ? 0.5 : 0.0;
                                 double predicted = (oddSource + oddTarget) / 2.0
-                                        + (sum / 2.0 - sum / 2);
+                                        + (sum / 2.0 - Math.floorDiv(sum, 2));
 
                                 if (Math.abs((assessed - reported) - predicted) > 1e-9) {
                                     mismatches++;
@@ -174,19 +180,21 @@ public class AbsoluteBendpointFrameTest {
     }
 
     /**
-     * The residual never exceeds the derived bound, and it is signed: on a bendpoint whose two
-     * whole-pixel reconstructions sum below zero, integer division truncates toward zero rather
-     * than flooring and a connection response reads <em>higher</em> than the assessor. Reporting
-     * the residual as an absolute value hides that direction.
+     * The residual never exceeds the derived bound, and it never goes negative, including where the
+     * two whole-pixel reconstructions sum below zero.
+     *
+     * <p>Both of a connection response's roundings go down: the centres are truncated from a
+     * non-negative half dimension, and the blend is floored as the renderer floors it. So the assessor
+     * never reads lower than a response. That was not so while the response truncated the blend
+     * toward zero: on a negative sum it read <em>higher</em> than the assessor, on 144,432 points of
+     * this sweep, and that sign was the trace of reporting a pixel the renderer does not draw.
      */
     @Test
-    public void shouldBoundTheResidualAndKeepItSigned_includingWhenTheSumIsNegative() {
+    public void shouldBoundTheResidual_andNeverLetItGoNegative_evenWhereTheSumIs() {
         double worst = 0.0;
         long negativeResidual = 0;
-        long negativeResidualOnNonNegativeSum = 0;
         long negativeSum = 0;
         long total = 0;
-        boolean sawNegativeResidualOnNegativeSum = false;
         for (int srcW = 0; srcW <= MAX_DIMENSION; srcW++) {
             for (int tgtW = 0; tgtW <= MAX_DIMENSION; tgtW++) {
                 for (int srcX = 0; srcX <= MAX_ORIGIN; srcX++) {
@@ -202,15 +210,8 @@ public class AbsoluteBendpointFrameTest {
                                 double residual = collectorBlend(
                                         startX, endX, srcCentreExact, tgtCentreExact, 0, 1) - reported;
                                 worst = Math.max(worst, Math.abs(residual));
-                                boolean sumIsNegative = startX + srcCentre + endX + tgtCentre < 0;
-                                if (sumIsNegative) {
-                                    negativeSum++;
-                                    if (residual < 0) sawNegativeResidualOnNegativeSum = true;
-                                }
-                                if (residual < 0) {
-                                    negativeResidual++;
-                                    if (!sumIsNegative) negativeResidualOnNonNegativeSum++;
-                                }
+                                if (startX + srcCentre + endX + tgtCentre < 0) negativeSum++;
+                                if (residual < 0) negativeResidual++;
                             }
                         }
                     }
@@ -220,35 +221,29 @@ public class AbsoluteBendpointFrameTest {
         assertEquals("at one bendpoint the bound is exactly one pixel",
                 maxSurfaceResidualPx(1), worst, 1e-9);
         assertTrue("the negative-sum region must be exercised", negativeSum > 0);
-        assertTrue("a negative residual must occur where the sum is negative",
-                sawNegativeResidualOnNegativeSum);
-        assertEquals("and it occurs ONLY there — a negative sum is necessary, not merely frequent",
-                0L, negativeResidualOnNonNegativeSum);
-        assertEquals("the residual goes negative on a measured minority of the space",
-                144_432L, negativeResidual);
+        assertEquals("the floor never reads above the assessor, on a negative sum either",
+                0L, negativeResidual);
         assertEquals("every combination must be swept", 28_302_400L, total);
     }
 
     /**
-     * The residual between the two reporting surfaces GROWS with the bendpoint count, and the bound
-     * is {@code 0.5 + n / (n + 1)}.
+     * The residual between the two reporting surfaces depends on the bendpoint count, and the bound
+     * is the one {@link #maxSurfaceResidualPx} derives.
      *
-     * <p>This is the case a single-bendpoint sweep cannot see, and it is a real cost of reporting at
-     * the render weight. A flat one-half blend always divided by two, so the remainder it discarded
-     * never exceeded half a pixel and the surfaces could not part by more than 1.0 px whatever the
-     * connection looked like. Dividing by {@code n + 1} instead discards up to {@code n / (n + 1)},
-     * so a four-bendpoint connection can read 1.3 px apart. The bound rises with {@code n} and
-     * approaches 1.5 px without reaching it.
+     * <p>This is the case a single-bendpoint sweep cannot see. A flat one-half blend always divided by
+     * two, so the surfaces could not part by more than 1.0 px whatever the connection looked like.
+     * Flooring a blend at {@code (i + 1) / (n + 1)} discards up to {@code n / (n + 1)}, and where the
+     * renderer's float weight is inexact it can discard a whole pixel, so a two-bendpoint connection
+     * can read one and a half pixels apart while a three-bendpoint one cannot pass 1.25.
      *
-     * <p>Asserted two ways at each count: never above the derived bound, and — at the counts where
-     * the sweep is rich enough to find the worst case — actually reaching it, so the bound is shown
-     * to be tight rather than merely safe. A bound that is never approached would not prove the
-     * derivation, only that nothing contradicted it.
+     * <p>Asserted two ways at each count: never above the derived bound, and actually reaching it, so
+     * the bound is shown to be tight rather than merely safe. A bound that is never approached would
+     * not prove the derivation, only that nothing contradicted it. Counts one to eight cover both
+     * kinds: three of them have exact float weights and five do not.
      */
     @Test
-    public void shouldWidenTheSurfaceResidual_asTheBendpointCountRises() {
-        double previousWorst = 0.0;
-        for (int count = 1; count <= 6; count++) {
+    public void shouldBoundTheSurfaceResidual_byWhetherTheFloatWeightIsExact() {
+        for (int count = 1; count <= 8; count++) {
             double worst = 0.0;
             for (int srcW = 0; srcW <= MAX_DIMENSION; srcW++) {
                 for (int tgtW = 0; tgtW <= MAX_DIMENSION; tgtW++) {
@@ -271,40 +266,46 @@ public class AbsoluteBendpointFrameTest {
             }
             assertTrue("at " + count + " bendpoints the residual must not exceed the derived bound "
                             + maxSurfaceResidualPx(count) + ", but reached " + worst,
-                    worst <= maxSurfaceResidualPx(count) + 1e-9);
+                    worst <= maxSurfaceResidualPx(count) + BLEND_ULPS);
             assertEquals("at " + count + " bendpoints the derived bound must be REACHED, or it is "
-                            + "not the bound", maxSurfaceResidualPx(count), worst, 1e-9);
-            assertTrue("the bound must widen with the bendpoint count, never narrow",
-                    worst >= previousWorst - 1e-9);
-            previousWorst = worst;
+                            + "not the bound", maxSurfaceResidualPx(count), worst, BLEND_ULPS);
         }
 
         // The single-bendpoint case is the only one that lands on a whole pixel. Stating it here
         // keeps the old flat "1.0 px for every connection" claim from creeping back.
         assertEquals(1.0, maxSurfaceResidualPx(1), 1e-9);
-        assertTrue("every count stays strictly below one and a half pixels",
-                maxSurfaceResidualPx(1_000_000) < 1.5);
+        assertEquals("an exact float weight keeps the bound below one and a half pixels",
+                1.375, maxSurfaceResidualPx(7), 1e-9);
+        assertEquals("an inexact one reaches it", 1.5, maxSurfaceResidualPx(2), 1e-9);
     }
 
     // ---------------------------------------------------------------- the reported frame
 
     /**
-     * A lone bendpoint sits at weight one half, so the render weight leaves every single-bendpoint
-     * connection exactly where it was. Swept over both reconstructions rather than sampled, because
-     * this is the compatibility guarantee the change rests on.
+     * A lone bendpoint sits at weight one half, which a {@code float} holds exactly, so it is reported
+     * at the floored half sum of its two reconstructions, where the renderer draws it. Swept over both
+     * reconstructions rather than sampled.
+     *
+     * <p>The render weight left every single-bendpoint connection where a flat blend put it. The
+     * floor does not, on a negative odd sum: it reports a pixel lower than the old truncation toward
+     * zero did. That is a quarter of this sweep, counted here so the move is stated, not inferred.
      */
     @Test
-    public void shouldLeaveEverySingleBendpointConnectionUnmoved() {
+    public void shouldPlaceEverySingleBendpointAtTheFlooredHalfSum() {
         long total = 0;
+        long movedOffTheTruncation = 0;
         for (int fromSource = -400; fromSource <= 400; fromSource++) {
             for (int fromTarget = -400; fromTarget <= 400; fromTarget++) {
                 total++;
                 int reported = reportedX(fromSource, fromTarget, 0, 0);
-                assertEquals("a single bendpoint sits at weight one half",
-                        (fromSource + fromTarget) / 2, reported);
+                assertEquals("a single bendpoint sits at weight one half, floored",
+                        Math.floorDiv(fromSource + fromTarget, 2), reported);
+                if (reported != (fromSource + fromTarget) / 2) movedOffTheTruncation++;
             }
         }
         assertEquals(641_601L, total);
+        assertEquals("the negative odd sums, each a pixel lower than truncation put them",
+                160_400L, movedOffTheTruncation);
     }
 
     /**
@@ -348,33 +349,37 @@ public class AbsoluteBendpointFrameTest {
     }
 
     /**
-     * The reported point is the renderer's point, truncated once. Compared against the renderer's
-     * own arithmetic — a float weight applied to whole-pixel anchor reference points — over a
-     * drifted sweep, so this fails if the weight, the centre truncation or the rounding direction
-     * ever diverges from what Archi draws.
+     * A connection response reports every bendpoint at the pixel Archi draws it, on a drifted
+     * connection too.
      *
-     * <p>The comparison is made against the renderer's value, not against truncating it. The
-     * renderer carries the weight as a {@code float}, whose 24-bit mantissa leaves a relative error
-     * near {@code 6e-8}; over coordinates of a few hundred pixels that is an absolute error around
-     * {@code 1e-4}, so its evaluation can land a hair either side of an integer that the exact
-     * arithmetic here lands exactly on. Truncating both and demanding the same integer would
-     * therefore be a test of the oracle's rounding noise. What is asserted instead is that the
-     * reported point never sits a whole pixel from the drawn one, and that wherever truncating the
-     * renderer's evaluation would disagree, that evaluation is within float noise of an integer
-     * boundary — the disagreement is in the oracle's arithmetic and never in the frame.
+     * <p>The oracle is {@link GeometryUtils#drawnBendpointCoordinate}, the project's single
+     * reproduction of draw2d 3.23's {@code RelativeBendpoint.getLocation}. It is pinned by {@code
+     * OffFaceHugDrawnGeometryTest}, and live PNG probes confirm it. draw2d keeps the weight {@code
+     * (i + 1) / (n + 1)} as a {@code float}, widens it to {@code double} before either product, blends
+     * the two reconstructions about whole-pixel reference points, and keeps {@code (int)
+     * Math.floor(d + 1e-9)}. The builder now calls the same helper, so nothing here has a tolerance.
+     *
+     * <p>The sweep keeps the arithmetic the builder used before, the exact rational weight truncated
+     * once toward zero, and counts where it parts from the drawn point. Two causes did that, and both
+     * need the reconstructions to disagree: a negative blend that is not a whole number, which
+     * truncation lifts and the floor does not; and a whole-number blend that draw2d's float weight
+     * lands a few millionths low, which the floor drops a pixel. Those counts are what make "every
+     * point equal" a claim with teeth: a builder that went back to its old arithmetic misses 480,450
+     * of the points compared here.
+     *
+     * <p>Where the two reconstructions agree, both arithmetics give the drawn point at every weight.
+     * That covers every route the router writes, because the router derives both stored offsets from
+     * one absolute point, and it is asserted over the sweep's agreeing points and at a point measured
+     * on a live route.
      */
     @Test
-    public void shouldReportTheRenderedPoint_acrossADriftedSweep() {
-        // Bound on the renderer's own float evaluation error over this sweep: a 24-bit mantissa
-        // gives a relative error near 6e-8, and the coordinates swept reach 600 px, so a handful of
-        // roundings cannot accumulate past roughly 1e-4. An order of magnitude of headroom on that
-        // derivation, deliberately not fitted to the largest value this sweep happens to produce.
-        final double renderEvaluationNoisePx = 1e-3;
-
+    public void shouldReportTheDrawnPoint_acrossADriftedSweep() {
         long compared = 0;
-        long straddled = 0;
-        double worstGap = 0.0;
-        double worstBoundaryDistance = 0.0;
+        long equal = 0;
+        long oldNegativeTruncation = 0;
+        long oldFloatWeight = 0;
+        long agreeing = 0;
+        long agreeingThatTheOldArithmeticMissed = 0;
         for (int count = 1; count <= 8; count++) {
             for (int fromSource = -600; fromSource <= 600; fromSource += 7) {
                 for (int fromTarget = -600; fromTarget <= 600; fromTarget += 7) {
@@ -387,24 +392,60 @@ public class AbsoluteBendpointFrameTest {
                                     stored, 0, 0, 0, 0);
                     for (int i = 0; i < count; i++) {
                         compared++;
-                        double rendered = renderedPoint(fromSource, fromTarget, 0, 0, i, count);
-                        worstGap = Math.max(worstGap, Math.abs(reported.get(i).x() - rendered));
-                        if (reported.get(i).x() != (int) rendered) {
-                            straddled++;
-                            worstBoundaryDistance = Math.max(
-                                    worstBoundaryDistance, Math.abs(rendered - Math.rint(rendered)));
+                        int drawn = GeometryUtils.drawnBendpointCoordinate(
+                                fromSource, fromTarget, 0, 0, 0, 0, i, count);
+                        if (reported.get(i).x() == drawn) equal++;
+                        // The old arithmetic: the exact blend is numerator / (count + 1), and Java's
+                        // long division truncates it toward zero.
+                        long numerator = (long) fromSource * (count - i) + (long) fromTarget * (i + 1);
+                        long divisor = count + 1L;
+                        long truncated = numerator / divisor;
+                        if (truncated != drawn) {
+                            if (numerator % divisor == 0) oldFloatWeight++; else oldNegativeTruncation++;
+                        }
+                        if (fromSource == fromTarget) {
+                            agreeing++;
+                            if (truncated != drawn) agreeingThatTheOldArithmeticMissed++;
                         }
                     }
                 }
             }
         }
-        assertTrue("the sweep must actually compare something", compared > 100_000);
-        assertTrue("the reported point never sits a whole pixel off what is drawn",
-                worstGap < 1.0);
-        assertTrue("a disagreement with the truncated oracle is float noise at an integer boundary",
-                worstBoundaryDistance < renderEvaluationNoisePx);
-        assertTrue("the sweep must reach the boundary region at all, or it proves nothing there",
-                straddled > 0);
+
+        // Measured on a live route (OffFaceHugDrawnGeometryTest): bendpoint index 4 of 5, weight
+        // 5/6, both reconstructions at 1229. Written here in the sweep's frame, with both reference
+        // points at the origin.
+        int liveReconstruction = 1229;
+        List<BendpointDto> live = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            live.add(new BendpointDto(liveReconstruction, 0, liveReconstruction, 0));
+        }
+        int liveReported =
+                ConnectionResponseBuilder.convertRelativeToAbsolute(live, 0, 0, 0, 0).get(4).x();
+        int liveDrawn = GeometryUtils.drawnBendpointCoordinate(
+                liveReconstruction, liveReconstruction, 0, 0, 0, 0, 4, 5);
+
+        // Every claim is checked and every failure listed together, so one break shows each arm
+        // it turns red rather than only the first.
+        List<String> failures = new ArrayList<>();
+        check(failures, "points compared", 1_065_024L, compared);
+        check(failures, "reported == drawn, at every point", compared, equal);
+        check(failures, "the old arithmetic: a negative fractional blend truncated toward zero",
+                337_544L, oldNegativeTruncation);
+        check(failures, "the old arithmetic: a whole-number blend the float weight drops",
+                142_906L, oldFloatWeight);
+        check(failures, "agreeing points in the sweep", 6_192L, agreeing);
+        check(failures, "agreeing reconstructions are drawn where either arithmetic reports them",
+                0L, agreeingThatTheOldArithmeticMissed);
+        check(failures, "live point: reported", 1229L, liveReported);
+        check(failures, "live point: drawn", 1229L, liveDrawn);
+        assertEquals("the builder reports the pixel draw2d draws", List.of(), failures);
+    }
+
+    private static void check(List<String> failures, String what, long expected, long actual) {
+        if (expected != actual) {
+            failures.add(what + ": expected " + expected + " but was " + actual);
+        }
     }
 
     /**
@@ -414,11 +455,12 @@ public class AbsoluteBendpointFrameTest {
      * <p>Note what this does <em>not</em> pin. Because both reconstructions agree, every weight —
      * the flat one half included — returns the same coordinate, so this test was green before the
      * render weight was applied and is green after it. It is a pin on the conversion being lossless,
-     * never a pin on the frame; the shear and rendered-point tests above are what hold the frame.
+     * never a pin on the frame; the shear and drawn-point tests above are what hold the frame.
      *
-     * <p>It does pin one thing the change had to earn: exact integer interpolation. Evaluating the
-     * same weight in floating point loses the last bits on a weight like three sevenths, and the
-     * truncation then lands a whole pixel low on a point whose reconstructions agree exactly.
+     * <p>It does hold the arithmetic to one thing: a blend that lost a last bit on a weight like
+     * three sevenths, and then rounded down, would land a whole pixel low on a point whose
+     * reconstructions agree exactly. The renderer's {@code 1e-9} nudge is what keeps the floor clear
+     * of that, and this sweep is what shows it does.
      */
     @Test
     public void shouldRoundTripEveryWeightExactly_becauseBothReconstructionsAgree() {
@@ -481,7 +523,8 @@ public class AbsoluteBendpointFrameTest {
         int undriftedConnections = 0;
         int movedCoordinates = 0;
         int maxMovement = 0;
-        int worstShearMismatch = 0;
+        double worstShearMismatch = 0;
+        int movedOffTheOldArithmetic = 0;
         Map<Integer, Integer> countDistribution = new LinkedHashMap<>();
 
         for (ViewFixture.FixtureConnection conn : drifted.getConnections()) {
@@ -533,15 +576,38 @@ public class AbsoluteBendpointFrameTest {
                 }
 
                 // The shear, from the derivation: a point is pulled off the halfway position by
-                // (weight - 0.5) x the SIGNED disagreement between its two reconstructions. Both
-                // sides here truncate once, so they may land a pixel apart but no further.
+                // (weight - 0.5) x the SIGNED disagreement between its two reconstructions. The
+                // halfway position and the reported point are each rounded down once. Flooring the
+                // exact blend E costs a fraction in [0, 1); flooring the half sum H costs 0 or a
+                // half; so dx - predicted = (H - floor H) - (E - floor E) lies in (-1, 0.5]. Where
+                // draw2d's float weight drops a whole-number E a pixel, the E term is exactly 1 and
+                // the difference lies in [-1, -0.5]. Either way it never passes one pixel.
                 double weight = (i + 1.0) / (n + 1.0);
                 double predictedX = (targetAnchored - sourceAnchored) * (weight - 0.5);
                 double predictedY = (targetAnchoredY - sourceAnchoredY) * (weight - 0.5);
                 worstShearMismatch = Math.max(worstShearMismatch,
-                        (int) Math.ceil(Math.abs(dx - predictedX)));
+                        Math.abs(dx - predictedX));
                 worstShearMismatch = Math.max(worstShearMismatch,
-                        (int) Math.ceil(Math.abs(dy - predictedY)));
+                        Math.abs(dy - predictedY));
+
+                // Against the arithmetic the builder used before: the exact rational weight,
+                // truncated once. On this fixture it parts from the drawn pixel only where the blend
+                // is a whole number and the float weight drops it.
+                long divisor = n + 1L;
+                long numeratorX = (long) sourceAnchored * (n - i) + (long) targetAnchored * (i + 1);
+                long numeratorY = (long) sourceAnchoredY * (n - i) + (long) targetAnchoredY * (i + 1);
+                if (numeratorX / divisor != reported.get(i).x()) {
+                    movedOffTheOldArithmetic++;
+                    assertEquals("a whole-number blend, dropped by the float weight",
+                            0L, numeratorX % divisor);
+                    assertEquals(numeratorX / divisor - 1, reported.get(i).x());
+                }
+                if (numeratorY / divisor != reported.get(i).y()) {
+                    movedOffTheOldArithmetic++;
+                    assertEquals("a whole-number blend, dropped by the float weight",
+                            0L, numeratorY % divisor);
+                    assertEquals(numeratorY / divisor - 1, reported.get(i).y());
+                }
             }
 
             if (!isDrifted) {
@@ -567,8 +633,10 @@ public class AbsoluteBendpointFrameTest {
         assertEquals("coordinates that move under the render weight", 16, movedCoordinates);
         assertEquals("largest movement, px", 15, maxMovement);
         assertTrue("every movement must match the predicted shear to within the one pixel two "
-                        + "truncations can cost, but was off by " + worstShearMismatch,
-                worstShearMismatch <= 1);
+                        + "roundings down can cost, but was off by " + worstShearMismatch,
+                worstShearMismatch <= 1 + BLEND_ULPS);
+        assertEquals("coordinates the drawn-pixel arithmetic reports a pixel off the old one",
+                6, movedOffTheOldArithmetic);
     }
 
     /**

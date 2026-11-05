@@ -75,7 +75,12 @@ public class ErrorResponseTest {
     @Test
     public void shouldHaveAllExpectedErrorCodes() {
         ErrorCode[] codes = ErrorCode.values();
-        assertEquals(36, codes.length);
+        assertEquals(40, codes.length);
+        assertNotNull(ErrorCode.valueOf("MODEL_AMBIGUOUS"));
+        assertNotNull(ErrorCode.valueOf("MODEL_NOT_OPEN"));
+        assertNotNull(ErrorCode.valueOf("MODEL_COPIES_AMBIGUOUS"));
+        assertNotNull(ErrorCode.valueOf("MODEL_SHARED"));
+        assertNotNull(ErrorCode.valueOf("BATCH_MODEL_MISMATCH"));
         assertNotNull(ErrorCode.valueOf("ELEMENT_NOT_FOUND"));
         assertNotNull(ErrorCode.valueOf("MODEL_NOT_LOADED"));
         assertNotNull(ErrorCode.valueOf("INVALID_PARAMETER"));
@@ -93,10 +98,7 @@ public class ErrorResponseTest {
         assertNotNull(ErrorCode.valueOf("TARGET_ELEMENT_NOT_FOUND"));
         assertNotNull(ErrorCode.valueOf("POTENTIAL_DUPLICATES"));
         assertNotNull(ErrorCode.valueOf("BULK_VALIDATION_FAILED"));
-        assertNotNull(ErrorCode.valueOf("APPROVAL_NOT_ACTIVE"));
-        assertNotNull(ErrorCode.valueOf("PROPOSAL_NOT_FOUND"));
         assertNotNull(ErrorCode.valueOf("PROPOSAL_STALE"));
-        assertNotNull(ErrorCode.valueOf("ELEMENT_ALREADY_ON_VIEW"));
         assertNotNull(ErrorCode.valueOf("RELATIONSHIP_NOT_FOUND"));
         assertNotNull(ErrorCode.valueOf("VIEW_OBJECT_NOT_FOUND"));
         assertNotNull(ErrorCode.valueOf("CONNECTION_ALREADY_ON_VIEW"));
@@ -115,5 +117,8 @@ public class ErrorResponseTest {
         assertNotNull(ErrorCode.valueOf("FOLDER_LAYER_MISMATCH"));
         // image error code
         assertNotNull(ErrorCode.valueOf("IMAGE_NOT_FOUND"));
+        // batch / proposal bound to a model that is not the active one, or was closed
+        assertNotNull(ErrorCode.valueOf("BOUND_MODEL_NOT_ACTIVE"));
+        assertNotNull(ErrorCode.valueOf("BOUND_MODEL_CLOSED"));
     }
 }

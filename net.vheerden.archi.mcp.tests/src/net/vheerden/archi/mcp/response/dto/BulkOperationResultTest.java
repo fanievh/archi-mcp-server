@@ -336,7 +336,11 @@ public class BulkOperationResultTest {
                 List.of(new MovedViewObjectDto("b", "B", 5, 6, 7, 8)),
                 sampleConnection(), sampleRelationship(), sampleElement(), "parent-1",
                 List.of(new StructuredWarningDto("SOME_CODE", "message", "tool", List.of("x"))),
-                "left");
+                "left", receded("parent-1", "#F4F4F4"), List.of(sampleConnection()),
+                List.of(new AddToViewResultDto.SkippedConnection("vo-a", "vo-b", "CompositionRelationship", "rel-n",
+                        "ancestor_descendant_on_view")),
+                List.of(new AddToViewResultDto.SkippedConnection("vo-a", "vo-c", "AssociationRelationship", "rel-c",
+                        "auto_connect_cap_reached")));
 
         int copiers = 0;
         for (java.lang.reflect.Method method : BulkOperationResult.class.getMethods()) {
@@ -353,7 +357,13 @@ public class BulkOperationResultTest {
         }
         assertEquals("every copier on the record must be exercised; if this number falls, a "
                 + "copier was renamed away from the withComponent convention this check relies on",
-                10, copiers);
+                12, copiers);
+    }
+
+    private static RecededParentDto receded(String id, String fill) {
+        RecededParentDto dto = new RecededParentDto();
+        dto.set(id, fill);
+        return dto;
     }
 
     private static ViewConnectionDto sampleConnection() {

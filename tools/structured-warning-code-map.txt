@@ -43,31 +43,48 @@
 #   If you sort this file, pin `LC_ALL=C`. An unpinned `sort` collates differently on macOS (dev)
 #   and the C-locale CI runner. Lines below are grouped by owning family, not sorted.
 
-# ---- auto-route-connections: the six routing codes ----------------------------------------------
-# Every surface that enumerates this tool's codes must name all six. The surfaces are registered in
+# ---- auto-route-connections: the ten routing codes ----------------------------------------------
+# Every surface that enumerates this tool's codes must name all ten. The surfaces are registered in
 # StructuredWarningCodeSurfaceParityTest: README, docs/routing-pipeline.md, the two served
 # resources, and the tool's own served description.
 AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP auto-route-connections # emitted when autoNudge hits a sibling overlap it cannot resolve
 EGRESS_LIFT_LAYOUT_BOUND auto-route-connections # emitted when a generated egress lift is rolled back as layout-bound
+EGRESS_LIFT_PRE_GATED auto-route-connections # emitted when the pre-gate skips the whole lift pass and a connection still hugs
 AUTO_ROUTE_CROSSINGS_REGRESSED auto-route-connections # emitted when a full re-route raised the view's own crossing count
 CONNECTION_NOT_FOUND auto-route-connections # emitted when an id in connectionIds does not resolve on the view
 CONNECTION_ROUTED_THROUGH_NOTE auto-route-connections # emitted when an applied route penetrates a note (a disclosure)
 AUTO_NUDGE_NET_ZERO auto-route-connections # emitted when a nudged element ends where it started
+MOVE_RECOMMENDATION_WITHHELD_BY_PARENT auto-route-connections # emitted when a recommended move is withheld because the parent's floor would absorb it
+SELF_CONNECTION_NOT_ROUTED auto-route-connections # emitted when a target is a self-connection, kept or given the default loop (decided when the change is applied)
 
 # ---- the layout and spacing families: NOT routing codes ------------------------------------------
 # These two are correctly ABSENT from every auto-route enumeration. Moving either line into the
 # routing family above turns the parity test RED, because these codes appear in none of the routing
-# surfaces — which is the intended behaviour: raising the routing count to eight is a regression,
-# not a fix. Their own surfaces are documented in docs/layout-engine.md; registering those surfaces
+# surfaces — which is the intended behaviour: adding a code the router never emits is a
+# regression, not a fix. Their own surfaces are documented in docs/layout-engine.md; registering those surfaces
 # for a build-fired check is a separate row from the one that created this file.
 AUTO_LAYOUT_RATING_REGRESSED auto-layout-and-route # emitted from QualityTargetTermination when the loop commits a worse view
+LAYOUT_OVERLAPS_NOTE auto-layout-and-route # emitted when the layout leaves a note over an object that is not a note (notes are not laid out)
 SPACING_RATING_REGRESSED apply-element-spacing-recommendations,apply-group-spacing-recommendations,apply-spacing-recommendations # emitted from SpacingQualityDisclosure on each of the three spacing tools
 
 # ---- the annotation-placement family: NOT a routing code -----------------------------------------
 # Emitted by the three annotation-placement tools at the moment of the call, against the routes
 # already on the view. It belongs here and NOT in the routing family above: the routing surfaces
-# enumerate exactly six codes, and raising that count to seven is a regression rather than a fix —
-# auto-route-connections never emits this one. All three tools own it equally, which is the point:
+# enumerate exactly the codes the router emits, and adding one it never emits is a regression rather
+# than a fix — auto-route-connections never emits this one. All three tools own it equally, which is the point:
 # the two non-note annotations land in the RATED passThroughs metric while a note lands in the
 # informational one, so scoping the disclosure to notes would leave the damaging half silent.
 ANNOTATION_PLACED_IN_ROUTED_CORRIDOR add-note-to-view,add-view-reference-to-view,add-image-to-view # emitted when the annotation's resolved rectangle intersects a route already drawn on the view
+
+# ---- the label-expression family -----------------------------------------------------------------
+# Emitted where a label expression is written: update-view-object, alone and as a bulk-mutate
+# operation, and the bulk-only set-view-label-expression operation. The map names only the
+# registered view tools, so the bulk entry points are recorded here rather than on the line. A
+# warning and never a refusal: the template may name a property about to be added.
+LABEL_EXPRESSION_PROPERTY_MISSING update-view-object # emitted when the template reads an unprefixed property the drawn object does not carry
+
+# ---- the container-growth family -----------------------------------------------------------------
+# Emitted by every tool that reports a container it grew (resizedAncestors or resizedGroups), on the
+# grown container's new overlap with a sibling. auto-route-connections is among them, so this code is
+# also the ninth in the routing family's surfaces; bulk-mutate carries it on each operation row.
+CASCADE_GROWN_INTO_SIBLING add-to-view,update-view-object,layout-within-group,adjust-view-spacing,auto-route-connections,resize-elements-to-fit # emitted when a container the call grew now overlaps a sibling it did not overlap before (also on each bulk-mutate operation row)

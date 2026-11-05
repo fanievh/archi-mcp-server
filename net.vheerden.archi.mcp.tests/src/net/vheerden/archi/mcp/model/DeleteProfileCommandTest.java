@@ -7,6 +7,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
 
 import org.eclipse.gef.commands.CompoundCommand;
 import org.junit.Before;
@@ -250,5 +252,62 @@ public class DeleteProfileCommandTest {
                 1, Collections.frequency(model.getProfiles(), profileB));
         assertEquals("Catalog membership is exactly restored", before, model.getProfiles().size());
         assertEquals("Profile restored at its original index", profileB, model.getProfiles().get(1));
+    }
+
+    // ---- changedNothing ----
+
+    @Test
+    public void shouldCertifyNothingChanged_whenStillInUse_andNotOnceTheUsageGoes() {
+        DeleteProfileCommand cmd = new DeleteProfileCommand(profileB, model);
+        assertFalse("not before execute", cmd.changedNothing());
+        IBusinessActor actor = actorWith(profileB);
+        Map<String, String> before = MergeElementsCommandTest.snapshot(model, Set.of());
+
+        cmd.execute();
+
+        assertNotNull("fixture check: the delete declined", cmd.getSkipReason());
+        assertTrue(cmd.changedNothing());
+        MergeElementsCommandTest.assertSnapshot("nothing written", before,
+                MergeElementsCommandTest.snapshot(model, Set.of()));
+
+        actor.getProfiles().clear();
+        cmd.execute();
+
+        assertFalse("fixture check: the profile went", model.getProfiles().contains(profileB));
+        assertFalse("a run that deleted certifies nothing", cmd.changedNothing());
+    }
+
+    @Test
+    public void shouldCertifyNothingChanged_whenAForceDeleteWouldStripAnUnrelatedProfile() {
+        DeleteProfileCommand cmd = new DeleteProfileCommand(profileB, model, true);
+        IBusinessActor actor = actorWith(profileB);
+        actor.getProfiles().add(profileA);
+        Map<String, String> before = MergeElementsCommandTest.snapshot(model, Set.of());
+
+        cmd.execute();
+
+        assertNotNull("fixture check: the delete declined", cmd.getSkipReason());
+        assertTrue(cmd.changedNothing());
+        MergeElementsCommandTest.assertSnapshot("nothing written", before,
+                MergeElementsCommandTest.snapshot(model, Set.of()));
+    }
+
+    @Test
+    public void shouldNotCertify_whenTheProfileWasAlreadyGone() {
+        DeleteProfileCommand cmd = new DeleteProfileCommand(profileB, model);
+        model.getProfiles().remove(profileB);
+
+        cmd.execute();
+
+        assertNull("fixture check: no decline", cmd.getSkipReason());
+        assertFalse(cmd.changedNothing());
+    }
+
+    private IBusinessActor actorWith(IProfile profile) {
+        IBusinessActor actor = factory.createBusinessActor();
+        actor.setName("Customer");
+        model.getFolder(FolderType.BUSINESS).getElements().add(actor);
+        actor.getProfiles().add(profile);
+        return actor;
     }
 }

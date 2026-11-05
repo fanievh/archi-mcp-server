@@ -42,17 +42,6 @@ public class OriginHostValidationHandlerTest {
         transportConfig.stopServer();
     }
 
-    /**
-     * Grabs an ephemeral free port (probe-then-release). Avoids static-port flakiness / collisions
-     * with {@code TransportConfigTest}'s range. TransportConfig stores the requested port (not the
-     * connector's local port), so the HTTP tests need a concrete, known-free port to connect back to.
-     */
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
-            return probe.getLocalPort();
-        }
-    }
-
     // A guard wired to the default loopback bind (enforcing). The wrapped Handler is null because
     // these unit tests exercise only the decision logic (isAllowed / hostPart / isEnforcing) and
     // never call handle() — passing null here is intentional and safe for that purpose only.
@@ -176,47 +165,33 @@ public class OriginHostValidationHandlerTest {
         assertTrue(new OriginHostValidationHandler(null, "::1").isEnforcing());
     }
 
-    // ---- Pure-unit: exposure classification (bind-address warning) ----
-    // The UI exposure warning reuses these SAME static predicates so the warning can never drift
-    // from server-side enforcement (warning shown iff isExposedBind iff NOT enforcing).
+    // ---- Pure-unit: the guard reads the server's one classification ----
+    // The guard no longer classifies a bind itself: it reads BindExposure, the classification the
+    // preference page's warning and the server-file-access decision read too (see BindExposureTest).
 
     @Test
-    public void shouldClassifyAsNotExposed_whenLoopbackBind() {
-        assertFalse(OriginHostValidationHandler.isExposedBind("127.0.0.1"));
-        assertFalse(OriginHostValidationHandler.isExposedBind("127.0.0.2")); // all of 127/8 is loopback
-        assertFalse(OriginHostValidationHandler.isExposedBind("localhost"));
-        assertFalse(OriginHostValidationHandler.isExposedBind("::1")); // IPv6 loopback
-        assertTrue(OriginHostValidationHandler.isLoopbackBind("127.0.0.1"));
-        assertTrue(OriginHostValidationHandler.isLoopbackBind("localhost"));
+    public void shouldEnforce_exactlyWhenTheClassificationSaysSo_forTheBindItIsGiven() {
+        for (BindExposure exposure : BindExposure.values()) {
+            assertEquals(exposure.name(), exposure.enforcesOriginHost(),
+                    new OriginHostValidationHandler(null, "192.168.1.10", exposure).isEnforcing());
+        }
     }
 
     @Test
-    public void shouldClassifyAsExposed_whenNonLoopbackBind() {
-        assertTrue(OriginHostValidationHandler.isExposedBind("0.0.0.0"));
-        assertTrue(OriginHostValidationHandler.isExposedBind("192.168.1.10"));
-        assertTrue(OriginHostValidationHandler.isExposedBind("8.8.8.8")); // public IP
-        assertFalse(OriginHostValidationHandler.isLoopbackBind("0.0.0.0"));
-    }
-
-    @Test
-    public void shouldClassifyAsNotExposed_whenBlankOrNullBind() {
-        // Fail-safe: a null/blank bind classifies as loopback (no scary warning for a value that
-        // would prevent the server from starting anyway, and matches enforcement).
-        assertFalse(OriginHostValidationHandler.isExposedBind(null));
-        assertFalse(OriginHostValidationHandler.isExposedBind(""));
+    public void shouldEnforce_whenTheBindCannotBeClassified() {
+        assertTrue(new OriginHostValidationHandler(null, null).isEnforcing());
+        assertTrue(new OriginHostValidationHandler(null, "").isEnforcing());
+        assertTrue(new OriginHostValidationHandler(null, "no.such.host.invalid").isEnforcing());
     }
 
     @Test
     public void shouldShowExposureWarningIffEnforcementOff_acrossMatrix() {
-        // Invariant across the full matrix: the UI exposure predicate (isExposedBind) is true
-        // EXACTLY when the server stops enforcing (isEnforcing() == false) for that same bind.
-        // Not a tautology — it crosses the static UI predicate to the instance enforcement decision
-        // computed independently in the constructor, guarding against future drift between them.
-        for (String bind : new String[] {
-                "127.0.0.1", "127.0.0.2", "localhost", "::1", "0.0.0.0", "192.168.1.10", "8.8.8.8" }) {
+        // Invariant across the full matrix: the page's warning (BindExposure.warnsOperator) is shown
+        // EXACTLY when the guard stops enforcing (isEnforcing() == false) for that same bind.
+        for (String bind : BindExposureTest.BINDS) {
             boolean enforcing = new OriginHostValidationHandler(null, bind).isEnforcing();
             assertEquals("exposure warning must be shown iff enforcement is OFF for " + bind,
-                    !enforcing, OriginHostValidationHandler.isExposedBind(bind));
+                    !enforcing, BindExposure.of(bind).warnsOperator());
         }
     }
 
@@ -246,22 +221,22 @@ public class OriginHostValidationHandlerTest {
 
     @Test
     public void shouldReturn403_whenForeignHostOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         assertEquals(403, rawRequest(port, "/mcp", "evil.attacker.com:" + port, null).status);
     }
 
     @Test
     public void shouldReturn403_whenForeignHostOnSse() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         assertEquals(403, rawRequest(port, "/sse", "evil.attacker.com:" + port, null).status);
     }
 
     @Test
     public void shouldReturn403_whenForeignOriginOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // Loopback Host but a cross-origin web Origin — the rebinding-page shape.
         Response resp = rawRequest(port, "/mcp", LOOPBACK + ":" + port, "https://evil.example");
         assertEquals(403, resp.status);
@@ -269,8 +244,8 @@ public class OriginHostValidationHandlerTest {
 
     @Test
     public void shouldReachServlet_whenLoopbackHostOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // The transport servlet may answer 200/400/405 for a bare GET — the point is it is NOT 403,
         // i.e. the request passed the guard and reached the servlet.
         assertNotEquals(403, rawRequest(port, "/mcp", LOOPBACK + ":" + port, null).status);
@@ -278,15 +253,15 @@ public class OriginHostValidationHandlerTest {
 
     @Test
     public void shouldReachServlet_whenLoopbackHostOnSse() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         assertNotEquals(403, rawRequest(port, "/sse", LOOPBACK + ":" + port, null).status);
     }
 
     @Test
     public void shouldReturnJsonRpcEnvelope_whenRejected() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         Response resp = rawRequest(port, "/mcp", "evil.attacker.com:" + port, null);
 
         assertEquals(403, resp.status);

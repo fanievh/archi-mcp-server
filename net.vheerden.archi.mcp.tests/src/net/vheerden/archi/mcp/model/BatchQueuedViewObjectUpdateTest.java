@@ -235,6 +235,20 @@ public class BatchQueuedViewObjectUpdateTest {
     }
 
     /** Asserts the ordinary parent live-lookup failure. */
+    /** A queued note named as a parent: refused by name, since the live lookup cannot see it. */
+    private void assertQueuedNoteRefusedAsParent(Runnable call, String noteId) {
+        try {
+            call.run();
+            fail("expected a queued note to be refused as parent " + noteId);
+        } catch (ModelAccessException e) {
+            assertEquals("Parent view object must be a group or element: " + noteId + " is the note this batch "
+                    + "places", e.getMessage());
+            assertEquals("A note, an image and a view reference hold no other objects. Name a group or an "
+                    + "element view object as parentViewObjectId.", e.getSuggestedCorrection());
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
     private void assertParentNotFound(Runnable call, String parentId) {
         try {
             call.run();
@@ -705,10 +719,10 @@ public class BatchQueuedViewObjectUpdateTest {
         dispatcher.endBatch(SESSION, true);
 
         assertTrue("the batch must dispatch as one compound", lastDispatched instanceof CompoundCommand);
-        CompoundCommand batch = (CompoundCommand) lastDispatched;
+        CompoundCommand batch = MutationContextTest.queuedIn(lastDispatched);
         assertEquals("four queued operations", 4, batch.getCommands().size());
 
-        Object last = batch.getCommands().get(3);
+        Object last = ((RequireAttachedContainerCommand) batch.getCommands().get(3)).getGuarded();
         assertTrue("the update must itself be a compound carrying its cascade resizes",
                 last instanceof CompoundCommand);
         List<?> members = ((CompoundCommand) last).getCommands();
@@ -752,10 +766,11 @@ public class BatchQueuedViewObjectUpdateTest {
         dispatcher.endBatch(SESSION, true);
 
         assertTrue("the batch must dispatch as one compound", lastDispatched instanceof CompoundCommand);
-        CompoundCommand batch = (CompoundCommand) lastDispatched;
+        CompoundCommand batch = MutationContextTest.queuedIn(lastDispatched);
         assertEquals("seven queued operations, adds first then updates", 7, batch.getCommands().size());
 
-        List<?> first = ((CompoundCommand) batch.getCommands().get(5)).getCommands();
+        List<?> first = ((CompoundCommand) ((RequireAttachedContainerCommand) batch.getCommands().get(5))
+                .getGuarded()).getCommands();
         assertEquals("the first update carries its leaf plus both grown ancestors", 3, first.size());
         assertEquals("the leaf update comes first",
                 leafA, ((UpdateViewObjectCommand) first.get(0)).getDiagramObject().getId());
@@ -764,7 +779,8 @@ public class BatchQueuedViewObjectUpdateTest {
         assertEquals("then the shared grandparent",
                 outer, ((UpdateViewObjectCommand) first.get(2)).getDiagramObject().getId());
 
-        List<?> second = ((CompoundCommand) batch.getCommands().get(6)).getCommands();
+        List<?> second = ((CompoundCommand) ((RequireAttachedContainerCommand) batch.getCommands().get(6))
+                .getGuarded()).getCommands();
         assertEquals("the second update carries its leaf and ONLY its own parent", 2, second.size());
         assertEquals("the leaf update comes first",
                 leafB, ((UpdateViewObjectCommand) second.get(0)).getDiagramObject().getId());
@@ -848,8 +864,8 @@ public class BatchQueuedViewObjectUpdateTest {
         dispatcher.beginBatch(SESSION, "note is target not parent");
         String n = note("Target", 10, 10, 150, 60, null);
 
-        assertParentNotFound(() -> element(5, 5, 40, 40, n), n);
-        assertNull("a queued note is not a container", dispatcher.queuedParentContainer(SESSION, n));
+        assertQueuedNoteRefusedAsParent(() -> element(5, 5, 40, 40, n), n);
+        assertQueuedNoteRefusedAsParent(() -> dispatcher.queuedParentContainer(SESSION, n), n);
         assertNotNull("a queued note is a resolvable update target",
                 dispatcher.queuedViewObject(SESSION, n));
 
@@ -1438,7 +1454,7 @@ public class BatchQueuedViewObjectUpdateTest {
 
         assertNotNull("object present after commit", find(view, child));
         assertTrue("the batch must dispatch as one compound", lastDispatched instanceof CompoundCommand);
-        CompoundCommand compound = (CompoundCommand) lastDispatched;
+        CompoundCommand compound = MutationContextTest.queuedIn(lastDispatched);
         assertEquals("three queued operations", 3, compound.getCommands().size());
 
         stack.undo();

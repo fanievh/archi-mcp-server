@@ -20,6 +20,8 @@ import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
+import net.vheerden.archi.mcp.response.dto.ChangeElementTypeResultDto;
+import net.vheerden.archi.mcp.response.dto.ChangeRelationshipTypeResultDto;
 import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ConceptUsageDto;
 import net.vheerden.archi.mcp.response.dto.DeleteResultDto;
@@ -27,10 +29,12 @@ import net.vheerden.archi.mcp.response.dto.DetectHubElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
 import net.vheerden.archi.mcp.response.dto.DuplicateCandidate;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.ElementTypeChangeRequest;
 import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
 import net.vheerden.archi.mcp.response.dto.FolderDto;
 import net.vheerden.archi.mcp.response.dto.FolderTreeDto;
 import net.vheerden.archi.mcp.response.dto.LayoutFlatViewResultDto;
+import net.vheerden.archi.mcp.response.dto.OpenModelDto;
 import net.vheerden.archi.mcp.response.dto.ResizeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.LayoutWithinGroupResultDto;
 import net.vheerden.archi.mcp.response.dto.MoveResultDto;
@@ -39,11 +43,14 @@ import net.vheerden.archi.mcp.response.dto.ModelImageDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipSemanticAttributes;
+import net.vheerden.archi.mcp.response.dto.RelationshipTypeChangeRequest;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.UndoRedoResultDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
+import net.vheerden.archi.mcp.response.dto.MergeClusterRequest;
+import net.vheerden.archi.mcp.response.dto.MergeElementsResultDto;
 import net.vheerden.archi.mcp.response.dto.ViewGroupDto;
 import net.vheerden.archi.mcp.response.dto.ViewNoteDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionSpec;
@@ -407,9 +414,11 @@ public interface ArchiModelAccessor {
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if type is invalid or folder not found
      */
-    MutationResult<ElementDto> createElement(String sessionId, String type, String name,
+    default MutationResult<ElementDto> createElement(String sessionId, String type, String name,
             String documentation, Map<String, String> properties, String folderId,
-            String specialization);
+            String specialization) {
+        return createElement(sessionId, type, name, documentation, properties, folderId, null, specialization);
+    }
 
     /**
      * Creates a new ArchiMate element with optional source traceability.
@@ -642,8 +651,9 @@ public interface ArchiModelAccessor {
      *
      * <p>Optionally positions at the given x/y coordinates with given width/height,
      * or uses auto-placement when coordinates are omitted. When autoConnect is true,
-     * also creates visual connections for any existing relationships to elements
-     * already on the view.</p>
+     * also creates visual connections for the element's relationships to elements
+     * on the view: inside a batch, as the queued work ahead of this call leaves the
+     * view and the relationships.</p>
      *
      * <p>The optional parentViewObjectId nests
      * elements inside visual groups.</p>
@@ -655,7 +665,7 @@ public interface ArchiModelAccessor {
      * @param y                  y coordinate (null for auto-placement)
      * @param width              width (null for default 120)
      * @param height             height (null for default 55)
-     * @param autoConnect        true to auto-create connections to existing view objects
+     * @param autoConnect        true to auto-create connections to the other view objects
      * @param parentViewObjectId optional group viewObjectId to nest element inside (null for top-level)
      * @return MutationResult containing the AddToViewResultDto
      * @throws NoModelLoadedException if no model is loaded
@@ -727,17 +737,34 @@ public interface ArchiModelAccessor {
      * @param height             height (null for default 80)
      * @param parentViewObjectId optional group/element viewObjectId to nest inside;
      *                           when non-null, x/y are RELATIVE to the parent's origin
-     * @param styling            optional styling surface (StylingHelper applies)
+     * @param styling            optional styling surface (StylingHelper applies); a figure
+     *                           type or border type is refused, since a view reference has neither
+     * @param imageParams        optional icon: imagePath (must resolve in the model archive),
+     *                           imagePosition and showIcon, applied as on the other placement tools
      * @return MutationResult containing the EmbeddedViewDto
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found, referenced view not found or
-     *                              not an ArchiMate view, parent is invalid, or bounds
-     *                              fail validation
+     *                              not an ArchiMate view, parent is invalid, bounds
+     *                              fail validation, or the icon path is not in the archive
      */
     MutationResult<EmbeddedViewDto> addViewReferenceToView(String sessionId,
             String viewId, String referencedViewId, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId,
-            StylingParams styling);
+            StylingParams styling, ImageParams imageParams);
+
+    /**
+     * Back-compat 9-arg overload. Delegates to the canonical 10-arg signature with no icon.
+     *
+     * @deprecated use {@link #addViewReferenceToView(String, String, String, Integer, Integer, Integer, Integer, String, StylingParams, ImageParams)}
+     */
+    @Deprecated
+    default MutationResult<EmbeddedViewDto> addViewReferenceToView(String sessionId,
+            String viewId, String referencedViewId, Integer x, Integer y,
+            Integer width, Integer height, String parentViewObjectId,
+            StylingParams styling) {
+        return addViewReferenceToView(sessionId, viewId, referencedViewId, x, y, width, height,
+                parentViewObjectId, styling, null);
+    }
 
     /**
      * Adds a standalone image visual ({@code IDiagramModelImage}) to a view
@@ -964,7 +991,9 @@ public interface ArchiModelAccessor {
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found
      */
-    AssessLayoutResultDto assessLayout(String viewId);
+    default AssessLayoutResultDto assessLayout(String viewId) {
+        return assessLayout(viewId, false);
+    }
 
     /**
      * Assesses layout quality with optional per-metric violator IDs.
@@ -1016,10 +1045,14 @@ public interface ArchiModelAccessor {
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found, connection not found, or invalid strategy/mode
      */
-    MutationResult<AutoRouteResultDto> autoRouteConnections(
+    default MutationResult<AutoRouteResultDto> autoRouteConnections(
             String sessionId, String viewId,
             List<String> connectionIds, String strategy, boolean force,
-            boolean autoNudge, int snapThreshold, int perimeterMargin, String mode);
+            boolean autoNudge, int snapThreshold, int perimeterMargin, String mode) {
+        return autoRouteConnections(sessionId, viewId, connectionIds, strategy, force,
+                autoNudge, snapThreshold, perimeterMargin, mode,
+                net.vheerden.archi.mcp.model.routing.RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING, null);
+    }
 
     /**
      * Overload with the channel-global ordered nudging gate.
@@ -1586,8 +1619,10 @@ public interface ArchiModelAccessor {
      * @throws NoModelLoadedException if no model is loaded
      * @throws ModelAccessException if view not found
      */
-    MutationResult<ResizeElementsResultDto> resizeElementsToFit(
-            String sessionId, String viewId, List<String> elementIds);
+    default MutationResult<ResizeElementsResultDto> resizeElementsToFit(
+            String sessionId, String viewId, List<String> elementIds) {
+        return resizeElementsToFit(sessionId, viewId, elementIds, false);
+    }
 
     /**
      * Resizes elements to fit their labels, with an opt-in <strong>wrap-fit</strong> mode.
@@ -1601,9 +1636,6 @@ public interface ArchiModelAccessor {
      * pitch (no sibling shift) — the lever that takes embedded ApplicationFunctions out of the
      * clipped 150×26 state without the bloat/destruction of single-line sizing.</p>
      *
-     * <p>Default implementation delegates to the 3-arg overload (ignoring {@code wrapFit}) so that
-     * test stubs and alternate accessors need no change; {@code ArchiModelAccessorImpl} overrides
-     * this with the real wrap-fit path.</p>
      *
      * @param sessionId  the session identifier for mode detection
      * @param viewId     the view's unique identifier (required)
@@ -1612,10 +1644,8 @@ public interface ArchiModelAccessor {
      * @param wrapFit    when true, keep width and grow height to wrap; when false, single-line sizing
      * @return MutationResult containing ResizeElementsResultDto
      */
-    default MutationResult<ResizeElementsResultDto> resizeElementsToFit(
-            String sessionId, String viewId, List<String> elementIds, boolean wrapFit) {
-        return resizeElementsToFit(sessionId, viewId, elementIds);
-    }
+    MutationResult<ResizeElementsResultDto> resizeElementsToFit(
+            String sessionId, String viewId, List<String> elementIds, boolean wrapFit);
 
     // ---- Hub element detection ----
 
@@ -1689,6 +1719,97 @@ public interface ArchiModelAccessor {
      * @throws ModelAccessException if folder not found, is default folder, or non-empty without force
      */
     MutationResult<DeleteResultDto> deleteFolder(String sessionId, String folderId, boolean force);
+
+    // ---- Merge ----
+
+    /**
+     * Collapses each cluster of same-type duplicate elements into the element named as its target.
+     *
+     * <p>Everything that referred to a duplicate is re-pointed in place, never recreated: each
+     * relationship keeps its id and attributes with the target at the duplicate's end, and each
+     * diagram object keeps its id, bounds, nesting, styling and connections while showing the
+     * target. The emptied duplicates are then deleted. A relationship between two members of one
+     * cluster is dropped (with what hangs on it) or, under {@code keep}, kept as a relationship of
+     * the target with itself when Archi allows that. Views that now show the target twice are
+     * reported, never changed. Relationships the merge makes parallel (one type, both ends shared)
+     * are reported and kept, unless {@code collapseParallel} is true: then each one whose name,
+     * documentation, properties and attributes agree with its group's survivor is folded into it
+     * (its view connections re-pointed or removed, what hangs on it moved) and deleted, and each
+     * one kept is reported with its reasons. The whole call is one undo step; it is refused inside
+     * a batch.</p>
+     *
+     * @param sessionId         the session identifier for mode detection
+     * @param merges            the clusters, each a target id and the ids of its duplicates
+     * @param propertyPolicy    {@code union} (default when null), {@code keep-target} or {@code append}
+     * @param selfRelationships {@code drop} (default when null) or {@code keep}
+     * @param recordMergedIds   true to add a {@code mergedFrom} property per duplicate to its target
+     * @param collapseParallel  true to fold each agreeing parallel relationship into its survivor
+     * @return what the merge did per cluster, with an id map from each duplicate to its target
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException   on a caller error (the model is unchanged), inside a batch, or
+     *                                when the merge declined to write at execute time
+     */
+    MutationResult<MergeElementsResultDto> mergeElements(String sessionId, List<MergeClusterRequest> merges,
+            String propertyPolicy, String selfRelationships, boolean recordMergedIds, boolean collapseParallel);
+
+    /**
+     * Changes the type of each listed element in place.
+     *
+     * <p>Each element is replaced by one of the new type that keeps its id, name, documentation,
+     * properties and features; every relationship end and every diagram object that referred to it
+     * is re-pointed to the new element, keeping its own id, attributes, bounds, nesting, styling and
+     * connections. The element stays in its folder at its place when that folder belongs to the new
+     * type's layer, and moves to the new type's default folder otherwise. Its specialization is
+     * dropped, since a specialization belongs to one type, and each box takes the new type's default
+     * figure, as Archi does. A relationship ArchiMate would not allow, judged with the types every
+     * listed element will have, is handled as {@code invalidRelationships} says: by default the call
+     * is refused and changes nothing; with {@code to-association} each such relationship becomes an
+     * Association, as Archi's editor does once asked, keeping its id, folder place, connections and
+     * the relationships attached to it. Junctions are refused. The whole call is one undo step; it is
+     * refused inside a batch.</p>
+     *
+     * @param sessionId            the session identifier for mode detection
+     * @param changes              the elements to change, each an element id and the type it should have
+     * @param invalidRelationships {@code refuse} (default when null) or {@code to-association}
+     * @return what the change did per element, with an id map from each id passed to its id now
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException   on a caller error (the model is unchanged), inside a batch, or
+     *                                when the change declined to write at execute time
+     */
+    MutationResult<ChangeElementTypeResultDto> changeElementType(String sessionId,
+            List<ElementTypeChangeRequest> changes, String invalidRelationships);
+
+    /** As {@link #changeElementType(String, List, String)}, refusing any relationship it would break. */
+    default MutationResult<ChangeElementTypeResultDto> changeElementType(String sessionId,
+            List<ElementTypeChangeRequest> changes) {
+        return changeElementType(sessionId, changes, null);
+    }
+
+    /**
+     * Changes the type of each listed relationship in place.
+     *
+     * <p>Each relationship is replaced by one of the new type that keeps its id, name,
+     * documentation, properties and features, its ends, and its place in its folder; every view
+     * connection that drew it draws the new one, keeping its id, ends, bendpoints, styling, label
+     * state and its place in both ends' connection lists, and every relationship attached to it is
+     * re-pointed to the new one. The old type's own attribute (an Access type, an Influence
+     * strength, an Association's direction) and the specialization are dropped and reported; the
+     * new relationship has its type's default attribute. A new type ArchiMate does not allow is
+     * refused, every such relationship named, judged as Archi judges it: between its ends and with
+     * every relationship attached to it, by the type each listed relationship will have, and, for
+     * an end that is a Junction or a relationship, by Archi's own rule, so a relationship joined to
+     * a Junction is refused as Archi refuses it. The whole call is one undo step; it is refused
+     * inside a batch.</p>
+     *
+     * @param sessionId the session identifier for mode detection
+     * @param changes   the relationships to change, each a relationship id and the type it should have
+     * @return what the change did per relationship, with an id map from each id passed to its id now
+     * @throws NoModelLoadedException if no model is loaded
+     * @throws ModelAccessException   on a caller error (the model is unchanged), inside a batch, or
+     *                                when the change declined to write at execute time
+     */
+    MutationResult<ChangeRelationshipTypeResultDto> changeRelationshipType(String sessionId,
+            List<RelationshipTypeChangeRequest> changes);
 
     // ---- Folder mutation methods ----
 
@@ -1772,8 +1893,10 @@ public interface ArchiModelAccessor {
      * @throws ModelAccessException   if any operation fails validation and continueOnError is false
      * @throws net.vheerden.archi.mcp.model.exceptions.MutationException if dispatch fails
      */
-    BulkMutationResult executeBulk(String sessionId, List<BulkOperation> operations,
-            String description, boolean continueOnError);
+    default BulkMutationResult executeBulk(String sessionId, List<BulkOperation> operations,
+            String description, boolean continueOnError) {
+        return executeBulk(sessionId, operations, description, continueOnError, null);
+    }
 
     /**
      * As {@link #executeBulk(String, List, boolean)} but carrying the optional agent-supplied
@@ -1823,12 +1946,17 @@ public interface ArchiModelAccessor {
      * command wrapping multiple sub-operations). If fewer than {@code steps}
      * operations are available, all available operations are undone.</p>
      *
+     * <p>Held to the session's open batch, if any: while that batch is bound to a model instance
+     * other than the active one, undo is refused rather than popping the active model's stack.</p>
+     *
+     * @param sessionId the calling session
      * @param steps number of operations to undo (must be >= 1)
      * @return UndoRedoResultDto with operation counts, labels, and stack state
      * @throws NoModelLoadedException if no model is loaded
-     * @throws ModelAccessException if undo fails
+     * @throws ModelAccessException if undo fails, or is refused because the session's batch is
+     *         bound to another model
      */
-    UndoRedoResultDto undo(int steps);
+    UndoRedoResultDto undo(String sessionId, int steps);
 
     /**
      * Redoes the specified number of most recently undone operations.
@@ -1836,12 +1964,16 @@ public interface ArchiModelAccessor {
      * <p>Each step redoes one top-level CommandStack entry. If fewer than
      * {@code steps} operations are available, all available operations are redone.</p>
      *
+     * <p>Held to the session's open batch exactly as {@link #undo} is.</p>
+     *
+     * @param sessionId the calling session
      * @param steps number of operations to redo (must be >= 1)
      * @return UndoRedoResultDto with operation counts, labels, and stack state
      * @throws NoModelLoadedException if no model is loaded
-     * @throws ModelAccessException if redo fails
+     * @throws ModelAccessException if redo fails, or is refused because the session's batch is
+     *         bound to another model
      */
-    UndoRedoResultDto redo(int steps);
+    UndoRedoResultDto redo(String sessionId, int steps);
 
     // ---- Mutation support ----
 
@@ -1869,6 +2001,19 @@ public interface ArchiModelAccessor {
      * @return version string, or null if no model loaded
      */
     String getModelVersion();
+
+    /**
+     * Lists every model open in Archi, each marked when a call from {@code sessionId} that names no
+     * model resolves to it.
+     *
+     * @param sessionId the calling session
+     * @return the open models, in Archi's order; empty when none is open or mutations are not supported
+     */
+    default List<OpenModelDto> getModels(String sessionId) {
+        MutationDispatcher dispatcher = getMutationDispatcher();
+        return dispatcher == null || dispatcher.selection() == null ? List.of()
+                : dispatcher.selection().listModels(sessionId);
+    }
 
     /**
      * Gets the name of the currently active model.

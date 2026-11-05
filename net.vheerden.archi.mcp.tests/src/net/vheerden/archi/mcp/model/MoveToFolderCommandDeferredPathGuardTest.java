@@ -11,6 +11,7 @@ import java.util.Collections;
 import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.eclipse.gef.commands.CompoundCommand;
@@ -505,5 +506,52 @@ public class MoveToFolderCommandDeferredPathGuardTest {
         legit.redo();
         assertNull("redo re-checks and still finds the move legal", legit.getSkipReason());
         assertTrue("redo re-applies the legitimate move", businessSub.getElements().contains(e));
+    }
+
+    // ---- changedNothing: each guard's decline certifies it wrote nothing ----
+
+    @Test
+    public void shouldCertifyNothingChanged_whenEachGuardDeclines_andNotBeforeOrAfterAMoveThatRan() {
+        // Cycle: B moves under A/sub, so moving A into B would close a cycle.
+        MoveToFolderCommand cycle = moveFolder(a, business, b);
+        assertFalse("not before execute", cycle.changedNothing());
+        sub.getFolders().add(b);
+        assertDeclinedWithNothingWritten(cycle);
+
+        // View hierarchy: the target folder leaves Views.
+        IDiagramModel view = factory.createArchimateDiagramModel();
+        view.setId("view");
+        IFolder diagrams = model.getFolder(FolderType.DIAGRAMS);
+        diagrams.getElements().add(view);
+        IFolder views = newFolder("views");
+        diagrams.getFolders().add(views);
+        MoveToFolderCommand viewMove = moveObject(view, diagrams, views);
+        business.getFolders().add(views);
+        assertDeclinedWithNothingWritten(viewMove);
+
+        // Layer: the target folder goes under Application.
+        IArchimateElement actor = factory.createBusinessActor();
+        actor.setId("actor");
+        business.getElements().add(actor);
+        IFolder target = newFolder("target");
+        business.getFolders().add(target);
+        MoveToFolderCommand layerMove = moveObject(actor, business, target);
+        model.getFolder(FolderType.APPLICATION).getFolders().add(target);
+        assertDeclinedWithNothingWritten(layerMove);
+
+        // The precondition is restored, and the same command runs: the flag resets.
+        business.getFolders().add(target);
+        layerMove.execute();
+        assertTrue("fixture check: the move ran", target.getElements().contains(actor));
+        assertFalse("a run that moved certifies nothing", layerMove.changedNothing());
+    }
+
+    private void assertDeclinedWithNothingWritten(MoveToFolderCommand move) {
+        Map<String, String> before = MergeElementsCommandTest.snapshot(model, Set.of());
+        move.execute();
+        assertNotNull("fixture check: the move declined", move.getSkipReason());
+        assertTrue(move.changedNothing());
+        MergeElementsCommandTest.assertSnapshot("nothing written", before,
+                MergeElementsCommandTest.snapshot(model, Set.of()));
     }
 }

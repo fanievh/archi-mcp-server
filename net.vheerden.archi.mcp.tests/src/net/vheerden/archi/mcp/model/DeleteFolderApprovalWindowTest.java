@@ -28,6 +28,8 @@ import com.archimatetool.model.IBusinessActor;
 import com.archimatetool.model.IFolder;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
+import net.vheerden.archi.mcp.model.exceptions.ProposalStaleException;
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.ProposalDto;
 import net.vheerden.archi.mcp.server.ApprovalService;
 
@@ -72,6 +74,8 @@ public class DeleteFolderApprovalWindowTest {
     private IArchimateModel model;
     private CommandStack stack;
     private IFolder ops;
+    /** Runs on the dispatch path, after the approval's rebuild and before its command executes. */
+    private Runnable beforeDispatch;
 
     @Before
     public void setUp() {
@@ -131,8 +135,92 @@ public class DeleteFolderApprovalWindowTest {
                     "Folder 'Ops' is not empty: 1 element(s), 0 subfolder(s). "
                             + "Use force: true to cascade-delete all contents.",
                     e.getMessage());
+            assertFalse("a domain refusal is not staleness", e instanceof ProposalStaleException);
         }
         assertTrue("nothing was deleted", model.getFolder(FolderType.BUSINESS).getFolders().contains(ops));
+    }
+
+    /**
+     * Content that arrives between the approval's rebuild and its write makes the delete decline before
+     * it removes anything. The delete vouches that it wrote nothing, so the card goes back and the model
+     * version stays where it was.
+     */
+    @Test
+    public void shouldKeepTheCard_andNotAdvanceTheVersion_whenContentArrivesAsTheApprovedDeleteRuns() {
+        ops.getElements().clear();
+        String proposalId = propose(false);
+        beforeDispatch = () -> ops.getElements().add(actor("actor-racing", "Racing Ops"));
+        String version = accessor.getModelVersion();
+
+        try {
+            approvalService.approve(SESSION, proposalId);
+            fail("an approval whose delete declined must not report success");
+        } catch (MutationException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("was not empty when the changes were applied"));
+            assertTrue(e.getMessage(), e.getMessage().endsWith(" Nothing was changed. Reject this proposal and "
+                    + "ask the agent to make the change again."));
+        }
+
+        assertTrue("the folder is still there", model.getFolder(FolderType.BUSINESS).getFolders().contains(ops));
+        assertEquals("the card is put back", 1, dispatcher.getPendingProposalDtos(SESSION).size());
+        assertEquals("a decline that wrote nothing is no new version", version, accessor.getModelVersion());
+    }
+
+    /**
+     * A force delete whose subfolder gains content as it runs: the folder's own contents go, the
+     * subfolder declines, and so the folder stays. Part of the change ran, so the card is not put back
+     * and the version moves on.
+     */
+    @Test
+    public void shouldNotRestoreTheCard_andAdvanceTheVersion_whenASubfolderGainsContentAsTheForceDeleteRuns() {
+        IFolder inner = factory.createFolder();
+        inner.setName("Inner");
+        inner.setId("folder-inner");
+        ops.getFolders().add(inner);
+        String proposalId = propose(true);
+        beforeDispatch = () -> inner.getElements().add(actor("actor-racing", "Racing Ops"));
+        String version = accessor.getModelVersion();
+
+        try {
+            approvalService.approve(SESSION, proposalId);
+            fail("an approval whose delete declined must not report success");
+        } catch (MutationException e) {
+            assertTrue(e.getMessage(), e.getMessage().endsWith(" Part of this change may have been applied. "
+                    + "Check the model in Archi before going on."));
+        }
+
+        assertTrue("the folder is still there", model.getFolder(FolderType.BUSINESS).getFolders().contains(ops));
+        assertTrue("fixture check: the folder's own contents went", ops.getElements().isEmpty());
+        assertTrue("the card is not put back", dispatcher.getPendingProposalDtos(SESSION).isEmpty());
+        assertFalse("a decline that does not vouch it wrote nothing still counts as a new version",
+                version.equals(accessor.getModelVersion()));
+    }
+
+    /**
+     * An approved create-folder whose parent is removed between the rebuild and the write creates
+     * nothing, so the card goes back and the version stays where it was.
+     */
+    @Test
+    public void shouldKeepTheCard_andCreateNothing_whenTheParentGoesAsTheApprovedCreateRuns() {
+        MutationResult<?> result = accessor.createFolder(SESSION, ops.getId(), "Late", null, null);
+        assertTrue("approval mode must queue a proposal, not apply", result.isProposal());
+        String proposalId = result.proposalContext().proposalId();
+        IFolder business = model.getFolder(FolderType.BUSINESS);
+        beforeDispatch = () -> business.getFolders().remove(ops);
+        String version = accessor.getModelVersion();
+
+        try {
+            approvalService.approve(SESSION, proposalId);
+            fail("an approval whose create declined must not report success");
+        } catch (MutationException e) {
+            assertTrue(e.getMessage(), e.getMessage().startsWith("'Late' was not created: the folder 'Ops'"));
+            assertTrue(e.getMessage(), e.getMessage().endsWith(" Nothing was changed. Reject this proposal and "
+                    + "ask the agent to make the change again."));
+        }
+
+        assertTrue("no folder was created", ops.getFolders().isEmpty());
+        assertEquals("the card is put back", 1, dispatcher.getPendingProposalDtos(SESSION).size());
+        assertEquals("a decline that wrote nothing is no new version", version, accessor.getModelVersion());
     }
 
     // ---- force: true — the card's blast radius versus the one that actually runs ----
@@ -167,6 +255,8 @@ public class DeleteFolderApprovalWindowTest {
                             + "but applying it now would remove 5 elements. "
                             + "Reject it and ask the agent to retry.",
                     e.getMessage());
+            assertTrue("a cascade larger than the card is a stale proposal", e instanceof ProposalStaleException);
+            assertEquals(ErrorCode.PROPOSAL_STALE, ((ProposalStaleException) e).getErrorCode());
         }
 
         assertTrue("the folder is untouched", model.getFolder(FolderType.BUSINESS).getFolders().contains(ops));
@@ -306,10 +396,14 @@ public class DeleteFolderApprovalWindowTest {
             }
             @Override
             protected void dispatchCommand(Command command) {
+                if (beforeDispatch != null) {
+                    beforeDispatch.run();
+                }
                 executeDecomposed(command);
             }
             private void executeDecomposed(Command command) {
-                if (command instanceof CompoundCommand compound) {
+                // A skippable compound (a guard) runs whole: decomposing it would skip its own check.
+                if (command instanceof CompoundCommand compound && !(command instanceof CommitSkippableCommand)) {
                     for (Object cmd : compound.getCommands()) {
                         executeDecomposed((Command) cmd);
                     }

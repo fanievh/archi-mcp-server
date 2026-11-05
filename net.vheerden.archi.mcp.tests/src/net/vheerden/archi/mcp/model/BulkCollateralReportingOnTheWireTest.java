@@ -368,6 +368,122 @@ public class BulkCollateralReportingOnTheWireTest {
                 json.contains("\"proposal\""));
     }
 
+    /**
+     * The connections a placement drew for itself, on the wire: the same {@code autoConnections} rows the
+     * typed result carries, naming the connection that is on the view. The handler builds this map key by
+     * key, so a value attached to the result is not on the wire until it is copied across here too.
+     */
+    @Test
+    public void shouldNameTheAutoConnectionOnTheWire_whenADispatchedBulkPlacementDrawsIt() throws Exception {
+        relate("actor-1", "actor-2");
+
+        Map<String, Object> operation = operation(invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(placeOp("actor-1", 40, false), placeOp("actor-2", 300, true)),
+                        "description", "place two related actors")), 1);
+
+        List<?> drawn = (List<?>) operation.get("autoConnections");
+        assertEquals("one line, named on the wire: " + operation, 1, drawn.size());
+        assertEquals(onlyConnectionId(), ((Map<?, ?>) drawn.get(0)).get("viewConnectionId"));
+        assertEquals("rel-1", ((Map<?, ?>) drawn.get(0)).get("relationshipId"));
+    }
+
+    /** Queued into a batch, the rows say what the placement will draw, as the single tool does there. */
+    @Test
+    public void shouldNameTheAutoConnectionOnTheWire_whenTheBulkPlacementIsQueued() throws Exception {
+        relate("actor-1", "actor-2");
+        place("actor-1", 40, 40, 120, 55);
+
+        dispatcher.beginBatch(SESSION, "queue a connected placement");
+        Map<String, Object> operation = operation(invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(placeOp("actor-2", 300, true)),
+                        "description", "queued placement")), 0);
+
+        assertEquals("fixture guard: nothing drawn while the batch is open", 0, connectionCount());
+        assertEquals("the queued placement names the line it will draw: " + operation, 1,
+                ((List<?>) operation.get("autoConnections")).size());
+    }
+
+    /** Without autoConnect the key is absent, as it is on the single tool. */
+    @Test
+    public void shouldOmitAutoConnectionsOnTheWire_whenThePlacementDidNotAskForThem() throws Exception {
+        relate("actor-1", "actor-2");
+
+        Map<String, Object> operation = operation(invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(placeOp("actor-1", 40, false), placeOp("actor-2", 300, false)),
+                        "description", "place without connecting")), 1);
+
+        assertFalse(String.valueOf(operation), operation.containsKey("autoConnections"));
+        assertFalse(operation.containsKey("skippedDueToNesting"));
+        assertFalse(operation.containsKey("skippedByCap"));
+    }
+
+    /**
+     * Every component of a bulk operation's result is copied onto the wire. Each value lost at this
+     * boundary was computed, attached and pinned on the typed result, then never put on the hand-built
+     * map, so a new component fails here until the handler puts it.
+     */
+    @Test
+    public void everyResultComponent_isPutOnTheWire() throws Exception {
+        String handler = null;
+        for (String root : new String[] {"..", "."}) {
+            java.nio.file.Path path = java.nio.file.Paths.get(root,
+                    "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/handlers/MutationHandler.java");
+            if (java.nio.file.Files.isRegularFile(path)) {
+                handler = java.nio.file.Files.readString(path);
+            }
+        }
+        assertTrue("the bulk-mutate handler source was not found", handler != null);
+        List<String> missing = new ArrayList<>();
+        for (java.lang.reflect.RecordComponent component
+                : net.vheerden.archi.mcp.response.dto.BulkOperationResult.class.getRecordComponents()) {
+            if (!handler.contains("opMap.put(\"" + component.getName() + "\"")) {
+                missing.add(component.getName());
+            }
+        }
+        assertEquals("components the handler never puts on the wire", List.of(), missing);
+    }
+
+    private void relate(String sourceId, String targetId) {
+        com.archimatetool.model.IArchimateRelationship rel = factory.createAssociationRelationship();
+        rel.setId("rel-1");
+        rel.connect((com.archimatetool.model.IArchimateConcept) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, sourceId), (com.archimatetool.model.IArchimateConcept)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, targetId));
+        model.getFolder(FolderType.RELATIONS).getElements().add(rel);
+    }
+
+    private Map<String, Object> placeOp(String elementId, int x, boolean autoConnect) {
+        return Map.of("tool", "add-to-view", "params", Map.of("viewId", view.getId(), "elementId", elementId,
+                "x", x, "y", 40, "autoConnect", autoConnect));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> operation(Map<String, Object> envelope, int index) {
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        return ((List<Map<String, Object>>) result.get("operations")).get(index);
+    }
+
+    private String onlyConnectionId() {
+        List<String> ids = new ArrayList<>();
+        model.eAllContents().forEachRemaining(o -> {
+            if (o instanceof com.archimatetool.model.IDiagramModelArchimateConnection c) {
+                ids.add(c.getId());
+            }
+        });
+        assertEquals(1, ids.size());
+        return ids.get(0);
+    }
+
+    private int connectionCount() {
+        int[] n = {0};
+        model.eAllContents().forEachRemaining(o -> {
+            if (o instanceof com.archimatetool.model.IDiagramModelArchimateConnection) {
+                n[0]++;
+            }
+        });
+        return n[0];
+    }
+
     private String place(String elementId, int x, int y, int w, int h) {
         return accessor.addToView(SESSION, view.getId(), elementId, x, y, w, h,
                 false, null, null, null).entity().viewObject().viewObjectId();

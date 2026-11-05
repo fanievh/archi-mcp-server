@@ -116,7 +116,31 @@ public record BulkOperationResult(
      * {@code effectiveBounds} is: a later operation in the same call can re-align the same object,
      * so a value captured at prepare time would describe neither the request nor the result.</p>
      */
-    @JsonInclude(JsonInclude.Include.NON_NULL) String textAlignment
+    @JsonInclude(JsonInclude.Include.NON_NULL) String textAlignment,
+    /**
+     * The container a placement receded to a backdrop, and the fill it now holds; omitted when the
+     * operation receded none. Not this operation's own entity, so the envelope carries it, as it
+     * carries {@code resizedAncestors}.
+     */
+    @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RecededParentDto.NoneRecorded.class)
+    RecededParentDto recededParent,
+    /**
+     * For an {@code add-to-view} that asked for {@code autoConnect}, the connections it draws,
+     * present and possibly empty; null and omitted when it did not ask. The pass connects what the
+     * work staged ahead of the operation leaves on the view and relates: an object placed, or a
+     * relationship created, earlier in the call or the enclosing batch, and not one created later. On
+     * a call that was applied it is re-read: a connection a later operation in the same call took off
+     * again is not listed. Where nothing has been written, it is what the placement will draw.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL) List<ViewConnectionDto> autoConnections,
+    /**
+     * The pairs the auto-connect pass declined because the placement nests inside the other end, as
+     * the direct call reports them. Empty and omitted otherwise. A disclosure decided when the
+     * operation is prepared: the model relationship is kept either way.
+     */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<AddToViewResultDto.SkippedConnection> skippedDueToNesting,
+    /** As {@code skippedDueToNesting}, for the pairs the fifty-connection cap dropped. */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<AddToViewResultDto.SkippedConnection> skippedByCap
 ) {
 
     /**
@@ -128,6 +152,58 @@ public record BulkOperationResult(
      */
     public BulkOperationResult {
         structuredWarnings = structuredWarnings != null ? structuredWarnings : List.of();
+        skippedDueToNesting = skippedDueToNesting != null ? skippedDueToNesting : List.of();
+        skippedByCap = skippedByCap != null ? skippedByCap : List.of();
+    }
+
+    /** The shape before the auto-connect report: delegates with none. */
+    public BulkOperationResult(int index, String tool, String action, String entityId, String entityType,
+            String entityName, Integer appliedCount, Integer skippedCount, EffectiveBounds effectiveBounds,
+            DeleteResultDto deletion, List<MovedViewObjectDto> resizedAncestors,
+            List<MovedViewObjectDto> movedObjects, ViewConnectionDto effectiveConnection,
+            RelationshipDto effectiveRelationship, ElementDto effectiveElement, String parentViewObjectId,
+            List<StructuredWarningDto> structuredWarnings, String textAlignment, RecededParentDto recededParent) {
+        this(index, tool, action, entityId, entityType, entityName, appliedCount, skippedCount,
+                effectiveBounds, deletion, resizedAncestors, movedObjects, effectiveConnection,
+                effectiveRelationship, effectiveElement, parentViewObjectId, structuredWarnings,
+                textAlignment, recededParent, null, List.of(), List.of());
+    }
+
+    /**
+     * Returns a copy of this result carrying the given auto-connections.
+     *
+     * <p>Every component is named, for the reason {@link #withEffectiveBounds} records.</p>
+     */
+    public BulkOperationResult withAutoConnections(List<ViewConnectionDto> connections) {
+        return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
+                appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors, movedObjects,
+                effectiveConnection, effectiveRelationship, effectiveElement, parentViewObjectId,
+                structuredWarnings, textAlignment, recededParent, connections, skippedDueToNesting, skippedByCap);
+    }
+
+    /** The shape before the recede report: delegates with none. */
+    public BulkOperationResult(int index, String tool, String action, String entityId, String entityType,
+            String entityName, Integer appliedCount, Integer skippedCount, EffectiveBounds effectiveBounds,
+            DeleteResultDto deletion, List<MovedViewObjectDto> resizedAncestors,
+            List<MovedViewObjectDto> movedObjects, ViewConnectionDto effectiveConnection,
+            RelationshipDto effectiveRelationship, ElementDto effectiveElement, String parentViewObjectId,
+            List<StructuredWarningDto> structuredWarnings, String textAlignment) {
+        this(index, tool, action, entityId, entityType, entityName, appliedCount, skippedCount,
+                effectiveBounds, deletion, resizedAncestors, movedObjects, effectiveConnection,
+                effectiveRelationship, effectiveElement, parentViewObjectId, structuredWarnings,
+                textAlignment, null);
+    }
+
+    /**
+     * Returns a copy of this result carrying the given recede report, or none.
+     *
+     * <p>Every component is named, for the reason {@link #withEffectiveBounds} records.</p>
+     */
+    public BulkOperationResult withRecededParent(RecededParentDto receded) {
+        return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
+                appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors, movedObjects,
+                effectiveConnection, effectiveRelationship, effectiveElement, parentViewObjectId,
+                structuredWarnings, textAlignment, receded, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /** Back-compatible constructor for callers built before per-operation disclosures. */
@@ -233,7 +309,7 @@ public record BulkOperationResult(
         return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
                 appliedCount, skippedCount, bounds, deletion, resizedAncestors, movedObjects,
                 effectiveConnection, effectiveRelationship, effectiveElement, parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /** Returns a copy of this result carrying the given re-sized ancestors. */
@@ -241,7 +317,7 @@ public record BulkOperationResult(
         return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
                 appliedCount, skippedCount, effectiveBounds, deletion, ancestors, movedObjects,
                 effectiveConnection, effectiveRelationship, effectiveElement, parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /** As {@link #withResizedAncestors}, for the objects an operation displaced rather than grew. */
@@ -249,7 +325,7 @@ public record BulkOperationResult(
         return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors, moved,
                 effectiveConnection, effectiveRelationship, effectiveElement, parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -264,7 +340,7 @@ public record BulkOperationResult(
         return new BulkOperationResult(index, tool, action, entityId, entityType, entityName,
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, connection, effectiveRelationship, effectiveElement, parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -280,7 +356,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, effectiveConnection, effectiveRelationship, effectiveElement,
                 parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -301,7 +377,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, replacement, resizedAncestors,
                 movedObjects, effectiveConnection, effectiveRelationship, effectiveElement,
                 parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -317,7 +393,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, effectiveConnection, relationship, effectiveElement,
                 parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -334,7 +410,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, effectiveConnection, effectiveRelationship, effectiveElement,
                 parent,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**
@@ -351,7 +427,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, effectiveConnection, effectiveRelationship, effectiveElement,
                 parentViewObjectId,
-                structuredWarnings, alignment);
+                structuredWarnings, alignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /** As {@link #withEffectiveRelationship}, for an operation whose entity is an element. */
@@ -360,7 +436,7 @@ public record BulkOperationResult(
                 appliedCount, skippedCount, effectiveBounds, deletion, resizedAncestors,
                 movedObjects, effectiveConnection, effectiveRelationship, element,
                 parentViewObjectId,
-                structuredWarnings, textAlignment);
+                structuredWarnings, textAlignment, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
     }
 
     /**

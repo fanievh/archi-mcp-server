@@ -157,7 +157,39 @@ public class HubPortQualitySilentBandTest {
      * wrong, because the band function it now routes through also feeds the breakdown — so a
      * boundary typed one character differently there would silently re-rate views rather than
      * merely re-advise them. The golden values below were measured on the unwidened tree and
-     * every one of them still holds.</p>
+     * every one of them held on the widened one.</p>
+     *
+     * <p>Three of them were later re-measured for a change to a different metric: M1
+     * ({@code nonOrthogonalTerminals}) now tests the terminal stub Archi draws, and every end it
+     * stopped counting on these stored routes has its bendpoint level with a face, where Archi draws
+     * a perpendicular stub. retail-bank-application-collaboration: M1 6 to 0, M1 rating poor to pass,
+     * routing and overall fair to good (M1 was the only thing holding it at fair, which its
+     * {@code overallExcludingAcceptedCosmetics} of good already said).
+     * retail-bank-business-architecture: M1 18 to 9 (the nine left are zero-bendpoint), poor to fair.
+     * retail-bank-drifted-anchors: M1 7 to 1, poor to good. Nothing else on any view moved.</p>
+     *
+     * <p>Five were re-measured again when the connection-end model was made to match where Archi
+     * attaches a connection: at the corner itself for an end off a corner, and, for a connection
+     * with no bendpoints, between the anchors Archi picks for the pair — straight across the
+     * overlap of two aligned boxes, corner to corner otherwise. hh-source-clone, st-source-clone and
+     * v4-integration-architecture-oracle: pass-throughs 8, 10 and 8 to 1 each (the corner-to-corner
+     * line misses boxes the centre line crossed), pass-through rating poor to fair, routing and
+     * overall poor to fair. retail-bank-business-architecture: its nine zero-bendpoint M1 ends all
+     * join aligned boxes, which Archi draws straight — M1 9 to 0, fair to pass, routing and
+     * overall fair to good. retail-bank-drifted-anchors: M1 1 to 0, good to pass. No other rating
+     * moved: app-architecture-view's M1 29 to 16 and pass-throughs 10 to 6, and hh-source-clone's
+     * and v4-integration-architecture-oracle's M1 29 to 25, all stay poor.</p>
+     *
+     * <p>Re-measured when a Middle label was scored where Archi draws it, the midpoint of the drawn
+     * line rather than of the centre line: on these views every labelled connection has no bendpoints,
+     * and the drawn ends sit off the centres. Measured then, and not asserted here: hh-source-clone's and
+     * v4-integration-architecture-oracle's label overlaps went 0 to 3 each, which the ratings below pin as
+     * pass to fair; st-source-clone's 3 to 5 stays in its band.</p>
+     *
+     * <p>Re-measured when a route through its own source or target was charged on the pass-through
+     * band beside the crossings of other elements: retail-bank-drifted-anchors draws three such
+     * crossings in its stored routes, which were counted before but never rated — pass-throughs pass
+     * to fair. Its routing and overall were already poor, and no other view draws one.</p>
      *
      * <p>What DID move, on exactly one of the seven views, is the violator set: the fixture at
      * hub-port quality 0.60 sits inside the band the remedy could not previously reach, and its
@@ -194,7 +226,7 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("zigzags", "pass")));
 
         assertCorpusRatingUnchanged("hh-source-clone",
-                "poor", "excellent", "poor", 1.0,
+                "fair", "excellent", "fair", 1.0,
                 java.util.Map.ofEntries(
                         java.util.Map.entry("alignment", "pass"),
                         java.util.Map.entry("boundaryViolations", "pass"),
@@ -205,22 +237,22 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("hubNeighbourCrowding", "pass"),
                         java.util.Map.entry("hubPortQuality", "pass"),
                         java.util.Map.entry("interiorTerminations", "pass"),
-                        java.util.Map.entry("labelOverlaps", "pass"),
+                        java.util.Map.entry("labelOverlaps", "fair"),
                         java.util.Map.entry("labelTruncations", "pass"),
                         java.util.Map.entry("nonOrthogonalInteriorSegments", "pass"),
                         java.util.Map.entry("nonOrthogonalTerminals", "poor"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
-                        java.util.Map.entry("overall", "poor"),
-                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "poor"),
+                        java.util.Map.entry("overall", "fair"),
+                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "fair"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
-                        java.util.Map.entry("passThroughs", "poor"),
+                        java.util.Map.entry("passThroughs", "fair"),
                         java.util.Map.entry("spacing", "pass"),
                         java.util.Map.entry("zigzags", "pass")));
 
         assertCorpusRatingUnchanged("retail-bank-application-collaboration",
-                "fair", "excellent", "fair", 0.75,
+                "good", "excellent", "good", 0.75,
                 java.util.Map.ofEntries(
                         java.util.Map.entry("alignment", "pass"),
                         java.util.Map.entry("boundaryViolations", "pass"),
@@ -234,10 +266,10 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("labelOverlaps", "pass"),
                         java.util.Map.entry("labelTruncations", "pass"),
                         java.util.Map.entry("nonOrthogonalInteriorSegments", "pass"),
-                        java.util.Map.entry("nonOrthogonalTerminals", "poor"),
+                        java.util.Map.entry("nonOrthogonalTerminals", "pass"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
-                        java.util.Map.entry("overall", "fair"),
+                        java.util.Map.entry("overall", "good"),
                         java.util.Map.entry("overallExcludingAcceptedCosmetics", "good"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
@@ -246,7 +278,7 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("zigzags", "pass")));
 
         assertCorpusRatingUnchanged("retail-bank-business-architecture",
-                "fair", "excellent", "fair", 0.75,
+                "good", "excellent", "good", 0.75,
                 java.util.Map.ofEntries(
                         java.util.Map.entry("alignment", "pass"),
                         java.util.Map.entry("boundaryViolations", "pass"),
@@ -260,10 +292,10 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("labelOverlaps", "pass"),
                         java.util.Map.entry("labelTruncations", "pass"),
                         java.util.Map.entry("nonOrthogonalInteriorSegments", "pass"),
-                        java.util.Map.entry("nonOrthogonalTerminals", "poor"),
+                        java.util.Map.entry("nonOrthogonalTerminals", "pass"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
-                        java.util.Map.entry("overall", "fair"),
+                        java.util.Map.entry("overall", "good"),
                         java.util.Map.entry("overallExcludingAcceptedCosmetics", "good"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
@@ -286,19 +318,19 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("labelOverlaps", "pass"),
                         java.util.Map.entry("labelTruncations", "pass"),
                         java.util.Map.entry("nonOrthogonalInteriorSegments", "fair"),
-                        java.util.Map.entry("nonOrthogonalTerminals", "poor"),
+                        java.util.Map.entry("nonOrthogonalTerminals", "pass"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
                         java.util.Map.entry("overall", "poor"),
                         java.util.Map.entry("overallExcludingAcceptedCosmetics", "poor"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
-                        java.util.Map.entry("passThroughs", "pass"),
+                        java.util.Map.entry("passThroughs", "fair"),
                         java.util.Map.entry("spacing", "pass"),
                         java.util.Map.entry("zigzags", "pass")));
 
         assertCorpusRatingUnchanged("st-source-clone",
-                "poor", "excellent", "poor", 1.0,
+                "fair", "excellent", "fair", 1.0,
                 java.util.Map.ofEntries(
                         java.util.Map.entry("alignment", "pass"),
                         java.util.Map.entry("boundaryViolations", "pass"),
@@ -315,16 +347,16 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("nonOrthogonalTerminals", "poor"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
-                        java.util.Map.entry("overall", "poor"),
-                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "poor"),
+                        java.util.Map.entry("overall", "fair"),
+                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "fair"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
-                        java.util.Map.entry("passThroughs", "poor"),
+                        java.util.Map.entry("passThroughs", "fair"),
                         java.util.Map.entry("spacing", "pass"),
                         java.util.Map.entry("zigzags", "pass")));
 
         assertCorpusRatingUnchanged("v4-integration-architecture-oracle",
-                "poor", "excellent", "poor", 1.0,
+                "fair", "excellent", "fair", 1.0,
                 java.util.Map.ofEntries(
                         java.util.Map.entry("alignment", "pass"),
                         java.util.Map.entry("boundaryViolations", "pass"),
@@ -335,17 +367,17 @@ public class HubPortQualitySilentBandTest {
                         java.util.Map.entry("hubNeighbourCrowding", "pass"),
                         java.util.Map.entry("hubPortQuality", "pass"),
                         java.util.Map.entry("interiorTerminations", "pass"),
-                        java.util.Map.entry("labelOverlaps", "pass"),
+                        java.util.Map.entry("labelOverlaps", "fair"),
                         java.util.Map.entry("labelTruncations", "pass"),
                         java.util.Map.entry("nonOrthogonalInteriorSegments", "pass"),
                         java.util.Map.entry("nonOrthogonalTerminals", "poor"),
                         java.util.Map.entry("offCanvas", "pass"),
                         java.util.Map.entry("offFaceParallelTerminals", "pass"),
-                        java.util.Map.entry("overall", "poor"),
-                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "poor"),
+                        java.util.Map.entry("overall", "fair"),
+                        java.util.Map.entry("overallExcludingAcceptedCosmetics", "fair"),
                         java.util.Map.entry("overlaps", "pass"),
                         java.util.Map.entry("parentLabelObscured", "pass"),
-                        java.util.Map.entry("passThroughs", "poor"),
+                        java.util.Map.entry("passThroughs", "fair"),
                         java.util.Map.entry("spacing", "pass"),
                         java.util.Map.entry("zigzags", "pass")));
     }

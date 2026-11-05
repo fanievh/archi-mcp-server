@@ -234,12 +234,23 @@ public class LabelFrameRatingImpactTest {
      * The per-view report: label overlaps and rating, before and after, on every fixture.
      *
      * <p>Reported per view and never aggregated, because a total can hide one view degrading while
-     * another improves. Two views improve, four are unchanged, and none gets worse — on any of the
-     * three things worth watching: the count, the rating, and the coverage level the count is
-     * declared at.
+     * another improves. None gets worse — on any of the three things worth watching: the count, the
+     * rating, and the coverage level the count is declared at.
+     *
+     * <p>Re-measured when Source and Target labels were scored where Archi draws them (draw2d's
+     * {@code ConnectionEndpointLocator}: just beyond that end of the line, not 15% or 85% along it).
+     * Reading the displaced path, the optimiser still puts labels at their source end, but Archi draws a
+     * Source label outside its own box, so on these fixtures those labels no longer collide: the two
+     * views that used to improve (two overlaps to none) measured none either way, and all six were
+     * unchanged.
+     *
+     * <p>Re-measured when a label lying on another connection's line was scored. Reading the displaced
+     * path, the optimiser steers one label of retail-bank-application-collaboration off a line that is not
+     * where Archi draws it, and onto a real overlap: that view improves again (one overlap to none), the
+     * other five are unchanged.
      */
     @Test
-    public void shouldImproveTwoViewsAndDegradeNone() throws IOException {
+    public void shouldDegradeNoView() throws IOException {
         Map<String, Measurement> report = new LinkedHashMap<>();
         for (String view : VIEWS) {
             report.put(view, measure(view));
@@ -271,32 +282,47 @@ public class LabelFrameRatingImpactTest {
             else unchanged++;
         }
 
-        assertEquals("views whose label overlaps improve", 2, improved);
-        assertEquals("views left unchanged", 4, unchanged);
+        assertEquals("views whose label overlaps improve", 1, improved);
+        assertEquals("views left unchanged", 5, unchanged);
     }
 
     /**
-     * The two views that improve, named, with their numbers.
+     * The two views carrying bent labelled connections, named, with their numbers.
      *
-     * <p>Four label overlaps become none on each. The mechanism is visible in the chosen positions:
-     * reading the displaced path, the optimiser put two labels at their source end, and the assessor
-     * — scoring against the real polyline — found them colliding.
+     * <p>They used to show the fix: reading the displaced path, the optimiser put two labels at their
+     * source end, and the assessor — scoring against the real polyline — found them colliding.
+     *
+     * <p>Re-measured when a Middle label was scored where Archi draws it (the index midpoint of the
+     * drawn line, not the point half way along it). That change alone moved the numbers before the fix:
+     * overlaps four to two, the rating fair to good, the label coverage partial to checked. Re-measured
+     * again when Source and Target labels were scored where Archi draws them: the two labels at their
+     * source end now sit just beyond the source's face, clear, so before the fix measures two to none and
+     * the rating good to excellent. The numbers after the fix did not move.
+     *
+     * <p>Re-measured when a label lying on another connection's line was scored: on the displaced path
+     * one label of retail-bank-application-collaboration is moved off a phantom line onto a real overlap, so
+     * that view measures, before the fix, one overlap, a good rating and partial label coverage (that label
+     * lands on a segment too short to carry it). retail-bank-drifted-anchors and every number after the fix
+     * did not move.
      */
     @Test
-    public void shouldClearEveryLabelOverlap_onTheTwoViewsCarryingBentLabelledConnections()
+    public void shouldHaveNoLabelOverlap_onTheTwoViewsCarryingBentLabelledConnections()
             throws IOException {
+        Map<String, ViewOutcome> before = Map.of(
+                "retail-bank-application-collaboration", new ViewOutcome(1, "good", "partial"),
+                "retail-bank-drifted-anchors", new ViewOutcome(0, "excellent", "checked"));
         for (String view : List.of("retail-bank-application-collaboration",
                                    "retail-bank-drifted-anchors")) {
             Measurement m = measure(view);
-            assertEquals(view + ": overlaps before the fix", 4, m.beforeFix().labelOverlapCount());
+            assertEquals(view + ": before the fix", before.get(view), m.beforeFix());
             assertEquals(view + ": overlaps after the fix", 0, m.afterFix().labelOverlapCount());
-            assertEquals(view + ": rating before", "fair", m.beforeFix().rating());
-            assertEquals(view + ": rating after", "fair", m.afterFix().rating());
+            // With the overlaps gone nothing else holds these labelled connections down: their
+            // bent ends sit level with their element faces, where Archi draws a perpendicular stub,
+            // so M1 counts none of them and the subset rates excellent.
+            assertEquals(view + ": rating after", "excellent", m.afterFix().rating());
 
-            // A third improvement, and the one the acceptance criteria singled out to watch: the
-            // displaced path pushed labels onto hosting segments too short to carry them, which
-            // downgrades what the dimension is willing to claim. Reading the real path clears it.
-            assertEquals(view + ": coverage before", "partial", m.beforeFix().labelCoverage());
+            // After the fix the coverage the dimension claims is checked: with each Middle label hosted
+            // on the segment Archi draws it on, no label lands on a segment too short to carry it.
             assertEquals(view + ": coverage after", "checked", m.afterFix().labelCoverage());
         }
     }
@@ -309,9 +335,13 @@ public class LabelFrameRatingImpactTest {
      * error at all. Every one of these views carries labelled connections, and not one of those
      * connections is bent — so there was nothing for the fix to change. Asserting the reason, and
      * not merely the sameness, is what stops "four of six unchanged" being read as weak evidence.
+     *
+     * <p>Since Source and Target labels are scored where Archi draws them, the two bent views do not move
+     * either (see {@link #shouldDegradeNoView}), so only this direction is still asserted: no bent labelled
+     * connection, no move.
      */
     @Test
-    public void shouldLeaveAViewUntouched_exactlyWhenNoLabelledConnectionIsBent() throws IOException {
+    public void shouldLeaveAViewUntouched_whenNoLabelledConnectionIsBent() throws IOException {
         for (String view : VIEWS) {
             Measurement m = measure(view);
             if (m.beforeFix() == null) {
@@ -320,8 +350,9 @@ public class LabelFrameRatingImpactTest {
                 continue;
             }
             boolean moved = m.afterFix().labelOverlapCount() != m.beforeFix().labelOverlapCount();
-            assertEquals(view + ": a view moves if and only if it carries a bent labelled connection",
-                    moved, m.labelledAndBent() > 0);
+            if (m.labelledAndBent() == 0) {
+                assertEquals(view + ": a view with no bent labelled connection does not move", false, moved);
+            }
         }
     }
 }

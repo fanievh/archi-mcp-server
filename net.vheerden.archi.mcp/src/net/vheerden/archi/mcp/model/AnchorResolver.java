@@ -55,6 +55,13 @@ public final class AnchorResolver {
     static final String ANCHOR_DX_FEATURE = "anchorDx";
     static final String ANCHOR_DY_FEATURE = "anchorDy";
 
+    /**
+     * The widest gap {@code add-note-to-view} accepts between a note and the content it clears, published in
+     * its schema. Far beyond any useful spacing, and small enough that no placement arithmetic overflows.
+     * The narrowest is 0: a negative gap would overlap the very content the position is meant to clear.
+     */
+    public static final int MAX_NOTE_GAP = 1000;
+
     static final String EDGE_BELOW = "below";
     static final String EDGE_ABOVE = "above";
     static final String EDGE_RIGHT = "right";
@@ -425,31 +432,42 @@ public final class AnchorResolver {
     }
 
     /**
-     * Drops a pass-scoped cascade resize for {@code viewObjectId} once the rectangle the current
-     * mutation settles for that same object already satisfies it.
+     * Folds a pass-scoped cascade resize already pending for {@code viewObjectId} into the rectangle
+     * the current mutation merged for that same object: each size becomes the larger of the two,
+     * and the position stays the mutation's own. Returns {@code merged}, changed in place.
      *
-     * <p>Only a caller that owns the fit commands for a whole pass needs this, and only because it
-     * commits them <em>after</em> every object has landed. That ordering is deliberate: it is what
-     * lets a group's re-fit supersede an entry that named the group and asked for it smaller than
-     * its children need, which is a wrong canvas described accurately. It must not also let the
-     * re-fit undo an entry that asked for the group <em>bigger</em>. Containment is the whole
-     * justification for going last, and a rectangle that already contains what the cascade demanded
-     * discharges it — so the cascade has nothing left to say and its command is retired rather than
-     * executed over the top of a larger one the caller explicitly asked for.</p>
+     * <p>Only a caller that owns the fit commands for a whole pass has such a resize, and it commits
+     * them <em>after</em> every object has landed. That ordering is deliberate: it is what lets a
+     * group's re-fit supersede an entry that named the group and asked for it smaller than its
+     * children need, which is a wrong canvas described accurately. It must not also let the re-fit
+     * undo anything else the entry asked for. The re-fit was measured from the rectangle the object
+     * had before this mutation, so running it last would write that position back, and the size of
+     * any axis this mutation enlarged. Folding it in here instead keeps the room the children need
+     * — they sit relative to their container, so that room does not depend on where it is — at the
+     * position the mutation sets, and everything this mutation goes on to measure (its own parent's
+     * fit, the objects anchored to it, the pass's pending bounds) sees the rectangle it will end at.
+     * {@link #settlePassResize} then retires the re-fit it absorbed.</p>
+     */
+    static int[] absorbPassFit(Map<String, Command> passFitCommands, String viewObjectId, int[] merged) {
+        if (passFitCommands != null && passFitCommands.get(viewObjectId) instanceof UpdateViewObjectCommand fit) {
+            merged[2] = Math.max(merged[2], fit.getNewWidth());
+            merged[3] = Math.max(merged[3], fit.getNewHeight());
+        }
+        return merged;
+    }
+
+    /**
+     * Retires a pass-scoped cascade resize for {@code viewObjectId} once the rectangle the current
+     * mutation sets for that same object is at least as large on both axes — which is always so once
+     * {@link #absorbPassFit} has folded it in.
      *
      * <p>Retiring rather than overwriting matters for what comes next: a LATER object in the same
      * pass may push this same container again, and that fit re-enters the map on its own terms,
      * measured against the rectangle this mutation just established.</p>
      */
-    static void retireCoveredResize(Map<String, Command> passFitCommands, String viewObjectId,
-            int x, int y, int width, int height) {
-        if (!(passFitCommands.get(viewObjectId) instanceof UpdateViewObjectCommand fit)) {
-            return;
-        }
-        // Both rectangles describe the same object in the same parent frame, so they compare directly.
-        if (x <= fit.getNewX() && y <= fit.getNewY()
-                && x + width >= fit.getNewX() + fit.getNewWidth()
-                && y + height >= fit.getNewY() + fit.getNewHeight()) {
+    static void settlePassResize(Map<String, Command> passFitCommands, String viewObjectId, int width, int height) {
+        if (passFitCommands.get(viewObjectId) instanceof UpdateViewObjectCommand fit
+                && width >= fit.getNewWidth() && height >= fit.getNewHeight()) {
             passFitCommands.remove(viewObjectId);
         }
     }

@@ -16,8 +16,22 @@ import java.util.*;
  */
 public class ViewFixture {
 
+    /**
+     * @param type       the ArchiMate class name ({@code BusinessProcess}), {@code Group} or
+     *                   {@code Note}; null when the fixture predates the field, which every
+     *                   reader treats as a plain rectangle
+     * @param figureType the diagram object's alternate-figure index (Archi's {@code getType()});
+     *                   0 when absent
+     */
     public record FixtureElement(String id, String name, int x, int y, int w, int h,
-                                  boolean isChild, String parentId) {}
+                                  boolean isChild, String parentId, String type, int figureType) {
+
+        /** Back-compatible 8-arg form for fixtures that record no element type. */
+        public FixtureElement(String id, String name, int x, int y, int w, int h,
+                              boolean isChild, String parentId) {
+            this(id, name, x, y, w, h, isChild, parentId, null, 0);
+        }
+    }
 
     /**
      * A bendpoint as Archi stores it: offsets relative to the source centre
@@ -87,6 +101,12 @@ public class ViewFixture {
 
             List<FixtureElement> elements = new ArrayList<>();
             for (JsonNode eNode : root.get("elements")) {
+                // A type without its figure variant would read as figure 0 and hide a service pill
+                // or a Value ellipse, which get-view-contents does not publish.
+                if (eNode.hasNonNull("type") && !eNode.hasNonNull("figureType")) {
+                    throw new IOException("Fixture element " + eNode.get("id").asText()
+                            + " has a type but no figureType: " + resourcePath);
+                }
                 elements.add(new FixtureElement(
                         eNode.get("id").asText(),
                         eNode.get("name").asText(),
@@ -95,7 +115,9 @@ public class ViewFixture {
                         eNode.get("w").asInt(),
                         eNode.get("h").asInt(),
                         eNode.has("isChild") && eNode.get("isChild").asBoolean(),
-                        eNode.has("parentId") ? eNode.get("parentId").asText() : null));
+                        eNode.has("parentId") ? eNode.get("parentId").asText() : null,
+                        eNode.hasNonNull("type") ? eNode.get("type").asText() : null,
+                        eNode.hasNonNull("figureType") ? eNode.get("figureType").asInt() : 0));
             }
 
             List<FixtureConnection> connections = new ArrayList<>();

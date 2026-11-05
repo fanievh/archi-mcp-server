@@ -148,7 +148,7 @@ class IntegrationStubAccessor extends BaseTestAccessor {
     }
 
     @Override
-    public String getModelVersion() { return "integration-v1"; }
+    public String getModelVersion() { return isModelLoaded() ? "integration-v1" : null; }
 
     @Override
     public Optional<String> getCurrentModelName() {

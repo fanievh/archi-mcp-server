@@ -45,12 +45,6 @@ public class RequestBodyUtf8ValidationHandlerTest {
         transportConfig.stopServer();
     }
 
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
-            return probe.getLocalPort();
-        }
-    }
-
     // ---- Pure-unit: isWellFormedUtf8(...) decision matrix ----
 
     @Test
@@ -99,8 +93,8 @@ public class RequestBodyUtf8ValidationHandlerTest {
 
     @Test
     public void shouldReturn415_whenBodyIsNotValidUtf8OnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // A client that serialized in a legacy codepage with no charset declared: "name":"widget�"
         // where the last byte is a raw Latin-1 'ä' (0xE4) — invalid UTF-8.
         byte[] body = concat("{\"name\":\"widget".getBytes(StandardCharsets.US_ASCII),
@@ -110,8 +104,8 @@ public class RequestBodyUtf8ValidationHandlerTest {
 
     @Test
     public void shouldReachServlet_whenBodyIsValidUtf8OnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // A normal, valid UTF-8 body must reach the servlet (NOT 415), and not crash it (NOT 500) —
         // proving both the well-formedness pass AND that the buffer-and-replay delivers the body.
         int status = rawPost(port, "/mcp", "application/json",
@@ -122,8 +116,8 @@ public class RequestBodyUtf8ValidationHandlerTest {
 
     @Test
     public void shouldReachServlet_whenBodyContainsGenuineReplacementCharacterOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // A correctly UTF-8-encoded body that contains a genuine U+FFFD character must pass through.
         byte[] body = "{\"name\":\"label�\"}".getBytes(StandardCharsets.UTF_8);
         int status = rawPost(port, "/mcp", "application/json", body).status;
@@ -133,8 +127,8 @@ public class RequestBodyUtf8ValidationHandlerTest {
 
     @Test
     public void shouldReturnJsonRpcEnvelope_whenBodyRejected() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         byte[] body = concat("{\"name\":\"".getBytes(StandardCharsets.US_ASCII),
                 new byte[] {(byte) 0xE4}, "\"}".getBytes(StandardCharsets.US_ASCII));
         Response resp = rawPost(port, "/mcp", "application/json", body);
@@ -158,8 +152,8 @@ public class RequestBodyUtf8ValidationHandlerTest {
         String previous = System.getProperty(key);
         System.setProperty(key, "false");
         try {
-            int port = freePort();
-            transportConfig.startServer(port, LOOPBACK);
+            transportConfig.startServer(0, LOOPBACK);
+            int port = transportConfig.getPort();
             byte[] body = concat("{\"name\":\"".getBytes(StandardCharsets.US_ASCII),
                     new byte[] {(byte) 0xE4}, "\"}".getBytes(StandardCharsets.US_ASCII));
             int status = rawPost(port, "/mcp", "application/json", body).status;

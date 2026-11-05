@@ -240,65 +240,117 @@ public class StylingHelperTypographyAndDecorationTest {
     // assembleFontString — partial-update permutations (merge discipline)
     // ------------------------------------------------------------------
 
+    /** Archi's default view font as these pins assume it: the macOS default. */
+    private static final DefaultViewFont.Spec MAC_DEFAULT = new DefaultViewFont.Spec("Lucida Grande", 12);
+
+    // Every string the server writes is version 1 ("1|name|height.0|style|"): SWT's FontData(String)
+    // refuses any other version, and Archi then draws the default font, so a version-0 string (what
+    // these pins used to expect) was stored and read back but never drawn.
+
     @Test
-    public void assembleFontString_buildsFromScratchVersion0_whenNoExisting() {
-        String result = StylingHelper.assembleFontString(null, "Segoe UI", 12, "bold");
-        // Version-0 minimal output: "Segoe UI|12|1"
-        assertEquals("Segoe UI|12|1", result);
+    public void assembleFontString_buildsVersion1_whenNoExisting() {
+        assertEquals("1|Segoe UI|12.0|1|", StylingHelper.assembleFontString(null, "Segoe UI", 12, "bold", MAC_DEFAULT));
     }
 
     @Test
     public void assembleFontString_emptyExistingTreatedAsNoExisting() {
-        String result = StylingHelper.assembleFontString("", "Arial", 9, "normal");
-        assertEquals("Arial|9|0", result);
+        assertEquals("1|Arial|9.0|0|", StylingHelper.assembleFontString("", "Arial", 9, "normal", MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_buildsFromScratchDefaults_whenAllArgsNull() {
-        // No existing + nothing supplied → minimal default (empty name, size 9, NORMAL).
-        String result = StylingHelper.assembleFontString(null, null, null, null);
-        assertEquals("|9|0", result);
+    public void assembleFontString_takesTheDefaultFamilyAndSize_whenOnlyTheStyleIsGiven() {
+        // A style-only call keeps the face and size the label had, rather than shrinking it to 9.
+        assertEquals("1|Lucida Grande|12.0|2|", StylingHelper.assembleFontString(null, null, null, "italic", MAC_DEFAULT));
+        assertEquals("1|Lucida Grande|20.0|0|", StylingHelper.assembleFontString(null, null, 20, null, MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_mergesNameOnly_intoVersion0Existing() {
-        // v0 existing: "Segoe UI|9|1" (bold, 9pt). Override name only.
-        String result = StylingHelper.assembleFontString("Segoe UI|9|1", "Arial", null, null);
-        assertEquals("Arial|9|1", result);
+    public void assembleFontString_leavesTheFamilyEmpty_onlyWhenTheDefaultCannotBeRead() {
+        assertEquals("1||9.0|0|", StylingHelper.assembleFontString(null, null, null, null, DefaultViewFont.UNKNOWN));
     }
 
     @Test
-    public void assembleFontString_mergesSizeOnly_intoVersion0Existing() {
-        String result = StylingHelper.assembleFontString("Segoe UI|9|1", null, 14, null);
-        assertEquals("Segoe UI|14|1", result);
+    public void assembleFontString_upgradesAVersion0Existing_keepingItsCells() {
+        assertEquals("1|Arial|9.0|1|", StylingHelper.assembleFontString("Segoe UI|9|1", "Arial", null, null, MAC_DEFAULT));
+        assertEquals("1|Segoe UI|14.0|1|", StylingHelper.assembleFontString("Segoe UI|9|1", null, 14, null, MAC_DEFAULT));
+        assertEquals("1|Segoe UI|9.0|2|", StylingHelper.assembleFontString("Segoe UI|9|0", null, null, "italic", MAC_DEFAULT));
+        assertEquals("1|Comic Sans MS|16.0|3|",
+                StylingHelper.assembleFontString("Segoe UI|9|0", "Comic Sans MS", 16, "bold-italic", MAC_DEFAULT));
+        // A version-0 font written with no name takes the default family when it is next written.
+        assertEquals("1|Lucida Grande|20.0|1|", StylingHelper.assembleFontString("|20|2", null, null, "bold", MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_mergesStyleOnly_intoVersion0Existing() {
-        String result = StylingHelper.assembleFontString("Segoe UI|9|0", null, null, "italic");
-        assertEquals("Segoe UI|9|2", result);
+    public void assembleFontString_mergesIntoVersion1_andDropsThePlatformCells() {
+        // On macOS the platform cells name the exact face, and SWT draws that face over the name and
+        // style cells, so a merge that kept them would not draw the change.
+        assertEquals("1|Arial|14.0|1|",
+                StylingHelper.assembleFontString("1|Segoe UI|9.0|0|WINDOWS|1|", "Arial", 14, "bold", MAC_DEFAULT));
+        assertEquals("1|Courier New|10.0|1|",
+                StylingHelper.assembleFontString("1|Arial|10.0|1|COCOA|1|Arial-BoldMT", "Courier New", null, null, MAC_DEFAULT));
+        assertEquals("1|Arial|10.0|2|",
+                StylingHelper.assembleFontString("1|Arial|10.0|1|COCOA|1|Arial-BoldMT", null, null, "italic", MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_mergesAllThree_intoVersion0Existing() {
-        String result = StylingHelper.assembleFontString("Segoe UI|9|0", "Comic Sans MS", 16, "bold-italic");
-        assertEquals("Comic Sans MS|16|3", result);
+    public void assembleFontString_clearName_writesTheDefaultFamily() {
+        // An empty family draws the platform's face, not Archi's default view font.
+        assertEquals("1|Lucida Grande|9.0|0|", StylingHelper.assembleFontString("Segoe UI|9|0", "", null, null, MAC_DEFAULT));
+        assertEquals("1|Lucida Grande|10.0|1|",
+                StylingHelper.assembleFontString("1|Arial|10.0|1|COCOA|1|Arial-BoldMT", "", null, null, MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_preservesVersion1Format_andPlatformCells() {
-        // v1 input with platform/extra cells: "1|Segoe UI|9.0|0|WINDOWS|1|" (style 0 = NORMAL).
-        String existing = "1|Segoe UI|9.0|0|WINDOWS|1|";
-        String result = StylingHelper.assembleFontString(existing, "Arial", 14, "bold");
-        // Expect v1 format preserved, height kept as float "14.0", platform cells untouched.
-        assertEquals("1|Arial|14.0|1|WINDOWS|1|", result);
+    public void assembleFontString_repairsAStoredHeightOrStyleCellSwtCannotRead() {
+        // SWT refuses the whole string over one unreadable cell, and Archi then draws its default font.
+        assertEquals("1|Arial|12.0|1|", StylingHelper.assembleFontString("1|Arial||0|", null, null, "bold", MAC_DEFAULT));
+        assertEquals("1|Arial|16.0|0|", StylingHelper.assembleFontString("1|Arial|abc|x|", null, 16, null, MAC_DEFAULT));
+        assertEquals("1|Arial|12.0|0|", StylingHelper.assembleFontString("1|Arial|0.0|0|", null, null, "normal", MAC_DEFAULT));
+        assertEquals("1|Arial|12.0|0|", StylingHelper.assembleFontString("1|Arial|12.0||", "Arial", null, null, MAC_DEFAULT));
     }
 
     @Test
-    public void assembleFontString_clearName_setsEmptyNameCell() {
-        // Empty string for name clears to system default — preserved as empty cell.
-        String result = StylingHelper.assembleFontString("Segoe UI|9|0", "", null, null);
-        assertEquals("|9|0", result);
+    public void validateStylingParams_refusesAFontNameHoldingTheCellSeparator() {
+        StylingParams styling = new StylingParams(null, null, null, null, null, null, null, null,
+                "A|B", null, null, null, null, null, null, null);
+        try {
+            StylingHelper.validateStylingParams(styling);
+            fail("a family name holding '|' was accepted");
+        } catch (ModelAccessException e) {
+            assertEquals("fontName must not contain '|', got: 'A|B'. Nothing was changed.", e.getMessage());
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+        StylingHelper.validateStylingParams(new StylingParams(null, null, null, null, null, null, null, null,
+                "Courier New", null, null, null, null, null, null, null));
+    }
+
+    @Test
+    public void computePostStyling_reportsTheFontTheWriteStores_notOnlyWhatWasAsked() {
+        // An object with no font, given only a style: the write stores the default height too.
+        IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
+        StylingParams italic = new StylingParams(null, null, null, null, null, null, null, null,
+                null, null, "italic", null, null, null, null, null);
+        StylingHelper.PostStyling post = StylingHelper.computePostStyling(group, italic);
+        String stored = StylingHelper.assembleFontString(null, null, null, "italic");
+        assertEquals(StylingHelper.parseFontSize(stored), post.fontSize());
+        assertEquals("italic", post.fontStyle());
+        assertEquals(StylingHelper.parseFontName(stored), post.fontName());
+        assertNotNull("the stored height is reported", post.fontSize());
+        // A stored family, cleared to the default: the answer is what the write stores, not null.
+        group.setFont("1|Arial|14.0|1|");
+        StylingParams cleared = new StylingParams(null, null, null, null, null, null, null, null,
+                "", null, null, null, null, null, null, null);
+        StylingHelper.PostStyling after = StylingHelper.computePostStyling(group, cleared);
+        String clearedStored = StylingHelper.assembleFontString("1|Arial|14.0|1|", "", null, null);
+        assertEquals(StylingHelper.parseFontName(clearedStored), after.fontName());
+        assertEquals(Integer.valueOf(14), after.fontSize());
+        assertEquals("bold", after.fontStyle());
+    }
+
+    @Test
+    public void assembleFontString_withoutAWorkbench_readsTheDefaultAsUnknown() {
+        assertEquals(DefaultViewFont.UNKNOWN, DefaultViewFont.read());
+        assertEquals("1|Arial|14.0|1|", StylingHelper.assembleFontString(null, "Arial", 14, "bold"));
     }
 
     // ------------------------------------------------------------------
@@ -449,8 +501,7 @@ public class StylingHelperTypographyAndDecorationTest {
                 null, null, null, null, null, null, null, null,
                 "Arial", 14, "bold", null, null, null, null, null);
         StylingHelper.applyStylingToNewObject(group, styling);
-        // Version-0 minimal composite emitted.
-        assertEquals("Arial|14|1", group.getFont());
+        assertEquals("1|Arial|14.0|1|", group.getFont());
     }
 
     // ------------------------------------------------------------------

@@ -154,7 +154,7 @@ public class RoutingDescendantExclusionCallSiteTest {
     public void labelOptimizationPass_doesNotCountAGrandchildOfAnEndpointAsALabelObstacle() {
         buildLabelOverGrandchildFixture();
 
-        LabelOptimizationPass.Result result = LabelOptimizationPass.compute(view, 8);
+        LabelOptimizationPass.Result result = LabelOptimizationPass.compute(view, 8, null);
 
         assertNull("the standalone label pass builds its exclusion sets from the same helper;"
                 + " with only the source's own grandchild under the label there is nothing to"
@@ -233,13 +233,22 @@ public class RoutingDescendantExclusionCallSiteTest {
      * the optimizer's only possible reason to move it is the grandchild.
      *
      * <p><b>The geometry here is load-bearing and its margin is thin — measure before you edit
-     * it.</b> Source centre is (450, 400) and target centre (1160, 402), so the straight
-     * source-to-target midpoint is x≈805, which is just <em>past</em> the grandchild's right edge at
+     * it.</b> Source centre is (460, 400) and target centre (1160, 402), so the straight
+     * source-to-target midpoint is x≈810, which is just <em>past</em> the grandchild's right edge at
      * x=800. What puts the grandchild under the label is the label <em>rectangle</em>, whose width
      * comes from the relationship name — deliberately long for exactly that reason. Shorten that
      * name, or move any of these four boxes, and the label can clear the grandchild entirely, at
      * which point both label pins pass for the trivial reason that there is nothing under the label
      * at all and stop discriminating the defect they exist for.
+     *
+     * <p>The source's width and the name's length are load-bearing too. The label also sits on its
+     * own source (the optimizer scores the render-calibrated box, 302 px wide for this 27-character
+     * name: x 659..961 against the source's 0..920), and a Label Offset is drawn half the label's
+     * width plus 5 px East: 156 px, to x 815..1117, which still leaves 105 x 20 / 6040 = 0.35 of it
+     * on the source, over the 0.30 bar. A 38-character name (420 px) left 0.25 after the same lift,
+     * under the bar, and so did a 900 px wide source with the old name; either way the pass wrote an
+     * East offset for that own-endpoint bleed and returned a result for a reason that has nothing to
+     * do with the grandchild.
      *
      * <p>That this fixture <em>does</em> discriminate is measured, not assumed: against the
      * pre-fix code the two pins it feeds failed with {@code labelsOptimized} = 1 and a non-null
@@ -256,7 +265,7 @@ public class RoutingDescendantExclusionCallSiteTest {
 
         IArchimateRelationship assoc = factory.createAssociationRelationship();
         assoc.setId("rel-host-remote");
-        assoc.setName("a deliberately long relationship label");
+        assoc.setName("a deliberately long caption");
         assoc.connect(host, remote);
         model.getFolder(FolderType.RELATIONS).getElements().add(assoc);
 
@@ -265,7 +274,7 @@ public class RoutingDescendantExclusionCallSiteTest {
 
         // Source spans the left half; its grandchild sits on the right edge, under the midpoint of
         // the source-centre -> target-centre segment.
-        String hostId = place("node-host", 0, 200, 900, 400, null);
+        String hostId = place("node-host", 0, 200, 920, 400, null);
         String innerId = place("node-inner", 50, 50, 800, 300, hostId);
         grandchildViewObjectId = place("node-deep", 550, 100, 200, 100, innerId);
         place("node-remote", 1100, 375, 120, 55, null);

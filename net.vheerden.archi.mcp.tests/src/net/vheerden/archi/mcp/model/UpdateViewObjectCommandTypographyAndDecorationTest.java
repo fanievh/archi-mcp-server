@@ -195,7 +195,7 @@ public class UpdateViewObjectCommandTypographyAndDecorationTest {
                 group, 0, 0, 100, 50, null,
                 onlyTypographyAndDecoration(null, null, null, null, "Arial", 14, "bold"), null);
         cmd.execute();
-        assertEquals("Arial|14|1", group.getFont());
+        assertEquals("1|Arial|14.0|1|", group.getFont());
 
         cmd.undo();
         assertNull(group.getFont());   // restored to original (null)
@@ -211,7 +211,7 @@ public class UpdateViewObjectCommandTypographyAndDecorationTest {
                 group, 0, 0, 100, 50, null,
                 onlyTypographyAndDecoration(null, null, null, null, null, 18, null), null);
         cmd.execute();
-        assertEquals("Segoe UI|18|0", group.getFont());
+        assertEquals("1|Segoe UI|18.0|0|", group.getFont());
 
         cmd.undo();
         assertEquals("Segoe UI|9|0", group.getFont());
@@ -311,7 +311,7 @@ public class UpdateViewObjectCommandTypographyAndDecorationTest {
         assertEquals(IDiagramModelNote.BORDER_RECTANGLE, note.getBorderType());
         assertFalse(note.getDeriveElementLineColor());
         assertEquals(100, note.getLineAlpha());
-        assertEquals("Comic Sans MS|16|3", note.getFont());
+        assertEquals("1|Comic Sans MS|16.0|3|", note.getFont());
         assertEquals("#AABBCC", note.getFillColor());
 
         // Single undo restores every captured field at once.
@@ -342,14 +342,15 @@ public class UpdateViewObjectCommandTypographyAndDecorationTest {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 100, 50, null, styling, null);
 
-        // Captured old values reflect pre-execute state.
+        // New values are the caller's intent, known when the command is built.
+        assertEquals(Integer.valueOf(0), cmd.getNewGradient());
+        assertEquals(Boolean.TRUE, cmd.getNewDeriveLineColor());
+        assertEquals(Integer.valueOf(50), cmd.getNewOutlineOpacity());
+
+        // Old values are read when the update runs.
+        cmd.execute();
         assertEquals(1, cmd.getOldGradient());
         assertFalse(cmd.getOldDeriveLineColor());
         assertEquals(200, cmd.getOldOutlineOpacity());
-
-        // New values reflect what will be applied.
-        assertEquals(0, cmd.getNewGradient());
-        assertTrue(cmd.getNewDeriveLineColor());
-        assertEquals(50, cmd.getNewOutlineOpacity());
     }
 }

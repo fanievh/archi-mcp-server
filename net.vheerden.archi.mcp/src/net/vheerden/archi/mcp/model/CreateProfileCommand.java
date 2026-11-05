@@ -45,8 +45,8 @@ public class CreateProfileCommand extends Command {
     }
 
     /**
-     * Returns the profile this command creates.
-     * Package-visible for testing.
+     * Returns the profile this command creates. Read by {@link StagedProfiles}, so a specialization a
+     * batch has queued is found before the command runs.
      */
     IProfile getProfile() {
         return profile;

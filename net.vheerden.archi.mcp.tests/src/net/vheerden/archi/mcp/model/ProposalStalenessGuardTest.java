@@ -17,7 +17,9 @@ import com.archimatetool.model.IArchimateDiagramModel;
 import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IBusinessActor;
 import com.archimatetool.model.IArchimateFactory;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelBendpoint;
 
 import net.vheerden.archi.mcp.model.ProposalStalenessGuard.StaleVerdict;
 
@@ -337,6 +339,164 @@ public class ProposalStalenessGuardTest {
                 guard.vet(cap, null).stale());
     }
 
+    // ---- Routes of tracked connections ----
+
+    @Test
+    public void routeFingerprint_shouldBeNullForANonConnection_andEmptyForAConnectionWithNoBendpoints() {
+        ConnectionFixture f = modelWithConnection();
+        assertNull(ProposalStalenessGuard.routeFingerprint(f.source));
+        assertEquals("a cleared route is a state, not an absence", "",
+                ProposalStalenessGuard.routeFingerprint(f.connection));
+        addBendpoint(f.connection, 1, 2, 3, 4);
+        addBendpoint(f.connection, -5, 6, -7, 8);
+        assertEquals("1,2,3,4|-5,6,-7,8", ProposalStalenessGuard.routeFingerprint(f.connection));
+    }
+
+    @Test
+    public void routeFingerprint_shouldLeaveTheAttributeFingerprintAlone() {
+        ConnectionFixture f = modelWithConnection();
+        String before = ProposalStalenessGuard.fingerprint(f.connection);
+        addBendpoint(f.connection, 0, 80, 0, 80);
+        assertEquals("a route edit is invisible to the attribute fingerprint, hence the route check",
+                before, ProposalStalenessGuard.fingerprint(f.connection));
+    }
+
+    @Test
+    public void shouldVetStaleRouteEdited_whenAHumanRedrewATrackedConnection() {
+        ConnectionFixture f = modelWithConnection();
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-1"), null);
+
+        stack.execute(human("Human route edit"));
+        addBendpoint(f.connection, 0, 80, 0, 80);
+
+        assertEquals(ProposalStalenessGuard.routeEditedMessage("'Ledger' \u2192 'Billing'"),
+                guard.vet(cap, null).reason());
+    }
+
+    @Test
+    public void shouldVetFresh_whenOnlyAnAgentChangedATrackedConnectionsRoute() {
+        ConnectionFixture f = modelWithConnection();
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-1"), null);
+
+        stack.execute(agent("Agent route edit"));
+        addBendpoint(f.connection, 0, 80, 0, 80);
+
+        assertFalse(guard.vet(cap, null).stale());
+    }
+
+    @Test
+    public void shouldPreferEditedMessage_whenAHumanRenamedAndRedrewATrackedConnection() {
+        ConnectionFixture f = modelWithConnection();
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-1"), null);
+
+        stack.execute(human("Human edit"));
+        f.connection.getArchimateRelationship().setName("Posts invoices");
+        addBendpoint(f.connection, 0, 80, 0, 80);
+
+        assertEquals(ProposalStalenessGuard.editedMessage("Posts invoices"), guard.vet(cap, null).reason());
+    }
+
+    @Test
+    public void staleMessages_shouldKeepTheirExactWording() {
+        assertEquals("This proposal is stale because you edited 'X' after the agent proposed it. "
+                + "Reject it and ask the agent to retry.", ProposalStalenessGuard.editedMessage("X"));
+        assertEquals("This proposal is stale because you moved 'X' after the agent proposed it. "
+                + "Reject it and ask the agent to retry.", ProposalStalenessGuard.movedMessage("X"));
+        assertEquals("This proposal is stale because 'X' was removed or replaced after the agent proposed it. "
+                + "Reject it and ask the agent to retry.", ProposalStalenessGuard.removedMessage("X"));
+        assertEquals("This proposal is stale because you edited the route of 'X' after the agent proposed "
+                + "it. Reject it and ask the agent to retry.", ProposalStalenessGuard.routeEditedMessage("'X'"));
+    }
+
+    @Test
+    public void connectionLabel_shouldUseTheNameWhenThereIsOne_andTheEndsOtherwise() {
+        ConnectionFixture f = modelWithConnection();
+        assertEquals("'Ledger' \u2192 'Billing'", ProposalStalenessGuard.connectionLabel(f.connection, "conn-1"));
+        f.connection.getArchimateRelationship().setName("Posts invoices");
+        assertEquals("'Posts invoices'", ProposalStalenessGuard.connectionLabel(f.connection, "conn-1"));
+    }
+
+    @Test
+    public void endMovedMessage_shouldNameTheEndAndTheConnection() {
+        assertEquals("This proposal is stale because 'B', an end of the connection 'A' \u2192 'B', moved after "
+                + "the agent proposed it. Reject it and ask the agent to retry.",
+                ProposalStalenessGuard.endMovedMessage("B", "'A' \u2192 'B'"));
+    }
+
+    @Test
+    public void shouldVetStaleEndMoved_whenAHumanMovedAnEndOfATrackedConnection() {
+        ConnectionFixture f = modelWithConnection();
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-1"), null);
+
+        stack.execute(human("Human drag"));
+        f.target.setBounds(300, 400, 100, 50);
+
+        assertEquals(ProposalStalenessGuard.endMovedMessage("Billing", "'Ledger' \u2192 'Billing'"),
+                guard.vet(cap, null).reason());
+    }
+
+    /** A connection whose target is another connection: that end is recorded by id, with no position. */
+    @Test
+    public void shouldRecordAConnectionEndById_andStillCheckTheObjectEnd() {
+        ConnectionFixture f = modelWithConnection();
+        com.archimatetool.model.IArchimateRelationship onRel =
+                IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        onRel.setSource(f.source.getArchimateElement());
+        onRel.setTarget(f.connection.getArchimateRelationship());
+        f.model.getFolder(FolderType.RELATIONS).getElements().add(onRel);
+        IDiagramModelArchimateConnection onConn = IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        onConn.setId("conn-on-conn");
+        onConn.setArchimateRelationship(onRel);
+        onConn.connect(f.source, f.connection);
+
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-on-conn"), null);
+        Map<String, String> ends = cap.connections().get("conn-on-conn").endBounds();
+        assertEquals("the view-object end is positioned", "vo-ledger@0,0,100,50",
+                ends.get(StalenessCapture.Connection.SOURCE));
+        assertEquals("the connection end by id alone", "conn-1", ends.get(StalenessCapture.Connection.TARGET));
+
+        stack.execute(human("Unrelated"));
+        assertFalse("nothing moved", guard.vet(cap, null).stale());
+        f.source.setBounds(0, 300, 100, 50);
+        // the unnamed connection end is named by its id, as displayName names any unnamed object
+        assertEquals(ProposalStalenessGuard.endMovedMessage("Ledger", "'Ledger' \u2192 'conn-1'"),
+                guard.vet(cap, null).reason());
+    }
+
+    @Test
+    public void shouldVetStaleEndMoved_whenAHumanReconnectedAConnectionEndOntoAnObject() {
+        ConnectionFixture f = modelWithConnection();
+        com.archimatetool.model.IArchimateRelationship onRel =
+                IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        onRel.setSource(f.source.getArchimateElement());
+        onRel.setTarget(f.connection.getArchimateRelationship());
+        f.model.getFolder(FolderType.RELATIONS).getElements().add(onRel);
+        IDiagramModelArchimateConnection onConn = IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        onConn.setId("conn-on-conn");
+        onConn.setArchimateRelationship(onRel);
+        onConn.connect(f.source, f.connection);
+        CommandStack stack = new CommandStack();
+        ProposalStalenessGuard guard = newGuardOn(stack, f.model);
+        StalenessCapture cap = guard.capture(java.util.Set.of("conn-on-conn"), null);
+
+        stack.execute(human("Reconnect"));
+        onConn.connect(f.source, f.target);
+
+        assertEquals("the end that was replaced is named",
+                ProposalStalenessGuard.endMovedMessage("conn-1", "'Ledger' \u2192 'conn-1'"),
+                guard.vet(cap, null).reason());
+    }
+
     // ---- helpers ----
 
     private static ProposalStalenessGuard newGuardOn(CommandStack stack, IArchimateModel model) {
@@ -371,6 +531,41 @@ public class ProposalStalenessGuardTest {
         child.setBounds(0, 0, 100, 50);
         view.getChildren().add(child);
         return new Fixture(model, child);
+    }
+
+    private record ConnectionFixture(IArchimateModel model, IDiagramModelArchimateObject source,
+            IDiagramModelArchimateObject target, IDiagramModelArchimateConnection connection) {}
+
+    /** A view holding 'Ledger' [0,0,100,50] -> 'Billing' [300,0,100,50], an unnamed connection with no bendpoints. */
+    private static ConnectionFixture modelWithConnection() {
+        Fixture f = modelWithDiagramChild("vo-ledger", "Ledger");
+        IBusinessActor billing = IArchimateFactory.eINSTANCE.createBusinessActor();
+        billing.setName("Billing");
+        f.model.getFolder(FolderType.BUSINESS).getElements().add(billing);
+        IDiagramModelArchimateObject target = IArchimateFactory.eINSTANCE.createDiagramModelArchimateObject();
+        target.setArchimateElement(billing);
+        target.setId("vo-billing");
+        target.setBounds(300, 0, 100, 50);
+        ((IArchimateDiagramModel) f.child.getDiagramModel()).getChildren().add(target);
+        com.archimatetool.model.IArchimateRelationship rel =
+                IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        rel.setSource(f.child.getArchimateElement());
+        rel.setTarget(billing);
+        f.model.getFolder(FolderType.RELATIONS).getElements().add(rel);
+        IDiagramModelArchimateConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        conn.setId("conn-1");
+        conn.setArchimateRelationship(rel);
+        conn.connect(f.child, target);
+        return new ConnectionFixture(f.model, f.child, target, conn);
+    }
+
+    private static void addBendpoint(IDiagramModelArchimateConnection conn, int sx, int sy, int ex, int ey) {
+        IDiagramModelBendpoint bp = IArchimateFactory.eINSTANCE.createDiagramModelBendpoint();
+        bp.setStartX(sx);
+        bp.setStartY(sy);
+        bp.setEndX(ex);
+        bp.setEndY(ey);
+        conn.getBendpoints().add(bp);
     }
 
     private static final class Fixture {

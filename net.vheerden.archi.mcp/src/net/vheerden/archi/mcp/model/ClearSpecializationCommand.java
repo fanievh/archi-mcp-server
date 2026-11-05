@@ -45,6 +45,9 @@ public class ClearSpecializationCommand extends Command implements CommitSkippab
     /** Non-null once {@link #execute()} has declined to run. See {@link CommitSkippableCommand}. */
     private String skipReason;
 
+    /** Set where the last run declined with nothing it wrote left behind. */
+    private boolean changedNothing;
+
     /**
      * Creates a command to clear all profiles from a concept, unconditionally.
      *
@@ -70,9 +73,11 @@ public class ClearSpecializationCommand extends Command implements CommitSkippab
 
     @Override
     public void execute() {
+        changedNothing = false;
         skipReason = describeUnauthorisedProfiles();
         if (skipReason != null) {
             previousProfiles = new ArrayList<>();
+            changedNothing = true;
             return;
         }
         previousProfiles = new ArrayList<>(concept.getProfiles());
@@ -90,6 +95,12 @@ public class ClearSpecializationCommand extends Command implements CommitSkippab
     @Override
     public String getSkipReason() {
         return skipReason;
+    }
+
+    /** True when the last run declined: the check comes before the profiles are cleared. */
+    @Override
+    public boolean changedNothing() {
+        return changedNothing;
     }
 
     /**
@@ -115,7 +126,7 @@ public class ClearSpecializationCommand extends Command implements CommitSkippab
         }
         return "Concept '" + concept.getName() + "' was left untouched because it now also carries "
                 + String.join(", ", unauthorised) + ", which this specialization deletion was not "
-                + "authorised to remove — an earlier operation in the same request attached it. "
+                + "authorised to remove — it was attached " + CHANGED_SINCE_PREPARED + ". "
                 + "Detach or delete the other specialization(s) explicitly, then retry the delete.";
     }
 

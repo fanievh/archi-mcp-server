@@ -59,7 +59,7 @@ public final class ConnectionThroughNoteDetector {
 
     /**
      * Returns every (connection, note) pair whose clipped path penetrates the note's inset
-     * interior.
+     * interior. A path whose clipped points all coincide draws no line and pairs with no note.
      *
      * <p>Enumerated per pair and never short-circuited on the first hit for a given connection —
      * the same cardinality {@code assess-layout} counts, so the two can be compared directly.
@@ -79,6 +79,10 @@ public final class ConnectionThroughNoteDetector {
             }
             List<double[]> clipped = GeometryUtils.clipPathToRectEdges(
                     path.points(), path.sourceRect(), path.targetRect());
+            // Ends that clip to one point draw no line, so there is nothing to cross a note with
+            if (GeometryUtils.drawsNoSegment(clipped)) {
+                continue;
+            }
             for (NoteRect note : notes) {
                 if (GeometryUtils.pathPassesThroughRect(clipped,
                         note.x(), note.y(), note.width(), note.height(), inset)) {

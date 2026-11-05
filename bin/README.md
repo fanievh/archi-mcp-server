@@ -13,6 +13,6 @@ Alternatively, copy the `.archiplugin` file directly into Archi's `dropins/` fol
 
 ## Compatibility
 
-- **Archi:** 5.7+
+- **Archi:** 5.8+ for v1.9.0 and later (enforced from v1.10.0: an older Archi refuses to load the plugin; v1.9.0 loads on 5.7 but fails on some note updates); v1.8.0 and earlier run on 5.7+
 - **Java:** 21+
 - **MCP SDK:** 0.17.2

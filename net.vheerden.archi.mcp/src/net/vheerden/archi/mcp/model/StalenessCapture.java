@@ -32,22 +32,74 @@ import java.util.Set;
  * <em>edit</em> (rename/retype) and name each correctly. Non-diagram targets carry no bounds
  * entry, so {@code bounds.keySet()} ⊆ {@code fingerprints.keySet()}.</p>
  *
+ * <p>A fifth map {@code connections} carries, for the subset of targets that are connections, what
+ * the attribute fingerprint cannot see: the {@linkplain Connection#route() route}, which is a
+ * containment reference, where each of its {@linkplain Connection#endBounds() ends} sits on the canvas,
+ * and a label naming the connection for a human. It is tracked orthogonally to
+ * the other maps for the same reason bounds is, so {@code connections.keySet()} ⊆
+ * {@code fingerprints.keySet()}.</p>
+ *
  * @param sequence     the guard's stack sequence at propose-time
  * @param fingerprints {@code id → attribute-fingerprint} for each tracked target (non-null values)
  * @param names        {@code id → display name} for each tracked target (non-null values)
  * @param bounds       {@code id → bounds-fingerprint} for tracked diagram-object targets
+ * @param trackId      which model's stack sequence {@code sequence} was read from, or 0 when none was
+ *                     recorded; a capture is only comparable with the same model's sequence
+ * @param connections  {@code id → route and label} for tracked connection targets
  */
 record StalenessCapture(long sequence, Map<String, String> fingerprints, Map<String, String> names,
-        Map<String, String> bounds) {
+        Map<String, String> bounds, long trackId, Map<String, Connection> connections) {
+
+    /**
+     * What a tracked connection looks like apart from its attributes.
+     *
+     * @param route its bendpoints in order, each as {@code startX,startY,endX,endY}, joined by
+     *              {@code |}; a connection with no bendpoints has the empty route, which is a state
+     *              like any other (clearing a route changes it)
+     * @param label the connection as a human would recognise it, quoted: its name, or its two ends
+     *              when it has none — most connections carry no name of their own
+     * @param endBounds {@link #SOURCE} / {@link #TARGET} {@code → end id@absolute canvas bounds}, or the
+     *              bare end id for an end that is itself a connection. A stored bendpoint is two offsets,
+     *              from the source's and the target's centre, so a route means something only against
+     *              which object holds each role and where it was. Absolute, so a nested end carried by its
+     *              parent's drag counts as moved. A role with no end is left out
+     * @param endNames the same roles {@code → display name}, so the message can name an end that is no
+     *              longer one
+     */
+    record Connection(String route, String label, Map<String, String> endBounds, Map<String, String> endNames) {
+        static final String SOURCE = "source";
+        static final String TARGET = "target";
+
+        Connection {
+            endBounds = Map.copyOf(endBounds);
+            endNames = Map.copyOf(endNames);
+        }
+    }
 
     /** A no-target capture (sequence 0) — always vets as fresh. Used by creates and the command-bridge ctor. */
     static final StalenessCapture EMPTY = new StalenessCapture(0L, Map.of(), Map.of(), Map.of());
+
+    /**
+     * Constructor at the prior canonical arity: no track recorded, so the sequence is read against
+     * the vetted model's own track.
+     */
+    StalenessCapture(long sequence, Map<String, String> fingerprints, Map<String, String> names,
+            Map<String, String> bounds) {
+        this(sequence, fingerprints, names, bounds, 0L);
+    }
+
+    /** Constructor at the prior canonical arity: no connection targets recorded. */
+    StalenessCapture(long sequence, Map<String, String> fingerprints, Map<String, String> names,
+            Map<String, String> bounds, long trackId) {
+        this(sequence, fingerprints, names, bounds, trackId, Map.of());
+    }
 
     StalenessCapture {
         // Defensive immutable copies — the guard hands in mutable LinkedHashMaps it built.
         fingerprints = Map.copyOf(fingerprints);
         names = Map.copyOf(names);
         bounds = Map.copyOf(bounds);
+        connections = Map.copyOf(connections);
     }
 
     /**

@@ -11,9 +11,13 @@ import net.vheerden.archi.mcp.McpPlugin;
  * Registered via the {@code org.eclipse.core.runtime.preferences} extension point.
  *
  * <p>Uses {@link DefaultScope} to set defaults without requiring plugin activation,
- * since this initializer may run before {@link McpPlugin#start}.
- * {@code McpPlugin.start()} also sets defaults as a safety fallback;
- * both initializers are harmless when run together.</p>
+ * since this initializer may run before {@link McpPlugin#start}.</p>
+ *
+ * <p>This is the <em>only</em> code that sets this plugin's defaults. Equinox runs it when the
+ * default scope is first loaded, then applies the product's {@code plugin_customization.ini} and any
+ * {@code -pluginCustomization} file on top, which is how an administrator presets these settings.
+ * A second writer that runs later, for example from {@code McpPlugin.start()}, overwrites the
+ * administrator's values with ours. {@code PreferenceDefaultsContractTest} refuses one.</p>
  */
 public class McpPreferenceInitializer extends AbstractPreferenceInitializer {
 
@@ -29,5 +33,7 @@ public class McpPreferenceInitializer extends AbstractPreferenceInitializer {
         defaults.put(McpPlugin.PREF_KEYSTORE_PASSWORD, McpPlugin.DEFAULT_KEYSTORE_PASSWORD);
         defaults.putBoolean(McpPlugin.PREF_AUTH_TOKEN_ENABLED, McpPlugin.DEFAULT_AUTH_TOKEN_ENABLED);
         defaults.putBoolean(McpPlugin.PREF_APPROVAL_MODE, McpPlugin.DEFAULT_APPROVAL_MODE);
+        defaults.putBoolean(McpPlugin.PREF_READ_ONLY, McpPlugin.DEFAULT_READ_ONLY);
+        defaults.putBoolean(McpPlugin.PREF_ALLOW_SERVER_IMAGE_SOURCES, McpPlugin.DEFAULT_ALLOW_SERVER_IMAGE_SOURCES);
     }
 }

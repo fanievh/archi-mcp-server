@@ -128,12 +128,14 @@ public class UpdateViewConnectionCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldBendpointsDefensively() {
+    public void shouldCaptureOldBendpointsWhenItRuns_notWhenItIsBuilt() {
         int oldCount = connection.getBendpoints().size();
         UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
                 connection, List.of());
+        assertNull("nothing is read before the command runs", cmd.getOldBendpoints());
 
-        assertEquals("Old bendpoints should be captured at construction",
+        cmd.execute();
+        assertEquals("the bendpoints the connection held when it ran",
                 oldCount, cmd.getOldBendpoints().size());
     }
 

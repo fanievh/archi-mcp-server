@@ -34,8 +34,13 @@ import net.vheerden.archi.mcp.response.dto.RelationshipSemanticAttributes;
  * <p>Source, target, and type are immutable — changing these fundamentally
  * alters the relationship's semantics and should be done via delete + create.</p>
  *
- * <p>Captures old state at construction time for full undo support.
- * Properties are deep-copied because EMF property objects are live references.</p>
+ * <p>Undo restores only the fields the update wrote, to the values they held when it ran:
+ * {@link #execute()} snapshots them from the relationship as it meets it, not the constructor. A
+ * proposal runs when it is approved and a batched update when the batch commits, so a snapshot
+ * taken when the command was built made Undo revert whatever changed in between — including fields
+ * this update never touched. The snapshot is re-armed by every {@code undo()}; a second execute
+ * with no undo between keeps it. Properties are deep-copied because EMF property objects are live
+ * references, and restored as the whole list held at execute.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -45,15 +50,19 @@ public class UpdateRelationshipCommand extends Command {
 
     private final IArchimateRelationship relationship;
 
-    // Old state (captured at construction time for undo)
-    private final String oldName;
-    private final String oldDocumentation;
-    private final List<PropertySnapshot> oldProperties;
-    // Old-state snapshots for the 3 semantic-attribute fields.
-    // Each is null when the relationship is NOT of the matching subtype.
-    private final Integer oldAccessType;
-    private final Boolean oldAssociationDirected;
-    private final String oldInfluenceStrength;
+    // The name when the command was built. Not undo state: the batch readers ask hasNameChange()
+    // while preparing, before this command runs, to project which labels a queued rename redraws.
+    private final String nameAtBuild;
+
+    // What undo restores: read by execute() for the fields it writes, re-armed by undo().
+    private boolean snapshotTaken;
+    private String oldName;
+    private String oldDocumentation;
+    private List<PropertySnapshot> oldProperties;
+    // The three semantic attributes, each read only when named and held by this relationship.
+    private Integer oldAccessType;
+    private Boolean oldAssociationDirected;
+    private String oldInfluenceStrength;
 
     // New state (null = don't change)
     private final String newName;
@@ -91,38 +100,72 @@ public class UpdateRelationshipCommand extends Command {
         this.newSemanticAttributes = (newSemanticAttributes != null)
                 ? newSemanticAttributes : RelationshipSemanticAttributes.NONE;
 
-        // Snapshot old state before any mutation
-        this.oldName = relationship.getName();
-        this.oldDocumentation = relationship.getDocumentation();
-        this.oldProperties = snapshotProperties(relationship);
-
-        // Snapshot semantic-attribute old state
-        this.oldAccessType = (relationship instanceof IAccessRelationship ar)
-                ? ar.getAccessType() : null;
-        this.oldAssociationDirected = (relationship instanceof IAssociationRelationship asr)
-                ? asr.isDirected() : null;
-        this.oldInfluenceStrength = (relationship instanceof IInfluenceRelationship ir)
-                ? ir.getStrength() : null;
+        this.nameAtBuild = relationship.getName();
 
         setLabel("Update " + relationship.eClass().getName() + ": " + relationship.getName());
     }
 
+    /**
+     * Snapshots the fields this update writes, from the relationship as it is now (unless a
+     * snapshot is already held because execute ran with no undo since), then writes them.
+     * {@code redo()} is GEF's default, which runs this again after the undo re-armed it.
+     */
     @Override
     public void execute() {
+        if (!snapshotTaken) {
+            if (newName != null) {
+                oldName = relationship.getName();
+            }
+            if (newDocumentation != null) {
+                oldDocumentation = relationship.getDocumentation();
+            }
+            if (newProperties != null) {
+                oldProperties = snapshotProperties(relationship);
+            }
+            if (writesAccessType()) {
+                oldAccessType = ((IAccessRelationship) relationship).getAccessType();
+            }
+            if (writesAssociationDirected()) {
+                oldAssociationDirected = ((IAssociationRelationship) relationship).isDirected();
+            }
+            if (writesInfluenceStrength()) {
+                oldInfluenceStrength = ((IInfluenceRelationship) relationship).getStrength();
+            }
+            snapshotTaken = true;
+        }
         applyNewValues();
     }
 
-    @Override
-    public void redo() {
-        applyNewValues();
-    }
-
+    /** Restores only the fields execute wrote, and re-arms the snapshot. */
     @Override
     public void undo() {
-        relationship.setName(oldName);
-        relationship.setDocumentation(oldDocumentation);
-        restoreProperties();
+        if (!snapshotTaken) {
+            return; // nothing was written, so there is nothing to restore
+        }
+        if (newName != null) {
+            relationship.setName(oldName);
+        }
+        if (newDocumentation != null) {
+            relationship.setDocumentation(oldDocumentation);
+        }
+        if (newProperties != null) {
+            restoreProperties();
+        }
         restoreSemanticAttributes();
+        snapshotTaken = false;
+    }
+
+    private boolean writesAccessType() {
+        return newSemanticAttributes.accessType() != null && relationship instanceof IAccessRelationship;
+    }
+
+    private boolean writesAssociationDirected() {
+        return newSemanticAttributes.associationDirected() != null
+                && relationship instanceof IAssociationRelationship;
+    }
+
+    private boolean writesInfluenceStrength() {
+        return newSemanticAttributes.influenceStrength() != null && relationship instanceof IInfluenceRelationship;
     }
 
     private void applyNewValues() {
@@ -175,31 +218,29 @@ public class UpdateRelationshipCommand extends Command {
     }
 
     /**
-     * Restore old semantic-attribute values on undo.
+     * Restore, on undo, the semantic attributes execute wrote — and no other, so an attribute
+     * changed by someone else since is left as they set it.
      *
-     * <p><strong>Intentional asymmetry:</strong> the {@code accessType} and
-     * {@code associationDirected} blocks are guarded by {@code oldAccessType != null}
-     * and {@code oldAssociationDirected != null} (those snapshot fields are non-null
-     * iff the relationship is the matching subtype, so the null check IS the
-     * type-discriminator). The {@code influenceStrength} block uses null-vs-empty
-     * normalisation because both {@code null} and {@code ""} are semantically valid
-     * "cleared" states — a {@code null} {@code oldInfluenceStrength} on an
-     * {@code IInfluenceRelationship} is meaningful (it was unset before, restore to unset).
-     * Guarding on {@code oldInfluenceStrength != null} would skip the legitimate restore-to-null
-     * case. The idempotence guard ({@code !oldNorm.equals(currentNorm)}) handles the no-op case.</p>
+     * <p>The {@code influenceStrength} restore uses null-vs-empty normalisation because both
+     * {@code null} and {@code ""} are semantically valid "cleared" states — a {@code null}
+     * {@code oldInfluenceStrength} is meaningful (it was unset before, restore to unset). The
+     * idempotence guards skip a restore that would write the value already held, as on apply.</p>
      */
     private void restoreSemanticAttributes() {
-        if (oldAccessType != null && relationship instanceof IAccessRelationship ar) {
+        if (writesAccessType()) {
+            IAccessRelationship ar = (IAccessRelationship) relationship;
             if (oldAccessType != ar.getAccessType()) {
                 ar.setAccessType(oldAccessType);
             }
         }
-        if (oldAssociationDirected != null && relationship instanceof IAssociationRelationship asr) {
+        if (writesAssociationDirected()) {
+            IAssociationRelationship asr = (IAssociationRelationship) relationship;
             if (oldAssociationDirected != asr.isDirected()) {
                 asr.setDirected(oldAssociationDirected);
             }
         }
-        if (relationship instanceof IInfluenceRelationship ir) {
+        if (writesInfluenceStrength()) {
+            IInfluenceRelationship ir = (IInfluenceRelationship) relationship;
             String oldNorm = (oldInfluenceStrength == null) ? "" : oldInfluenceStrength;
             String currentNorm = (ir.getStrength() == null) ? "" : ir.getStrength();
             if (!oldNorm.equals(currentNorm)) {
@@ -262,6 +303,16 @@ public class UpdateRelationshipCommand extends Command {
             snapshots.add(new PropertySnapshot(prop.getKey(), prop.getValue()));
         }
         return snapshots;
+    }
+
+    /**
+     * Whether this command changes the relationship's name, which is the text of every label drawn for it.
+     *
+     * <p>A projection, read while preparing — before this command runs — so it compares against the
+     * name when the command was built, not against the undo snapshot execute takes.</p>
+     */
+    boolean hasNameChange() {
+        return newName != null && !newName.equals(nameAtBuild);
     }
 
     /**

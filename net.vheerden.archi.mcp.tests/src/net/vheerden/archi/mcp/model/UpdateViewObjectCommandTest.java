@@ -81,10 +81,12 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldBoundsAtConstruction() {
+    public void shouldSnapshotOldBoundsWhenItRuns_notWhenBuilt() {
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 200, 100, 150, 70);
+        assertEquals("nothing is read before the update runs", 0, cmd.getOldX());
 
+        cmd.execute();
         assertEquals(50, cmd.getOldX());
         assertEquals(60, cmd.getOldY());
         assertEquals(120, cmd.getOldWidth());
@@ -256,14 +258,16 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldStylingAtConstruction() {
+    public void shouldSnapshotOldStylingWhenItRuns() {
         diagramObject.setFillColor("#AABBCC");
         ((ILineObject) diagramObject).setLineColor("#112233");
 
         StylingParams styling = new StylingParams("#FF0000", "#00FF00", null, null, null);
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, styling);
+        assertNull("nothing is read before the update runs", cmd.getOldFillColor());
 
+        cmd.execute();
         assertEquals("#AABBCC", cmd.getOldFillColor());
         assertEquals("#112233", cmd.getOldLineColor());
         assertEquals("#FF0000", cmd.getNewFillColor());
@@ -416,30 +420,27 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldFigureTypeAtConstruction() {
-        // Capture-at-construction pin: pre-populate the group to a non-default border type,
-        // construct the command (capturing oldFigureType), then mutate the group directly,
-        // then undo and verify undo restored the captured-at-construction value (NOT the
-        // post-mutate value).
+    public void shouldSnapshotOldFigureTypeWhenItRuns() {
+        // A group holds one of two figures. Built while the group is tabbed, run after it became
+        // rectangular: undo gives back what the group held when the update ran, not when it was built.
         IDiagramModelGroup group = IArchimateFactory.eINSTANCE.createDiagramModelGroup();
         group.setBounds(0, 0, 200, 200);
-        group.setBorderType(IDiagramModelGroup.BORDER_RECTANGLE);
+        group.setBorderType(IDiagramModelGroup.BORDER_TABBED);
 
         StylingParams styling = new StylingParams(
-                null, null, null, null, null, "tabbed", null, null);
+                null, null, null, null, null, "rectangular", null, null);
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 group, 0, 0, 200, 200, null, styling);
+        assertNull("nothing is read before the update runs", cmd.getOldFigureType());
+        assertEquals(Integer.valueOf(IDiagramModelGroup.BORDER_RECTANGLE), cmd.getNewFigureType());
 
-        // After construction: oldFigureType = BORDER_RECTANGLE, newFigureType = BORDER_TABBED
-        assertEquals(Integer.valueOf(IDiagramModelGroup.BORDER_RECTANGLE), cmd.getOldFigureType());
-        assertEquals(Integer.valueOf(IDiagramModelGroup.BORDER_TABBED), cmd.getNewFigureType());
-
-        // Mutate the group bypass-style — execute then undo should restore the captured old value.
+        group.setBorderType(IDiagramModelGroup.BORDER_RECTANGLE);
         cmd.execute();
-        assertEquals(IDiagramModelGroup.BORDER_TABBED, group.getBorderType());
+        assertEquals(Integer.valueOf(IDiagramModelGroup.BORDER_RECTANGLE), cmd.getOldFigureType());
 
         cmd.undo();
-        assertEquals(IDiagramModelGroup.BORDER_RECTANGLE, group.getBorderType());
+        assertEquals("not the tabbed figure the group had when the update was built",
+                IDiagramModelGroup.BORDER_RECTANGLE, group.getBorderType());
     }
 
     // ---- G4: labelExpression rail tests ----
@@ -548,26 +549,24 @@ public class UpdateViewObjectCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldLabelExpressionAtConstruction() {
+    public void shouldSnapshotOldLabelExpressionWhenItRuns_notWhenBuilt() {
         diagramObject.getFeatures().putString("labelExpression", "${property:Owner}");
 
         UpdateViewObjectCommand cmd = new UpdateViewObjectCommand(
                 diagramObject, 50, 60, 120, 55, null, null, null, "${name}");
 
-        // Snapshot pin: the old value is captured at construction, not at execute.
-        assertEquals("${property:Owner}", cmd.getOldLabelExpression());
+        assertNull("nothing is read before the update runs", cmd.getOldLabelExpression());
         assertEquals("${name}", cmd.getNewLabelExpression());
         assertTrue(cmd.hasLabelExpressionChange());
 
-        // Mutate the EMF state directly (bypassing the command) — undo must
-        // still restore the value captured at construction, not the
-        // bypass-mutated value.
+        // Changed between build and run: undo gives back what the object held when it ran.
         diagramObject.getFeatures().putString("labelExpression", "${type}");
         cmd.execute();
+        assertEquals("${type}", cmd.getOldLabelExpression());
         cmd.undo();
 
-        assertEquals("Undo restores construction-time captured value, not post-bypass",
-                "${property:Owner}",
+        assertEquals("Undo restores the value the object held when the update ran",
+                "${type}",
                 diagramObject.getFeatures().getString("labelExpression", null));
     }
 

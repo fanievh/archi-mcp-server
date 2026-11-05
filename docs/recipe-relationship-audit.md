@@ -74,9 +74,14 @@ letter is a permitted relationship.
 
 **Reproducing it.** Parse `<source concept="X">` and `<target concept="Y" relations="…"/>` into a map
 keyed by `(X, Y)`, do it for both copies, assert the maps are equal, then test for a letter's presence.
-The matrix is deliberately **not** read from the test suite: it lives outside the repo under an install
-path that differs between a developer machine and CI, so a test that could not find it would skip — and a
-skipped test is a green scan.
+
+The build now does the same thing on every run. `RecipeRelationshipMatrixTest` reads
+`model/relationships.xml` and `model/relationships-keys.xml` from the `com.archimatetool.model` bundle that
+holds Archi's model classes, located from that class's own code source rather than from an install path, so
+it finds the file the same way on a developer machine and on CI. If the file is not there the test
+**fails, naming the paths it tried; it never skips**, because a skipped test is a green scan. It also fails
+if the file's format version is not `3.2`, if the matrix is not total, or if a `relations` attribute carries
+a letter the key file does not define, so a format change stops the build instead of being mis-read.
 
 ---
 
@@ -128,6 +133,12 @@ permitted** — the audit found no impermissible fully-named pair anywhere in th
 Rows 7, 8, 16, 17 and 33-36 are the eight pairs the corrections below *introduced*; the other 28 were
 already named at `1ada2d19` and were re-checked, not assumed.
 
+**Which list the build checks.** This table is the human-readable record of the audit. The build checks the
+`relationships` block at the top of each page, where every pair above is declared as `permitted` on **every**
+page that names it (so a pair named on two pages is declared twice: 37 lines for these 36 pairs), and every
+prohibition below as `forbidden`, along with the orderings the index's two corrected rows deny outright. If the two ever disagree, the blocks are what `create-relationship` was
+checked against.
+
 **What this table is a list of, and what it is not.** Rows are **distinct pairs**, not sites: a pair named on
 two pages appears once, under the page that names it first. The corrected journey bullet, for example, names
 `ApplicationComponent → ApplicationComponent` Composition, which is already row 1 under
@@ -135,7 +146,7 @@ application-integration and is not repeated. So the Page column says where a pai
 row count is a count of pairs rather than of prescriptions.
 
 **This is also not the same count as the build guard's.** `RecipeCopyContractTest` pins the number of
-Assignment pairs written in **arrow form inside an `AssignmentRelationship` clause** — three, at the time of
+Assignment pairs written in **arrow form inside an `AssignmentRelationship` clause**: four, at the time of
 writing. That is a scanner's reach, not the corpus's content: rows 5 and 6 above are real Assignment pairs
 this document derives from prose (`role→process` plus the page's element subset) and the scanner cannot see,
 because the arrow's left side is lower-case. Neither number is wrong; they answer different questions, and
@@ -262,12 +273,19 @@ Stated plainly, because an audit that does not name its own limits is read as co
    in. The same sweep returns 28 after the corrections, because the corrections themselves add three bare
    denials. The two numbers are the same measurement in different frames and only the first one answers
    the question this paragraph asks.)
-4. **Nothing here is enforced by parsing the corpus.** The guards in
-   `RecipeCopyContractTest` are targeted assertions on named clauses, not a general relationship-pair
-   extractor. Extracting pairs from freeform English is a separate piece of work whose stated prerequisite
-   is giving each recipe structured front-matter so the pairs are data rather than prose; a parser over
-   the corpus in its current form would fail by silently matching nothing and reporting green, which would
-   launder an unchecked corpus as a checked one.
+4. **The build checks the declared pairs, not the prose.** Each page opens with a `relationships` block
+   that declares its pairs as data, and `RecipeRelationshipMatrixTest` checks every `permitted` and
+   `forbidden` line against the matrix, including the first Class B claim, declared on both pages that
+   make it as `forbidden Assignment * ApplicationComponent` and checked over every source concept. The
+   second Class B claim (no "Path" relationship) is not a pair; the test lists `PathRelationship` as named
+   only to deny it. It
+   also checks that every relationship type a page names in full appears in one of its lines (or is listed
+   in the test, with the reason it has no pair), and that every element type a line names appears in the
+   page's prose. What it **cannot** see is a pair written in the prose and never declared in the block:
+   it checks the page author's declaration, not an extraction from English, which would fail by silently
+   matching nothing. The Class C clauses name no pair and stay held by `RecipeCopyContractTest`'s targeted
+   assertions, as do set-wide denials such as "no Composition between two different types among these
+   four", which name a set rather than pairs.
 
 ---
 
@@ -277,6 +295,11 @@ Stated plainly, because an audit that does not name its own limits is read as co
 changing, and if this document names a page that no longer exists. That is deliberately a coarse guard:
 it cannot tell whether the tables above are still *correct*, only whether the corpus has moved underneath
 them. When it fires, re-run the sweep — do not edit the page list to make it pass.
+
+`RecipeRelationshipMatrixTest` is the fine-grained guard: it checks every declared pair against the matrix
+on every build, pins the number of `permitted` and `forbidden` lines across the corpus (so a block that
+parsed as empty cannot pass), and fails on a page with no block. A pair added to a page's prose belongs in
+that page's block in the same change; a pair added to the block belongs in the Class A table above.
 
 The individual corrections are held by their own assertions, each paired with an anchor that fails
 loudly if the prose it guards has moved rather than passing silently over its absence.

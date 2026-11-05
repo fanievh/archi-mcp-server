@@ -144,7 +144,7 @@ public class CostEstimatorTest {
 	 */
 	private static int conceptsOnly(int elementCount, int relationshipCount, FieldPreset preset) {
 		return CostEstimator.estimateTokensForViewContents(
-				new CostEstimator.ViewContentsCounts(elementCount, relationshipCount, 0, 0, 0, 0, 0),
+				new CostEstimator.ViewContentsCounts(elementCount, relationshipCount, 0, 0, 0, 0, 0, 0, 0),
 				preset);
 	}
 
@@ -159,40 +159,42 @@ public class CostEstimatorTest {
 
 	@Test
 	public void shouldChargeEveryVisualArray_forViewContents() {
-		// One row in each of the five arrays the estimate used to ignore, on top of the concept
-		// halves above. 5880 + 205 + 640 + 435 + 430 + 345 = 7935 chars / 4 = 1984 tokens.
+		// One row in each visual array, on top of the concept halves above.
+		// 5880 + 205 + 640 + 435 + 430 + 345 + 250 + 410 = 8595 chars / 4 = 2149 tokens (rounded up).
 		int tokens = CostEstimator.estimateTokensForViewContents(
-				new CostEstimator.ViewContentsCounts(15, 10, 1, 1, 1, 1, 1), FieldPreset.STANDARD);
-		assertEquals(1984, tokens);
+				new CostEstimator.ViewContentsCounts(15, 10, 1, 1, 1, 1, 1, 1, 1), FieldPreset.STANDARD);
+		assertEquals(2149, tokens);
 	}
 
 	@Test
 	public void shouldNotMoveTheVisualArraysWithThePreset_forViewContents() {
-		// The field selector emits these five raw, with no preset argument, so their contribution
+		// The field selector emits the visual arrays raw, with no preset argument, so their contribution
 		// is identical at every preset. Asserted as a DIFFERENCE against the same counts with the
 		// visual arrays zeroed: comparing whole estimates would be satisfied by the concept halves
 		// not moving either, which is false and is not what this pin is about.
 		//
-		// 20 * 205 + 20 * 640 + 3 * 435 + 2 * 430 + 1 * 345
-		//   = 4100 + 12800 + 1305 + 860 + 345 = 19410 chars = 4852 tokens.
+		// 20 * 205 + 20 * 640 + 3 * 435 + 2 * 430 + 1 * 345 + 2 * 250 + 1 * 410
+		//   = 4100 + 12800 + 1305 + 860 + 345 + 500 + 410 = 20320 chars = 5080 tokens.
 		//
 		// The difference is compared against that derived figure rather than against whichever
 		// preset ran first, and it is allowed one token either way. Both estimates are rounded UP
 		// to a whole token before the subtraction, so their difference carries up to a token of
-		// rounding that has nothing to do with the widths: the same 19410 chars really do come out
-		// as 4852 at standard and 4853 at minimal. Pinning the first observed value instead would
+		// rounding that has nothing to do with the widths: the same 20320 chars really do come out
+		// as one figure at standard and the next at minimal. Pinning the first observed value instead would
 		// have pinned that artefact and called it the property.
 		int expected = ((20 * CostEstimator.VISUAL_NODE_CHARS)
 				+ (20 * CostEstimator.VIEW_CONNECTION_CHARS)
 				+ (3 * CostEstimator.VIEW_GROUP_CHARS)
 				+ (2 * CostEstimator.VIEW_NOTE_CHARS)
-				+ CostEstimator.DIAGRAM_IMAGE_CHARS) / CostEstimator.CHARS_PER_TOKEN;
-		assertEquals("the derived figure this pin is anchored on", 4852, expected);
+				+ CostEstimator.DIAGRAM_IMAGE_CHARS
+				+ (2 * CostEstimator.VIEW_REFERENCE_CHARS)
+				+ CostEstimator.NON_ARCHIMATE_CONNECTION_CHARS) / CostEstimator.CHARS_PER_TOKEN;
+		assertEquals("the derived figure this pin is anchored on", 5080, expected);
 		for (FieldPreset preset : FieldPreset.values()) {
 			int withVisuals = CostEstimator.estimateTokensForViewContents(
-					new CostEstimator.ViewContentsCounts(15, 10, 20, 20, 3, 2, 1), preset);
+					new CostEstimator.ViewContentsCounts(15, 10, 20, 20, 3, 2, 1, 2, 1), preset);
 			int withoutVisuals = CostEstimator.estimateTokensForViewContents(
-					new CostEstimator.ViewContentsCounts(15, 10, 0, 0, 0, 0, 0), preset);
+					new CostEstimator.ViewContentsCounts(15, 10, 0, 0, 0, 0, 0, 0, 0), preset);
 			int delta = withVisuals - withoutVisuals;
 			assertTrue("the visual arrays carry no preset-dependent field, so their contribution "
 					+ "must be the measured widths at " + preset + " -- expected " + expected
@@ -208,7 +210,7 @@ public class CostEstimatorTest {
 		// saving a caller is offered is a small fraction of the payload -- which is the lie the
 		// old two-term estimate told, only in the opposite direction and much larger.
 		CostEstimator.ViewContentsCounts counts =
-				new CostEstimator.ViewContentsCounts(30, 25, 30, 25, 4, 1, 0);
+				new CostEstimator.ViewContentsCounts(30, 25, 30, 25, 4, 1, 0, 0, 0);
 		int atStandard = CostEstimator.estimateTokensForViewContents(counts, FieldPreset.STANDARD);
 		int atMinimal = CostEstimator.estimateTokensForViewContents(counts, FieldPreset.MINIMAL);
 		assertTrue("narrowing the preset must still reduce the estimate", atMinimal < atStandard);

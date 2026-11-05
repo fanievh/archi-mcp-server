@@ -29,6 +29,14 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *                            computes and previously discarded. Never truncated; empty when every label
  *                            is placeable. Reporting only a count here would be an index into missing data
  *                            (see {@code labelsOptimized}, which is exactly that shape).
+ * @param egress              the terminal-egress pass's caller-facing outcome: the same rollback
+ *                            count as {@code egressRolledBack}, or the pre-gate skip with the gap it
+ *                            compared and the connections left hugging. Defaults to the rollback
+ *                            count alone; must agree with {@code egressRolledBack}.
+ * @param labelOffsets        connectionId → the Label Offset anchor the label optimizer chose for a Middle
+ *                            label, only where it differs from the anchor held ({@code CENTER} for a reset)
+ *                            and only for a connection whose offset ships. The anchors scored with the
+ *                            positions in {@code optimalPositions}, so the anchor written is the one picked.
  */
 public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                              List<FailedConnection> failed,
@@ -38,16 +46,52 @@ public record RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
                              Map<String, Integer> optimalPositions,
                              int straightLineCrossings,
                              int egressRolledBack,
-                             Set<String> unresolvableLabels) {
+                             Set<String> unresolvableLabels,
+                             EgressOutcome egress,
+                             Map<String, Integer> labelOffsets) {
 
     /** Compact constructor: null-guard all fields. */
     public RoutingResult {
+        egress = egress != null ? egress : new EgressOutcome(egressRolledBack, null, List.of());
+        if (egress.rolledBack() != egressRolledBack) {
+            throw new IllegalArgumentException("egress outcome disagrees with egressRolledBack");
+        }
         routed = routed != null ? routed : Map.of();
         failed = failed != null ? failed : List.of();
         recommendations = recommendations != null ? recommendations : List.of();
         violatedRoutes = violatedRoutes != null ? violatedRoutes : Map.of();
         optimalPositions = optimalPositions != null ? optimalPositions : Map.of();
         unresolvableLabels = unresolvableLabels != null ? unresolvableLabels : Set.of();
+        labelOffsets = labelOffsets != null ? labelOffsets : Map.of();
+    }
+
+    /** Backward-compatible constructor without the chosen anchors (defaults them to none). */
+    public RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
+                         List<FailedConnection> failed,
+                         List<MoveRecommendation> recommendations,
+                         Map<String, List<AbsoluteBendpointDto>> violatedRoutes,
+                         int labelsOptimized,
+                         Map<String, Integer> optimalPositions,
+                         int straightLineCrossings,
+                         int egressRolledBack,
+                         Set<String> unresolvableLabels,
+                         EgressOutcome egress) {
+        this(routed, failed, recommendations, violatedRoutes, labelsOptimized, optimalPositions,
+                straightLineCrossings, egressRolledBack, unresolvableLabels, egress, null);
+    }
+
+    /** Backward-compatible constructor without the egress outcome (defaults it to the rollback count). */
+    public RoutingResult(Map<String, List<AbsoluteBendpointDto>> routed,
+                         List<FailedConnection> failed,
+                         List<MoveRecommendation> recommendations,
+                         Map<String, List<AbsoluteBendpointDto>> violatedRoutes,
+                         int labelsOptimized,
+                         Map<String, Integer> optimalPositions,
+                         int straightLineCrossings,
+                         int egressRolledBack,
+                         Set<String> unresolvableLabels) {
+        this(routed, failed, recommendations, violatedRoutes, labelsOptimized, optimalPositions,
+                straightLineCrossings, egressRolledBack, unresolvableLabels, null);
     }
 
     /** Backward-compatible constructor without unresolvableLabels (defaults it to empty). */

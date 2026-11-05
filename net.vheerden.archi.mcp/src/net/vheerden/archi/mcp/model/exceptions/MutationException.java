@@ -21,4 +21,13 @@ public class MutationException extends RuntimeException {
     public MutationException(String message, Throwable cause) {
         super(message, cause);
     }
+
+    /**
+     * What the caller should do next, when this failure knows better than the generic advice; null
+     * otherwise. A failure that may have left part of a change in the model says so here, since
+     * repeating the call could then apply that part twice.
+     */
+    public String getSuggestedCorrection() {
+        return null;
+    }
 }

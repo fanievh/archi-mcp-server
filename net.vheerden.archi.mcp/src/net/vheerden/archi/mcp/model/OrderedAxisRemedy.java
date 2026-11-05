@@ -136,7 +136,7 @@ final class OrderedAxisRemedy {
         boolean hubEnlargementIsActionable =
                 SpacingControlLoop.hubUnderSizedForFanOut(dominantHub);
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format(
+        sb.append(String.format(java.util.Locale.ROOT,
                 "This view's viewpoint (%s) makes the order in which its "
                 + "elements are placed meaningful, so a structural "
                 + "auto-layout is NOT offered here: it re-places elements "

@@ -79,7 +79,7 @@ public final class LayoutValidationFailures {
         // instead of being promoted to speak for a whole call that may have failed for several
         // unrelated reasons.
         record(array, index, id,
-                entryLabel + " entry [" + index + "] (" + idField + "='" + id + "'): "
+                entryLabel + " entry [" + index + "] (" + idField + "=" + CallerText.quoted(id) + "): "
                         + cause.getMessage(),
                 cause, false);
     }

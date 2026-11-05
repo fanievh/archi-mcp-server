@@ -16,6 +16,7 @@ import org.junit.Test;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
+import net.vheerden.archi.mcp.model.exceptions.ProposalStaleException;
 
 /**
  * Headless tests for the {@link ProposalBuilder} — the shared "stored request → fresh command +
@@ -70,6 +71,7 @@ public class ProposalBuilderTest {
         } catch (MutationException e) {
             assertTrue("plain-language stale message",
                     e.getMessage().toLowerCase().contains("can no longer be applied"));
+            assertStale(e);
         }
     }
 
@@ -92,6 +94,7 @@ public class ProposalBuilderTest {
             fail("expected MutationException carrying the domain reason");
         } catch (MutationException e) {
             assertEquals("the domain reason reaches the caller verbatim", domainSentence, e.getMessage());
+            assertFalse("a domain refusal is not staleness", e instanceof ProposalStaleException);
         }
     }
 
@@ -132,7 +135,13 @@ public class ProposalBuilderTest {
             fail("a null rebuilt command must surface as stale, not NPE downstream");
         } catch (MutationException e) {
             assertTrue(e.getMessage().toLowerCase().contains("can no longer be applied"));
+            assertStale(e);
         }
+    }
+
+    private static void assertStale(MutationException e) {
+        assertTrue("typed as stale: " + e.getClass().getName(), e instanceof ProposalStaleException);
+        assertEquals(ErrorCode.PROPOSAL_STALE, ((ProposalStaleException) e).getErrorCode());
     }
 
 

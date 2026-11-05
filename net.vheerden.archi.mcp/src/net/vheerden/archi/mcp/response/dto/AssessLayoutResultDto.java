@@ -301,9 +301,10 @@ public record AssessLayoutResultDto(
         //
         // Informational only — it appears in no rating breakdown and moves no tier.
         List<String> contextualPartialDimensions,
-        // The number of pass-through crossings the RATING charges (appended). It is NOT the size of
+        // The number of cross-element pass-through crossings, one of the two halves the RATING
+        // charges (appended; ownEndpointPassThroughCount is the other). It is NOT the size of
         // {@code connectionPassThroughs} above, and the two disagree in BOTH directions: that list
-        // also names the unrated self-element pass-throughs (so its size can overstate this count)
+        // also names the routes through their own ends (so its size can overstate this count)
         // and it is capped at ten entries (so its size can understate it). A caller asking "how
         // many crossings was this view marked down for" reads this field; the list stays what it
         // has always been, a capped human-readable description of what was seen.
@@ -311,11 +312,208 @@ public record AssessLayoutResultDto(
         // The back-compat constructors below default it to {@code 0}, so a legacy-constructed
         // response can read {@code 0} here beside a non-empty {@code connectionPassThroughs} — the
         // same shape, and for the same reason, as the terminal-partition halves above: a legacy
-        // caller passes a description list it never partitioned into charged and unrated, and
+        // caller passes a description list it never partitioned into its two kinds, and
         // deriving a count from that list would publish a measurement nothing made. Production
         // never takes those paths; it builds the canonical widest form from the assessor's own
         // cross-element tally.
-        int crossElementPassThroughCount) {
+        int crossElementPassThroughCount,
+        // Connection labels drawn on ANOTHER connection's line (appended). {@code labelOnForeignLineCount}
+        // counts (connection-label, other connection) pairs where the label lies on that connection's drawn
+        // line; a reader takes such a label for that line's label. Informational only — no rating impact.
+        // The back-compat constructors and {@link #degenerate} default it to {@code 0} / {@code null}.
+        int labelOnForeignLineCount,
+        List<String> labelOnForeignLineDescriptions,
+        // Routes through their own source or target, one per end crossed (appended). The other
+        // half of what the passThroughs band charges: the band is computed over
+        // crossElementPassThroughCount + ownEndpointPassThroughCount, and the same sum reaches the
+        // spacing loop's step scalar and the quality-target loop. Counted on every connection,
+        // past the cap on connectionPassThroughs; a container end is not counted, since a route
+        // must run inside it to reach the end it holds. The back-compat constructors and
+        // {@link #degenerate} default it to {@code 0}.
+        int ownEndpointPassThroughCount,
+        // View objects and connections the view's viewpoint does not allow, which Archi draws
+        // ghosted (appended). Detection only: on no rating band and in no breakdown. Null, and
+        // omitted, when nothing examined it — the back-compat constructors and a view whose
+        // viewpoint could not be read; the coverage entry viewpointConformance says which.
+        Integer viewpointNonConformingCount,
+        // Notes lying on another note (appended). Count of unordered note pairs whose boxes overlap,
+        // whatever depth either note sits at, and their descriptions capped like
+        // noteOverlapDescriptions; the note ids ride in violatorIds under noteOnNoteOverlap.
+        // Informational only: on no rating band and in no breakdown. noteOverlapCount keeps its
+        // meaning (a note against objects that are not notes). The back-compat constructors and
+        // {@link #degenerate} default it to 0 — a view of at most one object holds no pair.
+        int noteOnNoteOverlapCount,
+        List<String> noteOnNoteOverlapDescriptions) {
+
+    /**
+     * The shape before note-on-note overlaps were reported: it delegates with a zero count and no
+     * descriptions, so every earlier construction site compiles unchanged.
+     */
+    public AssessLayoutResultDto(
+            String viewId, int elementCount, int connectionCount, int overlapCount,
+            int containmentOverlaps, int edgeCrossingCount, double crossingsPerConnection,
+            double averageSpacing, int alignmentScore, String overallRating,
+            Map<String, String> ratingBreakdown, List<String> overlaps,
+            List<String> boundaryViolations, List<String> connectionPassThroughs,
+            List<String> offCanvasWarnings, int labelOverlapCount, List<String> labelOverlaps,
+            int orphanedConnections, List<String> orphanedConnectionDescriptions,
+            int noteOverlapCount, List<String> noteOverlapDescriptions, int noteClipCount,
+            List<String> noteClipDescriptions, boolean hasGroups, int coincidentSegmentCount,
+            int nonOrthogonalTerminalCount, ContentBoundsDto contentBounds,
+            int labelTruncationCount, List<String> labelTruncations, int parentLabelObscuredCount,
+            List<String> parentLabelObscuredDescriptions, int imageSiblingOverlapCount,
+            List<String> imageSiblingOverlapDescriptions, int overlayIconCollisionCount,
+            List<String> overlayIconCollisionDescriptions, Map<String, List<String>> violatorIds,
+            List<String> suggestions, int interiorTerminationCount,
+            List<String> interiorTerminationDescriptions, int zigzagCount,
+            List<String> zigzagDescriptions, int connectionEdgeCoincidenceCount,
+            List<String> edgeCoincidenceDescriptions, double hubPortQualityScore,
+            List<HubFaceDetailDto> hubPortQualityFaces, String layoutRating, String routingRating,
+            double corridorUtilisationScore,
+            List<CorridorUtilisationDetailDto> corridorUtilisationChannels,
+            Double vAxisParallelGapP10, int vAxisParallelGapNarrow25Count,
+            int hAxisParallelGapNarrow25Count,
+            ParallelConnectionGapDetailDto parallelConnectionGapDetail,
+            double hubNeighbourClearanceMin, Map<String, String> coverage,
+            int connectionThroughNoteCount, List<String> connectionThroughNoteDescriptions,
+            int connectionRedundantBendpointCount,
+            List<String> connectionRedundantBendpointDescriptions,
+            int nonOrthogonalInteriorSegmentCount,
+            List<String> nonOrthogonalInteriorSegmentDescriptions,
+            int containerFillEqualsChildCount, List<String> containerFillEqualsChildDescriptions,
+            int connectionGrazesVisualCount, List<String> connectionGrazesVisualDescriptions,
+            int labelOnNoteCount, List<String> labelOnNoteDescriptions, int labelOnGroupCount,
+            List<String> labelOnGroupDescriptions, int edgeCoincidenceGrazedElementCount,
+            int offFaceParallelTerminalCount, List<String> offFaceParallelTerminalDescriptions,
+            int coincidentFacePortCount, List<String> coincidentFacePortDescriptions,
+            int ownIconOverLabelCount, List<String> ownIconOverLabelDescriptions,
+            int cousinOverlapCount, List<String> cousinOverlaps, int boundaryViolationCount,
+            int anchorDriftCount, List<String> anchorDriftDescriptions,
+            int lateralJogReversalCount, List<String> lateralJogReversalDescriptions,
+            int zeroBendpointNonOrthogonalTerminalCount, int routedNonOrthogonalTerminalCount,
+            List<HubPreconditionDto> unsizedHubs, List<String> contextualPartialDimensions,
+            int crossElementPassThroughCount, int labelOnForeignLineCount,
+            List<String> labelOnForeignLineDescriptions, int ownEndpointPassThroughCount,
+            Integer viewpointNonConformingCount) {
+        this(viewId, elementCount, connectionCount, overlapCount, containmentOverlaps,
+                edgeCrossingCount, crossingsPerConnection, averageSpacing, alignmentScore,
+                overallRating, ratingBreakdown, overlaps, boundaryViolations,
+                connectionPassThroughs, offCanvasWarnings, labelOverlapCount, labelOverlaps,
+                orphanedConnections, orphanedConnectionDescriptions, noteOverlapCount,
+                noteOverlapDescriptions, noteClipCount, noteClipDescriptions, hasGroups,
+                coincidentSegmentCount, nonOrthogonalTerminalCount, contentBounds,
+                labelTruncationCount, labelTruncations, parentLabelObscuredCount,
+                parentLabelObscuredDescriptions, imageSiblingOverlapCount,
+                imageSiblingOverlapDescriptions, overlayIconCollisionCount,
+                overlayIconCollisionDescriptions, violatorIds, suggestions,
+                interiorTerminationCount, interiorTerminationDescriptions, zigzagCount,
+                zigzagDescriptions, connectionEdgeCoincidenceCount, edgeCoincidenceDescriptions,
+                hubPortQualityScore, hubPortQualityFaces, layoutRating, routingRating,
+                corridorUtilisationScore, corridorUtilisationChannels, vAxisParallelGapP10,
+                vAxisParallelGapNarrow25Count, hAxisParallelGapNarrow25Count,
+                parallelConnectionGapDetail, hubNeighbourClearanceMin, coverage,
+                connectionThroughNoteCount, connectionThroughNoteDescriptions,
+                connectionRedundantBendpointCount, connectionRedundantBendpointDescriptions,
+                nonOrthogonalInteriorSegmentCount, nonOrthogonalInteriorSegmentDescriptions,
+                containerFillEqualsChildCount, containerFillEqualsChildDescriptions,
+                connectionGrazesVisualCount, connectionGrazesVisualDescriptions, labelOnNoteCount,
+                labelOnNoteDescriptions, labelOnGroupCount, labelOnGroupDescriptions,
+                edgeCoincidenceGrazedElementCount, offFaceParallelTerminalCount,
+                offFaceParallelTerminalDescriptions, coincidentFacePortCount,
+                coincidentFacePortDescriptions, ownIconOverLabelCount,
+                ownIconOverLabelDescriptions, cousinOverlapCount, cousinOverlaps,
+                boundaryViolationCount, anchorDriftCount, anchorDriftDescriptions,
+                lateralJogReversalCount, lateralJogReversalDescriptions,
+                zeroBendpointNonOrthogonalTerminalCount, routedNonOrthogonalTerminalCount,
+                unsizedHubs, contextualPartialDimensions, crossElementPassThroughCount,
+                labelOnForeignLineCount, labelOnForeignLineDescriptions,
+                ownEndpointPassThroughCount, viewpointNonConformingCount, 0, null);
+    }
+
+    /**
+     * The shape before viewpoint conformance was reported: it delegates with a null count, so every
+     * earlier construction site compiles unchanged and omits the field.
+     */
+    public AssessLayoutResultDto(
+            String viewId, int elementCount, int connectionCount, int overlapCount,
+            int containmentOverlaps, int edgeCrossingCount, double crossingsPerConnection,
+            double averageSpacing, int alignmentScore, String overallRating,
+            Map<String, String> ratingBreakdown, List<String> overlaps,
+            List<String> boundaryViolations, List<String> connectionPassThroughs,
+            List<String> offCanvasWarnings, int labelOverlapCount, List<String> labelOverlaps,
+            int orphanedConnections, List<String> orphanedConnectionDescriptions,
+            int noteOverlapCount, List<String> noteOverlapDescriptions, int noteClipCount,
+            List<String> noteClipDescriptions, boolean hasGroups, int coincidentSegmentCount,
+            int nonOrthogonalTerminalCount, ContentBoundsDto contentBounds,
+            int labelTruncationCount, List<String> labelTruncations, int parentLabelObscuredCount,
+            List<String> parentLabelObscuredDescriptions, int imageSiblingOverlapCount,
+            List<String> imageSiblingOverlapDescriptions, int overlayIconCollisionCount,
+            List<String> overlayIconCollisionDescriptions, Map<String, List<String>> violatorIds,
+            List<String> suggestions, int interiorTerminationCount,
+            List<String> interiorTerminationDescriptions, int zigzagCount,
+            List<String> zigzagDescriptions, int connectionEdgeCoincidenceCount,
+            List<String> edgeCoincidenceDescriptions, double hubPortQualityScore,
+            List<HubFaceDetailDto> hubPortQualityFaces, String layoutRating, String routingRating,
+            double corridorUtilisationScore,
+            List<CorridorUtilisationDetailDto> corridorUtilisationChannels,
+            Double vAxisParallelGapP10, int vAxisParallelGapNarrow25Count,
+            int hAxisParallelGapNarrow25Count,
+            ParallelConnectionGapDetailDto parallelConnectionGapDetail,
+            double hubNeighbourClearanceMin, Map<String, String> coverage,
+            int connectionThroughNoteCount, List<String> connectionThroughNoteDescriptions,
+            int connectionRedundantBendpointCount,
+            List<String> connectionRedundantBendpointDescriptions,
+            int nonOrthogonalInteriorSegmentCount,
+            List<String> nonOrthogonalInteriorSegmentDescriptions,
+            int containerFillEqualsChildCount, List<String> containerFillEqualsChildDescriptions,
+            int connectionGrazesVisualCount, List<String> connectionGrazesVisualDescriptions,
+            int labelOnNoteCount, List<String> labelOnNoteDescriptions, int labelOnGroupCount,
+            List<String> labelOnGroupDescriptions, int edgeCoincidenceGrazedElementCount,
+            int offFaceParallelTerminalCount, List<String> offFaceParallelTerminalDescriptions,
+            int coincidentFacePortCount, List<String> coincidentFacePortDescriptions,
+            int ownIconOverLabelCount, List<String> ownIconOverLabelDescriptions,
+            int cousinOverlapCount, List<String> cousinOverlaps, int boundaryViolationCount,
+            int anchorDriftCount, List<String> anchorDriftDescriptions,
+            int lateralJogReversalCount, List<String> lateralJogReversalDescriptions,
+            int zeroBendpointNonOrthogonalTerminalCount, int routedNonOrthogonalTerminalCount,
+            List<HubPreconditionDto> unsizedHubs, List<String> contextualPartialDimensions,
+            int crossElementPassThroughCount, int labelOnForeignLineCount,
+            List<String> labelOnForeignLineDescriptions, int ownEndpointPassThroughCount) {
+        this(viewId, elementCount, connectionCount, overlapCount, containmentOverlaps,
+                edgeCrossingCount, crossingsPerConnection, averageSpacing, alignmentScore,
+                overallRating, ratingBreakdown, overlaps, boundaryViolations,
+                connectionPassThroughs, offCanvasWarnings, labelOverlapCount, labelOverlaps,
+                orphanedConnections, orphanedConnectionDescriptions, noteOverlapCount,
+                noteOverlapDescriptions, noteClipCount, noteClipDescriptions, hasGroups,
+                coincidentSegmentCount, nonOrthogonalTerminalCount, contentBounds,
+                labelTruncationCount, labelTruncations, parentLabelObscuredCount,
+                parentLabelObscuredDescriptions, imageSiblingOverlapCount,
+                imageSiblingOverlapDescriptions, overlayIconCollisionCount,
+                overlayIconCollisionDescriptions, violatorIds, suggestions,
+                interiorTerminationCount, interiorTerminationDescriptions, zigzagCount,
+                zigzagDescriptions, connectionEdgeCoincidenceCount, edgeCoincidenceDescriptions,
+                hubPortQualityScore, hubPortQualityFaces, layoutRating, routingRating,
+                corridorUtilisationScore, corridorUtilisationChannels, vAxisParallelGapP10,
+                vAxisParallelGapNarrow25Count, hAxisParallelGapNarrow25Count,
+                parallelConnectionGapDetail, hubNeighbourClearanceMin, coverage,
+                connectionThroughNoteCount, connectionThroughNoteDescriptions,
+                connectionRedundantBendpointCount, connectionRedundantBendpointDescriptions,
+                nonOrthogonalInteriorSegmentCount, nonOrthogonalInteriorSegmentDescriptions,
+                containerFillEqualsChildCount, containerFillEqualsChildDescriptions,
+                connectionGrazesVisualCount, connectionGrazesVisualDescriptions, labelOnNoteCount,
+                labelOnNoteDescriptions, labelOnGroupCount, labelOnGroupDescriptions,
+                edgeCoincidenceGrazedElementCount, offFaceParallelTerminalCount,
+                offFaceParallelTerminalDescriptions, coincidentFacePortCount,
+                coincidentFacePortDescriptions, ownIconOverLabelCount,
+                ownIconOverLabelDescriptions, cousinOverlapCount, cousinOverlaps,
+                boundaryViolationCount, anchorDriftCount, anchorDriftDescriptions,
+                lateralJogReversalCount, lateralJogReversalDescriptions,
+                zeroBendpointNonOrthogonalTerminalCount, routedNonOrthogonalTerminalCount,
+                unsizedHubs, contextualPartialDimensions, crossElementPassThroughCount,
+                labelOnForeignLineCount, labelOnForeignLineDescriptions,
+                ownEndpointPassThroughCount,
+                null, 0, null);
+    }
 
     /**
      * Sentinel for {@code hubNeighbourClearanceMin} when no detected hub has a measurable
@@ -355,6 +553,26 @@ public record AssessLayoutResultDto(
             int ownIconOverLabelCount, List<String> ownIconOverLabelDescriptions,
             List<String> suggestions, Map<String, String> coverage,
             List<String> contextualPartialDimensions) {
+        return degenerate(viewId, objectCount, connectionCount, orphanedConnections,
+                orphanedConnectionDescriptions, offCanvasWarnings, labelTruncationCount,
+                labelTruncations, noteClipCount, noteClipDescriptions, ownIconOverLabelCount,
+                ownIconOverLabelDescriptions, suggestions, coverage, contextualPartialDimensions, null);
+    }
+
+    /**
+     * As the factory above, with the count of objects the view's viewpoint does not allow, or null
+     * when that was not examined. A lone object can be outside its view's viewpoint, so the count
+     * is measured here like on any other view.
+     */
+    public static AssessLayoutResultDto degenerate(
+            String viewId, int objectCount, int connectionCount,
+            int orphanedConnections, List<String> orphanedConnectionDescriptions,
+            List<String> offCanvasWarnings,
+            int labelTruncationCount, List<String> labelTruncations,
+            int noteClipCount, List<String> noteClipDescriptions,
+            int ownIconOverLabelCount, List<String> ownIconOverLabelDescriptions,
+            List<String> suggestions, Map<String, String> coverage,
+            List<String> contextualPartialDimensions, Integer viewpointNonConformingCount) {
         return new AssessLayoutResultDto(
                 viewId, objectCount, connectionCount, 0, 0, 0, 0.0, 0.0, 0,
                 "not-applicable", Map.of("overall", "not-applicable"),
@@ -396,7 +614,16 @@ public record AssessLayoutResultDto(
                 contextualPartialDimensions == null ? List.of() : contextualPartialDimensions,
                 // MEASURED zero, not a default: a cross-element crossing needs a second element to
                 // be drawn across, and a view holding at most one object has none.
-                0);
+                0,
+                // label on another connection's line: not examined on a degenerate view, like the label-host
+                // dimensions above (its coverage entry says not-checked)
+                0, null,
+                // own-end pass-throughs: not examined, since the degenerate view returns before
+                // the assessor runs (a lone object's self-loop could cross it)
+                0,
+                viewpointNonConformingCount,
+                // a view holding at most one object holds no pair of notes: a measured zero
+                0, null);
     }
 
     /**
@@ -507,6 +734,10 @@ public record AssessLayoutResultDto(
                 // Charged pass-through count default (see the component's own note): a legacy
                 // caller passes a description list it never partitioned, so there is no charged
                 // count to forward and none may be invented from the list.
+                0,
+                // Label-on-foreign-line default: a legacy caller has no such count to forward.
+                0, null,
+                // own-end pass-throughs: a legacy caller has no such count to forward
                 0);
     }
 
@@ -677,6 +908,10 @@ public record AssessLayoutResultDto(
                 // Charged pass-through count default (see the component's own note): a legacy
                 // caller passes a description list it never partitioned, so there is no charged
                 // count to forward and none may be invented from the list.
+                0,
+                // Label-on-foreign-line default: a legacy caller has no such count to forward.
+                0, null,
+                // own-end pass-throughs: a legacy caller has no such count to forward
                 0);
     }
 
@@ -795,6 +1030,10 @@ public record AssessLayoutResultDto(
                 // Charged pass-through count default (see the component's own note): a legacy
                 // caller passes a description list it never partitioned, so there is no charged
                 // count to forward and none may be invented from the list.
+                0,
+                // Label-on-foreign-line default: a legacy caller has no such count to forward.
+                0, null,
+                // own-end pass-throughs: a legacy caller has no such count to forward
                 0);
     }
 

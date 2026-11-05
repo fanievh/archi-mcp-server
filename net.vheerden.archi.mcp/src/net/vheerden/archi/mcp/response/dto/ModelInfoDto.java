@@ -34,8 +34,23 @@ public record ModelInfoDto(
     Map<String, Integer> elementTypeDistribution,
     Map<String, Integer> relationshipTypeDistribution,
     Map<String, Integer> layerDistribution,
-    Boolean approvalMode
+    Boolean approvalMode,
+    Boolean readOnly
 ) {
+    /**
+     * Constructor for the call sites that pre-date the read-only field. Delegates with {@code readOnly}
+     * null (omitted); the get-model-info handler stamps this server's mode via {@link #withReadOnly(Boolean)}.
+     */
+    public ModelInfoDto(String name, String purpose, Map<String, String> properties,
+            int elementCount, int relationshipCount, int viewCount, int specializationCount,
+            Map<String, Integer> elementTypeDistribution,
+            Map<String, Integer> relationshipTypeDistribution,
+            Map<String, Integer> layerDistribution, Boolean approvalMode) {
+        this(name, purpose, properties, elementCount, relationshipCount, viewCount,
+                specializationCount, elementTypeDistribution,
+                relationshipTypeDistribution, layerDistribution, approvalMode, null);
+    }
+
     /**
      * Backward-compatible constructor for the 10-field call sites that pre-date the approval-mode field.
      * Delegates to the canonical 11-field constructor with {@code approvalMode} null (Jackson
@@ -50,7 +65,7 @@ public record ModelInfoDto(
             Map<String, Integer> layerDistribution) {
         this(name, purpose, properties, elementCount, relationshipCount, viewCount,
                 specializationCount, elementTypeDistribution,
-                relationshipTypeDistribution, layerDistribution, null);
+                relationshipTypeDistribution, layerDistribution, null, null);
     }
 
     /**
@@ -66,7 +81,7 @@ public record ModelInfoDto(
             Map<String, Integer> layerDistribution) {
         this(name, null, null, elementCount, relationshipCount, viewCount,
                 specializationCount, elementTypeDistribution,
-                relationshipTypeDistribution, layerDistribution, null);
+                relationshipTypeDistribution, layerDistribution, null, null);
     }
 
     /**
@@ -84,7 +99,20 @@ public record ModelInfoDto(
     public ModelInfoDto withApprovalMode(Boolean mode) {
         return new ModelInfoDto(name, purpose, properties, elementCount, relationshipCount,
                 viewCount, specializationCount, elementTypeDistribution,
-                relationshipTypeDistribution, layerDistribution, mode);
+                relationshipTypeDistribution, layerDistribution, mode, readOnly);
+    }
+
+    /**
+     * Returns a copy carrying whether this server offers only the tools that read the model. The
+     * get-model-info handler stamps it on every response; other callers leave it null and Jackson omits it.
+     *
+     * @param serverReadOnly whether the server is read-only, or null to omit
+     * @return a copy of this DTO with {@code readOnly} set
+     */
+    public ModelInfoDto withReadOnly(Boolean serverReadOnly) {
+        return new ModelInfoDto(name, purpose, properties, elementCount, relationshipCount,
+                viewCount, specializationCount, elementTypeDistribution,
+                relationshipTypeDistribution, layerDistribution, approvalMode, serverReadOnly);
     }
 
     /**
@@ -111,6 +139,6 @@ public record ModelInfoDto(
         return (requested == null) ? this
                 : new ModelInfoDto(requested, purpose, properties, elementCount, relationshipCount,
                         viewCount, specializationCount, elementTypeDistribution,
-                        relationshipTypeDistribution, layerDistribution, approvalMode);
+                        relationshipTypeDistribution, layerDistribution, approvalMode, readOnly);
     }
 }

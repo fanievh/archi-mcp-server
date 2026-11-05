@@ -91,7 +91,24 @@ public record LayoutWithinGroupResultDto(
 		List<MovedViewObjectDto> nestedContainersFitted,
 		String ancestorPropagation,
 		@JsonInclude(JsonInclude.Include.NON_EMPTY)
-		List<MovedViewObjectDto> resizedElements) {
+		List<MovedViewObjectDto> resizedElements,
+		// A container this call grew now overlaps a sibling it did not overlap before (appended);
+		// see StructuredWarningCodes.CASCADE_GROWN_INTO_SIBLING. Omitted when empty.
+		@JsonInclude(JsonInclude.Include.NON_EMPTY)
+		List<StructuredWarningDto> structuredWarnings) {
+
+	/** The shape before the cascade overlap warning: delegates with none. */
+	public LayoutWithinGroupResultDto(String viewId, String groupViewObjectId, String arrangement,
+			int elementsRepositioned, boolean groupResized, Integer newGroupWidth,
+			Integer newGroupHeight, boolean overflow, boolean autoWidth, Integer columnsUsed,
+			int ancestorsResized, int nestedContainersArranged, int maxDepthReached,
+			List<MovedViewObjectDto> resizedAncestors, List<MovedViewObjectDto> nestedContainersFitted,
+			String ancestorPropagation, List<MovedViewObjectDto> resizedElements) {
+		this(viewId, groupViewObjectId, arrangement, elementsRepositioned, groupResized,
+				newGroupWidth, newGroupHeight, overflow, autoWidth, columnsUsed, ancestorsResized,
+				nestedContainersArranged, maxDepthReached, resizedAncestors, nestedContainersFitted,
+				ancestorPropagation, resizedElements, List.of());
+	}
 
 	// ---- ancestorPropagation vocabulary --------------------------------------------------------
 	//

@@ -1,3 +1,19 @@
+---
+relationships:
+  - permitted Composition BusinessActor BusinessActor
+  - permitted Composition BusinessRole BusinessRole
+  - permitted Assignment BusinessActor BusinessRole
+  - permitted Realization DataObject BusinessObject
+  - forbidden Composition BusinessActor BusinessRole
+  - forbidden Composition BusinessRole BusinessActor
+  - forbidden Assignment BusinessRole BusinessActor
+  - forbidden Assignment BusinessActor BusinessActor
+  - forbidden Assignment BusinessRole BusinessRole
+  - forbidden Realization BusinessObject DataObject
+  - forbidden Realization BusinessObject BusinessObject
+  - forbidden Realization DataObject DataObject
+---
+
 # ArchiMate Viewpoint Recipes — Index
 
 Read this page first. It does two things: it states the **invariant build sequence once**, and it routes you to the **one** thing the generic guidance cannot give per viewpoint — the **topology** (the spatial shape).
@@ -45,6 +61,8 @@ A recipe gives only the per-family **deltas** — the parameters that change. Do
 Fetch **only** the one page that matches. You do not need to read the others, and there is no per-viewpoint page for the conventional shapes in Step 0 by design.
 
 ## How to read a family page
+
+Every page, this one included, opens with a `relationships` block: each line is `permitted` or `forbidden`, then a relationship type, a source element type and a target element type (`*` means any element type). These are the pairs the page names, checked against Archi's own relationship rules at build time, so a `permitted` line is one `create-relationship` accepts.
 
 Each recipe has the same five parts:
 

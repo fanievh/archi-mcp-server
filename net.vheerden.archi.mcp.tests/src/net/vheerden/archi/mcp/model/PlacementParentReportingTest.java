@@ -293,7 +293,8 @@ public class PlacementParentReportingTest {
             throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
         String containerId = addTopLevel(registry, "actor-1");
-        invokeTool(registry, "begin-batch", Map.of("description", "queue a nested placement"));
+        invokeTool(registry, "begin-batch", Map.of("description", "queue a nested placement",
+                "modelId", "model-placement-parent"));
 
         Map<String, Object> queued = resultOf(invokeTool(registry, "bulk-mutate", Map.of(
                 "operations", List.of(Map.of("tool", "add-to-view", "params", Map.of(

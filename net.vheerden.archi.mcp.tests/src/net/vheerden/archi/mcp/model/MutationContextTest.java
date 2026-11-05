@@ -105,6 +105,24 @@ public class MutationContextTest {
         assertEquals("create-relationship", pending.get(1).tool());
     }
 
+    /** A proposal put back after a refused approval keeps its place, so approving oldest first meets it first. */
+    @Test
+    public void shouldRestoreAProposalToItsPlaceInTheQueue() {
+        context.storeProposal(makeProposal("create-element", "first"));
+        context.storeProposal(makeProposal("create-element", "second"));
+        context.storeProposal(makeProposal("create-element", "third"));
+        PendingProposal first = context.removeProposal("p-1");
+        PendingProposal second = context.removeProposal("p-2");
+
+        context.restoreProposal(second);
+        context.restoreProposal(first);
+
+        assertEquals(List.of("p-1", "p-2", "p-3"),
+                context.getPendingProposals().stream().map(PendingProposal::proposalId).toList());
+        context.restoreProposal(first);
+        assertEquals("restoring a proposal still queued changes nothing", 3, context.getPendingCount());
+    }
+
     @Test
     public void shouldClearProposals() {
         context.storeProposal(makeProposal("create-element", "desc1"));
@@ -970,6 +988,44 @@ public class MutationContextTest {
         context.reset();
 
         assertNull("a reset batch derives no geometry", context.queuedBounds());
+    }
+
+    @Test
+    public void shouldHoldTheQueueInOneTrackedCompound_inQueueOrder_whenBuildingTheCommit() {
+        context.beginBatch("batch");
+        Command first = new StubCommand("first");
+        Command second = new StubCommand("second");
+        context.queueCommand(first, "First");
+        context.queueCommand(second, "Second");
+
+        CompoundCommand commit = context.buildCompoundCommand();
+
+        assertEquals("one child: the tracker", 1, commit.getCommands().size());
+        assertTrue(commit.getCommands().get(0) instanceof TrackedCompoundCommand);
+        assertEquals(List.of(first, second), queuedIn(commit).getCommands());
+    }
+
+    @Test
+    public void shouldDescribeAQueuedOperationByItsIndex_andNumberOneOutOfRange() {
+        context.beginBatch("batch");
+        context.queueCommand(new StubCommand("first"), "First");
+        context.queueCommand(new StubCommand("second"), "Second");
+
+        assertEquals("Second", context.describeQueued(1));
+        assertEquals("operation 3", context.describeQueued(2));
+    }
+
+    /**
+     * The queued commands of a dispatched batch commit, which holds them in one tracked compound. Fails when the
+     * commit holds anything else, so a commit that lost its tracker cannot pass by counting its own children.
+     */
+    static CompoundCommand queuedIn(Command dispatched) {
+        assertTrue("a batch commit is a compound: " + dispatched, dispatched instanceof CompoundCommand);
+        CompoundCommand compound = (CompoundCommand) dispatched;
+        assertEquals("a batch commit holds one tracked compound", 1, compound.size());
+        Object only = compound.getCommands().get(0);
+        assertTrue("a batch commit holds one tracked compound: " + only, only instanceof TrackedCompoundCommand);
+        return (TrackedCompoundCommand) only;
     }
 
     private static class StubCommand extends Command {

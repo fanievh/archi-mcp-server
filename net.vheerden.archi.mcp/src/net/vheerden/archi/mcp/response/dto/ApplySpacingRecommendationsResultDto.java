@@ -171,7 +171,62 @@ public record ApplySpacingRecommendationsResultDto(
          * the silence to be read as "nothing regressed".</p>
          */
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        List<StructuredWarningDto> structuredWarnings) {
+        List<StructuredWarningDto> structuredWarnings,
+        /**
+         * The ArchiMate elements on the canvas that hold children and that this tool did not
+         * measure, recommend for or move: it acts on native groups and {@code Grouping} elements
+         * only, by contract. Read from the view before anything is measured, so it is the same on
+         * every return path, dry run, declined call and queued call alike. Empty, and then omitted
+         * from the wire, when the view holds none.
+         */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<SkippedContainerDto> skippedContainers) {
+
+    /**
+     * The full form as it stood before {@code skippedContainers}: every existing call site
+     * builds through it, and the field is attached with {@link #withSkippedContainers}.
+     */
+    public ApplySpacingRecommendationsResultDto(
+            String viewId,
+            String scope,
+            boolean dryRun,
+            int connectionCount,
+            int interGroupConnectionCount,
+            boolean isConnected,
+            boolean hasLargeHubs,
+            int currentElementSpacingPx,
+            int currentGroupSpacingPx,
+            int elementTargetSpacingPx,
+            int groupTargetSpacingPx,
+            int proposedElementDelta,
+            int proposedGroupDelta,
+            int interElementDelta,
+            int interGroupDelta,
+            boolean elementKneeClampApplied,
+            boolean groupKneeClampApplied,
+            String noChangeReason,
+            Integer elementTargetOverride,
+            Integer groupTargetOverride,
+            AssessLayoutResultDto before,
+            AssessLayoutResultDto after,
+            AdjustViewSpacingResultDto adjustResult,
+            String elementTerminationReason,
+            int elementIterationCount,
+            List<Integer> elementAppliedDeltas,
+            String groupTerminationReason,
+            int groupIterationCount,
+            List<Integer> groupAppliedDeltas,
+            String elementDensityFloorDiagnosis,
+            String groupDensityFloorDiagnosis,
+            List<StructuredWarningDto> structuredWarnings) {
+        this(viewId, scope, dryRun, connectionCount, interGroupConnectionCount, isConnected, hasLargeHubs, currentElementSpacingPx, currentGroupSpacingPx, elementTargetSpacingPx, groupTargetSpacingPx, proposedElementDelta, proposedGroupDelta, interElementDelta, interGroupDelta, elementKneeClampApplied, groupKneeClampApplied, noChangeReason, elementTargetOverride, groupTargetOverride, before, after, adjustResult, elementTerminationReason, elementIterationCount, elementAppliedDeltas, groupTerminationReason, groupIterationCount, groupAppliedDeltas, elementDensityFloorDiagnosis, groupDensityFloorDiagnosis, structuredWarnings,
+                /*skippedContainers=*/ List.of());
+    }
+
+    /** This response with the element containers the tool did not measure attached. */
+    public ApplySpacingRecommendationsResultDto withSkippedContainers(List<SkippedContainerDto> skipped) {
+        return new ApplySpacingRecommendationsResultDto(viewId, scope, dryRun, connectionCount, interGroupConnectionCount, isConnected, hasLargeHubs, currentElementSpacingPx, currentGroupSpacingPx, elementTargetSpacingPx, groupTargetSpacingPx, proposedElementDelta, proposedGroupDelta, interElementDelta, interGroupDelta, elementKneeClampApplied, groupKneeClampApplied, noChangeReason, elementTargetOverride, groupTargetOverride, before, after, adjustResult, elementTerminationReason, elementIterationCount, elementAppliedDeltas, groupTerminationReason, groupIterationCount, groupAppliedDeltas, elementDensityFloorDiagnosis, groupDensityFloorDiagnosis, structuredWarnings, List.copyOf(skipped));
+    }
 
     /**
      * Backwards-compatible constructor for every call site that predates the rating-regression

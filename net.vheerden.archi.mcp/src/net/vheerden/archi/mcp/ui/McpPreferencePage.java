@@ -38,7 +38,7 @@ import net.vheerden.archi.mcp.McpPlugin;
 import net.vheerden.archi.mcp.server.BearerTokenStore;
 import net.vheerden.archi.mcp.server.CertificateGenerator;
 import net.vheerden.archi.mcp.server.KeystorePasswordStore;
-import net.vheerden.archi.mcp.server.OriginHostValidationHandler;
+import net.vheerden.archi.mcp.server.BindExposure;
 
 /**
  * Preferences page for MCP Server configuration.
@@ -59,20 +59,44 @@ public class McpPreferencePage extends FieldEditorPreferencePage
     /** Placeholder shown in the token field when no token has been generated yet. */
     private static final String TOKEN_PLACEHOLDER = "—";
 
+    /** The read-only checkbox's label. The server reads the setting once as it starts. */
+    static final String READ_ONLY_LABEL =
+            "&Read-only: offer only tools that cannot change the model (applies when the server next starts)";
+
+    /** The image-sources checkbox's label. The server reads the setting once as it starts. */
+    static final String ALLOW_SERVER_IMAGE_SOURCES_LABEL =
+            "Allow image &file paths and URLs, and exported files, when the server is reachable from other "
+                    + "machines (applies when the server next starts)";
+
     /**
-     * Inline exposure-warning copy (amber). Names the stakes in user vocabulary: the concrete
-     * consequence — every MCP tool becomes reachable by every device on the network — in plain
-     * terms, not security jargon. Deliberately category-phrased with no hard-coded tool count
-     * (the count is registry-derived and in flux; a literal here would rot). The closing sentence is
-     * the progressive-disclosure affordance handed over from the bind-address exposure-warning:
-     * it points the user at the Authentication section as a mitigation.
+     * The amber exposure warning, a pure function of the page's own two settings so it says what this
+     * exposed server will offer and nothing more. Names the stakes in user vocabulary, not security
+     * jargon. Deliberately category-phrased with no hard-coded tool count (the count is
+     * registry-derived and in flux; a literal here would rot). It claims file access only while the
+     * image-sources setting allows it on a server that can act on it: a read-only server writes no
+     * files and does not import images, so there the setting changes nothing and the warning says
+     * nothing about files. The closing sentence points the user at the Authentication section as a
+     * mitigation.
+     *
+     * @param readOnly              the page's Read-only setting
+     * @param allowServerFileAccess the page's image-sources setting
      */
-    private static final String EXPOSURE_WARNING_TEXT =
-            "This bind address exposes the MCP Server to other devices on your network. "
-            + "Every MCP tool — including file read/write and model edit/deletion — becomes "
-            + "reachable by any device that can reach this machine. Only bind to a non-loopback "
-            + "address on a trusted network, or enable bearer-token authentication below to require "
-            + "a secret on every request.";
+    static String exposureWarningText(boolean readOnly, boolean allowServerFileAccess) {
+        StringBuilder text = new StringBuilder(
+                "This bind address exposes the MCP Server to other devices on your network: any device that "
+                + "can reach this machine can call its tools.");
+        if (readOnly) {
+            text.append(" The server is read-only, so those tools can read the model but not change it.");
+        } else {
+            text.append(" That includes changing and deleting model content.");
+            if (allowServerFileAccess) {
+                text.append(" Image file paths, URLs and exported files are allowed too, so a caller can read "
+                        + "files this machine can see and write exports to its disk.");
+            }
+        }
+        return text.append(" Only bind to a non-loopback address on a trusted network, or enable bearer-token "
+                + "authentication below to require a secret on every request.").toString();
+    }
 
     /**
      * Exposure copy once a token mitigates it (blue/INFORMATION). The bind is still non-loopback, but
@@ -97,10 +121,17 @@ public class McpPreferencePage extends FieldEditorPreferencePage
     private static final int EXPOSURE_AMBER = 1;
     private static final int EXPOSURE_BLUE = 2;
 
+    /** The Read-only checkbox: the amber warning says what a read-only server offers. */
+    private BooleanFieldEditor readOnlyEditor;
+
     private IpAddressFieldEditor bindAddressEditor;
+    /** Offered only while the bind address is a valid one reachable from other machines. */
+    private BooleanFieldEditor allowServerImageSourcesEditor;
     private ControlDecoration bindExposureDecoration;
     /** Tracks which exposure banner is currently shown, so updates are idempotent. */
     private int exposureState = EXPOSURE_NONE;
+    /** The banner text currently shown, so a settings change that rewrites the amber text still refreshes it. */
+    private String exposureText;
     private BooleanFieldEditor tlsEnabledEditor;
     private FileFieldEditor keystorePathEditor;
     /**
@@ -153,15 +184,22 @@ public class McpPreferencePage extends FieldEditorPreferencePage
             FieldDecoration warnDec = FieldDecorationRegistry.getDefault()
                     .getFieldDecoration(FieldDecorationRegistry.DEC_WARNING);
             bindExposureDecoration.setImage(warnDec.getImage());
-            bindExposureDecoration.setDescriptionText(EXPOSURE_WARNING_TEXT);
+            bindExposureDecoration.setDescriptionText(exposureWarningText(false, false));
             bindExposureDecoration.hide();
         }
+
+        allowServerImageSourcesEditor = new BooleanFieldEditor(
+                McpPlugin.PREF_ALLOW_SERVER_IMAGE_SOURCES, ALLOW_SERVER_IMAGE_SOURCES_LABEL, parent);
+        addField(allowServerImageSourcesEditor);
 
         addField(new BooleanFieldEditor(
                 McpPlugin.PREF_AUTO_START, "&Auto-start on launch", parent));
 
         addField(new ComboFieldEditor(
                 McpPlugin.PREF_LOG_LEVEL, "&Log level:", LOG_LEVELS, parent));
+
+        readOnlyEditor = new BooleanFieldEditor(McpPlugin.PREF_READ_ONLY, READ_ONLY_LABEL, parent);
+        addField(readOnlyEditor);
 
         // --- TLS Section separator ---
         Label separator = new Label(parent, SWT.SEPARATOR | SWT.HORIZONTAL);
@@ -274,6 +312,7 @@ public class McpPreferencePage extends FieldEditorPreferencePage
         // Reflect the stored bind value on page open (warning present immediately if the
         // stored bind is already non-loopback; absent for the default 127.0.0.1).
         updateExposureWarning();
+        updateImageSourcesEnabled();
     }
 
     @Override
@@ -294,6 +333,10 @@ public class McpPreferencePage extends FieldEditorPreferencePage
             // Recompute on every bind-address change (value or validity). updateExposureWarning()
             // self-gates on validity, so partial/invalid input never shows the banner.
             updateExposureWarning();
+            updateImageSourcesEnabled();
+        } else if (event.getSource() == readOnlyEditor || event.getSource() == allowServerImageSourcesEditor) {
+            // The amber text says what the exposed server offers, which these two settings decide.
+            updateExposureWarning();
         }
     }
 
@@ -306,6 +349,7 @@ public class McpPreferencePage extends FieldEditorPreferencePage
         refreshTokenDisplay();
         updateAuthFieldsEnabled();
         updateExposureWarning();
+        updateImageSourcesEnabled();
     }
 
     @Override
@@ -385,8 +429,8 @@ public class McpPreferencePage extends FieldEditorPreferencePage
         } catch (KeystorePasswordStore.KeystorePasswordStoreException e) {
             logger.warn("Could not read keystore password from secure storage for display", e);
         }
-        String legacy = getPreferenceStore().getString(McpPlugin.PREF_KEYSTORE_PASSWORD);
-        return legacy != null ? legacy : "";
+        McpPlugin plugin = McpPlugin.getDefault();
+        return plugin != null ? plugin.getLegacyKeystorePassword() : "";
     }
 
     /** Null/disposed-safe setter for the masked keystore-password field. */
@@ -428,14 +472,15 @@ public class McpPreferencePage extends FieldEditorPreferencePage
 
     /**
      * Shows the exposure warning (page-top banner + field decoration) <em>iff</em> the bind
-     * address is a valid, non-loopback value — i.e. exactly when {@link OriginHostValidationHandler}
-     * stops enforcing Origin/Host validation for that bind.
+     * address is a valid, exposed value — i.e. exactly when the server's Origin/Host guard stops
+     * enforcing for that bind.
      *
      * <p>Self-gates on validity: a syntactically invalid bind is left to the existing
      * {@link IpAddressFieldEditor} error state and shows no exposure banner. Loopback literals
      * ({@code 127.x}, {@code localhost}) classify as safe instantly, so there is no transient
-     * flicker while typing them. The exposure decision reuses the server's own
-     * {@code isExposedBind} predicate so the warning can never drift from enforcement.</p>
+     * flicker while typing them. The exposure decision reads the server's own {@link BindExposure}
+     * classification, so the warning can never drift from enforcement. The amber text follows the
+     * Read-only and image-sources settings ({@link #exposureWarningText}).</p>
      */
     private void updateExposureWarning() {
         if (bindAddressEditor == null) {
@@ -443,29 +488,38 @@ public class McpPreferencePage extends FieldEditorPreferencePage
         }
         // getStringValue() reads the text control directly, so it reflects the current widget text
         // for both the VALUE and IS_VALID events a single keystroke may fire.
-        String bind = bindAddressEditor.getStringValue();
-        boolean exposed = IpAddressFieldEditor.isValidAddress(bind)
-                && OriginHostValidationHandler.isExposedBind(bind);
+        boolean exposed = isExposedValidBind(bindAddressEditor.getStringValue());
 
         // Tri-state: none if loopback; blue if exposed-but-token-mitigated; amber otherwise.
         int newState = !exposed ? EXPOSURE_NONE : (isTokenMitigated() ? EXPOSURE_BLUE : EXPOSURE_AMBER);
 
-        // Idempotent: only touch the page message channel when the state actually flips. A keystroke
+        String newText = switch (newState) {
+            case EXPOSURE_AMBER -> exposureWarningText(readOnlyEditor != null && readOnlyEditor.getBooleanValue(),
+                    allowServerImageSourcesEditor != null && allowServerImageSourcesEditor.getBooleanValue());
+            case EXPOSURE_BLUE -> EXPOSURE_MITIGATED_TEXT;
+            default -> null;
+        };
+
+        // Idempotent: only touch the page message channel when the banner actually changes. A keystroke
         // can fire both VALUE and IS_VALID events, and an auth toggle re-enters here too; without
         // this guard each recompute would needlessly disturb the page description.
-        if (newState == exposureState) {
+        if (newState == exposureState && java.util.Objects.equals(newText, exposureText)) {
             return;
         }
         exposureState = newState;
+        exposureText = newText;
 
         switch (newState) {
-            case EXPOSURE_AMBER -> setMessage(EXPOSURE_WARNING_TEXT, IMessageProvider.WARNING);
-            case EXPOSURE_BLUE -> setMessage(EXPOSURE_MITIGATED_TEXT, IMessageProvider.INFORMATION);
+            case EXPOSURE_AMBER -> setMessage(newText, IMessageProvider.WARNING);
+            case EXPOSURE_BLUE -> setMessage(newText, IMessageProvider.INFORMATION);
             // Clear only our banner. This does not touch the validator's error message
             // (setErrorMessage is a separate channel that takes display precedence), so the validator wins.
             default -> setMessage(null, IMessageProvider.NONE);
         }
         if (bindExposureDecoration != null) {
+            if (newState == EXPOSURE_AMBER) {
+                bindExposureDecoration.setDescriptionText(newText);
+            }
             // The field-level warning icon marks an UNMITIGATED exposure only; once a token mitigates
             // it (blue), hide the warning decoration so it does not contradict the advisory banner.
             if (newState == EXPOSURE_AMBER) {
@@ -600,6 +654,26 @@ public class McpPreferencePage extends FieldEditorPreferencePage
                 + "configured until secure storage is available. To reset secure storage, see "
                 + "\"Troubleshooting: secure storage\" in the README. Full details are in the "
                 + ".metadata/.log file in your Archi workspace.");
+    }
+
+    /**
+     * True when {@code bind} is a valid address that makes the server reachable from other machines. The
+     * exposure warning and the image-sources checkbox both use it, and it reads the server's own
+     * {@link BindExposure} classification, so neither can disagree with what the server does for that bind.
+     */
+    static boolean isExposedValidBind(String bind) {
+        return IpAddressFieldEditor.isValidAddress(bind) && BindExposure.of(bind).warnsOperator();
+    }
+
+    /**
+     * Offers the image-sources checkbox only while the bind address is one the setting applies to. Greying
+     * it never changes its value, so flipping the bind to loopback and back keeps the setting.
+     */
+    private void updateImageSourcesEnabled() {
+        if (allowServerImageSourcesEditor == null || bindAddressEditor == null) {
+            return;
+        }
+        allowServerImageSourcesEditor.setEnabled(isExposedValidBind(bindAddressEditor.getStringValue()), fieldParent);
     }
 
     /** Null-safe, disposed-safe enable toggle for a plain SWT control. */

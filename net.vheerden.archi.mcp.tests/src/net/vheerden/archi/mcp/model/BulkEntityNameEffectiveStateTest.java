@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
@@ -302,14 +303,13 @@ public class BulkEntityNameEffectiveStateTest {
     }
 
     /**
-     * A specialization is addressed by name rather than by id, so the deletion's prepared name is
-     * whatever the caller typed. Addressing it by the name it had <em>before</em> a rename in the
-     * same call still resolves — the bulk profile cache is re-keyed at prepare while the profile
-     * itself is not renamed until dispatch — and the prepared value is then the one name the
-     * profile had already stopped using.
+     * A specialization is addressed by name rather than by id. Once an earlier operation in the same
+     * call renames it, its old name no longer resolves — as after a rename the batch has queued, and as
+     * after one that has run — so a delete addressing the old name is refused with the not-found
+     * sentence rather than destroying the profile under a name it had stopped using.
      */
     @Test
-    public void shouldReportTheNameItWasDestroyedUnder_whenTheDeleteAddressedTheSpecializationByItsOldName() {
+    public void shouldNotFindTheSpecialization_whenTheDeleteAddressesTheNameAnEarlierRenameReplaced() {
         Map<String, Object> rename = new HashMap<>();
         rename.put("name", "Gold");
         rename.put("conceptType", "BusinessActor");
@@ -318,15 +318,16 @@ public class BulkEntityNameEffectiveStateTest {
         delete.put("name", "Gold");
         delete.put("conceptType", "BusinessActor");
 
-        BulkMutationResult result = accessor.executeBulk(SESSION,
-                List.of(new BulkOperation("update-specialization", rename),
-                        new BulkOperation("delete-specialization", delete)),
-                "rename then delete a specialization by its old name", false);
-
-        assertEquals("the profile was destroyed as 'Platinum'",
-                "Platinum", result.operations().get(1).entityName());
-        assertNull("a specialization deletion carries no cascade report to correct",
-                result.operations().get(1).deletion());
+        try {
+            accessor.executeBulk(SESSION,
+                    List.of(new BulkOperation("update-specialization", rename),
+                            new BulkOperation("delete-specialization", delete)),
+                    "rename then delete a specialization by its old name", false);
+            fail("the old name resolved after the rename");
+        } catch (ModelAccessException refused) {
+            assertEquals("Operation 1 (delete-specialization): Specialization not found: name='Gold', "
+                    + "conceptType='BusinessActor'", refused.getMessage());
+        }
     }
 
     /**
@@ -816,7 +817,7 @@ public class BulkEntityNameEffectiveStateTest {
         IFolder target = newSubfolderUnder(FolderType.DIAGRAMS, "f-sketch", "Sketches");
 
         BulkOperationResult op = BulkResultProjection.describe(0, "move-to-folder", "moved",
-                accessor.prepareMoveToFolder("sketch-1", target.getId()));
+                accessor.folderOps.prepareMoveToFolder("sketch-1", target.getId()));
 
         assertEquals("the sketch's name, never the id the caller passed in — asserted FIRST so a "
                 + "regression here reports the raw id rather than being masked by the type check",
@@ -848,7 +849,7 @@ public class BulkEntityNameEffectiveStateTest {
         IFolder target = newSubfolderUnder(FolderType.DIAGRAMS, "f-canvas", "Canvases");
 
         BulkOperationResult op = BulkResultProjection.describe(0, "move-to-folder", "moved",
-                accessor.prepareMoveToFolder("canvas-1", target.getId()));
+                accessor.folderOps.prepareMoveToFolder("canvas-1", target.getId()));
 
         assertEquals("Business Model Canvas", op.entityName());
         assertEquals("CanvasModel", op.entityType());
@@ -875,17 +876,17 @@ public class BulkEntityNameEffectiveStateTest {
 
         assertEquals("an element still reports its eClass, as it always did",
                 "BusinessActor",
-                accessor.prepareMoveToFolder("ba-001", elTarget.getId()).entity().elementType());
+                accessor.folderOps.prepareMoveToFolder("ba-001", elTarget.getId()).entity().elementType());
         assertEquals("a relationship's elementType was NULL before this widened",
                 "AssociationRelationship",
-                accessor.prepareMoveToFolder("rel-1", relTarget.getId()).entity().elementType());
+                accessor.folderOps.prepareMoveToFolder("rel-1", relTarget.getId()).entity().elementType());
         assertEquals("a view's elementType was NULL before this widened",
                 "ArchimateDiagramModel",
-                accessor.prepareMoveToFolder("view-1", viewTarget.getId()).entity().elementType());
+                accessor.folderOps.prepareMoveToFolder("view-1", viewTarget.getId()).entity().elementType());
         assertEquals("a folder's elementType was NULL before this widened — and it is the one kind "
                 + "entityType cannot detect a regression in, since objectType reads 'Folder' too",
                 "Folder",
-                accessor.prepareMoveToFolder("folder-sub", folderTarget.getId()).entity()
+                accessor.folderOps.prepareMoveToFolder("folder-sub", folderTarget.getId()).entity()
                         .elementType());
     }
 
@@ -1138,7 +1139,7 @@ public class BulkEntityNameEffectiveStateTest {
                                 "viewId", "view-1", "elementId", "grp-001",
                                 "x", 10, "y", 10, "width", 200, "height", 120)),
                         Map.of("tool", "update-view-object", "params", Map.of(
-                                "viewId", "view-1", "viewObjectId", "$0.id",
+                                "viewObjectId", "$0.id",
                                 "textAlignment", "right"))),
                 "description", "place then realign"));
         String json = json(envelope);
@@ -1163,7 +1164,7 @@ public class BulkEntityNameEffectiveStateTest {
     @Test
     public void shouldOmitTheAlignmentOnTheWire_whenTheBulkCallIsQueuedIntoABatch() throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of());
+        invokeTool(registry, "begin-batch", Map.of("modelId", "model-bulk-entity-name"));
 
         String json = json(invokeTool(registry, "bulk-mutate", Map.of(
                 "operations", List.of(Map.of("tool", "add-to-view", "params", Map.of(

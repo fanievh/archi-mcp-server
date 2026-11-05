@@ -45,7 +45,7 @@ public class UpdateViewConnectionCommandTypographyTest {
                 conn, List.of(), connectionTypographyStyling("Verdana", 11, "italic"));
         cmd.execute();
 
-        assertEquals("Verdana|11|2", conn.getFont());
+        assertEquals("1|Verdana|11.0|2|", conn.getFont());
 
         cmd.undo();
         assertNull(conn.getFont());
@@ -60,7 +60,7 @@ public class UpdateViewConnectionCommandTypographyTest {
                 conn, List.of(), connectionTypographyStyling(null, null, "bold"));
         cmd.execute();
 
-        assertEquals("Segoe UI|10|1", conn.getFont());
+        assertEquals("1|Segoe UI|10.0|1|", conn.getFont());
 
         cmd.undo();
         assertEquals("Segoe UI|10|0", conn.getFont());
@@ -110,7 +110,7 @@ public class UpdateViewConnectionCommandTypographyTest {
 
         assertEquals("#FF6600", conn.getLineColor());
         assertEquals(3, conn.getLineWidth());
-        assertEquals("Comic Sans MS|16|1", conn.getFont());
+        assertEquals("1|Comic Sans MS|16.0|1|", conn.getFont());
 
         // One undo restores everything.
         cmd.undo();
@@ -134,7 +134,11 @@ public class UpdateViewConnectionCommandTypographyTest {
         UpdateViewConnectionCommand cmd = new UpdateViewConnectionCommand(
                 conn, List.of(), styling);
 
+        assertNull("the font is read when the command runs, not when it is built", cmd.getOldFont());
+        assertNull(cmd.getNewFont());
+
+        cmd.execute();
         assertEquals("Arial|10|0", cmd.getOldFont());
-        assertEquals("Arial|10|1", cmd.getNewFont());  // style flipped to BOLD
+        assertEquals("1|Arial|10.0|1|", cmd.getNewFont());  // style flipped to BOLD
     }
 }

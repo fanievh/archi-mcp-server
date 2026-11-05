@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -10,6 +12,7 @@ import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelObject;
 
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
+import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 
 /**
  * The connections an auto-connect pass declines to draw, and the containment question that decides
@@ -92,6 +95,10 @@ final class AutoConnectSkip {
      * decline: a placement whose every candidate is nested proposes zero connections, and a card
      * that then says nothing about auto-connect asks a human to approve silent non-drawing.</p>
      *
+     * <p>The connections it will draw go on the card too, named by relationship and ends, so the
+     * person can see which lines a placement in a batch draws to objects that work queued earlier
+     * places.</p>
+     *
      * <p>The pairs go on the card, never their count, and each list is omitted when empty rather
      * than sent as an empty one — a zero beside a description of what the field would have held
      * reads as a measured all-clear.</p>
@@ -103,9 +110,7 @@ final class AutoConnectSkip {
     static String discloseOnCard(Map<String, Object> proposedChanges, AddToViewResultDto placement) {
         List<AddToViewResultDto.SkippedConnection> nested = placement.skippedDueToNesting();
         List<AddToViewResultDto.SkippedConnection> capped = placement.skippedByCap();
-        ProposalBuilder.putIfPresent(proposedChanges,
-                "skippedDueToNesting", nested.isEmpty() ? null : nested,
-                "skippedByCap", capped.isEmpty() ? null : capped);
+        discloseOnRow(proposedChanges, placement.autoConnections(), nested, capped);
         int drawn = (placement.autoConnections() != null) ? placement.autoConnections().size() : 0;
         StringBuilder summary = new StringBuilder("Element ready for placement on view.");
         if (drawn > 0) {
@@ -121,6 +126,30 @@ final class AutoConnectSkip {
                     .append(" more are dropped by the auto-connect cap.");
         }
         return summary.toString();
+    }
+
+    /**
+     * Puts what a placement's auto-connect will draw, and the pairs it will not, onto one card row,
+     * each list omitted when empty, as {@link #discloseOnCard} omits them. A drawn connection is
+     * named by its relationship and its two ends, which is what a person approving it can check.
+     *
+     * @param row     the row, mutated in place
+     * @param drawn   the connections the placement will draw, or null when it was not asked to
+     */
+    static void discloseOnRow(Map<String, Object> row, List<ViewConnectionDto> drawn,
+            List<AddToViewResultDto.SkippedConnection> nested, List<AddToViewResultDto.SkippedConnection> capped) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (ViewConnectionDto connection : drawn == null ? List.<ViewConnectionDto>of() : drawn) {
+            Map<String, Object> line = new LinkedHashMap<>();
+            line.put("relationshipId", connection.relationshipId());
+            line.put("relationshipType", connection.relationshipType());
+            line.put("sourceViewObjectId", connection.sourceViewObjectId());
+            line.put("targetViewObjectId", connection.targetViewObjectId());
+            rows.add(line);
+        }
+        ProposalBuilder.putIfPresent(row, "autoConnections", rows.isEmpty() ? null : rows,
+                "skippedDueToNesting", nested.isEmpty() ? null : nested,
+                "skippedByCap", capped.isEmpty() ? null : capped);
     }
 
     /**

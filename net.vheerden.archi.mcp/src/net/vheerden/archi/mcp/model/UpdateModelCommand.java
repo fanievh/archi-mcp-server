@@ -18,8 +18,12 @@ import com.archimatetool.model.IProperty;
  * fields are modified; null fields are left unchanged. For properties, a
  * merge semantic applies: non-null values add/update, null values remove.</p>
  *
- * <p>Captures old state at construction time for full undo support.
- * Properties are deep-copied because EMF property objects are live references.</p>
+ * <p>Undo restores only the fields the update wrote, to the values they held when it ran:
+ * {@link #execute()} snapshots them from the model as it meets it, not the constructor, so a
+ * batched update does not revert a rename made while the batch was open. The snapshot is re-armed
+ * by every {@code undo()}; a second execute with no undo between keeps it. Properties are
+ * deep-copied because EMF property objects are live references, and restored as the whole list held
+ * at execute.</p>
  *
  * <p>The {@code documentation} field
  * (mentioned in some jArchi documentation) is OUT-OF-SCOPE here because
@@ -35,12 +39,17 @@ import com.archimatetool.model.IProperty;
  */
 public class UpdateModelCommand extends Command {
 
+    // Archi's value for "no purpose": the model's default for the attribute, and what its
+    // Properties editor writes when the field is emptied. Archi's own UI never writes null here.
+    private static final String NO_PURPOSE = "";
+
     private final IArchimateModel model;
 
-    // Old state (captured at construction time for undo)
-    private final String oldName;
-    private final String oldPurpose;
-    private final List<PropertySnapshot> oldProperties;
+    // What undo restores: read by execute() for the fields it writes, re-armed by undo().
+    private boolean snapshotTaken;
+    private String oldName;
+    private String oldPurpose;
+    private List<PropertySnapshot> oldProperties;
 
     // New state (null = don't change)
     private final String newName;
@@ -54,7 +63,8 @@ public class UpdateModelCommand extends Command {
      * @param model           the model to update
      * @param newName         new name, or null to leave unchanged
      * @param newPurpose      new purpose, or null to leave unchanged
-     * @param clearPurpose    true to clear the purpose (set to null)
+     * @param clearPurpose    true to clear the purpose (set to the empty string, the value
+     *                        Archi uses for no purpose)
      * @param newProperties   property merge map (null value = remove key), or null to leave unchanged
      */
     public UpdateModelCommand(IArchimateModel model, String newName,
@@ -66,34 +76,56 @@ public class UpdateModelCommand extends Command {
         this.clearPurpose = clearPurpose;
         this.newProperties = newProperties;
 
-        // Snapshot old state before any mutation
-        this.oldName = model.getName();
-        this.oldPurpose = model.getPurpose();
-        this.oldProperties = snapshotProperties(model);
-
         setLabel("Update model: " + model.getName());
     }
 
+    /**
+     * Snapshots the fields this update writes, from the model as it is now (unless a snapshot is
+     * already held because execute ran with no undo since), then writes them. {@code redo()} is
+     * GEF's default, which runs this again after the undo re-armed it.
+     */
     @Override
     public void execute() {
+        if (!snapshotTaken) {
+            if (newName != null) {
+                oldName = model.getName();
+            }
+            if (writesPurpose()) {
+                oldPurpose = model.getPurpose();
+            }
+            if (newProperties != null) {
+                oldProperties = snapshotProperties(model);
+            }
+            snapshotTaken = true;
+        }
         applyNewValues();
     }
 
-    @Override
-    public void redo() {
-        applyNewValues();
-    }
-
+    /** Restores only the fields execute wrote, and re-arms the snapshot. */
     @Override
     public void undo() {
-        model.setName(oldName);
-        // Note: oldPurpose may be "" (how Archi internally stores "no purpose")
-        // while clearPurpose sets null. Both are functionally equivalent in Archi —
-        // the undo/redo cycle is not strictly idempotent at the EMF level but is
-        // semantically correct. Do not "normalize" this to null. (Mirrors the
-        // UpdateViewCommand viewpoint comment.)
-        model.setPurpose(oldPurpose);
-        restoreProperties();
+        if (!snapshotTaken) {
+            return; // nothing was written, so there is nothing to restore
+        }
+        if (newName != null) {
+            model.setName(oldName);
+        }
+        if (writesPurpose()) {
+            // Undo restores the snapshot value verbatim, including a null left by an older
+            // write. Note that the clear path writes "" and never null: "" is the value Archi
+            // uses for "no purpose" (its model default, and what its Properties editor writes),
+            // and the generated setter stores null verbatim, leaving a state the GUI cannot
+            // produce.
+            model.setPurpose(oldPurpose);
+        }
+        if (newProperties != null) {
+            restoreProperties();
+        }
+        snapshotTaken = false;
+    }
+
+    private boolean writesPurpose() {
+        return clearPurpose || newPurpose != null;
     }
 
     private void applyNewValues() {
@@ -101,7 +133,7 @@ public class UpdateModelCommand extends Command {
             model.setName(newName);
         }
         if (clearPurpose) {
-            model.setPurpose(null);
+            model.setPurpose(NO_PURPOSE);
         } else if (newPurpose != null) {
             model.setPurpose(newPurpose);
         }

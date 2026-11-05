@@ -129,7 +129,7 @@ public class HubDataCollectorTest {
         addArchimateConnection(f.model, f.hub, f.hub, "loop");
 
         Map<String, Integer> counts = new HashMap<>();
-        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>());
+        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>(), null);
 
         assertEquals("4 spokes plus a self-loop counted at both of its ends",
                 Integer.valueOf(6), counts.get("obj-hub"));
@@ -151,7 +151,7 @@ public class HubDataCollectorTest {
         plain.connect(f.hub, note);
 
         Map<String, Integer> counts = new HashMap<>();
-        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>());
+        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>(), null);
 
         assertEquals("the note line is not an ArchiMate connection and is not counted",
                 Integer.valueOf(7), counts.get("obj-hub"));
@@ -166,7 +166,7 @@ public class HubDataCollectorTest {
         addArchimateConnection(f.model, f.hub, f.hub, "loop");
 
         Map<String, Integer> counts = new HashMap<>();
-        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>());
+        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>(), null);
         List<AssessLayoutResultDto.HubPreconditionDto> unmet =
                 HubDataCollector.unmetHubPreconditions(f.view);
 
@@ -227,6 +227,103 @@ public class HubDataCollectorTest {
         assertEquals(2, unmet.size());
         assertEquals("the busiest hub leads", "obj-hub2", unmet.get(0).viewObjectId());
         assertTrue(unmet.get(0).connectionCount() > unmet.get(1).connectionCount());
+    }
+
+    // ---- The published label width ----
+
+    @Test
+    public void collect_maxLabelWidth_isTheReservedEstimateOfTheLabelArchiShows() {
+        // detect-hub-elements publishes this width, so it is a reservation: ceil(len * 8 + 10) with no
+        // render factor. It reads the label Archi draws, the reader the layout engine reserves edge labels
+        // with, so a whitespace-only name, which draws nothing, reserves nothing (it used to reserve 26, the
+        // raw name checked only for emptiness), and neither does an empty one.
+        Fixture f = hubWithSpokes(4, 300, 200);
+        String[] names = {"  ", "Accesses", "a", ""};
+        for (int i = 0; i < names.length; i++) {
+            ((IDiagramModelArchimateConnection) f.connections.get(i)).getArchimateRelationship()
+                    .setName(names[i]);
+        }
+
+        Map<String, Integer> widths = collectWidths(f, null);
+
+        assertNull("two blanks draw nothing and reserve nothing", widths.get("obj-s0"));
+        assertEquals("Accesses reserves 8 * 8 + 10", Integer.valueOf(74), widths.get("obj-s1"));
+        assertEquals(Integer.valueOf(18), widths.get("obj-s2"));
+        assertNull("an empty name reserves nothing", widths.get("obj-s3"));
+        assertEquals("the hub keeps the widest of its labels", Integer.valueOf(74), widths.get("obj-hub"));
+    }
+
+    @Test
+    public void collect_maxLabelWidth_aHiddenLabelReservesNothing() {
+        // The hub's only wide label is hidden: Archi shows no text there, so it must not widen the hub.
+        Fixture f = hubWithSpokes(2, 300, 200);
+        name(f, 0, "Accesses");
+        name(f, 1, "a");
+        f.connections.get(0).setNameVisible(false);
+
+        Map<String, Integer> widths = collectWidths(f, null);
+
+        assertNull("the hidden label's spoke reserves nothing", widths.get("obj-s0"));
+        assertEquals("the hub keeps only the label it shows", Integer.valueOf(18), widths.get("obj-hub"));
+    }
+
+    @Test
+    public void collect_maxLabelWidth_aLabelExpressionReservesFromItsText() {
+        // Archi draws a label expression instead of the name. Its raw text is the width basis, the
+        // approximation the layout engine's edge-label reservation also uses (a template is not evaluated
+        // headlessly): "${name} (sync)" is 14 characters, 14 * 8 + 10 = 122, not the name's 74.
+        Fixture f = hubWithSpokes(1, 300, 200);
+        name(f, 0, "Accesses");
+        f.connections.get(0).getFeatures().putString("labelExpression", "${name} (sync)");
+
+        Map<String, Integer> widths = collectWidths(f, null);
+
+        assertEquals(Integer.valueOf(122), widths.get("obj-hub"));
+        assertEquals(Integer.valueOf(122), widths.get("obj-s0"));
+    }
+
+    @Test
+    public void collect_maxLabelWidth_readsTheVisibilityABatchHasQueued() {
+        // Inside a batch the label is still shown in the model, but a queued command will hide it: the
+        // width follows the queued visibility, as every other label reader does in a batch. A queued show
+        // of a hidden label counts it again.
+        Fixture f = hubWithSpokes(2, 300, 200);
+        name(f, 0, "Accesses");
+        name(f, 1, "a");
+        f.connections.get(1).setNameVisible(false);
+
+        Map<String, Integer> widths = collectWidths(f,
+                Map.of(f.connections.get(0).getId(), false, f.connections.get(1).getId(), true));
+
+        assertNull("the label the batch hides reserves nothing", widths.get("obj-s0"));
+        assertEquals("the label the batch shows reserves again", Integer.valueOf(18), widths.get("obj-s1"));
+        assertEquals(Integer.valueOf(18), widths.get("obj-hub"));
+    }
+
+    @Test
+    public void collect_aConnectionThatShowsNoLabel_stillCounts() {
+        // Only the width reads the label: the published connection count, and so the hub precondition,
+        // is the same whatever the labels show.
+        Fixture f = hubWithSpokes(KAFKA_CONNECTIONS, 240, 100);
+        List<AssessLayoutResultDto.HubPreconditionDto> before = HubDataCollector.unmetHubPreconditions(f.view);
+        for (IDiagramModelConnection c : f.connections) {
+            c.setNameVisible(false);
+        }
+        Map<String, Integer> counts = new HashMap<>();
+        HubDataCollector.collect(f.view, counts, new HashMap<>(), new HashMap<>(), null);
+
+        assertEquals(Integer.valueOf(KAFKA_CONNECTIONS), counts.get("obj-hub"));
+        assertEquals(before, HubDataCollector.unmetHubPreconditions(f.view));
+    }
+
+    private static void name(Fixture f, int spoke, String name) {
+        ((IDiagramModelArchimateConnection) f.connections.get(spoke)).getArchimateRelationship().setName(name);
+    }
+
+    private static Map<String, Integer> collectWidths(Fixture f, Map<String, Boolean> queuedVisibility) {
+        Map<String, Integer> widths = new HashMap<>();
+        HubDataCollector.collect(f.view, new HashMap<>(), new HashMap<>(), widths, queuedVisibility);
+        return widths;
     }
 
     @Test

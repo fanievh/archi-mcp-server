@@ -716,6 +716,58 @@ public class ElementCreationHandlerTest {
     }
 
     @Test
+    public void shouldSayWhenABatchedCloneCopiesItsSource_inCloneViewDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(spec -> "clone-view".equals(spec.tool().name()))
+                .map(spec -> spec.tool().description())
+                .findFirst().orElseThrow();
+        assertTrue(description, description.contains("Inside a batch, the clone copies the source view as "
+                + "the batch's earlier operations leave it, when the batch commits; if one of them removed "
+                + "the source view, or left it holding a view reference to a view that is not in the model, "
+                + "no clone is created and the commit summary says why."));
+        assertTrue(description, description.contains("Until the batch commits, a later operation in the same "
+                + "batch sees the clone empty: add-to-view onto it places objects as on an empty view, so they "
+                + "can overlap the cloned objects, and its autoConnect connects nothing to them."));
+    }
+
+    @Test
+    public void shouldSayACloneCopiesViewReferencesAndImages_inCloneViewDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(spec -> "clone-view".equals(spec.tool().name()))
+                .map(spec -> spec.tool().description())
+                .findFirst().orElseThrow();
+        assertTrue(description, description.contains("Creates a new view with identical element positions, "
+                + "connection routing, groups, notes, view references, images, and styling."));
+        assertTrue(description, description.contains("A view reference to the source view itself points to "
+                + "the clone in the copy, as in Archi's Duplicate."));
+        assertTrue(description, description.contains("A view holding a view reference to a view that is not "
+                + "in the model, or an object a clone cannot copy (one only a script or a hand-edited file can "
+                + "put on an ArchiMate view, such as a sketch sticky), is refused with INVALID_PARAMETER."));
+    }
+
+    @Test
+    public void shouldSayACopiedAnchorFollowsTheCopiedTarget_inCloneViewDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(spec -> "clone-view".equals(spec.tool().name()))
+                .map(spec -> spec.tool().description())
+                .findFirst().orElseThrow();
+        assertTrue(description, description.contains("An object anchored to another is anchored to that "
+                + "object's copy."));
+    }
+
+    @Test
+    public void shouldSayACloneCanCopyAViewTheBatchCreates_inCloneViewDescription() {
+        String description = registry.getToolSpecifications().stream()
+                .filter(spec -> "clone-view".equals(spec.tool().name()))
+                .map(spec -> spec.tool().description())
+                .findFirst().orElseThrow();
+        assertTrue(description, description.contains("The source may be a view an earlier operation of the "
+                + "same batch creates, another clone included: the clone copies it as it is when the batch "
+                + "commits, and goes in the folder that view is created in unless folderId is given. If that "
+                + "view is not created, no clone is created either, and the commit summary says why."));
+    }
+
+    @Test
     public void shouldPassFolderId_whenCloneViewWithFolderId() throws Exception {
         final String[] capturedFolderId = {null};
         accessor.setCloneViewBehavior((sessionId, sourceViewId, newName, folderId) -> {

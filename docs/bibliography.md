@@ -226,7 +226,7 @@ Each entry below names the source class plus the references that ground it. **Em
 | Severity-tiered overall rating (Tier 1 critical / Tier 2 moderate / Tier 3 cosmetic; M6 two-dimensional rating in v1.4) | `LayoutQualityAssessor` | empirical |
 | M1–M5 perception-aligned metrics + R8 corridor utilisation (assessor redesign, v1.4) | `LayoutQualityAssessor` | empirical (project contribution) |
 | Label truncation / parent-label-obscured / image-sibling-overlap detections | `LayoutQualityAssessor` | empirical |
-| Label position optimisation (greedy assignment, longest-path-first) | `LabelPositionOptimizer` | empirical |
+| Label position optimisation (greedy assignment over candidate placements, longest-path-first: Source, Middle and Target, plus the eight Label Offset anchors scored where Archi draws them on Archi 5.10; the label passes add seeded shuffled-order trials and keep the lowest total) | `LabelPositionOptimizer` | empirical |
 | Spacing convenience-tool control loop (observe → decide → density-aware-terminate) + sound pre-routing infeasibility certificate | `SpacingControlLoop`, `SpacingPreconditionInfeasibilityCertificate`, `ComposerSpeculativeReplay` | empirical (project contribution) |
 
 ## Provenance summary

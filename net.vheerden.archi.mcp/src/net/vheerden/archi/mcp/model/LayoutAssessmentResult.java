@@ -184,7 +184,8 @@ record LayoutAssessmentResult(
         // Informational only — no rating impact.
         int edgeCoincidenceGrazedElementCount,
         // Terminal routes that depart an element face then run parallel to and hug that face (the
-        // first exterior segment travels along the departed face within OFF_FACE_MIN_STUB_PX of it),
+        // first exterior segment runs along the departed face, within 5 degrees and more than 1px
+        // along it, with the terminal less than OFF_FACE_MIN_STUB_PX from it; decided by OffFaceHug),
         // and their descriptions. Counted per connection (a route hugging at either terminal counts
         // once). Informational only — no rating impact; distinct from the rating-bearing
         // nonOrthogonalTerminalCount (raw terminal-segment angle), which is unchanged.
@@ -246,15 +247,32 @@ record LayoutAssessmentResult(
         // nonOrthogonalTerminalsRouted rather than being duplicated here.
         int zeroBendpointNonOrthogonalTerminalCount,
         int routedNonOrthogonalTerminalCount,
-        // The number of pass-through crossings the RATING charges (appended). Sourced from the
-        // detector's cross-element tally, which is the quantity the passThroughs band is computed
-        // over. It is deliberately NOT the size of connectionPassThroughs above: that list is a
-        // capped description list carrying the unrated self-element pass-throughs alongside the
-        // charged ones, so its size can both overstate this count (self-element entries) and
-        // understate it (the cap). Published because every consumer that wants "how many crossings
+        // The number of cross-element pass-through crossings, one of the two halves the RATING
+        // charges (appended; ownEndpointPassThroughCount below is the other, and the passThroughs
+        // band is computed over their sum). It is deliberately NOT the size of
+        // connectionPassThroughs above: that list is a capped description list carrying the
+        // own-end pass-throughs alongside the cross-element ones, so its size can both overstate
+        // this count (own-end entries) and understate it (the cap). Published because every consumer that wants "how many crossings
         // was this view marked down for" previously had to read that list's size and get a
         // different number.
-        int crossElementPassThroughCount) {
+        int crossElementPassThroughCount,
+        // Connection labels drawn on ANOTHER connection's line (appended). Count of (connection-label,
+        // other connection) pairs where the label box lies on that connection's drawn line, and their
+        // descriptions. A reader takes such a label for that line's label; no label or route detector tests
+        // a label against a line. Informational only — no rating impact.
+        int labelOnForeignLineCount,
+        List<String> labelOnForeignLineDescriptions,
+        // Routes through their own source or target, one per end crossed (appended). Counted on
+        // every connection, past the description cap, and charged on the passThroughs band beside
+        // crossElementPassThroughCount: the band reads the sum of the two. A container end is not
+        // counted, since a route must run inside it to reach the end it holds.
+        int ownEndpointPassThroughCount,
+        // Notes lying on another note (appended). Count of unordered note pairs whose boxes overlap,
+        // at any depth, and their capped descriptions; the notes' ids ride in the violatorIds map
+        // under noteOnNoteOverlap. Informational only — no rating impact. noteOverlapCount above
+        // tests a note against objects that are not notes and is unchanged.
+        int noteOnNoteOverlapCount,
+        List<String> noteOnNoteOverlapDescriptions) {
 
     /**
      * Per-face hub-port allocation detail (M5).

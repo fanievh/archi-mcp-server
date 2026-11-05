@@ -467,11 +467,14 @@ public class NestedLayoutOperationsTest {
         // rectangle, so inside an open batch it yields the size the batch queued instead of the
         // pre-batch one. That is a change of source, not of precedence, and the assertion below
         // still fails if the container-vs-leaf decision is ever pushed down into the resolver.
+        //
+        // A junction draws no label, so it has no label-derived width and takes the fallback. That
+        // is a fact about the leaf's kind, not a container-vs-leaf decision, and keeps the precedence.
         String facade = readProductionSource("model/ArchiModelAccessorImpl.java");
 
         assertTrue("the resolver's leaf sizing precedence must be untouched",
                 facade.contains("int w = (elementWidth != null) ? elementWidth\n"
-                        + "                    : autoWidth ? computeAutoWidth(child)\n"
+                        + "                    : autoWidth && PaletteDefaultSize.sizesToLabel(child) ? computeAutoWidth(child)\n"
                         + "                    : eff[2];"));
         assertFalse("the resolver must not learn what a container is — that decision stays at the "
                 + "grouped call site", facade.contains("isRecursableContainer(child)\n"
@@ -488,19 +491,19 @@ public class NestedLayoutOperationsTest {
         // null explicitly rather than inheriting a session lookup it cannot opt out of.
         String facade = readProductionSource("model/ArchiModelAccessorImpl.java");
 
-        // Each arm is named in full. A bare "true, null);" would match whichever arm is still
-        // correct and stay green while another leaked — the three calls are textually identical
-        // from the arguments alone, so the assertion has to carry the method name with it.
-        assertTrue("the relay's row arm must stay queue-blind",
-                facade.contains("computeRowLayout(orderedChildren, startX, startY,\n"
-                        + "                        resolvedSpacing, null, null, true, null);"));
+        // The relay sizes its children once, for every arm, so that one call carries the null; it
+        // is named with its own arguments so a queue lookup added to it alone still turns this red.
+        assertTrue("the relay's sizes must stay queue-blind",
+                facade.contains("resolveElementSizes(orderedChildren, null, null, true, null), sizes -> switch"));
+        // Each arm is then named in full and must arrange those sizes, not re-resolve its own: a
+        // facade wrapper here would take a map of its own again.
+        assertTrue("the relay's row arm arranges the queue-blind sizes",
+                facade.contains("case \"row\" -> GroupLayoutCalculator.computeRowLayout(sizes, startX, startY, resolvedSpacing);"));
         assertTrue("its column arm, which is also its default",
-                facade.contains("computeColumnLayout(orderedChildren, startX, startY,\n"
-                        + "                        resolvedSpacing, null, null, true, null);"));
+                facade.contains("default -> GroupLayoutCalculator.computeColumnLayout(sizes, startX, startY, resolvedSpacing);"));
         assertTrue("and its grid arm, which also decides a column count",
-                facade.contains("computeGridLayout(orderedChildren, startX, startY,\n"
-                        + "                                resolvedSpacing, resolvedPadding, 0,\n"
-                        + "                                null, null, true, gridCols, null);"));
+                facade.contains("case \"grid\" -> GroupLayoutCalculator.computeGridLayout(sizes, startX, startY, resolvedSpacing,\n"
+                        + "                            resolvedPadding, 0, GroupLayoutCalculator.computeGridColumns(sizes.size())).positions();"));
     }
 
     // ====================================================================

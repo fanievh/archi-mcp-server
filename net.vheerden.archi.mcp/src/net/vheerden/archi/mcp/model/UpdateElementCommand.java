@@ -18,8 +18,15 @@ import com.archimatetool.model.IProperty;
  * fields are modified; null fields are left unchanged. For properties,
  * a merge semantic applies: non-null values add/update, null values remove.</p>
  *
- * <p>Captures old state at construction time for full undo support.
- * Properties are deep-copied because EMF property objects are live references.</p>
+ * <p>Undo restores only the fields the update wrote, to the values they held when it ran:
+ * {@link #execute()} snapshots them from the element as it meets it, not the constructor. A
+ * proposal runs when it is approved and a batched update when the batch commits, so a snapshot
+ * taken when the command was built made Undo revert whatever changed in between — including fields
+ * this update never touched, such as a human's rename under a documentation-only update. The
+ * snapshot is re-armed by every {@code undo()}; a second execute with no undo between keeps it.
+ * Properties are deep-copied because EMF property objects are live references, and restored as the
+ * whole list held at execute: under the stack's last-in-first-out order the list at undo time is
+ * what this command left, so that reverts only this command's own merges.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -29,10 +36,11 @@ public class UpdateElementCommand extends Command {
 
     private final IArchimateElement element;
 
-    // Old state (captured at construction time for undo)
-    private final String oldName;
-    private final String oldDocumentation;
-    private final List<PropertySnapshot> oldProperties;
+    // What undo restores: read by execute() for the fields it writes, re-armed by undo().
+    private boolean snapshotTaken;
+    private String oldName;
+    private String oldDocumentation;
+    private List<PropertySnapshot> oldProperties;
 
     // New state (null = don't change)
     private final String newName;
@@ -54,29 +62,47 @@ public class UpdateElementCommand extends Command {
         this.newDocumentation = newDocumentation;
         this.newProperties = newProperties;
 
-        // Snapshot old state before any mutation
-        this.oldName = element.getName();
-        this.oldDocumentation = element.getDocumentation();
-        this.oldProperties = snapshotProperties(element);
-
         setLabel("Update " + element.eClass().getName() + ": " + element.getName());
     }
 
+    /**
+     * Snapshots the fields this update writes, from the element as it is now (unless a snapshot is
+     * already held because execute ran with no undo since), then writes them. {@code redo()} is
+     * GEF's default, which runs this again after the undo re-armed it.
+     */
     @Override
     public void execute() {
+        if (!snapshotTaken) {
+            if (newName != null) {
+                oldName = element.getName();
+            }
+            if (newDocumentation != null) {
+                oldDocumentation = element.getDocumentation();
+            }
+            if (newProperties != null) {
+                oldProperties = snapshotProperties(element);
+            }
+            snapshotTaken = true;
+        }
         applyNewValues();
     }
 
-    @Override
-    public void redo() {
-        applyNewValues();
-    }
-
+    /** Restores only the fields execute wrote, and re-arms the snapshot. */
     @Override
     public void undo() {
-        element.setName(oldName);
-        element.setDocumentation(oldDocumentation);
-        restoreProperties();
+        if (!snapshotTaken) {
+            return; // nothing was written, so there is nothing to restore
+        }
+        if (newName != null) {
+            element.setName(oldName);
+        }
+        if (newDocumentation != null) {
+            element.setDocumentation(oldDocumentation);
+        }
+        if (newProperties != null) {
+            restoreProperties();
+        }
+        snapshotTaken = false;
     }
 
     private void applyNewValues() {
@@ -137,5 +163,10 @@ public class UpdateElementCommand extends Command {
      */
     IArchimateElement getElement() {
         return element;
+    }
+
+    /** The name this command gives the element, or null when it leaves the name alone. */
+    String getNewName() {
+        return newName;
     }
 }

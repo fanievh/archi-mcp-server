@@ -47,6 +47,20 @@ public class ModelAccessException extends RuntimeException {
         this.archiMateReference = archiMateReference;
     }
 
+    /**
+     * Creates an exception with full error context that also keeps the exception it wraps. The
+     * client sees only the structured fields; the cause is what the Archi log prints for a server
+     * fault, so a failure caught with an exception in hand must not drop it to supply them.
+     */
+    public ModelAccessException(String message, Throwable cause, ErrorCode errorCode,
+            String details, String suggestedCorrection, String archiMateReference) {
+        super(message, cause);
+        this.errorCode = errorCode;
+        this.details = details;
+        this.suggestedCorrection = suggestedCorrection;
+        this.archiMateReference = archiMateReference;
+    }
+
     public ErrorCode getErrorCode() {
         return errorCode;
     }

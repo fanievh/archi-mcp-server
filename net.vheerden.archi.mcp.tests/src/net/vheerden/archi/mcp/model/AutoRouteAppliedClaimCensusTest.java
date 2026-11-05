@@ -12,6 +12,7 @@ import java.util.function.Function;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.AutoRouteArmFixture.Arm;
+import net.vheerden.archi.mcp.response.dto.AutoLayoutAndRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
@@ -46,26 +47,33 @@ public class AutoRouteAppliedClaimCensusTest {
     private static final Map<String, String> APPLIED_CLAIM_BY_CODE = Map.of(
             StructuredWarningCodes.CONNECTION_NOT_FOUND, "were routed normally",
             StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND, "kept the hug(s) in place",
+            StructuredWarningCodes.EGRESS_LIFT_PRE_GATED, "left the hug(s) in place",
             StructuredWarningCodes.AUTO_NUDGE_NET_ZERO, "ended at their starting position",
             StructuredWarningCodes.CONNECTION_ROUTED_THROUGH_NOTE, "were applied through it",
-            StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED, "were still applied");
+            StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED, "were still applied",
+            StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED, "were given Archi's default loop");
 
     /**
-     * The one code that is CORRECTLY arm-blind. The sibling-overlap skip is a decision the router
+     * The codes that are CORRECTLY arm-blind. The sibling-overlap skip is a decision the router
      * took while computing, on geometry that already exists on the view, so it happened on every
-     * arm and a deferred tense for it would be false. It is in the census as an explicit exemption
-     * rather than absent from it: a code missing from a census is indistinguishable from one nobody
-     * has looked at yet.
+     * arm and a deferred tense for it would be false. A move recommendation withheld because the
+     * parent would absorb it is the same kind of decision: it describes a recommendation that was
+     * not offered, never a move that was or was not made. They are in the census as explicit
+     * exemptions rather than absent from it: a code missing from a census is indistinguishable from
+     * one nobody has looked at yet.
      */
     private static final String ARM_BLIND_BY_DESIGN =
             StructuredWarningCodes.AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP;
+
+    private static final java.util.Set<String> ARM_BLIND_CODES = java.util.Set.of(
+            ARM_BLIND_BY_DESIGN, StructuredWarningCodes.MOVE_RECOMMENDATION_WITHHELD_BY_PARENT);
 
     @Test
     public void everyAppliedStateClaim_appearsOnTheAppliedArmAndOnNoOther() {
         Map<String, Map<DispatchArm, String>> census = census();
 
-        assertEquals("every routing code must be in the census, exemption included",
-                APPLIED_CLAIM_BY_CODE.size() + 1, census.size());
+        assertEquals("every routing code must be in the census, exemptions included",
+                APPLIED_CLAIM_BY_CODE.size() + ARM_BLIND_CODES.size(), census.size());
 
         for (Map.Entry<String, Map<DispatchArm, String>> row : census.entrySet()) {
             String code = row.getKey();
@@ -73,7 +81,7 @@ public class AutoRouteAppliedClaimCensusTest {
             assertEquals(code + " must be exercised on all three arms, or the row proves nothing",
                     3, byArm.size());
 
-            if (ARM_BLIND_BY_DESIGN.equals(code)) {
+            if (ARM_BLIND_CODES.contains(code)) {
                 assertEquals(code + " is a compute-time decision and reads the same on every arm",
                         byArm.get(DispatchArm.APPLIED), byArm.get(DispatchArm.QUEUED));
                 assertEquals(code + " on the third arm too",
@@ -106,7 +114,7 @@ public class AutoRouteAppliedClaimCensusTest {
         // sibling's arm clause can drop its OWN applied claim while picking up somebody else's.
         Map<String, Map<DispatchArm, String>> census = census();
         for (Map.Entry<String, Map<DispatchArm, String>> row : census.entrySet()) {
-            if (ARM_BLIND_BY_DESIGN.equals(row.getKey())) {
+            if (ARM_BLIND_CODES.contains(row.getKey())) {
                 continue;
             }
             for (DispatchArm arm : List.of(DispatchArm.QUEUED, DispatchArm.AWAITING_APPROVAL)) {
@@ -120,6 +128,30 @@ public class AutoRouteAppliedClaimCensusTest {
         }
     }
 
+    /**
+     * The layout tools name their self-connections in one wording on every arm, so it must make no
+     * arm's claim: not the applied arm's "given Archi's default loop", which on a deferred arm has
+     * not happened, and not "left exactly as stored", which in flat mode would describe the loop
+     * the layout drew, not the caller's.
+     */
+    @Test
+    public void layoutSelfConnectionWording_claimsNoArmsState_andIsAbsentWithNoSelfConnection() {
+        AutoLayoutAndRouteResultDto dto = new AutoLayoutAndRouteResultDto("v", "DOWN", 50, 0, 0, false, 0);
+        assertTrue(AutoRouteWarnings.withSelfConnectionsKeptByLayout(dto, List.of()) == dto);
+
+        List<StructuredWarningDto> warnings =
+                AutoRouteWarnings.withSelfConnectionsKeptByLayout(dto, List.of("c1", "c2")).structuredWarnings();
+        assertEquals(1, warnings.size());
+        assertEquals(StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED, warnings.get(0).code());
+        assertEquals(List.of("c1", "c2"), warnings.get(0).remediationViolatorIds());
+        String message = warnings.get(0).message();
+        for (String claim : APPLIED_CLAIM_BY_CODE.values()) {
+            assertTrue("carries the applied claim \"" + claim + "\": " + message, !message.contains(claim));
+        }
+        assertTrue(message, !message.contains("as stored"));
+        assertTrue(message, message.startsWith("2 self-connection(s) were not routed; each keeps its loop."));
+    }
+
     /** Calls every emitter on every arm and returns what they produced. */
     private static Map<String, Map<DispatchArm, String>> census() {
         Map<String, Function<DispatchArm, String>> emitters = new LinkedHashMap<>();
@@ -127,15 +159,22 @@ public class AutoRouteAppliedClaimCensusTest {
                 arm -> AutoRouteWarningsProbe.connectionsNotFound(arm).structured().message());
         emitters.put(StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND,
                 arm -> AutoRouteWarningsProbe.egressLiftLayoutBound(arm).structured().message());
+        emitters.put(StructuredWarningCodes.EGRESS_LIFT_PRE_GATED,
+                arm -> AutoRouteWarningsProbe.egressLiftPreGated(arm).structured().message());
         emitters.put(StructuredWarningCodes.AUTO_NUDGE_NET_ZERO,
                 arm -> AutoRouteWarningsProbe.netZeroNudge(arm).structured().message());
         emitters.put(StructuredWarningCodes.CONNECTION_ROUTED_THROUGH_NOTE,
                 arm -> AutoRouteWarningsProbe.connectionThroughNote(arm).structured().message());
         emitters.put(StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED,
                 arm -> AutoRouteWarningsProbe.crossingsRegressed(arm).structured().message());
+        emitters.put(StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED,
+                arm -> AutoRouteWarningsProbe.selfConnectionsNotRouted(arm).structured().message());
         // No extractable emitter: composed inline on the accessor's autoNudge pre-gate, so the real
         // accessor is the only thing that can produce it.
         emitters.put(ARM_BLIND_BY_DESIGN, AutoRouteAppliedClaimCensusTest::overlapSkipMessage);
+        // Takes no arm at all: the screen decides from geometry before anything is dispatched.
+        emitters.put(StructuredWarningCodes.MOVE_RECOMMENDATION_WITHHELD_BY_PARENT,
+                arm -> withheldMoveMessage());
 
         Map<String, Map<DispatchArm, String>> census = new LinkedHashMap<>();
         for (Map.Entry<String, Function<DispatchArm, String>> emitter : emitters.entrySet()) {
@@ -146,6 +185,17 @@ public class AutoRouteAppliedClaimCensusTest {
             census.put(emitter.getKey(), byArm);
         }
         return census;
+    }
+
+    private static String withheldMoveMessage() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitRecommendationsWithheld(List.of(new NudgeRecommendationScreen.Withheld(
+                "e1", "Step", "g1", "Lane",
+                java.util.EnumSet.of(NudgeRecommendationScreen.Floor.LEFT_PADDING))),
+                warnings, structured);
+        assertEquals(1, structured.size());
+        return structured.get(0).message();
     }
 
     private static String overlapSkipMessage(DispatchArm arm) {

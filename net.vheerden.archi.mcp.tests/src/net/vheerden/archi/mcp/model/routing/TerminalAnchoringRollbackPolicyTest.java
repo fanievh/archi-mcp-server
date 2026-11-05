@@ -42,10 +42,17 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  */
 public class TerminalAnchoringRollbackPolicyTest {
 
-    /** Source rect: centre (150,150); LEFT 99, RIGHT 201, TOP 99, BOTTOM 201. */
+    /** Source rect: centre (150,150); its face lines are derived, not restated. */
     private static final RoutingRect SRC = new RoutingRect(100, 100, 100, 100, "src");
-    /** Target rect: centre (1050,150); LEFT 999, RIGHT 1101, TOP 99, BOTTOM 201. */
+    /** Target rect: centre (1050,150); its face lines are derived, not restated. */
     private static final RoutingRect TGT = new RoutingRect(1000, 100, 100, 100, "tgt");
+
+
+    /** The face-line coordinate, read from production; its value is pinned by
+     * {@code EdgeAttachmentCalculatorTest}. */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
 
     private static final int[] SRC_CENTRE = {150, 150};
     private static final int[] TGT_CENTRE = {1050, 150};
@@ -56,14 +63,24 @@ public class TerminalAnchoringRollbackPolicyTest {
 
     private static final int THRESHOLD = 20;
 
-    /** Source terminal 9px beyond the RIGHT faceline (201) — the already-off-face arrival. */
+    /**
+     * Source terminal well beyond the RIGHT face line — the already-off-face arrival. Its x is
+     * literal rather than derived because the corridor bendpoints below are collinear with it;
+     * it is beyond {@code faceLine(SRC, RIGHT)} by construction and the assertion in
+     * {@link #srcOffFaceIsActuallyOffTheFaceLine()} keeps it that way.
+     */
     private static final AbsoluteBendpointDto SRC_OFF_FACE = bp(210, 150);
     /** Source terminal exactly on the RIGHT faceline. */
-    private static final AbsoluteBendpointDto SRC_ON_FACE = bp(201, 150);
-    /** Target terminal exactly on the TOP faceline (99). */
-    private static final AbsoluteBendpointDto TGT_ON_FACE = bp(1050, 99);
+    private static final AbsoluteBendpointDto SRC_ON_FACE =
+            bp(faceLine(SRC, EdgeAttachmentCalculator.Face.RIGHT), 150);
+    /** Target terminal exactly on the TOP faceline, read from production. */
+    private static final AbsoluteBendpointDto TGT_ON_FACE =
+            bp(1050, faceLine(TGT, EdgeAttachmentCalculator.Face.TOP));
+    /** Nine px above the TOP faceline — the off-face y every already-off-face target arrives on. */
+    private static final int TGT_OFF_FACE_Y =
+            faceLine(TGT, EdgeAttachmentCalculator.Face.TOP) - 9;
     /** Target terminal 9px above the TOP faceline. */
-    private static final AbsoluteBendpointDto TGT_OFF_FACE = bp(1050, 90);
+    private static final AbsoluteBendpointDto TGT_OFF_FACE = bp(1050, TGT_OFF_FACE_Y);
 
     private static AbsoluteBendpointDto bp(int x, int y) {
         return new AbsoluteBendpointDto(x, y);
@@ -90,12 +107,12 @@ public class TerminalAnchoringRollbackPolicyTest {
     public void snapToStraight_shouldCommitInteriorSnap_whenSourceTerminalArrivedOffFace() {
         List<AbsoluteBendpointDto> p = path(
                 bp(150, 150),      // sentinel source centre
-                SRC_OFF_FACE,      // real source terminal, already off the 201 faceline
+                SRC_OFF_FACE,      // real source terminal, already off the RIGHT face line
                 bp(210, 400),      // interior — snaps to x=215
                 bp(215, 700),
                 bp(900, 700),
                 bp(900, 99),
-                TGT_ON_FACE,       // real target terminal, on the 99 faceline
+                TGT_ON_FACE,       // real target terminal, on the TOP faceline
                 bp(1050, 150));    // sentinel target centre
         List<AbsoluteBendpointDto> before = new ArrayList<>(p);
 
@@ -301,6 +318,18 @@ public class TerminalAnchoringRollbackPolicyTest {
     // already off-face, so a single conjunctive flip check fails both.
     // =====================================================================
 
+    /**
+     * {@link #SRC_OFF_FACE} keeps a literal x so the corridor bendpoints stay collinear with it.
+     * That literal is only meaningful while it is genuinely outside the RIGHT face line, which
+     * moves with {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} — so assert it rather than
+     * leave a fixture silently claiming an off-face arrival it no longer has.
+     */
+    @Test
+    public void srcOffFaceIsActuallyOffTheFaceLine() {
+        assertTrue("SRC_OFF_FACE must lie strictly beyond the RIGHT face line",
+                SRC_OFF_FACE.x() > faceLine(SRC, EdgeAttachmentCalculator.Face.RIGHT));
+    }
+
     @Test
     public void collapseBends_shouldRollBack_whenTargetIsDraggedOffFace_evenThoughSourceArrivedOffFace() {
         List<AbsoluteBendpointDto> p = path(
@@ -308,7 +337,7 @@ public class TerminalAnchoringRollbackPolicyTest {
                 SRC_OFF_FACE,      // source ALREADY off its faceline
                 bp(210, 600),
                 bp(1050, 600),
-                TGT_ON_FACE,       // target on the 99 faceline — collinear, so it is removed
+                TGT_ON_FACE,       // target on the TOP faceline — collinear, so it is removed
                 bp(1050, 150));
         List<AbsoluteBendpointDto> before = new ArrayList<>(p);
 
@@ -497,8 +526,8 @@ public class TerminalAnchoringRollbackPolicyTest {
                 bp(150, 150),
                 SRC_ON_FACE,
                 bp(1040, 400),
-                bp(1040, 90),
-                bp(1050, 90),      // target terminal, off the 99 TOP faceline, NOT collinear
+                bp(1040, TGT_OFF_FACE_Y),
+                bp(1050, TGT_OFF_FACE_Y),  // target terminal, off the TOP faceline, NOT collinear
                 bp(1050, 150));
         List<AbsoluteBendpointDto> before = new ArrayList<>(p);
 
@@ -556,10 +585,10 @@ public class TerminalAnchoringRollbackPolicyTest {
         List<AbsoluteBendpointDto> p = path(
                 bp(150, 150),
                 SRC_ON_FACE,
-                bp(201, 600),
+                bp(faceLine(SRC, EdgeAttachmentCalculator.Face.RIGHT), 600),
                 bp(700, 600),
                 bp(1050, 600),
-                bp(1050, 90),      // target terminal — collinear with (1050,600) and the centre
+                bp(1050, TGT_OFF_FACE_Y),  // target terminal — collinear with (1050,600) and centre
                 bp(1050, 150));
         List<AbsoluteBendpointDto> drawnBefore = drawnPolyline(p);
 

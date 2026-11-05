@@ -3,6 +3,7 @@ package net.vheerden.archi.mcp.model;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 import org.slf4j.Logger;
@@ -1495,20 +1496,20 @@ public final class SpacingControlLoop {
                 + "aggregate stalled — more spacing/hub-resize cannot improve "
                 + "this layout; it needs a structural reflow. ");
         if (!Double.isNaN(post.avgSpacingPx())) {
-            sb.append(String.format(
+            sb.append(String.format(Locale.ROOT,
                     "Measured average spacing is %.0fpx (prescribed flow-view "
                     + "band: %d–%dpx). ",
                     post.avgSpacingPx(), DENSITY_REGIME_LOWER_PX,
                     DENSITY_REGIME_EXCELLENT_PX));
         }
         if (hub != null) {
-            sb.append(String.format(
+            sb.append(String.format(Locale.ROOT,
                     "The dominant hub is %dx%dpx absorbing %d connections",
                     hub.hubWidthPx(), hub.hubHeightPx(),
                     hub.maxHubConnectionCount()));
             if (hubUnderSizedForFanOut(hub)) {
                 int conns = hub.maxHubConnectionCount();
-                sb.append(String.format(
+                sb.append(String.format(Locale.ROOT,
                         " — under-sized for that fan-out (HH-like guidance: "
                         + "≥%dx%dpx for %d connections)",
                         requiredHubMinWidthPx(conns),

@@ -385,4 +385,275 @@ public class CommandRegistryTest {
                 .callHandler(handler)
                 .build();
     }
+
+    // ---- call-exit hook ------------------------------------------------------------------------
+
+    private McpServerFeatures.SyncToolSpecification registerAndGet(String name,
+            BiFunction<McpSyncServerExchange, McpSchema.CallToolRequest, McpSchema.CallToolResult> handler) {
+        McpSchema.JsonSchema emptySchema = new McpSchema.JsonSchema(
+                "object", Collections.emptyMap(), null, null, null, null);
+        registry.registerTool(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder().name(name).description(name).inputSchema(emptySchema).build())
+                .callHandler(handler)
+                .build());
+        return registry.getToolSpecifications().get(registry.getToolCount() - 1);
+    }
+
+    private static McpSchema.CallToolResult textResult(String text) {
+        return McpSchema.CallToolResult.builder()
+                .content(List.of(new McpSchema.TextContent(text)))
+                .isError(false)
+                .build();
+    }
+
+    @Test
+    public void shouldRunTheExitHookOnceAfterTheHandlerReturns_andKeepTheResult() {
+        java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.atomic.AtomicInteger runsSeenByHandler = new java.util.concurrent.atomic.AtomicInteger(-1);
+        registry.setCallExitHook(runs::incrementAndGet);
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("returns", (exchange, request) -> {
+            runsSeenByHandler.set(runs.get());
+            return textResult("handler text");
+        });
+
+        McpSchema.CallToolResult result = wrapped.callHandler().apply(null, null);
+
+        assertEquals("the hook runs after the handler, not before", 0, runsSeenByHandler.get());
+        assertEquals(1, runs.get());
+        assertEquals("handler text", ((McpSchema.TextContent) result.content().get(0)).text());
+    }
+
+    @Test
+    public void shouldRunTheExitHookAndPropagateTheHandlersException_whenTheHandlerThrows() {
+        java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+        registry.setCallExitHook(runs::incrementAndGet);
+        IllegalStateException thrown = new IllegalStateException("handler failed");
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("throws", (exchange, request) -> {
+            throw thrown;
+        });
+
+        try {
+            wrapped.callHandler().apply(null, null);
+            fail("the handler's exception must propagate");
+        } catch (IllegalStateException e) {
+            assertSame(thrown, e);
+        }
+        assertEquals(1, runs.get());
+    }
+
+    @Test
+    public void shouldKeepTheHandlersResult_whenTheExitHookThrows() {
+        registry.setCallExitHook(() -> {
+            throw new IllegalStateException("hook failed");
+        });
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("returns",
+                (exchange, request) -> textResult("handler text"));
+
+        McpSchema.CallToolResult result = wrapped.callHandler().apply(null, null);
+
+        assertEquals("handler text", ((McpSchema.TextContent) result.content().get(0)).text());
+    }
+
+    @Test
+    public void shouldKeepTheHandlersException_whenTheExitHookAlsoThrows() {
+        registry.setCallExitHook(() -> {
+            throw new IllegalArgumentException("hook failed");
+        });
+        IllegalStateException thrown = new IllegalStateException("handler failed");
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("throws", (exchange, request) -> {
+            throw thrown;
+        });
+
+        try {
+            wrapped.callHandler().apply(null, null);
+            fail("the handler's exception must propagate");
+        } catch (IllegalStateException e) {
+            assertSame(thrown, e);
+        }
+    }
+
+    @Test
+    public void shouldReturnTheHandlersResult_whenNoExitHookIsSet() {
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("returns",
+                (exchange, request) -> textResult("handler text"));
+
+        McpSchema.CallToolResult result = wrapped.callHandler().apply(null, null);
+
+        assertEquals("handler text", ((McpSchema.TextContent) result.content().get(0)).text());
+    }
+
+    @Test
+    public void shouldNotRunTheExitHook_afterTheToolsAreCleared() {
+        java.util.concurrent.atomic.AtomicInteger runs = new java.util.concurrent.atomic.AtomicInteger();
+        registry.setCallExitHook(runs::incrementAndGet);
+        McpServerFeatures.SyncToolSpecification wrapped = registerAndGet("returns",
+                (exchange, request) -> textResult("handler text"));
+
+        registry.clearTools();
+        wrapped.callHandler().apply(null, null);   // a call still in flight across a stop
+
+        assertEquals("a stopped server must not keep its dispatcher reachable through the hook", 0, runs.get());
+    }
+
+    // ---- admission -----------------------------------------------------------------------------
+
+    @Test
+    public void shouldAdmitEveryTool_whenNoAdmissionIsSet() {
+        registry.setToolAdmission(null);
+        registry.registerTool(createToolSpec("tool-a", "Tool A"));
+        registry.registerTool(createToolSpec("tool-b", "Tool B"));
+
+        assertEquals(2, registry.getToolCount());
+        assertTrue(registry.getWithheldToolNames().isEmpty());
+    }
+
+    @Test
+    public void shouldWithholdATool_whenTheAdmissionRefusesIt() {
+        registry.setToolAdmission(tool -> !tool.name().startsWith("write-"));
+
+        registry.registerTool(createToolSpec("read-a", "Read A"));
+        registry.registerTool(createToolSpec("write-b", "Write B"));
+        registry.registerTool(createToolSpec("read-c", "Read C"));
+
+        assertEquals(2, registry.getToolCount());
+        assertEquals("read-a", registry.getToolSpecifications().get(0).tool().name());
+        assertEquals("read-c", registry.getToolSpecifications().get(1).tool().name());
+        assertEquals(java.util.Set.of("write-b"), registry.getWithheldToolNames());
+    }
+
+    @Test
+    public void shouldJudgeTheDecoratedTool_whenAdmitting() {
+        registry.setToolDecorator(tool -> McpSchema.Tool.builder().name(tool.name()).description("decorated")
+                .inputSchema(tool.inputSchema()).build());
+        registry.setToolAdmission(tool -> "decorated".equals(tool.description()));
+
+        registry.registerTool(createToolSpec("tool-a", "Tool A"));
+
+        assertEquals(1, registry.getToolCount());
+    }
+
+    @Test
+    public void shouldStillRejectADuplicateName_evenWhenTheFirstWasWithheld() {
+        registry.setToolAdmission(tool -> false);
+        registry.registerTool(createToolSpec("tool-a", "Tool A"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> registry.registerTool(createToolSpec("tool-a", "Tool A again")));
+
+        assertTrue(e.getMessage(), e.getMessage().contains("tool-a"));
+        assertEquals(0, registry.getToolCount());
+        assertEquals(java.util.Set.of("tool-a"), registry.getWithheldToolNames());
+    }
+
+    @Test
+    public void shouldForgetTheAdmissionAndTheWithheldNames_whenToolsAreCleared() {
+        registry.setToolAdmission(tool -> false);
+        registry.registerTool(createToolSpec("tool-a", "Tool A"));
+
+        registry.clearTools();
+        registry.registerTool(createToolSpec("tool-a", "Tool A"));
+
+        assertEquals(1, registry.getToolCount());
+        assertTrue(registry.getWithheldToolNames().isEmpty());
+    }
+
+    // ---- suggestions of tools the server withholds ---------------------------------------------
+
+    private static final String SUGGESTING = "{\"result\":{},\"nextSteps\":["
+            + "\"Use get-view to open it\","
+            + "\"Use get-views to list views\","
+            + "\"Then call get-element for details\","
+            + "\"Or call (get-view) again\","
+            + "\"Run create-relationship, then get-element\"],"
+            + "\"_meta\":{}}";
+
+    @SuppressWarnings("unchecked")
+    private List<Object> nextStepsOf(McpSchema.CallToolResult result) throws Exception {
+        return (List<Object>) parseResultJson(result).get("nextSteps");
+    }
+
+    @Test
+    public void shouldDropOnlyTheSuggestionsThatNameAWithheldTool_inTheirOrder() throws Exception {
+        registry.setToolAdmission(tool -> !java.util.Set.of("get-view", "create-relationship")
+                .contains(tool.name()));
+        registry.registerTool(createToolSpecWithJson("get-views", "lists", SUGGESTING, false));
+        registry.registerTool(createToolSpec("get-view", "withheld"));
+        registry.registerTool(createToolSpec("create-relationship", "withheld"));
+
+        McpSchema.CallToolResult result = registry.getToolSpecifications().get(0).callHandler().apply(null, null);
+
+        assertEquals(List.of("Use get-views to list views", "Then call get-element for details"),
+                nextStepsOf(result));
+        assertNotNull("the rest of the envelope is kept", parseResultJson(result).get("result"));
+        assertNotNull(((Map<?, ?>) parseResultJson(result).get("_meta")).get("durationMs"));
+    }
+
+    @Test
+    public void shouldKeepAnEmptySuggestionList_whenEverySuggestionNamesAWithheldTool() throws Exception {
+        registry.setToolAdmission(tool -> !tool.name().equals("create-relationship"));
+        registry.registerTool(createToolSpecWithJson("reader", "reads",
+                "{\"result\":{},\"nextSteps\":[\"Run create-relationship\"]}", false));
+        registry.registerTool(createToolSpec("create-relationship", "withheld"));
+
+        McpSchema.CallToolResult result = registry.getToolSpecifications().get(0).callHandler().apply(null, null);
+
+        assertEquals(List.of(), nextStepsOf(result));
+    }
+
+    @Test
+    public void shouldLeaveTheSuggestionsOfAnErrorResponseUntouched() throws Exception {
+        registry.setToolAdmission(tool -> !tool.name().equals("get-view"));
+        registry.registerTool(createToolSpecWithJson("reader", "reads", SUGGESTING, true));
+        registry.registerTool(createToolSpec("get-view", "withheld"));
+
+        McpSchema.CallToolResult result = registry.getToolSpecifications().get(0).callHandler().apply(null, null);
+
+        assertEquals(5, nextStepsOf(result).size());
+    }
+
+    @Test
+    public void shouldLeaveEverySuggestion_whenNoToolIsWithheld() throws Exception {
+        registry.registerTool(createToolSpecWithJson("reader", "reads", SUGGESTING, false));
+        registry.registerTool(createToolSpec("get-view", "registered"));
+
+        McpSchema.CallToolResult result = registry.getToolSpecifications().get(0).callHandler().apply(null, null);
+
+        assertEquals(5, nextStepsOf(result).size());
+        String text = ((McpSchema.TextContent) result.content().get(0)).text();
+        assertTrue(text, text.startsWith("{\"result\":{},\"nextSteps\":[\"Use get-view to open it\","));
+    }
+
+    @Test
+    public void shouldPassANonEnvelopeResponseThroughUnchanged_whenAToolIsWithheld() {
+        registry.setToolAdmission(tool -> !tool.name().equals("get-view"));
+        McpSchema.ImageContent image = new McpSchema.ImageContent(null, "aGVsbG8=", "image/png");
+        registry.registerTool(McpServerFeatures.SyncToolSpecification.builder()
+                .tool(McpSchema.Tool.builder().name("exporter").description("x").inputSchema(
+                        new McpSchema.JsonSchema("object", Collections.emptyMap(), null, null, null, null)).build())
+                .callHandler((exchange, request) -> McpSchema.CallToolResult.builder()
+                        .content(List.of(image)).isError(false).build())
+                .build());
+        registry.registerTool(createToolSpec("get-view", "withheld"));
+        registry.registerTool(createToolSpecWithJson("plain", "x", "Use get-view now", false));
+
+        McpSchema.CallToolResult imageResult = registry.getToolSpecifications().get(0).callHandler()
+                .apply(null, null);
+        McpSchema.CallToolResult plainResult = registry.getToolSpecifications().get(1).callHandler()
+                .apply(null, null);
+
+        assertSame(image, imageResult.content().get(0));
+        assertEquals("Use get-view now", ((McpSchema.TextContent) plainResult.content().get(0)).text());
+    }
+
+    @Test
+    public void shouldKeepASuggestionThatIsNotText() throws Exception {
+        registry.setToolAdmission(tool -> !tool.name().equals("get-view"));
+        registry.registerTool(createToolSpecWithJson("reader", "reads",
+                "{\"result\":{},\"nextSteps\":[{\"tool\":\"get-view\"},\"Use get-view\"]}", false));
+        registry.registerTool(createToolSpec("get-view", "withheld"));
+
+        McpSchema.CallToolResult result = registry.getToolSpecifications().get(0).callHandler().apply(null, null);
+
+        assertEquals(List.of(Map.of("tool", "get-view")), nextStepsOf(result));
+    }
 }

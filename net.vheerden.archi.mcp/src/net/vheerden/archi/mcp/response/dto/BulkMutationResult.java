@@ -26,6 +26,9 @@ import net.vheerden.archi.mcp.model.ProposalContext;
  *                             operation named here reports an {@code action} that did not
  *                             actually happen — this list is the authority, and
  *                             {@code allSucceeded} is false whenever it is non-empty.
+ * @param nothingApplied       true when the changes were applied and every operation declined with
+ *                             nothing written, so the call left no undo step; null (and omitted)
+ *                             otherwise
  */
 @JsonInclude(JsonInclude.Include.NON_EMPTY)
 public record BulkMutationResult(
@@ -35,8 +38,19 @@ public record BulkMutationResult(
     boolean allSucceeded,
     Integer batchSequenceNumber,
     ProposalContext proposalContext,
-    List<String> skippedOperations
+    List<String> skippedOperations,
+    Boolean nothingApplied
 ) {
+
+    /**
+     * Back-compat constructor at the prior canonical arity: something was applied, or nothing ran yet.
+     */
+    public BulkMutationResult(List<BulkOperationResult> operations,
+            List<BulkOperationFailure> failedOperations, int totalOperations, boolean allSucceeded,
+            Integer batchSequenceNumber, ProposalContext proposalContext, List<String> skippedOperations) {
+        this(operations, failedOperations, totalOperations, allSucceeded, batchSequenceNumber,
+                proposalContext, skippedOperations, null);
+    }
 
     /**
      * Builds a result whose {@code allSucceeded} accounts for declined operations as well as
@@ -85,6 +99,14 @@ public record BulkMutationResult(
             int totalOperations, boolean allSucceeded,
             Integer batchSequenceNumber, ProposalContext proposalContext) {
         this(operations, List.of(), totalOperations, allSucceeded, batchSequenceNumber, proposalContext);
+    }
+
+    /**
+     * This result, saying that nothing was applied: every operation declined with nothing written.
+     */
+    public BulkMutationResult withNothingApplied() {
+        return new BulkMutationResult(operations, failedOperations, totalOperations, allSucceeded,
+                batchSequenceNumber, proposalContext, skippedOperations, Boolean.TRUE);
     }
 
     /**

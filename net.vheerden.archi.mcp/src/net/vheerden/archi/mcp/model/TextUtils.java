@@ -1,8 +1,10 @@
 package net.vheerden.archi.mcp.model;
 
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelImage;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
+import com.archimatetool.model.IDiagramModelReference;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
 
@@ -25,7 +27,9 @@ final class TextUtils {
      * <p>Text is a group's label or a note's content. An ArchiMate element view object has neither
      * — it shows the name of the element behind it, which is changed through {@code update-element}
      * — so setting text on one is rejected rather than silently applied to a box whose name is
-     * derived elsewhere.</p>
+     * derived elsewhere. An image and a view reference are rejected for the same reason: an image
+     * has no label at all, and a view reference shows the name of the view it points at, so the
+     * value would be accepted and then written nowhere, behind a success response.</p>
      *
      * <p>Lives here, and does the escape interpretation in the same call, because both
      * update-view-object prepares need exactly this pair and a caller that did one without the
@@ -36,7 +40,8 @@ final class TextUtils {
      * @param target the object the text is destined for
      * @param text   the requested text, or null to leave it unchanged
      * @return the interpreted text, or null when none was requested
-     * @throws ModelAccessException if text was supplied for an element view object
+     * @throws ModelAccessException if text was supplied for an element view object, an image or
+     *                              a view reference
      */
     static String acceptTextFor(IDiagramModelObject target, String text) {
         if (text != null && target instanceof IDiagramModelArchimateObject) {
@@ -46,6 +51,25 @@ final class TextUtils {
                     null,
                     "The 'text' parameter is only valid for groups (label) and notes (content). "
                             + "Use update-element to change an element's name.",
+                    null);
+        }
+        if (text != null && target instanceof IDiagramModelImage) {
+            throw new ModelAccessException(
+                    "Cannot set text on an image",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "An image has no label. The 'text' parameter is only valid for groups (label) "
+                            + "and notes (content); place a note beside the image to caption it.",
+                    null);
+        }
+        if (text != null && target instanceof IDiagramModelReference) {
+            throw new ModelAccessException(
+                    "Cannot set text on a view reference",
+                    ErrorCode.INVALID_PARAMETER,
+                    null,
+                    "A view reference shows the name of the view it points at. The 'text' parameter "
+                            + "is only valid for groups (label) and notes (content); use update-view to "
+                            + "rename the referenced view.",
                     null);
         }
         return interpretEscapes(InputValidation.reject(text, "text"));

@@ -303,6 +303,8 @@ public class ViewHandlerTreeFormatTest {
         assertEquals(0, stats.get("nestedGroups"));
         assertEquals(3, stats.get("totalElements"));
         assertEquals(2, stats.get("totalNotes"));
+        assertEquals("a count of none is emitted, not omitted", 0, stats.get("totalImages"));
+        assertEquals(0, stats.get("totalViewReferences"));
         assertEquals(1, stats.get("ungroupedElements"));
     }
 

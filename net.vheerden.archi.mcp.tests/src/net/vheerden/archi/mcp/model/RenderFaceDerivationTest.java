@@ -2,7 +2,6 @@ package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -364,38 +363,35 @@ public class RenderFaceDerivationTest {
     }
 
     /**
-     * The bendpoint reference this server publishes and the one the renderer computes can differ by
-     * one pixel, and at a band boundary that pixel changes the answer.
+     * The bendpoint reference this server publishes is the one the renderer computes, at a band
+     * boundary too, where a pixel changes the answer.
      *
-     * <p>{@code absoluteBendpoints} interpolates in exact integer arithmetic and its single
-     * division truncates toward zero; the renderer blends in {@code double} and converts with
-     * {@code floor}. They agree everywhere the blend is non-negative and part company on a negative
-     * one. Here the true blend is minus a half: the published value is 0, on the box's own left
-     * edge and therefore inside it, while the renderer's is -1, outside. The derivation uses the
-     * published value and so declines, where the renderer attaches on the left. It under-claims
-     * rather than guessing, which is the direction this field is allowed to be wrong in.
+     * <p>{@code absoluteBendpoints} blends with the renderer's arithmetic and converts with {@code
+     * floor}. Here the true blend is minus a half: the published value is -1, outside the box's own
+     * left edge, and the derivation attaches on the left, where the renderer does. The arithmetic it
+     * replaced truncated toward zero, published 0, on the edge and therefore inside the box, and the
+     * derivation declined: a face withheld wherever a negative blend fell a half pixel from an edge.
      */
     @Test
-    public void shouldDiverge_whenTruncationAndFloorDisagreeAtABandBoundary() {
+    public void shouldAgreeWithTheRenderer_atABandBoundaryWhereTruncationWouldNot() {
         List<BendpointDto> stored = List.of(new BendpointDto(0, 50, -1, 50));
         List<AbsoluteBendpointDto> published =
                 ConnectionResponseBuilder.convertRelativeToAbsolute(stored, 0, 0, 0, 0);
-        assertEquals("the published reference, truncated toward zero", 0, published.get(0).x());
-        assertEquals(50, published.get(0).y());
-
         int rendererX = (int) Math.floor(-0.5d + 1e-9);
         assertEquals("the reference the renderer computes, floored", -1, rendererX);
+        assertEquals("the published reference is the renderer's", rendererX, published.get(0).x());
+        assertEquals(50, published.get(0).y());
 
         int[] own = { 0, 0, 100, 100 };
-        assertEquals("from the published reference", Outcome.ABSTAIN_REFERENCE_INSIDE_BOX,
+        assertEquals("from the published reference", Outcome.FACE_LEFT,
                 RenderFaceDeriver.classify(own, ELSEWHERE, published.get(0).x(),
                         published.get(0).y(), PLAIN));
-        assertEquals("from the reference the renderer would use", Outcome.FACE_LEFT,
-                RenderFaceDeriver.classify(own, ELSEWHERE, rendererX,
-                        published.get(0).y(), PLAIN));
-        assertNotEquals("so the one pixel is not cosmetic here",
-                RenderFaceDeriver.classify(own, ELSEWHERE, published.get(0).x(), 50, PLAIN),
-                RenderFaceDeriver.classify(own, ELSEWHERE, rendererX, 50, PLAIN));
+
+        int truncatedX = (0 + -1) / 2;
+        assertEquals("the value truncation toward zero would publish", 0, truncatedX);
+        assertEquals("from which the derivation declines, so the pixel is not cosmetic",
+                Outcome.ABSTAIN_REFERENCE_INSIDE_BOX,
+                RenderFaceDeriver.classify(own, ELSEWHERE, truncatedX, 50, PLAIN));
     }
 
     /**

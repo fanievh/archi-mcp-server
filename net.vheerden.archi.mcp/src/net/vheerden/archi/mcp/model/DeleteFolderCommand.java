@@ -54,8 +54,14 @@ public class DeleteFolderCommand extends Command
     /** Whether the sub-commands actually ran, so {@link #undo()} reverses only what happened. */
     private boolean subCommandsRan;
 
+    /** The sub-commands the last run executed, in order; {@link #undo()} reverses exactly these. */
+    private final List<Command> ranSubCommands = new ArrayList<>();
+
     /** Whether this folder was actually detached from its parent. */
     private boolean folderRemoved;
+
+    /** Set where the last run declined before any sub-command ran. */
+    private boolean changedNothing;
 
     /**
      * Creates a command to delete a folder.
@@ -86,6 +92,7 @@ public class DeleteFolderCommand extends Command
     public void execute() {
         subCommandsRan = false;
         folderRemoved = false;
+        changedNothing = false;
         // Cleared alongside the two flags, and set below only past both declines AND only if the
         // removal actually removed something, so a run that refuses — or that finds the folder
         // already gone — reports no name at all. {@code folderRemoved} deliberately keeps its
@@ -95,12 +102,17 @@ public class DeleteFolderCommand extends Command
 
         skipReason = describeUnpreparedContents();
         if (skipReason != null) {
+            changedNothing = true;
             return;
         }
 
         // 1. Execute all sub-commands (cascade-delete contents)
+        ranSubCommands.clear();
         for (Command cmd : subCommands) {
-            cmd.execute();
+            if (!leftBehind(cmd)) {
+                cmd.execute();
+                ranSubCommands.add(cmd);
+            }
         }
         subCommandsRan = true;
 
@@ -120,6 +132,7 @@ public class DeleteFolderCommand extends Command
     public void redo() {
         subCommandsRan = false;
         folderRemoved = false;
+        changedNothing = false;
         // Kept in step with execute() above. This class is the only delete command that overrides
         // redo() rather than inheriting the default that re-runs execute(), so the capture has to
         // be written twice or the field would mean "the name at the last run" in one path and "the
@@ -130,12 +143,17 @@ public class DeleteFolderCommand extends Command
 
         skipReason = describeUnpreparedContents();
         if (skipReason != null) {
+            changedNothing = true;
             return;
         }
 
         // 1. Redo all sub-commands
+        ranSubCommands.clear();
         for (Command cmd : subCommands) {
-            cmd.redo();
+            if (!leftBehind(cmd)) {
+                cmd.redo();
+                ranSubCommands.add(cmd);
+            }
         }
         subCommandsRan = true;
 
@@ -162,15 +180,34 @@ public class DeleteFolderCommand extends Command
         }
 
         if (subCommandsRan) {
-            for (int i = subCommands.size() - 1; i >= 0; i--) {
-                subCommands.get(i).undo();
+            for (int i = ranSubCommands.size() - 1; i >= 0; i--) {
+                ranSubCommands.get(i).undo();
             }
         }
+    }
+
+    /**
+     * Whether {@code cmd} deletes a view that is no longer in the folder it was prepared to remove it
+     * from: an earlier operation moved it out, so it is not this folder's to delete and the cascade
+     * leaves it whole, objects and connections included. Read at each run.
+     */
+    static boolean leftBehind(Command cmd) {
+        return cmd instanceof DeleteViewCommand deleteView
+                && deleteView.getView().eContainer() != deleteView.getViewFolder();
     }
 
     @Override
     public String getSkipReason() {
         return skipReason;
+    }
+
+    /**
+     * True only when the last run declined on contents it was not prepared for, before any sub-command
+     * ran. A decline after the sub-commands ran is not vouched for: they removed what they removed.
+     */
+    @Override
+    public boolean changedNothing() {
+        return changedNothing;
     }
 
     @Override
@@ -215,8 +252,8 @@ public class DeleteFolderCommand extends Command
             return null;
         }
         return "Folder '" + folder.getName() + "' was not empty when the changes were applied: "
-                + unprepared + " item(s) were added to it by an earlier operation in the same "
-                + "request. The folder and its contents were left in place so nothing is lost. "
+                + unprepared + " item(s) were added to it " + CHANGED_SINCE_PREPARED
+                + ". The folder and its contents were left in place so nothing is lost. "
                 + "Delete it in a separate request, or use force: true there so the cascade "
                 + "covers everything the folder holds by then.";
     }
@@ -251,6 +288,13 @@ public class DeleteFolderCommand extends Command
         }
         return null;
     }
+
+    /**
+     * Whether {@code child} was a direct child of the folder when this delete was prepared: one it
+     * is authorised to remove. Read-only; a staged reader uses it to tell, ahead of the run, that a
+     * child arriving afterwards will make this delete decline.
+     */
+    boolean wasPreparedWith(Object child) { return preparedChildren.contains(child); }
 
     /** Package-visible for testing. */
     IFolder getFolder() { return folder; }

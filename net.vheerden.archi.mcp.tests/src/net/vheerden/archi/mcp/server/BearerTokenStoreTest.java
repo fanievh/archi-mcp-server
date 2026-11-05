@@ -6,19 +6,19 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.Set;
 
+import org.eclipse.equinox.security.storage.ISecurePreferences;
 import org.junit.Test;
 
 /**
  * Tests for {@link BearerTokenStore} (the token half of the loopback-exposure hardening).
  *
- * <p>Only the pure, JDK-only {@link BearerTokenStore#generate()} is exercised headlessly here
- * (length / charset / uniqueness). The secure-storage round-trip
- * ({@code setToken}/{@code getToken}/{@code clearToken}) needs the Equinox secure-storage provider
- * and its master-password unlock, which is unavailable in a plain headless JVM
- * ({@code SecurePreferencesFactory.getDefault()} returns null) — that round-trip is validated in the
- * PDE {@code AllPluginTestsRunner} lane and the live {@code /mcp reconnect} round-trip, per
- * the documented pure-vs-PDE split. This class therefore stays in the headless {@code ci-junit} lane
- * (NOT in {@code tools/osgi-excluded-tests.txt}).</p>
+ * <p>The pure, JDK-only {@link BearerTokenStore#generate()} is exercised headlessly here (length /
+ * charset / uniqueness). The secure-storage round-trip ({@code setToken}/{@code getToken}/{@code clearToken})
+ * needs the Equinox secure-storage provider, which a plain headless JVM lacks, so it runs in the Eclipse
+ * PDE {@code AllPluginTestsRunner} lane, and only when that launch names its own throwaway
+ * {@code -eclipse.keyring} ({@link SecureStorageRoundTrip}); everywhere else, including every headless
+ * lane, it is assumption-skipped by design. This class therefore stays in the headless {@code ci-junit}
+ * lane (NOT in {@code tools/osgi-excluded-tests.txt}).</p>
  */
 public class BearerTokenStoreTest {
 
@@ -51,5 +51,22 @@ public class BearerTokenStoreTest {
             tokens.add(BearerTokenStore.generate());
         }
         assertEquals("100 generations must all be distinct", 100, tokens.size());
+    }
+
+    /**
+     * Round-trip: a stored token reads back identically, and {@code clearToken()} removes it. Runs only in
+     * an isolated secure store ({@link SecureStorageRoundTrip#isolatedNodeOrSkip(String)}); any token the key held
+     * before is put back afterwards.
+     */
+    @Test
+    public void shouldRoundTripAndClear_whenProviderAvailable() throws Exception {
+        ISecurePreferences node = SecureStorageRoundTrip.isolatedNodeOrSkip(BearerTokenStore.NODE_PATH);
+        SecureStorageRoundTrip.restoringPrior(node, BearerTokenStore.KEY_TOKEN, () -> {
+            String token = BearerTokenStore.generate();
+            BearerTokenStore.setToken(token);
+            assertEquals("stored token must read back identically", token, BearerTokenStore.getToken());
+            BearerTokenStore.clearToken();
+            assertNull("after clearToken(), the token must be absent", BearerTokenStore.getToken());
+        });
     }
 }

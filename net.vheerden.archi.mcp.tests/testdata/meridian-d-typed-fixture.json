@@ -1,0 +1,569 @@
+{
+ "viewId": "id-432a1d35784e4fe7b3c41802dccaed8f",
+ "viewName": "D · Customer Journey & Service Design",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-8954dab120754b37ac1779f8170d9e97",
+   "name": "1. Awareness & Discovery",
+   "x": 30,
+   "y": 54,
+   "w": 120,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-c1d5baaef6a348b380b52b7f7e07c1c9",
+   "name": "2. Consideration & Apply",
+   "x": 260,
+   "y": 54,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-659b0afdf0254fb0ae227320e90f16d0",
+   "name": "3. Onboarding & Verification",
+   "x": 491,
+   "y": 54,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-822cad27169348cd849a484613ae9af3",
+   "name": "4. First Use & Activation",
+   "x": 722,
+   "y": 54,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-6e7bf6b29de14a4eb7b58c3315be6e32",
+   "name": "5. Everyday Banking & Payments",
+   "x": 953,
+   "y": 54,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-28d64aa0d2814b89b9297bd808d448de",
+   "name": "6. Support & Loyalty",
+   "x": 1186,
+   "y": 54,
+   "w": 124,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-490a83a77f044dd3b85db02c9c01cb1f"
+  },
+  {
+   "id": "id-e2b20080aece4666abb0cedbe531342a",
+   "name": "Financial Advisory Service",
+   "x": 30,
+   "y": 316,
+   "w": 124,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-44f55aaa71624c13a63fdaeec9ac6db1"
+  },
+  {
+   "id": "id-77d3fd25e33d4c14a3999b31a1073100",
+   "name": "Account Opening Service",
+   "x": 284,
+   "y": 316,
+   "w": 124,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-44f55aaa71624c13a63fdaeec9ac6db1"
+  },
+  {
+   "id": "id-210990010b43461fb121afc7b722b70d",
+   "name": "Digital Banking Service",
+   "x": 538,
+   "y": 316,
+   "w": 120,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-44f55aaa71624c13a63fdaeec9ac6db1"
+  },
+  {
+   "id": "id-81404366e2cb4182856fd0c884024f89",
+   "name": "Payments & Transfers Service",
+   "x": 788,
+   "y": 316,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-44f55aaa71624c13a63fdaeec9ac6db1"
+  },
+  {
+   "id": "id-745f4bdff97d4a2db7fc4d6d9db73419",
+   "name": "Customer Support Service",
+   "x": 1039,
+   "y": 316,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessService",
+   "figureType": 0,
+   "parentId": "id-44f55aaa71624c13a63fdaeec9ac6db1"
+  },
+  {
+   "id": "id-ffc0dd6b04fc4b0082d3c6b58ad99314",
+   "name": "Notification Service",
+   "x": 30,
+   "y": 578,
+   "w": 124,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-07a568d748de41b29ed0816e13cb0004",
+   "name": "Credit Scoring Service",
+   "x": 249,
+   "y": 578,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-84168ca5c99941ae9a61fccb1bcd0746",
+   "name": "Authentication Service",
+   "x": 465,
+   "y": 578,
+   "w": 122,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-c826f261e14b4472af1df36aa49f89c8",
+   "name": "Mobile Banking Service",
+   "x": 682,
+   "y": 578,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-c3fdddea557e405fa8f16c4ed8faad6a",
+   "name": "Payment Initiation Service",
+   "x": 899,
+   "y": 578,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-6a7c79245b47434293ebe855517c9ebe",
+   "name": "Customer 360 Service",
+   "x": 1116,
+   "y": 578,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationService",
+   "figureType": 0,
+   "parentId": "id-5e022320cbce41e7ae1a21373a6bf0df"
+  },
+  {
+   "id": "id-490a83a77f044dd3b85db02c9c01cb1f",
+   "name": "Customer Journey",
+   "x": 20,
+   "y": 20,
+   "w": 1300,
+   "h": 112,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-44f55aaa71624c13a63fdaeec9ac6db1",
+   "name": "Business Support (Business Services)",
+   "x": 20,
+   "y": 282,
+   "w": 1150,
+   "h": 112,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-5e022320cbce41e7ae1a21373a6bf0df",
+   "name": "Applications (Application Services)",
+   "x": 20,
+   "y": 544,
+   "w": 1227,
+   "h": 112,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-0f3f75bcabb84f35b1ab0f297d0a0922",
+   "name": "D · Customer Journey & Service Design (o",
+   "x": 20,
+   "y": -50,
+   "w": 900,
+   "h": 60,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-216b2b1ee93d474ea2da2075d8b0c24f",
+   "sourceId": "id-e2b20080aece4666abb0cedbe531342a",
+   "targetId": "id-8954dab120754b37ac1779f8170d9e97",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -35,
+     "endX": 2,
+     "endY": 234
+    },
+    {
+     "startX": -2,
+     "startY": -35,
+     "endX": 0,
+     "endY": 234
+    },
+    {
+     "startX": -2,
+     "startY": -240,
+     "endX": 0,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-a0500f8152fd4081996244a3fcc80067",
+   "sourceId": "id-77d3fd25e33d4c14a3999b31a1073100",
+   "targetId": "id-c1d5baaef6a348b380b52b7f7e07c1c9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -35,
+     "endX": 26,
+     "endY": 227
+    },
+    {
+     "startX": 0,
+     "startY": -227,
+     "endX": 26,
+     "endY": 35
+    }
+   ]
+  },
+  {
+   "id": "id-f57af49a6eb74e108024de75de76b40d",
+   "sourceId": "id-77d3fd25e33d4c14a3999b31a1073100",
+   "targetId": "id-659b0afdf0254fb0ae227320e90f16d0",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -44,
+     "endX": -205,
+     "endY": 225
+    },
+    {
+     "startX": 224,
+     "startY": -44,
+     "endX": 19,
+     "endY": 225
+    },
+    {
+     "startX": 224,
+     "startY": -240,
+     "endX": 19,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-ba0f800494b64396ac99609449722032",
+   "sourceId": "id-210990010b43461fb121afc7b722b70d",
+   "targetId": "id-822cad27169348cd849a484613ae9af3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 140,
+     "startY": 0,
+     "endX": -44,
+     "endY": 269
+    },
+    {
+     "startX": 140,
+     "startY": -85,
+     "endX": -44,
+     "endY": 184
+    },
+    {
+     "startX": 184,
+     "startY": -85,
+     "endX": 0,
+     "endY": 184
+    },
+    {
+     "startX": 184,
+     "startY": -240,
+     "endX": 0,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-5455233149f04334b160a667fbc4409f",
+   "sourceId": "id-81404366e2cb4182856fd0c884024f89",
+   "targetId": "id-6e7bf6b29de14a4eb7b58c3315be6e32",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -104,
+     "endY": 262
+    },
+    {
+     "startX": 166,
+     "startY": 0,
+     "endX": 0,
+     "endY": 262
+    },
+    {
+     "startX": 166,
+     "startY": -227,
+     "endX": 0,
+     "endY": 35
+    }
+   ]
+  },
+  {
+   "id": "id-dd15b8082cf04e829e87f69c13997ad3",
+   "sourceId": "id-745f4bdff97d4a2db7fc4d6d9db73419",
+   "targetId": "id-28d64aa0d2814b89b9297bd808d448de",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -87,
+     "endY": 269
+    },
+    {
+     "startX": 149,
+     "startY": 0,
+     "endX": 0,
+     "endY": 269
+    },
+    {
+     "startX": 149,
+     "startY": -240,
+     "endX": 0,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-24ffcaa695b749d689967fe8a66ab206",
+   "sourceId": "id-ffc0dd6b04fc4b0082d3c6b58ad99314",
+   "targetId": "id-8954dab120754b37ac1779f8170d9e97",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 109,
+     "startY": 0,
+     "endX": 111,
+     "endY": 524
+    },
+    {
+     "startX": 109,
+     "startY": -524,
+     "endX": 111,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-358274ae841f4badb46f7198ba8f0d27",
+   "sourceId": "id-07a568d748de41b29ed0816e13cb0004",
+   "targetId": "id-c1d5baaef6a348b380b52b7f7e07c1c9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": -11,
+     "endY": 489
+    },
+    {
+     "startX": 0,
+     "startY": -124,
+     "endX": -11,
+     "endY": 393
+    },
+    {
+     "startX": -90,
+     "startY": -124,
+     "endX": -101,
+     "endY": 393
+    },
+    {
+     "startX": -90,
+     "startY": -473,
+     "endX": -101,
+     "endY": 44
+    },
+    {
+     "startX": 11,
+     "startY": -473,
+     "endX": 0,
+     "endY": 44
+    }
+   ]
+  },
+  {
+   "id": "id-e415bb404f3c4cea8bb993359ba382b8",
+   "sourceId": "id-84168ca5c99941ae9a61fccb1bcd0746",
+   "targetId": "id-659b0afdf0254fb0ae227320e90f16d0",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": -25,
+     "endY": 496
+    },
+    {
+     "startX": 0,
+     "startY": -495,
+     "endX": -25,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-0150bfbfa3884d54b7c751e899802c6e",
+   "sourceId": "id-c826f261e14b4472af1df36aa49f89c8",
+   "targetId": "id-822cad27169348cd849a484613ae9af3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -35,
+     "endX": -39,
+     "endY": 496
+    },
+    {
+     "startX": 0,
+     "startY": -191,
+     "endX": -39,
+     "endY": 340
+    },
+    {
+     "startX": 19,
+     "startY": -191,
+     "endX": -20,
+     "endY": 340
+    },
+    {
+     "startX": 19,
+     "startY": -502,
+     "endX": -20,
+     "endY": 29
+    }
+   ]
+  },
+  {
+   "id": "id-1cc7c82e1a6d4d79af0b5e21bcb9d0d8",
+   "sourceId": "id-c3fdddea557e405fa8f16c4ed8faad6a",
+   "targetId": "id-6e7bf6b29de14a4eb7b58c3315be6e32",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -35,
+     "endX": -54,
+     "endY": 489
+    },
+    {
+     "startX": 0,
+     "startY": -480,
+     "endX": -54,
+     "endY": 44
+    },
+    {
+     "startX": 54,
+     "startY": -480,
+     "endX": 0,
+     "endY": 44
+    }
+   ]
+  },
+  {
+   "id": "id-6b07c6a71cc54415afa7513bd054b729",
+   "sourceId": "id-6a7c79245b47434293ebe855517c9ebe",
+   "targetId": "id-28d64aa0d2814b89b9297bd808d448de",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": -72,
+     "endY": 496
+    },
+    {
+     "startX": 0,
+     "startY": -524,
+     "endX": -72,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

@@ -63,7 +63,12 @@ public record ApplyElementSpacingDecision(
      *                                    when every container on this view is
      *                                    drawn inside a host, so the step this
      *                                    tool applies has none of the view's
-     *                                    own to space inside; null otherwise
+     *                                    own to space inside — or, despite the
+     *                                    name, the element-container reason
+     *                                    when the only containers are ArchiMate
+     *                                    elements holding children (it carries
+     *                                    the not-spaced marker, which maps to
+     *                                    its own code); null otherwise
      * @return decision describing the chosen branch + computed delta
      */
     public static ApplyElementSpacingDecision decide(

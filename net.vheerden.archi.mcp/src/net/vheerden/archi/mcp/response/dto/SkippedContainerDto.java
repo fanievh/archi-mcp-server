@@ -5,7 +5,8 @@ import java.util.List;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
- * A populated top-level container {@code arrange-groups} deliberately did not position.
+ * A populated top-level container a tool deliberately did not position or measure — first
+ * {@code arrange-groups}'s record, now shared by other tools (see below).
  *
  * <p><b>The host is what was skipped, not necessarily its contents.</b> When the same call arranged
  * the containers drawn inside a host, that host still appears here — it was not itself moved — and
@@ -36,6 +37,15 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * and typically {@code Node} for {@code arrange-groups}, and the container is <em>populated</em>
  * only in the {@code arrange-groups} case. The {@code reason} is the field that says which
  * situation this entry describes, which is why it is prose rather than a code.</p>
+ *
+ * <p><strong>A third reporter: the spacing tools.</strong> The three
+ * {@code apply-*-spacing-recommendations} tools list here every ArchiMate element drawn directly on
+ * the view that holds a child other than a note or an image: they measure and space native groups
+ * and {@code Grouping} elements only, so such an element (a role drawn as a swimlane, a {@code Node} holding its components) is a container on
+ * the canvas that they did not measure. {@code elementType} is that element's type, and the
+ * {@code reason} names {@code layout-within-group} as the tool that spaces inside it. The
+ * {@code groupIds} pass-back below is {@code arrange-groups}' and does not apply to these
+ * entries.</p>
  *
  * <p>The identity is the action. A caller that disagrees with the default — it can see the canvas,
  * and this tool cannot — passes the {@code viewObjectId} straight back in {@code groupIds}, and the

@@ -275,6 +275,14 @@ public class DeleteViewCommand extends Command implements NameCapturingCommand {
     }
 
     /**
+     * The placeholders in other views that this delete would remove, read from the model as it
+     * stands now. Read-only: nothing is captured for undo.
+     */
+    List<IDiagramModelReference> externalPlaceholders() {
+        return captureExternalPlaceholders(view).stream().map(CascadedRef::ref).toList();
+    }
+
+    /**
      * Scan the model's DIAGRAMS folder for every {@link IDiagramModelReference}
      * whose {@code getReferencedModel() == view}, excluding refs contained
      * inside the view being deleted (those die with the view).

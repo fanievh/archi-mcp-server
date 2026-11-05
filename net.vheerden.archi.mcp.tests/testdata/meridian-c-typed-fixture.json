@@ -1,0 +1,594 @@
+{
+ "viewId": "id-266efda9c0ca446bb4c9ad7a3c401d04",
+ "viewName": "C · Account Opening — Process Cooperation",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-6264c57601524c21a19dee2fe8b6dd9e",
+   "name": "Prospect / Applicant",
+   "x": 40,
+   "y": 40,
+   "w": 1560,
+   "h": 230,
+   "isChild": false,
+   "type": "BusinessRole",
+   "figureType": 0
+  },
+  {
+   "id": "id-c33f76b60c024f6da758a98291bb9c0f",
+   "name": "Account Application Submitted",
+   "x": 80,
+   "y": 104,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessEvent",
+   "figureType": 0,
+   "parentId": "id-6264c57601524c21a19dee2fe8b6dd9e"
+  },
+  {
+   "id": "id-f84f6fb386a9481c95efa3dcd6d64b68",
+   "name": "Submit Account Application",
+   "x": 263,
+   "y": 104,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-6264c57601524c21a19dee2fe8b6dd9e"
+  },
+  {
+   "id": "id-d353b6c17ede45f9bc55e755a9e9846f",
+   "name": "Accept Offer",
+   "x": 446,
+   "y": 104,
+   "w": 120,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-6264c57601524c21a19dee2fe8b6dd9e"
+  },
+  {
+   "id": "id-b9def7a0b2ac44d7b308cd58d5ea744c",
+   "name": "KYC / AML Analyst",
+   "x": 40,
+   "y": 310,
+   "w": 1560,
+   "h": 230,
+   "isChild": false,
+   "type": "BusinessRole",
+   "figureType": 0
+  },
+  {
+   "id": "id-ff25a0b6662d4719a9481348a7335943",
+   "name": "Capture Customer Details",
+   "x": 80,
+   "y": 374,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-b9def7a0b2ac44d7b308cd58d5ea744c"
+  },
+  {
+   "id": "id-aea1f6ea89de41cf9d6489852174f8fa",
+   "name": "Verify Customer Identity",
+   "x": 262,
+   "y": 374,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-b9def7a0b2ac44d7b308cd58d5ea744c"
+  },
+  {
+   "id": "id-829421e485e047f6872498215cf78e05",
+   "name": "Perform KYC Due Diligence",
+   "x": 444,
+   "y": 374,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-b9def7a0b2ac44d7b308cd58d5ea744c"
+  },
+  {
+   "id": "id-bee93f66ce274c8e867e69742dfef783",
+   "name": "Screen AML & Sanctions",
+   "x": 625,
+   "y": 374,
+   "w": 120,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-b9def7a0b2ac44d7b308cd58d5ea744c"
+  },
+  {
+   "id": "id-70ce829fa4c3486daa689ce9793a04a5",
+   "name": "Loan Officer",
+   "x": 40,
+   "y": 580,
+   "w": 1560,
+   "h": 230,
+   "isChild": false,
+   "type": "BusinessRole",
+   "figureType": 0
+  },
+  {
+   "id": "id-34eb709e0c7c489b93fae3120a3f3049",
+   "name": "Assess Eligibility & Risk",
+   "x": 80,
+   "y": 644,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-70ce829fa4c3486daa689ce9793a04a5"
+  },
+  {
+   "id": "id-fa12b95a371d48ab980fc625ca159b06",
+   "name": "Approve & Decision Application",
+   "x": 262,
+   "y": 644,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-70ce829fa4c3486daa689ce9793a04a5"
+  },
+  {
+   "id": "id-5aea5d53ae9348f494ce672e21f8695f",
+   "name": "Generate & Present Offer",
+   "x": 443,
+   "y": 644,
+   "w": 124,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-70ce829fa4c3486daa689ce9793a04a5"
+  },
+  {
+   "id": "id-d7c27cca8572443fb91a9fd00df822a4",
+   "name": "Contact Centre Agent",
+   "x": 40,
+   "y": 850,
+   "w": 1560,
+   "h": 230,
+   "isChild": false,
+   "type": "BusinessRole",
+   "figureType": 0
+  },
+  {
+   "id": "id-d9864066bf0a49da861f1ee57bb3cce3",
+   "name": "Fund & Open Account",
+   "x": 80,
+   "y": 914,
+   "w": 123,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-d7c27cca8572443fb91a9fd00df822a4"
+  },
+  {
+   "id": "id-e3461d9a802c464c9cee95c3db22346e",
+   "name": "Activate Account & Issue Credentials",
+   "x": 263,
+   "y": 914,
+   "w": 124,
+   "h": 84,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-d7c27cca8572443fb91a9fd00df822a4"
+  },
+  {
+   "id": "id-bc8cbb7b50fb495ab97f8d863c8c5a83",
+   "name": "Welcome & Servicing Handover",
+   "x": 447,
+   "y": 914,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "BusinessProcess",
+   "figureType": 0,
+   "parentId": "id-d7c27cca8572443fb91a9fd00df822a4"
+  },
+  {
+   "id": "id-faad4abbb9b54518aaaf709e00c79252",
+   "name": "Account Activated",
+   "x": 628,
+   "y": 914,
+   "w": 121,
+   "h": 55,
+   "isChild": true,
+   "type": "BusinessEvent",
+   "figureType": 0,
+   "parentId": "id-d7c27cca8572443fb91a9fd00df822a4"
+  },
+  {
+   "id": "id-291f1992b0e8496d922d40baebdbd42f",
+   "name": "C · Account Opening & Onboarding — Proce",
+   "x": -20,
+   "y": -36,
+   "w": 980,
+   "h": 66,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-8c5a2e5d65a242359d92fdd77ece7c34",
+   "sourceId": "id-c33f76b60c024f6da758a98291bb9c0f",
+   "targetId": "id-f84f6fb386a9481c95efa3dcd6d64b68",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 63,
+     "startY": 0,
+     "endX": -120,
+     "endY": 0
+    },
+    {
+     "startX": 121,
+     "startY": 0,
+     "endX": -62,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-ee2def4805ec40c5bf2133d6ee3a47f4",
+   "sourceId": "id-f84f6fb386a9481c95efa3dcd6d64b68",
+   "targetId": "id-ff25a0b6662d4719a9481348a7335943",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -62,
+     "startY": 0,
+     "endX": 121,
+     "endY": -270
+    },
+    {
+     "startX": -111,
+     "startY": 0,
+     "endX": 72,
+     "endY": -270
+    },
+    {
+     "startX": -111,
+     "startY": 260,
+     "endX": 72,
+     "endY": -10
+    },
+    {
+     "startX": -114,
+     "startY": 260,
+     "endX": 69,
+     "endY": -10
+    },
+    {
+     "startX": -114,
+     "startY": 270,
+     "endX": 69,
+     "endY": 0
+    },
+    {
+     "startX": -121,
+     "startY": 270,
+     "endX": 62,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-fb222f969d3c403cb1f28889f51610a0",
+   "sourceId": "id-d353b6c17ede45f9bc55e755a9e9846f",
+   "targetId": "id-d9864066bf0a49da861f1ee57bb3cce3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 29,
+     "endX": 365,
+     "endY": -781
+    },
+    {
+     "startX": 0,
+     "startY": 169,
+     "endX": 365,
+     "endY": -641
+    },
+    {
+     "startX": -526,
+     "startY": 169,
+     "endX": -161,
+     "endY": -641
+    },
+    {
+     "startX": -526,
+     "startY": 810,
+     "endX": -161,
+     "endY": 0
+    },
+    {
+     "startX": -427,
+     "startY": 810,
+     "endX": -62,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-7e2bfb08d403450c807d0c247a76ff49",
+   "sourceId": "id-ff25a0b6662d4719a9481348a7335943",
+   "targetId": "id-aea1f6ea89de41cf9d6489852174f8fa",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -120,
+     "endY": 0
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -62,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-bcaaddd516e747d59cc2b7ddb18fe7ae",
+   "sourceId": "id-aea1f6ea89de41cf9d6489852174f8fa",
+   "targetId": "id-829421e485e047f6872498215cf78e05",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -119,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -61,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": -7,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-c1718b6541054260927a2b076ab1a616",
+   "sourceId": "id-829421e485e047f6872498215cf78e05",
+   "targetId": "id-bee93f66ce274c8e867e69742dfef783",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -119,
+     "endY": 0
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-399d858a23474255bb2cc260d21416c8",
+   "sourceId": "id-bee93f66ce274c8e867e69742dfef783",
+   "targetId": "id-34eb709e0c7c489b93fae3120a3f3049",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 29,
+     "endX": 544,
+     "endY": -248
+    },
+    {
+     "startX": 0,
+     "startY": 142,
+     "endX": 544,
+     "endY": -135
+    },
+    {
+     "startX": -544,
+     "startY": 142,
+     "endX": 0,
+     "endY": -135
+    },
+    {
+     "startX": -544,
+     "startY": 242,
+     "endX": 0,
+     "endY": -35
+    }
+   ]
+  },
+  {
+   "id": "id-0fe3f8267f504e999dcd11fb915a1009",
+   "sourceId": "id-34eb709e0c7c489b93fae3120a3f3049",
+   "targetId": "id-fa12b95a371d48ab980fc625ca159b06",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -119,
+     "endY": 0
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-3de66c99227b41aa809715686a5955fe",
+   "sourceId": "id-fa12b95a371d48ab980fc625ca159b06",
+   "targetId": "id-5aea5d53ae9348f494ce672e21f8695f",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -121,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -63,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": -7,
+     "endX": -63,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-c38dbf0d8ad74e0a98a2d84dc379f4fa",
+   "sourceId": "id-5aea5d53ae9348f494ce672e21f8695f",
+   "targetId": "id-d353b6c17ede45f9bc55e755a9e9846f",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": -1,
+     "endY": 512
+    },
+    {
+     "startX": -475,
+     "startY": -28,
+     "endX": -476,
+     "endY": 512
+    },
+    {
+     "startX": -475,
+     "startY": -568,
+     "endX": -476,
+     "endY": -28
+    },
+    {
+     "startX": 1,
+     "startY": -568,
+     "endX": 0,
+     "endY": -28
+    }
+   ]
+  },
+  {
+   "id": "id-99154b80935d40e38545bb8ab1557e0d",
+   "sourceId": "id-d9864066bf0a49da861f1ee57bb3cce3",
+   "targetId": "id-e3461d9a802c464c9cee95c3db22346e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 63,
+     "startY": 0,
+     "endX": -121,
+     "endY": -15
+    },
+    {
+     "startX": 114,
+     "startY": 0,
+     "endX": -70,
+     "endY": -15
+    },
+    {
+     "startX": 114,
+     "startY": 15,
+     "endX": -70,
+     "endY": 0
+    },
+    {
+     "startX": 121,
+     "startY": 15,
+     "endX": -63,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-acebb48370184cd7a569dfee433b9b99",
+   "sourceId": "id-e3461d9a802c464c9cee95c3db22346e",
+   "targetId": "id-bc8cbb7b50fb495ab97f8d863c8c5a83",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 63,
+     "startY": 0,
+     "endX": -119,
+     "endY": 8
+    },
+    {
+     "startX": 121,
+     "startY": 0,
+     "endX": -61,
+     "endY": 8
+    },
+    {
+     "startX": 121,
+     "startY": -8,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-44e99405b5064082a6366599ca86abe9",
+   "sourceId": "id-bc8cbb7b50fb495ab97f8d863c8c5a83",
+   "targetId": "id-faad4abbb9b54518aaaf709e00c79252",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 62,
+     "startY": 0,
+     "endX": -119,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": 0,
+     "endX": -61,
+     "endY": 7
+    },
+    {
+     "startX": 120,
+     "startY": -7,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

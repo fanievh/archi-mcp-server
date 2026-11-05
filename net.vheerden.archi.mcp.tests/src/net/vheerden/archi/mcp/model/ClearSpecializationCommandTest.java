@@ -6,11 +6,13 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.Before;
 import org.junit.Test;
 
+import com.archimatetool.model.FolderType;
 import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IBusinessActor;
@@ -175,5 +177,40 @@ public class ClearSpecializationCommandTest {
         p.setName(name);
         p.setConceptType("BusinessActor");
         return p;
+    }
+
+    // ---- changedNothing ----
+
+    @Test
+    public void shouldCertifyNothingChanged_whenAnUnauthorisedProfileArrived_andNotOnceItRunsNormally() {
+        model.getFolder(FolderType.BUSINESS).getElements().add(concept);
+        IProfile authorised = profile("VIP");
+        IProfile unauthorised = profile("Internal");
+        concept.getProfiles().add(authorised);
+        ClearSpecializationCommand cmd = new ClearSpecializationCommand(concept, Set.of(authorised));
+        assertFalse("not before execute", cmd.changedNothing());
+        concept.getProfiles().add(unauthorised);
+        Map<String, String> before = MergeElementsCommandTest.snapshot(model, Set.of());
+
+        cmd.execute();
+
+        assertNotNull("fixture check: the clear declined", cmd.getSkipReason());
+        assertTrue(cmd.changedNothing());
+        MergeElementsCommandTest.assertSnapshot("nothing written", before,
+                MergeElementsCommandTest.snapshot(model, Set.of()));
+
+        concept.getProfiles().remove(unauthorised);
+        cmd.execute();
+
+        assertTrue("fixture check: the clear ran", concept.getProfiles().isEmpty());
+        assertFalse("a run that cleared certifies nothing", cmd.changedNothing());
+    }
+
+    private IProfile profile(String name) {
+        IProfile profile = factory.createProfile();
+        profile.setName(name);
+        profile.setConceptType("BusinessActor");
+        model.getProfiles().add(profile);
+        return profile;
     }
 }

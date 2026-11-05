@@ -9,6 +9,7 @@ import org.eclipse.gef.commands.Command;
 
 import com.archimatetool.model.IArchimateDiagramModel;
 import com.archimatetool.model.IArchimateFactory;
+import com.archimatetool.model.IDiagramModel;
 import com.archimatetool.model.IProperty;
 
 /**
@@ -26,6 +27,10 @@ import com.archimatetool.model.IProperty;
  * Direct invocation of {@code execute()} bypasses undo tracking.</p>
  */
 public class UpdateViewCommand extends Command {
+
+    // Archi's value for "no viewpoint": the model's default for the attribute, and what the
+    // GUI's "None" choice writes. Archi's own UI never writes null here.
+    private static final String NO_VIEWPOINT = "";
 
     private final IArchimateDiagramModel view;
 
@@ -50,7 +55,8 @@ public class UpdateViewCommand extends Command {
      * @param view                     the view to update
      * @param newName                  new name, or null to leave unchanged
      * @param newViewpoint             new viewpoint, or null to leave unchanged
-     * @param clearViewpoint           true to clear the viewpoint (set to empty/null)
+     * @param clearViewpoint           true to clear the viewpoint (set to the empty string,
+     *                                 the value Archi uses for no viewpoint)
      * @param newDocumentation         new documentation, or null to leave unchanged
      * @param newProperties            property merge map (null value = remove key), or null to leave unchanged
      * @param newConnectionRouterType  new router type int, or null to leave unchanged
@@ -89,10 +95,11 @@ public class UpdateViewCommand extends Command {
     @Override
     public void undo() {
         view.setName(oldName);
-        // Note: oldViewpoint may be "" (how Archi internally stores "no viewpoint")
-        // while clearViewpoint sets null. Both are functionally equivalent in Archi —
-        // the undo/redo cycle is not strictly idempotent at the EMF level but is
-        // semantically correct. Do not "normalize" this to null.
+        // Undo restores the captured value verbatim, including a null left by an older
+        // write. Note that the clear path writes "" and never null: "" is the value Archi
+        // uses for "no viewpoint" (its model default, and what the GUI's "None" choice
+        // writes), while null is not a state the GUI can produce and Archi's viewpoint
+        // actions dereference the value unguarded, so the view's editor fails to open.
         view.setViewpoint(oldViewpoint);
         view.setDocumentation(oldDocumentation);
         restoreProperties();
@@ -104,7 +111,7 @@ public class UpdateViewCommand extends Command {
             view.setName(newName);
         }
         if (clearViewpoint) {
-            view.setViewpoint(null);
+            view.setViewpoint(NO_VIEWPOINT);
         } else if (newViewpoint != null) {
             view.setViewpoint(newViewpoint);
         }
@@ -165,5 +172,11 @@ public class UpdateViewCommand extends Command {
      */
     IArchimateDiagramModel getView() {
         return view;
+    }
+
+    /** Whether this command changes the connection router type of {@code target}. */
+    boolean changesRouterTypeOf(IDiagramModel target) {
+        return view == target && newConnectionRouterType != null
+                && newConnectionRouterType != oldConnectionRouterType;
     }
 }

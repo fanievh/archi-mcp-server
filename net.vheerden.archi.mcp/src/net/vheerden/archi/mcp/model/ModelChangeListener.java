@@ -20,4 +20,12 @@ public interface ModelChangeListener {
      * @param modelId   the ID of the new active model, or null if no model is loaded
      */
     void onModelChanged(String modelName, String modelId);
+
+    /**
+     * Called when one open model instance closes, whether or not it was the active one.
+     *
+     * @param modelKey the closed instance's key, as {@code ModelSelection.cacheKey()} names it
+     */
+    default void onModelClosed(String modelKey) {
+    }
 }

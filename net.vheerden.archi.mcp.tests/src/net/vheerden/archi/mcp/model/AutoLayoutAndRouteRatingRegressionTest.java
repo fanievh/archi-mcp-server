@@ -276,7 +276,8 @@ public class AutoLayoutAndRouteRatingRegressionTest {
         // addToView would queue too, and the loop would be handed an empty view.
         String viewId = cleanFlatView();
         dispatcher.beginBatch(SESSION, "arm-b");
-        MutationResult<AutoLayoutAndRouteResultDto> result = runFlat(viewId, 50, "fair");
+        MutationResult<AutoLayoutAndRouteResultDto> result =
+                runFlat(viewId, FLAT_REGRESSING_SPACING, "fair");
 
         assertTrue("fixture premise: this call must actually be queued", result.isBatched());
         assertQueuedArm(regressionOf(result.entity()));
@@ -297,7 +298,8 @@ public class AutoLayoutAndRouteRatingRegressionTest {
         // Same ordering rule as the queued arm: approval mode would propose the fixture too.
         String viewId = cleanFlatView();
         dispatcher.setApprovalModeProvider(() -> true);
-        MutationResult<AutoLayoutAndRouteResultDto> result = runFlat(viewId, 50, "fair");
+        MutationResult<AutoLayoutAndRouteResultDto> result =
+                runFlat(viewId, FLAT_REGRESSING_SPACING, "fair");
 
         assertTrue("fixture premise: this call must actually be proposed", result.isProposal());
         assertProposedCard("excellent");
@@ -387,8 +389,17 @@ public class AutoLayoutAndRouteRatingRegressionTest {
     // from. Measured, not assumed — a fixture whose before and after rate alike cannot
     // discriminate, and one that never regresses makes every assertion above vacuous.
 
+    /**
+     * The flat run's ELK spacing. At 30 the run leaves element spacing at 'good' where the
+     * hand-laid view was 'pass', so the overall rating drops from 'excellent' to 'good'. At 50 it
+     * used to regress too, but only through connections with no bendpoints between aligned boxes
+     * that the assessor counted as diagonal; Archi draws those straight, the assessor now tests
+     * the line Archi draws, and at 50 the run rates 'excellent' — no regression to disclose.
+     */
+    private static final int FLAT_REGRESSING_SPACING = 30;
+
     private AutoLayoutAndRouteResultDto runFlatRegressing() {
-        return runFlat(cleanFlatView(), 50, "fair").entity();
+        return runFlat(cleanFlatView(), FLAT_REGRESSING_SPACING, "fair").entity();
     }
 
     private AutoLayoutAndRouteResultDto runGroupedRegressing() {

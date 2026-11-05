@@ -813,6 +813,40 @@ public class QualityTargetTerminationTest {
                 0, QualityTargetTermination.getMetricCount("passThroughs", selfOnly));
     }
 
+    @Test
+    public void findLimitingFactor_shouldNameNothing_whenEveryMeasuredMetricPasses() {
+        // The breakdown the assessor builds: the measured metrics, then the two fold outputs, the
+        // de-noised headline inserted last. Neither fold output is a metric, so with every metric
+        // passing there is nothing limiting.
+        Map<String, String> breakdown = new java.util.LinkedHashMap<>();
+        breakdown.put("overlaps", "pass");
+        breakdown.put("spacing", "pass");
+        breakdown.put("edgeCrossings", "pass");
+        breakdown.put("overall", "excellent");
+        breakdown.put("overallExcludingAcceptedCosmetics", "excellent");
+        AssessLayoutResultDto dto = build("excellent", 0, 0, 0, breakdown, 1.0);
+
+        assertNull(QualityTargetTermination.findLimitingFactor(dto));
+    }
+
+    @Test
+    public void findLimitingFactor_shouldSkipTheFoldOutputsTheAssessorPublishes_byReadingItsOwnSet() throws Exception {
+        assertTrue(LayoutQualityAssessor.isRatingFoldOutput("overall"));
+        assertTrue(LayoutQualityAssessor.isRatingFoldOutput("overallExcludingAcceptedCosmetics"));
+        assertFalse(LayoutQualityAssessor.isRatingFoldOutput("overlaps"));
+        java.nio.file.Path dir = java.nio.file.Path.of("").toAbsolutePath();
+        String rel = "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/QualityTargetTermination.java";
+        while (dir != null && !java.nio.file.Files.exists(dir.resolve(rel))) {
+            dir = dir.getParent();
+        }
+        assertNotNull(dir);
+        String src = java.nio.file.Files.readString(dir.resolve(rel));
+        String body = src.substring(src.indexOf("public static String findLimitingFactor("));
+        body = body.substring(0, body.indexOf("\n    }\n"));
+        assertFalse("no fold output is named here", body.contains("\"overall"));
+        assertTrue(body.contains("LayoutQualityAssessor.isRatingFoldOutput(metric)"));
+    }
+
     /**
      * Rebuilds a DTO with the icon count replaced; the widest constructor takes 87 arguments.
      *

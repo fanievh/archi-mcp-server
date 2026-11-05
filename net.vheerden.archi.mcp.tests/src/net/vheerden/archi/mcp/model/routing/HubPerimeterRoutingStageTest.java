@@ -18,6 +18,7 @@ import java.util.Set;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.RoutingRect;
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator.Face;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
@@ -57,6 +58,16 @@ public class HubPerimeterRoutingStageTest {
 
     private static AbsoluteBendpointDto bp(int x, int y) {
         return new AbsoluteBendpointDto(x, y);
+    }
+
+    /**
+     * The face-line coordinate, read from production. These fixtures need terminals to be
+     * <em>on</em> a face line so the migrator's exact-equality face inference reaches them; none
+     * of them asserts where that line is. Its value is pinned in
+     * {@code EdgeAttachmentCalculatorTest}.
+     */
+    private static int faceLine(RoutingRect r, Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
     }
 
     private static List<AbsoluteBendpointDto> path(AbsoluteBendpointDto... bps) {
@@ -898,15 +909,18 @@ public class HubPerimeterRoutingStageTest {
 
     private static boolean isOnOrAdjacentToPerimeter(AbsoluteBendpointDto bp,
                                                       ViewFixture.FixtureElement el) {
-        // Matches the convention used by RoutingPipelineTest:
-        // a terminal bp passes if it lies on the perimeter (within 2px of any edge AND
-        // within the parallel extent) OR if it shares a coordinate with the element center
-        // (chopbox-anchor degenerate-port fallback).
+        // A terminal bp passes if it lies on the perimeter (within the tolerance below of any
+        // edge AND within the parallel extent) OR if it shares a coordinate with the element
+        // center (chopbox-anchor degenerate-port fallback).
         int xLo = el.x();
         int xHi = el.x() + el.w();
         int yLo = el.y();
         int yHi = el.y() + el.h();
-        int tol = 2;
+        // A router-placed terminal sits exactly TERMINAL_FACE_MARGIN px outside the edge by
+        // construction, so the band has to admit the margin or this predicate rejects every
+        // correctly-placed terminal. The extra pixel is the int-snapping slack on odd-parity
+        // rects that the band carried before the margin was single-sourced.
+        int tol = EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN + 1;
         boolean nearLeftRight = (Math.abs(bp.x() - xLo) <= tol || Math.abs(bp.x() - xHi) <= tol)
                 && bp.y() >= yLo - tol && bp.y() <= yHi + tol;
         boolean nearTopBottom = (Math.abs(bp.y() - yLo) <= tol || Math.abs(bp.y() - yHi) <= tol)
@@ -970,13 +984,13 @@ public class HubPerimeterRoutingStageTest {
      */
     @Test
     public void stage_shouldRollBackMigratorProposal_whenItRegressesM4_viaInjectedRegressor() {
-        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H");   // RIGHT face line x=181
+        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H");   // terminal on its RIGHT face line
         RoutingRect e = new RoutingRect(200, 201, 120, 40, "E");   // E.topEdge y=201
         RoutingRect tg = new RoutingRect(340, 300, 80, 50, "Tg");
         List<RoutingPipeline.ConnectionEndpoints> conns =
                 List.of(conn("c-reg", h, tg));
         List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
-        paths.add(path(bp(181, 160), bp(360, 160), bp(360, 280)));
+        paths.add(path(bp(faceLine(h, Face.RIGHT), 160), bp(360, 160), bp(360, 280)));
         List<AbsoluteBendpointDto> original = new ArrayList<>(paths.get(0));
         List<RoutingRect> obstacles = List.of(h, e, tg);
 
@@ -999,13 +1013,13 @@ public class HubPerimeterRoutingStageTest {
      */
     @Test
     public void stage_shouldAcceptMigratorProposal_andReduceM4_onCellLessGateGeometry() {
-        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H");   // RIGHT face line x=181
+        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H");   // terminal on its RIGHT face line
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");   // E.topEdge y=161
         RoutingRect tg = new RoutingRect(340, 250, 80, 50, "Tg");
         List<RoutingPipeline.ConnectionEndpoints> conns =
                 List.of(conn("c-poc", h, tg));
         List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
-        paths.add(path(bp(181, 160), bp(360, 160), bp(360, 250)));
+        paths.add(path(bp(faceLine(h, Face.RIGHT), 160), bp(360, 160), bp(360, 250)));
         List<RoutingRect> obstacles = List.of(h, e, tg);
 
         assertEquals("pre: seg0 hugs E.top", 1,
@@ -1033,9 +1047,9 @@ public class HubPerimeterRoutingStageTest {
      */
     @Test
     public void stage_terminalIncidentMigration_preservesTerminalAnchoring_byConstruction() {
-        RoutingRect ha = new RoutingRect(100, 100, 80, 200, "HA"); // RIGHT line 181
-        RoutingRect hb = new RoutingRect(100, 500, 80, 200, "HB"); // RIGHT line 181
-        RoutingRect hc = new RoutingRect(600, 100, 80, 200, "HC"); // RIGHT line 681
+        RoutingRect ha = new RoutingRect(100, 100, 80, 200, "HA");
+        RoutingRect hb = new RoutingRect(100, 500, 80, 200, "HB");
+        RoutingRect hc = new RoutingRect(600, 100, 80, 200, "HC");
         RoutingRect ea = new RoutingRect(200, 161, 120, 40, "EA");
         RoutingRect eb = new RoutingRect(200, 561, 120, 40, "EB");
         RoutingRect ec = new RoutingRect(700, 161, 120, 40, "EC");
@@ -1045,9 +1059,9 @@ public class HubPerimeterRoutingStageTest {
         List<RoutingPipeline.ConnectionEndpoints> conns = List.of(
                 conn("cA", ha, ta), conn("cB", hb, tb), conn("cC", hc, tc));
         List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
-        paths.add(path(bp(181, 160), bp(360, 160), bp(360, 250)));
-        paths.add(path(bp(181, 560), bp(360, 560), bp(360, 650)));
-        paths.add(path(bp(681, 160), bp(860, 160), bp(860, 250)));
+        paths.add(path(bp(faceLine(ha, Face.RIGHT), 160), bp(360, 160), bp(360, 250)));
+        paths.add(path(bp(faceLine(hb, Face.RIGHT), 560), bp(360, 560), bp(360, 650)));
+        paths.add(path(bp(faceLine(hc, Face.RIGHT), 160), bp(860, 160), bp(860, 250)));
         List<RoutingRect> obstacles =
                 List.of(ha, hb, hc, ea, eb, ec, ta, tb, tc);
 
@@ -1055,9 +1069,9 @@ public class HubPerimeterRoutingStageTest {
         HubPerimeterRoutingStage.Result r = stage.apply(conns, paths, obstacles);
 
         assertEquals("all three terminal-incident L-shapes migrated", 3, r.migratorApplied());
-        assertEquals(181, paths.get(0).get(0).x()); // HA RIGHT line preserved
-        assertEquals(181, paths.get(1).get(0).x()); // HB RIGHT line preserved
-        assertEquals(681, paths.get(2).get(0).x()); // HC RIGHT line preserved
+        assertEquals(faceLine(ha, Face.RIGHT), paths.get(0).get(0).x()); // HA RIGHT line preserved
+        assertEquals(faceLine(hb, Face.RIGHT), paths.get(1).get(0).x()); // HB RIGHT line preserved
+        assertEquals(faceLine(hc, Face.RIGHT), paths.get(2).get(0).x()); // HC RIGHT line preserved
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), ha, paths.get(0)));
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
@@ -1073,13 +1087,14 @@ public class HubPerimeterRoutingStageTest {
      */
     @Test
     public void stage_shouldNotMigrate_unsafeTerminalSegment_b71PreservedByRejection() {
-        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H"); // RIGHT line 181
+        RoutingRect h = new RoutingRect(100, 100, 80, 200, "H");
         RoutingRect tg = new RoutingRect(340, 250, 80, 50, "Tg");
         List<RoutingPipeline.ConnectionEndpoints> conns =
                 List.of(conn("c-unsafe", h, tg));
         List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
-        // seg0 = (181,160)->(181,300) VERTICAL: constant axis X = RIGHT's orthogonal.
-        paths.add(path(bp(181, 160), bp(181, 300), bp(360, 300)));
+        // seg0 is VERTICAL on the RIGHT face line: constant axis X = RIGHT's orthogonal.
+        int hRight = faceLine(h, Face.RIGHT);
+        paths.add(path(bp(hRight, 160), bp(hRight, 300), bp(360, 300)));
         List<AbsoluteBendpointDto> original = new ArrayList<>(paths.get(0));
 
         HubPerimeterRoutingStage stage = new HubPerimeterRoutingStage();
@@ -1165,11 +1180,11 @@ public class HubPerimeterRoutingStageTest {
             }
         }
         // 6th connection: size-3 terminal-incident L on a far-away non-hub source.
-        RoutingRect s6 = new RoutingRect(600, 600, 80, 40, "S6"); // RIGHT face line x=681
+        RoutingRect s6 = new RoutingRect(600, 600, 80, 40, "S6"); // terminal on its RIGHT face line
         RoutingRect e6 = new RoutingRect(700, 621, 80, 40, "E6");  // E6.topEdge y=621
         RoutingRect t6 = new RoutingRect(760, 700, 40, 40, "T6");
         conns.add(conn("c-5", s6, t6));
-        paths.add(path(bp(681, 620), bp(800, 620), bp(800, 700)));
+        paths.add(path(bp(faceLine(s6, Face.RIGHT), 620), bp(800, 620), bp(800, 700)));
 
         List<RoutingRect> all = new ArrayList<>(List.of(hub));
         Collections.addAll(all, spokes);
@@ -1187,8 +1202,8 @@ public class HubPerimeterRoutingStageTest {
         assertTrue("global M4 monotone (not regressed)",
                 HubPerimeterRoutingStage.computeM4Count(paths, all) <= m4Pre);
         // Axis-3 preserved terminal anchoring on c-5's source terminal.
-        assertEquals("c-5 terminal x stays on S6 RIGHT face line 681",
-                681, paths.get(5).get(0).x());
+        assertEquals("c-5 terminal x stays on S6's RIGHT face line",
+                faceLine(s6, Face.RIGHT), paths.get(5).get(0).x());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), s6, paths.get(5)));
         // c-5 stays a clean orthogonal L (no zigzag/diagonal introduced).

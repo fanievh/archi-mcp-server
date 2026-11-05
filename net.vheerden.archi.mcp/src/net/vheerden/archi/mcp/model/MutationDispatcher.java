@@ -1,5 +1,6 @@
 package net.vheerden.archi.mcp.model;
 
+import java.lang.ref.WeakReference;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -8,9 +9,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.gef.commands.Command;
@@ -28,8 +31,11 @@ import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IFolder;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
+import net.vheerden.archi.mcp.model.exceptions.ProposalStaleException;
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.BatchStatusDto;
 import net.vheerden.archi.mcp.response.dto.BatchSummaryDto;
 import net.vheerden.archi.mcp.response.dto.PendingProposalView;
@@ -47,9 +53,10 @@ import net.vheerden.archi.mcp.response.dto.ProposalDto;
  * thread for CommandStack.execute. Results are passed back via
  * {@link AtomicReference}.</p>
  *
- * <p>Manages per-session state via {@link MutationContext}, supporting
- * GUI-attached (immediate), batch (queued), and approval (proposed)
- * operational modes.</p>
+ * <p>Manages per-session state via {@link MutationContext}: the operational
+ * mode, GUI-attached (immediate) or batch (queued). Approval is not a third
+ * mode but a global, human-owned gate tested first, which turns a mutation into
+ * a proposal whichever mode the session is in ({@link DispatchArm#of}).</p>
  *
  * <p><strong>Layer 3 (Model Boundary):</strong> This class imports
  * {@code org.eclipse.gef.commands.*}, {@code org.eclipse.swt.widgets.Display},
@@ -62,6 +69,161 @@ public class MutationDispatcher {
     private final Supplier<IArchimateModel> modelSupplier;
     private final ConcurrentHashMap<String, MutationContext> batchSessions = new ConcurrentHashMap<>();
     private Runnable onImmediateDispatchCallback;
+
+    /**
+     * Model instances observed closing, by epoch, each with its model id. Recorded from the
+     * accessor's model-removed event and never cleared: a reopened file is a new instance. Closure is
+     * per instance because two open copies of one file share an id, and closing one of them says
+     * nothing about the other. Empty until a close is observed, so a dispatcher that never sees model
+     * lifecycle events treats every bound model as open.
+     */
+    private final Map<Long, String> closedInstances = new ConcurrentHashMap<>();
+
+    /**
+     * An epoch per model <em>instance</em> the dispatcher has observed, assigned on first sight and
+     * never reused. Queued commands reference an instance, and an id does not name one: a copied
+     * file keeps its id and Archi opens both copies at once, and a reopened file is a new instance
+     * with the old id. Weak keys, so a closed model is not held. Kept here rather than in the model's
+     * own adapter map, which is an unsynchronised map the UI thread reads while epochs are first
+     * assigned from request threads. Guarded by itself, and a leaf lock: it may be taken while a
+     * session context's monitor is held (as {@link #queueForBatch} does), so nothing may call into a
+     * {@link MutationContext} while holding it.
+     */
+    private final Map<IArchimateModel, Long> instanceEpochs = new WeakHashMap<>();
+    private long lastEpoch;
+
+    /**
+     * Each open model instance's latest activation, as a rising tick, so that closing the active model
+     * can return to the one active before it. Starts empty at each server start; weak keys, so a closed
+     * model is not held. Guarded by itself, and a leaf lock: nothing is called while holding it, and it
+     * is never taken while {@link #instanceEpochs} is held.
+     */
+    private final Map<IArchimateModel, Long> activations = new WeakHashMap<>();
+    private long lastActivation;
+
+    /**
+     * The model instance the call on this thread was admitted against, or null. Set by {@link #admit}
+     * and {@link #admitStackOperation}.
+     *
+     * <p>Consumed (read, then removed) by {@link #queueForBatch} and
+     * {@link #storeProposal(String, PendingProposal)}, so the queue and the proposal stamp see the
+     * model the call prepared against rather than whichever is active by then. Consuming on read
+     * assumes an admitted call queues or stores at most once, which holds for every mutating tool
+     * today; a call that queued twice would have its second command checked against the batch's
+     * binding alone.</p>
+     *
+     * <p>Read without consuming by {@link #currentDispatchGuard} and {@link #stackOperation}, because
+     * the layout tools dispatch and undo many times in one call: every immediate dispatch, undo and
+     * redo of the call is bound to the admitted instance. The tool registry clears it when the call
+     * exits ({@link #endCall}), and every path that reaches a queue, a store or a stack operation
+     * without being admitted, such as the approval dock, also clears it first.</p>
+     */
+    private final ThreadLocal<Admission> admission = new ThreadLocal<>();
+
+    /**
+     * One admitted call. {@code instance} is weak so a closed model is not held by an idle pooled
+     * thread. The mutable fields are written only on the UI thread, inside the runnables that resolve
+     * a stack, so they need no lock.
+     */
+    private static final class Admission {
+        final long epoch;
+        final String modelId;
+        final String modelName;
+        final String operation;
+        final WeakReference<IArchimateModel> instance;
+        /** An undo or redo tool, which prepares nothing; else a mutating call. */
+        final boolean stackOperation;
+        /**
+         * Whether the call resolved its model as a tool call (by address, batch, default or as the only
+         * model open) rather than following the model active in Archi. A bound call runs on its own
+         * instance while that is open, whichever model is active.
+         */
+        final boolean bound;
+        /** Whether the guard has seen this call dispatch, so its stamped entries are all it owns. */
+        boolean dispatched;
+        /** Marks the stack entries this call makes, so the call can tell its own from any other's. */
+        final CallStamp stamp;
+        /** The entries this call undid itself, most recent last: the only ones it may redo. */
+        final List<Command> undoneByCall = new ArrayList<>();
+
+        Admission(long epoch, IArchimateModel model, String operation, boolean stackOperation, String sessionId,
+                boolean bound) {
+            this.epoch = epoch;
+            this.bound = bound;
+            this.stamp = new CallStamp(sessionId);
+            this.modelId = model.getId();
+            this.modelName = model.getName();
+            this.operation = operation;
+            this.instance = new WeakReference<>(model);
+            this.stackOperation = stackOperation;
+        }
+
+        /** The admitted instance while it is open, else null. */
+        IArchimateModel openInstance(MutationDispatcher dispatcher) {
+            IArchimateModel model = instance.get();
+            return model == null || dispatcher.isClosed(epoch) ? null : model;
+        }
+    }
+
+    /**
+     * The owner of the stack entries one admitted call makes. Compared only by identity: two calls of
+     * one session are two owners, so neither undoes the other's entries. The session id is carried,
+     * not compared.
+     */
+    static final class CallStamp {
+        final String sessionId;
+
+        CallStamp(String sessionId) {
+            this.sessionId = sessionId;
+        }
+    }
+
+    /**
+     * The binding check for the dispatch this thread is about to make, or null for an unbound one.
+     * Set around a bound dispatch (a batch commit, an approved proposal) and read by
+     * {@link #dispatchImmediate} on the calling thread, which hands it to the UI-thread runnable. The
+     * check then runs again in the same runnable that resolves the {@code CommandStack}: models open
+     * and close on the UI thread, so a switch can no longer fall between the check and the stack.
+     */
+    private final ThreadLocal<Function<IArchimateModel, ModelAccessException>> dispatchGuard =
+            new ThreadLocal<>();
+
+    /**
+     * The owner stamped on the stack entry of the explicitly guarded dispatch this thread is about to
+     * make: a fresh stamp per batch commit or approved proposal, carrying the session it was made for.
+     * A fresh stamp is never any call's own, so no call's rollback ever undoes one.
+     */
+    private final ThreadLocal<CallStamp> dispatchOwner = new ThreadLocal<>();
+
+    /**
+     * Set by {@link #dispatchImmediateOrDecline} around its dispatch and read by {@link #agentEntry} on the
+     * same thread: the entry it builds undoes a delegate that declined partway.
+     */
+    private final ThreadLocal<Boolean> rollBackOnDecline = new ThreadLocal<>();
+
+    /**
+     * A dispatch binding that names its own target instance rather than following the model active in
+     * Archi. Its target is resolved on the UI thread, in the same runnable that takes the stack; null
+     * once that instance has closed, which the check then refuses.
+     */
+    interface BoundGuard extends Function<IArchimateModel, ModelAccessException> {
+        IArchimateModel target();
+    }
+
+    private static BoundGuard boundGuard(Supplier<IArchimateModel> target,
+            Function<IArchimateModel, ModelAccessException> check) {
+        return new BoundGuard() {
+            @Override
+            public IArchimateModel target() {
+                return target.get();
+            }
+
+            @Override
+            public ModelAccessException apply(IArchimateModel model) {
+                return check.apply(model);
+            }
+        };
+    }
 
     /**
      * Per-thread nesting depth of an open "silent measurement" window. While
@@ -91,13 +253,16 @@ public class MutationDispatcher {
     static final Duration PROPOSAL_TTL = Duration.ofMinutes(30);
 
     /**
-     * The staleness guard — one {@code CommandStack} listener over the active model, re-resolving and
+     * The staleness guard — one {@code CommandStack} listener per open model, re-resolving and
      * fingerprinting a proposal's targets so approve rejects-stale rather than misapplying a frozen command.
      */
     private final ProposalStalenessGuard stalenessGuard;
 
     /** The shared "stored request → fresh command + preconditions" rebuilder used by the approve path. */
     private final ProposalBuilder proposalBuilder = new ProposalBuilder();
+
+    /** Which open model each tool call acts on. */
+    private final ModelSelection selection;
 
     /**
      * Listeners notified whenever the pending-approval queue changes. The dispatcher
@@ -121,16 +286,122 @@ public class MutationDispatcher {
     public MutationDispatcher(Supplier<IArchimateModel> modelSupplier) {
         this.modelSupplier = Objects.requireNonNull(modelSupplier, "modelSupplier must not be null");
         this.stalenessGuard = new ProposalStalenessGuard(modelSupplier);
+        this.selection = new ModelSelection(modelSupplier, this::epochOf, this::batchInstance, this::isClosed);
+    }
+
+    /** Which open model each tool call acts on. */
+    public ModelSelection selection() {
+        return selection;
+    }
+
+    /** Sets where the open models are listed and how a model's unsaved state is read. */
+    void setOpenModels(Supplier<List<IArchimateModel>> openModels,
+            java.util.function.Predicate<IArchimateModel> dirty) {
+        selection.setOpenModels(openModels, dirty);
+    }
+
+    /** The open instance a session's open batch is bound to, or null. */
+    private IArchimateModel batchInstance(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        if (context == null || context.getMode() != OperationalMode.BATCH) {
+            return null;
+        }
+        long bound = context.getBoundModelEpoch();
+        return bound == 0L ? null : openInstance(bound);
+    }
+
+    /**
+     * The epoch of this model instance, assigned on first observation. Never 0, which stands for
+     * "no instance recorded".
+     */
+    long epochOf(IArchimateModel model) {
+        synchronized (instanceEpochs) {
+            return instanceEpochs.computeIfAbsent(model, m -> ++lastEpoch);
+        }
     }
 
     // ---- Staleness-guard lifecycle (driven by the accessor's model events) ----
 
     /**
-     * Registers the staleness guard's single {@code CommandStack} listener for the now-active model.
-     * Called by the accessor when a model becomes active / on model switch. Idempotent.
+     * Observes a model that is open, without making it active: it gets an epoch and the staleness guard
+     * watches its {@code CommandStack}. Called by the accessor at start for every model already open, so
+     * a model that is addressed without ever being made active is watched too.
+     */
+    void observeOpen(IArchimateModel model) {
+        if (model != null) {
+            epochOf(model);
+            stalenessGuard.onModelActive(model);
+        }
+    }
+
+    /**
+     * Watches the now-active model's {@code CommandStack} for the staleness guard, keeping every other
+     * open model's watch. Called by the accessor when a model becomes active / on model switch. Idempotent.
      */
     public void onModelActive(IArchimateModel model) {
+        if (model != null) {
+            epochOf(model); // observed: an open instance with this id now exists
+            synchronized (activations) {
+                activations.put(model, ++lastActivation);
+            }
+        }
         stalenessGuard.onModelActive(model);
+    }
+
+    /**
+     * Records that a model instance was closed in Archi, whether or not it was the active one. A
+     * batch or proposal bound to it is then refused with {@link ErrorCode#BOUND_MODEL_CLOSED} rather
+     * than as a mismatch, because the remedy is to reopen it, not to switch to it; and a batch that
+     * held queued work at this moment stays refused even after a reopen, since its commands reference
+     * the closed instance. Another open copy with the same id is unaffected.
+     */
+    public void onModelClosed(IArchimateModel model) {
+        if (model == null) {
+            return;
+        }
+        synchronized (activations) {
+            activations.remove(model);
+        }
+        stalenessGuard.onModelClosed(model);
+        selection.onModelClosed(model);
+        if (model.getId() == null) {
+            return;
+        }
+        long epoch = epochOf(model);
+        closedInstances.put(epoch, model.getId());
+        for (MutationContext context : batchSessions.values()) {
+            context.onModelClosed(epoch);
+        }
+    }
+
+    /**
+     * The model to make active after {@code closing}, the active one, has closed: the most recently
+     * active of {@code remaining}, else the first listed when none of them was ever active, else null.
+     * {@code closing} is never chosen, even when it is still listed.
+     */
+    public IArchimateModel fallbackAfterClose(List<IArchimateModel> remaining, IArchimateModel closing) {
+        if (remaining == null) {
+            return null;
+        }
+        IArchimateModel first = null;
+        IArchimateModel latest = null;
+        long latestTick = 0;
+        synchronized (activations) {
+            for (IArchimateModel model : remaining) {
+                if (model == null || model == closing) {
+                    continue;
+                }
+                if (first == null) {
+                    first = model;
+                }
+                Long tick = activations.get(model);
+                if (tick != null && tick > latestTick) {
+                    latest = model;
+                    latestTick = tick;
+                }
+            }
+        }
+        return latest != null ? latest : first;
     }
 
     /** Removes the staleness guard's stack listener (active model closed, or accessor disposed). */
@@ -150,7 +421,8 @@ public class MutationDispatcher {
      * see an edit made in that window instead of treating the proposal as having nothing to check.</p>
      */
     StalenessCapture captureStaleness(String sessionId, Set<String> targetIds) {
-        return stalenessGuard.capture(targetIds, id -> queuedAny(sessionId, id));
+        return stalenessGuard.capture(targetIds, id -> queuedAny(sessionId, id),
+                selection.peekModelForCall(modelSupplier.get()));
     }
 
     /**
@@ -277,18 +549,355 @@ public class MutationDispatcher {
      */
     public void dispatchImmediate(Command command) throws MutationException {
         logger.info("Dispatching immediate command: {}", command.getLabel());
-        IArchimateModel model = requireModel();
+        // An admitted dispatch resolves its model in the guard, which refuses when none is active.
+        IArchimateModel model = dispatchGuard.get() == null && admission.get() != null ? null : requireModel();
         // Stamp authorship at the single admission chokepoint. Every agent
         // mutation — immediate single ops, the batch-commit compound, and approved-proposal
         // executes — funnels here, so wrapping once tags them all. Human GUI edits reach
         // Archi's CommandStack directly and stay untagged. One wrapper == one stack entry,
         // preserving the speculative undo(undoCount) arithmetic.
-        AgentAuthoredCompoundCommand tagged = new AgentAuthoredCompoundCommand(command);
+        AgentAuthoredCompoundCommand tagged = agentEntry(command);
+        Function<IArchimateModel, ModelAccessException> guard = currentDispatchGuard();
         dispatchOnUiThread(() -> {
-            CommandStack stack = getCommandStack(model);
-            stack.execute(tagged);
+            executeEntry(guardedStack(model, guard), tagged);
             return null;
         });
+    }
+
+    /**
+     * Dispatches {@code command} as one immediate call, and refuses the call when anything in it declined.
+     * A decline that wrote part of the change is undone in the same UI-thread run first, so a refused call
+     * leaves no undo entry and the model as it was. Live, that write and undo still move the model version.
+     *
+     * <p>Not for the approve path, which needs a normal return to put the card back, nor for bulk-mutate,
+     * which keeps the rest of the call and reports each declined operation.</p>
+     *
+     * @throws ModelAccessException {@code MUTATION_FAILED} carrying the skip reasons, when nothing was changed
+     * @throws MutationException when a partial write could not be undone
+     */
+    void dispatchImmediateOrDecline(Command command) throws MutationException {
+        rollBackOnDecline.set(Boolean.TRUE);
+        try {
+            dispatchImmediate(command);
+        } finally {
+            rollBackOnDecline.remove();
+        }
+        List<String> reasons = CommitSkippableCommand.collectSkipReasons(command);
+        if (!reasons.isEmpty()) {
+            throw new ModelAccessException(String.join("; ", reasons),
+                    ErrorCode.MUTATION_FAILED, null,
+                    "Nothing was changed. Read the model again and repeat the call if it is still wanted.", null);
+        }
+    }
+
+    /**
+     * Queues {@code command} in a batch, else dispatches it at once, keeping what ran when part of it
+     * declined: the caller reports each declined operation. For bulk-mutate.
+     *
+     * @return the batch sequence number if queued, null if dispatched
+     */
+    Integer dispatchOrQueueKeepingDeclines(String sessionId, Command command, String description)
+            throws MutationException {
+        if (getMode(sessionId) == OperationalMode.BATCH) {
+            return queueForBatch(sessionId, command, description);
+        }
+        dispatchImmediate(command);
+        return null;
+    }
+
+    /**
+     * Executes {@code entry} on {@code stack}. Runs on the UI thread. A delegate that declined with
+     * nothing written leaves no entry on the stack and returns normally, so the caller reads its skip
+     * reason as before.
+     */
+    static void executeEntry(CommandStack stack, AgentAuthoredCompoundCommand entry) {
+        try {
+            stack.execute(entry);
+        } catch (AgentAuthoredCompoundCommand.Declined declined) {
+            // nothing was written and GEF pushed nothing: no entry is the right record of it
+        }
+    }
+
+    /**
+     * The stack entry for {@code command}, built on the calling thread. Owned by this thread's
+     * admitted call, unless an explicit guard is set: a batch commit or an approved proposal is no
+     * single call's work. Lets a test double of {@link #dispatchCommand} build its entry exactly as
+     * production does.
+     *
+     * <p>An immediate entry that fails as it runs moves the model version, since part of it may still be
+     * in the model; a batch commit and an approval move it themselves.</p>
+     */
+    AgentAuthoredCompoundCommand agentEntry(Command command) {
+        boolean rollBack = rollBackOnDecline.get() != null;
+        if (dispatchGuard.get() != null) {
+            return new AgentAuthoredCompoundCommand(command, dispatchOwner.get(), rollBack);
+        }
+        Admission admitted = admission.get();
+        return new AgentAuthoredCompoundCommand(command, admitted != null ? admitted.stamp : null, rollBack,
+                versionMoveForThisCall());
+    }
+
+    /**
+     * {@link #onImmediateDispatchCallback} bound to this thread's call scope, or null when none is set. The
+     * entry runs on the UI thread, which has no call scope of its own, so the version moved is that of the
+     * model this call acts on rather than whichever is active.
+     */
+    private Runnable versionMoveForThisCall() {
+        Runnable callback = onImmediateDispatchCallback;
+        if (callback == null) {
+            return null;
+        }
+        ModelSelection.Call call = selection.scope();
+        return () -> {
+            ModelSelection.Call outer = selection.adopt(call);
+            try {
+                callback.run();
+            } finally {
+                selection.restore(outer);
+            }
+        };
+    }
+
+    /**
+     * The stack a dispatch executes on. Unbound: the model resolved by the caller, as before. Guarded:
+     * the guard's own target when it names one ({@link BoundGuard}), else the model active at this
+     * moment, provided the guard accepts it — called on the UI thread, so the check and the stack it
+     * vouches for are read with no model event able to come between them.
+     */
+    CommandStack guardedStack(IArchimateModel resolved,
+            Function<IArchimateModel, ModelAccessException> guard) throws MutationException {
+        if (guard == null) {
+            return getCommandStack(resolved);
+        }
+        IArchimateModel current = guard instanceof BoundGuard bound ? bound.target() : modelSupplier.get();
+        ModelAccessException refusal = guard.apply(current);
+        if (refusal != null) {
+            throw refusal;
+        }
+        return getCommandStack(current);
+    }
+
+    /**
+     * Runs {@link #dispatchCommand} with {@code guard} as this thread's {@link #dispatchGuard}, its
+     * stack entry owned by a fresh stamp for {@code sessionId}.
+     */
+    private void dispatchGuarded(Command command, Function<IArchimateModel, ModelAccessException> guard,
+            String sessionId) throws MutationException {
+        dispatchGuard.set(guard);
+        dispatchOwner.set(new CallStamp(sessionId));
+        try {
+            dispatchCommand(command);
+        } finally {
+            dispatchGuard.remove();
+            dispatchOwner.remove();
+        }
+    }
+
+    /** The commit-time binding check for this batch, for use as a {@link #dispatchGuard}. */
+    private Function<IArchimateModel, ModelAccessException> commitGuard(MutationContext context) {
+        if (context.isBoundModelAddressed()) {
+            return boundGuard(() -> bindingTarget(context), target -> boundModelRefusal(context, target, "Commit"));
+        }
+        return target -> boundModelRefusal(context, target, "Commit");
+    }
+
+    /**
+     * What a batch's binding is checked against. A batch bound to the model its begin call addressed
+     * is checked against its own instance, or, once that has closed, against the one open instance
+     * with its id (which an empty batch may rebind to); any other batch against the model active now.
+     */
+    private IArchimateModel bindingTarget(MutationContext context) {
+        if (!context.isBoundModelAddressed()) {
+            return modelSupplier.get();
+        }
+        IArchimateModel own = openInstance(context.getBoundModelEpoch());
+        return own != null ? own : soleOpenInstanceWithId(context.getBoundModelId());
+    }
+
+    /** The one open, observed instance with this id, or null when there is none or more than one. */
+    private IArchimateModel soleOpenInstanceWithId(String modelId) {
+        IArchimateModel found = null;
+        synchronized (instanceEpochs) {
+            for (Map.Entry<IArchimateModel, Long> entry : instanceEpochs.entrySet()) {
+                if (Objects.equals(modelId, entry.getKey().getId()) && !isClosed(entry.getValue())) {
+                    if (found != null) {
+                        return null;
+                    }
+                    found = entry.getKey();
+                }
+            }
+        }
+        return found;
+    }
+
+    /** The commit-time binding check for a session's open batch (for test doubles of dispatch). */
+    Function<IArchimateModel, ModelAccessException> commitGuard(String sessionId) {
+        return commitGuard(getActiveContext(sessionId));
+    }
+
+    /**
+     * The binding check of the dispatch in progress on this thread, or null. Lets a test double of
+     * {@link #dispatchCommand} resolve its stack through {@link #guardedStack} exactly as production does.
+     *
+     * <p>An explicit guard (a batch commit, an approved proposal) wins. Otherwise a dispatch made by an
+     * admitted call is bound to the instance the call was admitted against: the call prepared its
+     * command there, so the command's undo entry belongs on that instance's stack and nowhere else.
+     * Unbound when neither applies.</p>
+     */
+    Function<IArchimateModel, ModelAccessException> currentDispatchGuard() {
+        Function<IArchimateModel, ModelAccessException> explicit = dispatchGuard.get();
+        if (explicit != null) {
+            return explicit;
+        }
+        Admission admitted = admission.get();
+        if (admitted == null) {
+            return null;
+        }
+        if (admitted.bound) {
+            return boundGuard(() -> admitted.openInstance(this), active -> admittedDispatchRefusal(admitted, active));
+        }
+        return active -> admittedDispatchRefusal(admitted, active);
+    }
+
+    /**
+     * The refusal for a dispatch of an admitted call with {@code active} active, or null when the
+     * admitted instance is open and active. Runs on the UI thread inside {@link #guardedStack}.
+     *
+     * <p>On a refusal the call's own earlier entries are undone first, on the admitted instance's own
+     * stack, so that a refused call leaves the model as it found it; the message says how far that got.
+     * A closed instance has nothing left to undo.</p>
+     */
+    private ModelAccessException admittedDispatchRefusal(Admission admitted, IArchimateModel active) {
+        admitted.dispatched = true; // from here on the call owns exactly the entries stamped with it
+        IArchimateModel instance = admitted.openInstance(this);
+        if (instance != null && instance == active) {
+            return null;
+        }
+        String outcome;
+        if (instance == null) {
+            outcome = "Nothing was applied to any open model.";
+        } else {
+            outcome = rollBackOwnEntries(admitted, instance);
+        }
+        return admittedRefusal(admitted, active, "'" + admitted.operation + "'", outcome, "");
+    }
+
+    /**
+     * Undoes the admitted call's own entries on its instance's stack, stopping at the first entry the
+     * call did not make, and says what happened. The call may not redo what a refusal rolled back.
+     * An entry whose undo fails stops it, and the refusal says so in place of "Nothing was changed".
+     */
+    private String rollBackOwnEntries(Admission admitted, IArchimateModel instance) {
+        CommandStack stack = getCommandStack(instance);
+        if (ownedCount(stack, admitted.stamp) == 0) {
+            return "Nothing was changed.";
+        }
+        String model = describeModel(admitted.modelName, admitted.modelId);
+        int undone;
+        try {
+            undone = undoOwnEntries(admitted, stack, Integer.MAX_VALUE).labels().size();
+        } catch (AgentAuthoredCompoundCommand.StackStepFailed failed) {
+            admitted.undoneByCall.clear();
+            int left = ownedCount(stack, admitted.stamp);
+            return "Undoing the call's earlier changes to " + model + " failed: " + failed.getMessage()
+                    + (left == 0 ? "" : " " + left + " more of the call's change(s) were not undone. Undo them in "
+                            + "Archi if they are not wanted.");
+        }
+        admitted.undoneByCall.clear();
+        int kept = ownedCount(stack, admitted.stamp);
+        if (kept == 0) {
+            return "Nothing was changed: the call's " + undone + " earlier change(s) to " + model + " were undone.";
+        }
+        Command top = stack.getUndoCommand();
+        String why = top == null || ownedBy(top, admitted.stamp) ? ""
+                : top instanceof AgentAuthoredCommand
+                        ? ", because another agent change sits above them in that model's undo history"
+                        : ", because a human edit sits above them in that model's undo history";
+        return kept + " of the call's " + (undone + kept) + " earlier change(s) to " + model
+                + " could not be undone" + why + " (" + undone + " were undone). Undo them in Archi "
+                + "if they are not wanted.";
+    }
+
+    /**
+     * Undoes up to {@code steps} entries while the undo top is the call's own, so neither a human edit
+     * nor another call's change is crossed, and an earlier call's work is never reached. Records each
+     * as undone by the call. Reports a human-edit block only when one stopped it before any undo, as
+     * {@link #scopedUndo} does. An entry whose undo fails stops it, naming the entries undone before it.
+     */
+    private static UndoRedoState undoOwnEntries(Admission admitted, CommandStack stack, int steps) {
+        List<String> labels = new ArrayList<>();
+        while (labels.size() < steps && stack.canUndo() && ownedBy(stack.getUndoCommand(), admitted.stamp)) {
+            Command top = stack.getUndoCommand();
+            UndoRedoState step;
+            try {
+                step = scopedUndo(stack, 1);
+            } catch (AgentAuthoredCompoundCommand.StackStepFailed failed) {
+                throw failed.after(labels);
+            }
+            if (step.labels().isEmpty()) {
+                break;
+            }
+            labels.addAll(step.labels());
+            admitted.undoneByCall.add(top);
+        }
+        String blockedReason = labels.isEmpty() && stack.canUndo()
+                && !(stack.getUndoCommand() instanceof AgentAuthoredCommand) ? BLOCK_REASON_HUMAN_EDIT : null;
+        return new UndoRedoState(labels, stack.canUndo(), stack.canRedo(), blockedReason);
+    }
+
+    /**
+     * Redoes up to {@code steps} entries while the redo top is the entry the call most recently undid
+     * itself, so a change the human undid is never re-applied by the call. An entry whose redo fails
+     * stops it, naming the entries redone before it; the stack has dropped that entry, so the call no
+     * longer counts it as its own to redo.
+     */
+    private static UndoRedoState redoOwnUndos(Admission admitted, CommandStack stack, int steps) {
+        List<String> labels = new ArrayList<>();
+        List<Command> undone = admitted.undoneByCall;
+        while (labels.size() < steps && !undone.isEmpty() && stack.canRedo()
+                && stack.getRedoCommand() == undone.get(undone.size() - 1)) {
+            UndoRedoState step;
+            try {
+                step = scopedRedo(stack, 1);
+            } catch (AgentAuthoredCompoundCommand.StackStepFailed failed) {
+                undone.remove(undone.size() - 1); // the stack dropped it: it is no longer the call's to redo
+                throw failed.after(labels);
+            }
+            if (step.labels().isEmpty()) {
+                break;
+            }
+            labels.addAll(step.labels());
+            undone.remove(undone.size() - 1);
+        }
+        return new UndoRedoState(labels, stack.canUndo(), stack.canRedo());
+    }
+
+    /** Whether {@code command} is a stack entry made by the call stamped {@code stamp}. */
+    private static boolean ownedBy(Object command, CallStamp stamp) {
+        return command instanceof AgentAuthoredCompoundCommand entry && entry.getOwner() == stamp;
+    }
+
+    /**
+     * The entries on the undo side of {@code stack} made by the call stamped {@code stamp}. An entry
+     * the human undid natively sits on the redo side, and a command that declined to run, or declined
+     * and vouched it changed nothing, never reached the stack, so neither counts. {@code getCommands()}
+     * lists the undo side bottom to top, then the redo side.
+     */
+    private static int ownedCount(CommandStack stack, CallStamp stamp) {
+        int owned = 0;
+        Command top = stack.getUndoCommand();
+        if (top == null) {
+            return 0;
+        }
+        for (Object each : stack.getCommands()) {
+            if (ownedBy(each, stamp)) {
+                owned++;
+            }
+            if (each == top) {
+                break;
+            }
+        }
+        return owned;
     }
 
     // ---- Undo/Redo ----
@@ -302,8 +911,60 @@ public class MutationDispatcher {
      */
     public UndoRedoState undo(int steps) throws MutationException {
         logger.info("Undo requested: {} steps", steps);
-        IArchimateModel model = requireModel();
-        return dispatchOnUiThread(() -> scopedUndo(getCommandStack(model), steps));
+        Supplier<UndoRedoState> operation = stackOperation(steps, true);
+        return dispatchOnUiThread(operation::get);
+    }
+
+    /**
+     * The undo or redo this thread is about to make, resolved on the calling thread and run on the UI
+     * thread. Lets a test double of {@link #undo} and {@link #redo} resolve the stack exactly as
+     * production does.
+     *
+     * <ul>
+     *   <li>Not admitted: the active model's stack, as resolved now.</li>
+     *   <li>The undo or redo tool: the active model's stack, refused unless that is still the instance
+     *       the call was admitted against. The agent's undo is a write, and a write never lands in a
+     *       model the human moved to.</li>
+     *   <li>A mutating call reverting its own trial dispatches: the admitted instance's own stack, even
+     *       when another model has become active. Undo stops at the first entry the call did not make,
+     *       and redo re-applies only what the call itself undid. A no-op once the instance has closed,
+     *       since its entries went with it.</li>
+     * </ul>
+     */
+    Supplier<UndoRedoState> stackOperation(int steps, boolean undo) {
+        Admission admitted = admission.get();
+        if (admitted == null) {
+            IArchimateModel model = requireModel();
+            return () -> scoped(getCommandStack(model), steps, undo);
+        }
+        if (admitted.stackOperation) {
+            return () -> {
+                IArchimateModel instance = admitted.openInstance(this);
+                IArchimateModel active = admitted.bound ? instance : modelSupplier.get();
+                if (instance == null || instance != active) {
+                    throw admittedRefusal(admitted, active, "'" + admitted.operation + "'",
+                            "Nothing was " + (undo ? "undone" : "redone") + ".", "");
+                }
+                return scoped(getCommandStack(instance), steps, undo);
+            };
+        }
+        return () -> {
+            IArchimateModel instance = admitted.openInstance(this);
+            if (instance == null) {
+                logger.info("{} of {} step(s) skipped: model {} was closed while the call was in progress",
+                        undo ? "Undo" : "Redo", steps, describeModel(admitted.modelName, admitted.modelId));
+                return new UndoRedoState(List.of(), false, false);
+            }
+            CommandStack stack = getCommandStack(instance);
+            if (!admitted.dispatched) {
+                return scoped(stack, steps, undo); // the call has made no entry of its own yet
+            }
+            return undo ? undoOwnEntries(admitted, stack, steps) : redoOwnUndos(admitted, stack, steps);
+        };
+    }
+
+    private static UndoRedoState scoped(CommandStack stack, int steps, boolean undo) {
+        return undo ? scopedUndo(stack, steps) : scopedRedo(stack, steps);
     }
 
     /**
@@ -322,6 +983,9 @@ public class MutationDispatcher {
      *       (partial progress was made).</li>
      *   <li>An empty/exhausted stack returns zero undos and <strong>no</strong> block reason —
      *       distinct from the human-blocked case.</li>
+     *   <li>An entry whose undo fails throws {@link AgentAuthoredCompoundCommand.StackStepFailed}, naming
+     *       the entries undone before it, which are not lost. The stack has dropped the failing entry
+     *       from both its stacks.</li>
      * </ul>
      *
      * <p>Extracted out of the {@code Display}-bound {@link #undo(int)} so the betrayal guard is
@@ -339,8 +1003,13 @@ public class MutationDispatcher {
             if (!stack.canUndo()) break;
             Command cmd = stack.getUndoCommand();
             if (cmd instanceof AgentAuthoredCommand) {
-                labels.add(cmd.getLabel());
-                stack.undo();
+                String label = cmd.getLabel();
+                try {
+                    stack.undo();
+                } catch (AgentAuthoredCompoundCommand.StackStepFailed failed) {
+                    throw failed.after(labels);
+                }
+                labels.add(label);
             } else {
                 // Top is the human's (or, defensively, an unexpected null). Stop here — never
                 // cross a human edit. Flag the betrayal refusal only when zero progress was made.
@@ -362,8 +1031,8 @@ public class MutationDispatcher {
      */
     public UndoRedoState redo(int steps) throws MutationException {
         logger.info("Redo requested: {} steps", steps);
-        IArchimateModel model = requireModel();
-        return dispatchOnUiThread(() -> scopedRedo(getCommandStack(model), steps));
+        Supplier<UndoRedoState> operation = stackOperation(steps, false);
+        return dispatchOnUiThread(operation::get);
     }
 
     /**
@@ -372,7 +1041,8 @@ public class MutationDispatcher {
      * top redo entry is human-authored (e.g. the human used native undo on their own edit), perform
      * zero redos and return {@link #BLOCK_REASON_HUMAN_EDIT}; for {@code steps > 1}, stop without
      * error at the first human redo entry. A human change must never be re-applied — or evaporated —
-     * by the agent. An empty/exhausted redo stack returns zero with no block reason.
+     * by the agent. An empty/exhausted redo stack returns zero with no block reason. An entry whose redo
+     * fails throws {@link AgentAuthoredCompoundCommand.StackStepFailed}, naming the entries redone before it.
      *
      * @param stack the command stack to operate on
      * @param steps the number of operations requested
@@ -385,8 +1055,13 @@ public class MutationDispatcher {
             if (!stack.canRedo()) break;
             Command cmd = stack.getRedoCommand();
             if (cmd instanceof AgentAuthoredCommand) {
-                labels.add(cmd.getLabel());
-                stack.redo();
+                String label = cmd.getLabel();
+                try {
+                    stack.redo();
+                } catch (AgentAuthoredCompoundCommand.StackStepFailed failed) {
+                    throw failed.after(labels);
+                }
+                labels.add(label);
             } else {
                 if (labels.isEmpty() && cmd != null) {
                     blockedReason = BLOCK_REASON_HUMAN_EDIT;
@@ -447,10 +1122,23 @@ public class MutationDispatcher {
      */
     public void beginBatch(String sessionId, String description, String intent) {
         logger.info("Beginning batch for session '{}'{}", sessionId,
-                description != null ? ": " + description : "");
+                description != null ? ": " + CallerText.logged(description) : ""); // the caller's own text
+        // Bind the batch to the model this call resolved (the one it addressed, inside a tool call) or,
+        // outside one, the model active now: the one every queued command will be prepared against and
+        // hold references into. An addressed batch commits into that instance whichever model is
+        // active; one that followed the active model is refused if a different model is active then.
+        IArchimateModel model = selection.peekModelForCall(modelSupplier.get());
+        if (model != null && selection.inScope() && isClosed(epochOf(model))) {
+            throw new ModelAccessException("begin-batch refused: model " + describeModel(model.getName(),
+                    model.getId()) + " was closed in Archi while the call was in progress. No batch was "
+                    + "started.", ErrorCode.BOUND_MODEL_CLOSED, null,
+                    "Reopen the model in Archi, then retry begin-batch (get-models lists what is open).", null);
+        }
         MutationContext context = batchSessions.computeIfAbsent(
                 sessionId, k -> new MutationContext());
-        context.beginBatch(description, intent);
+        context.beginBatch(description, intent, model != null ? model.getId() : null,
+                model != null ? model.getName() : null, model != null ? epochOf(model) : 0L,
+                selection.inScope());
     }
 
     /**
@@ -463,12 +1151,25 @@ public class MutationDispatcher {
      * @throws MutationException if commit dispatch fails
      */
     public BatchSummaryDto endBatch(String sessionId, boolean commit) throws MutationException {
+        // Not admitted: the commit dispatches under its own guard, and an admission left on this
+        // thread by an earlier call must not bind anything this thread does next.
+        admission.remove();
         MutationContext context = getActiveContext(sessionId);
 
         if (!commit) {
             logger.info("Rolling back batch for session '{}' ({} queued commands)",
                     sessionId, context.getQueuedCount());
+            // A rollback dispatches nothing, so it cannot write into the wrong model and is allowed
+            // even when the bound model is no longer active — a diverged batch must always be
+            // discardable. The summary then names the bound model, so the discard is attributable.
             BatchSummaryDto summary = context.buildRollbackSummary();
+            IArchimateModel active = bindingTarget(context);
+            rebindIfBoundInstanceClosed(context, active);
+            if (boundModelRefusal(context, active, "Rollback") != null) {
+                summary = new BatchSummaryDto(summary.operationCount(), summary.descriptions(),
+                        summary.duration(), summary.rolledBack(), summary.skippedOperations(),
+                        context.getBoundModelId(), context.getBoundModelName());
+            }
             context.reset();
             removeBatchSessionIfEmpty(sessionId);
             return summary;
@@ -478,9 +1179,43 @@ public class MutationDispatcher {
         logger.info("Committing batch for session '{}' ({} queued commands)",
                 sessionId, queuedCount);
 
+        // The compound mutates the model its commands were prepared against, but dispatch takes
+        // the CommandStack of whichever model is active now. If those differ, the write and its
+        // undo entry would land in different models — refuse, leaving the queue intact. Refused even
+        // with nothing queued, so a commit never reports success for a batch bound elsewhere.
+        IArchimateModel active = bindingTarget(context);
+        rebindIfBoundInstanceClosed(context, active);
+        requireBatchBoundTo(context, active, "Commit");
         if (queuedCount > 0) {
             Command compound = context.buildCompoundCommand();
-            dispatchCommand(compound);
+            // GEF's stack runs nothing, and says nothing, for a compound that cannot execute. Refuse
+            // instead, with the queue intact, as the binding refusal above does.
+            if (!compound.canExecute()) {
+                ModelAccessException refusal = context.unexecutableCommitRefusal();
+                logger.info("{}", CallerText.loggedMessage(refusal.getMessage()));
+                throw refusal;
+            }
+            try {
+                dispatchGuarded(compound, commitGuard(context), sessionId);
+            } catch (AgentAuthoredCompoundCommand.ChangesLeft | AgentAuthoredCompoundCommand.Failed failure) {
+                // The rest of the batch was undone with it. Its commands have run, so a retry would run
+                // them again over what was left: the batch ends here, whatever happens while reporting it.
+                try {
+                    if (onImmediateDispatchCallback != null) {
+                        onImmediateDispatchCallback.run(); // part of it may still be in the model: a new version
+                    }
+                    MutationException ended = failure instanceof AgentAuthoredCompoundCommand.Failed thrown
+                            ? thrown.inBatch(context.describeQueued(thrown.getFailedAt()))
+                            : ((AgentAuthoredCompoundCommand.ChangesLeft) failure).inBatch(
+                                    context.describeChangesLeft());
+                    logger.error("Batch for session '{}' failed at commit and has ended: {}", sessionId,
+                            CallerText.loggedMessage(ended.getMessage()));
+                    throw ended;
+                } finally {
+                    context.reset();
+                    removeBatchSessionIfEmpty(sessionId);
+                }
+            }
         }
 
         // Built after dispatch, not before: a command that declines to run at commit time
@@ -529,10 +1264,48 @@ public class MutationDispatcher {
      * @param description human-readable description of the mutation
      * @return the batch sequence number for this command
      * @throws IllegalStateException if session is not in batch mode
+     * @throws BatchClosingCommand.Refusal if a command queued earlier closes the batch to this one
      */
     public int queueForBatch(String sessionId, Command command, String description) {
+        return queueForBatch(sessionId, command, description, null);
+    }
+
+    /**
+     * As {@link #queueForBatch(String, Command, String)}, naming {@code approvedTool} as the tool
+     * queuing the command when no call admitted it (an approved proposal's rebuilt command).
+     */
+    private int queueForBatch(String sessionId, Command command, String description, String approvedTool) {
+        Admission admitted = consumeMutationAdmission();
         MutationContext context = getActiveContext(sessionId);
-        int seq = context.queueCommand(command, description);
+        String refused = "Queuing '" + description + "'";
+        int seq;
+        // Every command entering the queue passes here, including an approved proposal's rebuilt
+        // command, so this is where a command prepared against another model is kept out of it. The
+        // checks and the enqueue hold the context's lock, so an empty batch cannot be rebound to a
+        // reopened instance between them. No rebind here: a command already prepared against a
+        // closed instance must not follow its id to the new one.
+        synchronized (context) {
+            // A bound call is checked against its own instance; a command that was not admitted (an
+            // approved proposal's) against the model its approval bound this thread to, else the active one.
+            IArchimateModel active = admitted != null && admitted.bound ? admitted.openInstance(this)
+                    : selection.peekModelForCall(modelSupplier.get());
+            if (admitted != null) {
+                requireAdmittedInstance(admitted, active, refused, context);
+            }
+            requireBatchBoundTo(context, active, refused);
+            // A command queued earlier may close the batch to this one (BatchClosingCommand): it
+            // would run after a command that removes what it was prepared against. Checked here,
+            // with the enqueue, so no tool can bypass it and no other call can slip in between.
+            BatchClosingCommand.Refusal closed = context.refuseQueuing(command,
+                    admitted != null ? admitted.operation : approvedTool);
+            if (closed != null) {
+                throw closed;
+            }
+            // An operation with nothing to change would stop the whole commit from running
+            // (ChangesNothingCommand says why); it keeps its place in the queue as nothing instead.
+            seq = context.queueCommand(ChangesNothingCommand.holdsNothing(command)
+                    ? new ChangesNothingCommand(command.getLabel()) : command, description);
+        }
         logger.debug("Queued command #{} for session '{}': {}", seq, sessionId, description);
         return seq;
     }
@@ -548,8 +1321,9 @@ public class MutationDispatcher {
      *
      * <p>Returns null whenever the session is not in batch mode, so every non-batch caller keeps
      * its existing behaviour by construction rather than by argument. Returns null too when the id
-     * names no queued container — including a queued note, image or view-reference — leaving the
-     * caller's ordinary live lookup (and its not-found error) in charge.</p>
+     * names no queued container. An id naming a queued note, image or view-reference is refused by
+     * name ({@link QueuedObjectRefusals#refuseAsParent}); any other id is left to the caller's ordinary
+     * live lookup and its not-found error.</p>
      *
      * <p>The batch-mode test is delegated to the context rather than performed here, so that one
      * map read and one locked context call decide the whole answer. A batch spans several requests
@@ -563,7 +1337,17 @@ public class MutationDispatcher {
      */
     IDiagramModelContainer queuedParentContainer(String sessionId, String parentViewObjectId) {
         MutationContext context = batchSessions.get(sessionId);
-        return context == null ? null : context.queuedContainer(parentViewObjectId);
+        if (context == null) {
+            return null;
+        }
+        IDiagramModelContainer container = context.queuedContainer(parentViewObjectId);
+        if (container == null) {
+            // A queued note, image or view reference: refused by name rather than left to the live
+            // lookup, which cannot see it and would answer "not found". A batch ending between the
+            // two reads makes the second answer null, which keeps the old not-found path.
+            QueuedObjectRefusals.refuseAsParent(context.queuedViewObject(parentViewObjectId), parentViewObjectId);
+        }
+        return container;
     }
 
     /**
@@ -612,6 +1396,28 @@ public class MutationDispatcher {
     IArchimateDiagramModel queuedCreatedView(String sessionId, String viewId) {
         MutationContext context = batchSessions.get(sessionId);
         return context == null ? null : context.queuedCreatedView(viewId);
+    }
+
+    /**
+     * The folder a session's open batch will add a queued view to, or null when it queues no create
+     * for that id.
+     *
+     * <p>The folder-side sibling of {@link #queuedCreatedView(String, String)}: a queued view has no
+     * container until the batch commits, so a caller that needs to know where it will go reads it off
+     * the queued create instead. {@code clone-view} uses it to place a clone of a view the same batch
+     * creates in that view's folder, as it does for a view already in the model.</p>
+     *
+     * <p>Reads {@code batchSessions} exactly once, and the mode test lives inside
+     * {@link MutationContext#queuedCreatedViewFolder(String)} under that context's own lock — same
+     * TOCTOU reasoning as its siblings.</p>
+     *
+     * @param sessionId the session identifier
+     * @param viewId    the queued view's id, may be null
+     * @return the folder its create will add it to, or null when there is none to resolve
+     */
+    IFolder queuedCreatedViewFolder(String sessionId, String viewId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedCreatedViewFolder(viewId);
     }
 
     /**
@@ -718,7 +1524,26 @@ public class MutationDispatcher {
     IDiagramModelArchimateObject queuedConnectionEnd(String sessionId, String viewObjectId,
             IArchimateDiagramModel view) {
         MutationContext context = batchSessions.get(sessionId);
-        return context == null ? null : context.queuedConnectionEnd(viewObjectId, view);
+        if (context == null) {
+            return null;
+        }
+        IDiagramModelArchimateObject end = context.queuedConnectionEnd(viewObjectId, view);
+        if (end == null) {
+            QueuedObjectRefusals.refuseAsConnectionEnd(context.queuedViewObject(viewObjectId), viewObjectId);
+        }
+        return end;
+    }
+
+    /**
+     * Refuses removing an object this session's open batch has queued for placement: it is detached
+     * until the batch commits, so the live lookup would answer "not found" for an id an earlier call of
+     * the batch handed back. Does nothing outside batch mode or for an object already on the view.
+     */
+    void refuseRemovingQueued(String sessionId, String viewObjectId) {
+        MutationContext context = batchSessions.get(sessionId);
+        if (context != null) {
+            QueuedObjectRefusals.refuseRemoving(context.queuedViewObject(viewObjectId), viewObjectId);
+        }
     }
 
     /**
@@ -806,6 +1631,32 @@ public class MutationDispatcher {
     }
 
     /**
+     * {@link #queuedLabelVisibility(String)} for the session whose tool call this thread is running,
+     * or null when no call is admitted on this thread or its session has no open batch.
+     *
+     * <p>Lets a routing pass several layers inside a call read the label visibility its own batch
+     * will commit, without every method between the tool and the router carrying the session id. The
+     * admission is the same per-call binding every immediate dispatch of the call already reads.</p>
+     */
+    Map<String, Boolean> queuedLabelVisibilityOfCall() {
+        Admission admitted = admission.get();
+        return admitted == null || admitted.stamp.sessionId == null
+                ? null : queuedLabelVisibility(admitted.stamp.sessionId);
+    }
+
+    /**
+     * Every non-compound command a session's open batch has queued, in queue order, or null when
+     * the session is not in a batch. See {@link MutationContext#queuedLeafCommands()}.
+     *
+     * @param sessionId the session identifier
+     * @return the queued leaf commands, or null when the session has no open batch
+     */
+    List<Command> queuedLeafCommands(String sessionId) {
+        MutationContext context = batchSessions.get(sessionId);
+        return context == null ? null : context.queuedLeafCommands();
+    }
+
+    /**
      * The {@code object id → anchor} a session's open batch has queued but not yet applied, or null
      * when the session is not in a batch.
      *
@@ -859,7 +1710,8 @@ public class MutationDispatcher {
         BatchStatusDto base = context.getBatchStatus();
         return new BatchStatusDto(
                 base.mode(), base.queuedCount(), base.queuedDescriptions(),
-                base.batchStarted(), approval, base.pendingApprovalCount());
+                base.batchStarted(), approval, base.pendingApprovalCount(),
+                base.boundModelId(), base.boundModelName());
     }
 
     // ---- Approval management (globalised) ----
@@ -920,8 +1772,29 @@ public class MutationDispatcher {
      * @return the assigned proposal ID
      */
     public String storeProposal(String sessionId, PendingProposal proposal) {
+        // Bind the proposal to the model it was prepared against: the one the call was admitted on,
+        // or, on a path that is not admitted, the one active now. Approve rebuilds against whichever
+        // model is active then, so it is refused if that is another one.
+        Admission admitted = consumeMutationAdmission();
+        if (proposal.modelId() == null) {
+            if (admitted != null) {
+                proposal = proposal.withModel(admitted.modelId, admitted.modelName, admitted.epoch, admitted.bound);
+            } else {
+                IArchimateModel model = selection.peekModelForCall(modelSupplier.get());
+                if (model != null) {
+                    proposal = proposal.withModel(model.getId(), model.getName(), epochOf(model),
+                            selection.inScope());
+                }
+            }
+        }
         MutationContext context = batchSessions.computeIfAbsent(
                 sessionId, k -> new MutationContext());
+        // A proposal that approval would queue after a batch-closing command is refused now, so the
+        // agent learns the batch is closed instead of the human meeting the refusal on approve.
+        BatchClosingCommand.Refusal closed = context.refuseProposing(proposal.tool());
+        if (closed != null) {
+            throw closed;
+        }
         // Sweep abandoned proposals first so TTL relieves the hard cap before this store.
         List<String> swept = context.sweepExpired(Instant.now(), PROPOSAL_TTL);
         if (!swept.isEmpty()) {
@@ -929,7 +1802,7 @@ public class MutationDispatcher {
                     swept.size(), sessionId, swept);
         }
         String id = context.storeProposal(proposal);
-        logger.debug("Stored proposal '{}' for session '{}': {}", id, sessionId, proposal.description());
+        logger.debug("Stored proposal '{}' for session '{}': {}", CallerText.logged(id), sessionId, proposal.description());
         fireQueueChanged();
         return id;
     }
@@ -953,6 +1826,7 @@ public class MutationDispatcher {
             Command command, Object entity, Map<String, Object> currentState,
             Map<String, Object> proposedChanges, String validationSummary,
             Instant createdAt) {
+        admission.remove(); // not an admitted path: stamp from the active model, never a stale admission
         PendingProposal proposal = new PendingProposal(
                 null, tool, description, command, entity,
                 currentState, proposedChanges, validationSummary, createdAt);
@@ -1011,17 +1885,33 @@ public class MutationDispatcher {
      * @return batch sequence number if queued, null if dispatched immediately
      * @throws MutationException if dispatch fails
      */
-    private Integer dispatchApproved(String sessionId, Command command, String description)
-            throws MutationException {
+    private Integer dispatchApproved(String sessionId, PendingProposal proposal, Command command,
+            String description) throws MutationException {
         OperationalMode mode = getMode(sessionId);
         if (mode == OperationalMode.BATCH) {
-            return queueForBatch(sessionId, command, description);
+            return queueForBatch(sessionId, command, description, proposal.tool());
         }
-        dispatchCommand(command);
-        if (onImmediateDispatchCallback != null) {
+        Function<IArchimateModel, ModelAccessException> check = target -> proposalRefusal(proposal, target);
+        try {
+            dispatchGuarded(command, proposal.modelAddressed() ? boundGuard(() -> proposalTarget(proposal), check)
+                    : check, sessionId);
+        } catch (AgentAuthoredCompoundCommand.ChangesLeft | AgentAuthoredCompoundCommand.Failed failure) {
+            // Part of it may still be in the model: a new version.
+            if (onImmediateDispatchCallback != null) {
+                onImmediateDispatchCallback.run();
+            }
+            throw failure;
+        }
+        // A command that declined with nothing written left the model as it was: no new version.
+        if (onImmediateDispatchCallback != null && !changedNothing(command)) {
             onImmediateDispatchCallback.run();
         }
         return null;
+    }
+
+    /** Whether {@code command}, or every part of it, declined and vouches it left the model as it was. */
+    private static boolean changedNothing(Command command) {
+        return CommitSkippableCommand.vouchesNothingChanged(command);
     }
 
     // ---- Handler-facing facade methods ----
@@ -1119,16 +2009,50 @@ public class MutationDispatcher {
      * @param sessionId  the session identifier
      * @param proposalId the proposal to approve
      * @return ApprovalResult with entity and optional batch sequence, or null if not found
-     * @throws MutationException if the proposal is stale or its command cannot be rebuilt (nothing dispatched)
+     * @throws MutationException if the proposal is stale or its command cannot be rebuilt (nothing dispatched),
+     *         or if the dispatched command declined as it ran; the card is kept only when the command
+     *         vouches that it changed nothing
      */
     public ApprovalResult approveProposal(String sessionId, String proposalId)
             throws MutationException {
+        // An approval is never admitted: it acts on a stored request, on the MCP or the UI thread. A
+        // value left on this thread by an earlier call must not reach the queue it may dispatch into.
+        admission.remove();
         PendingProposal proposal = getProposal(sessionId, proposalId);
         if (proposal == null) {
             return null;
         }
         logger.info("Approving proposal '{}' for session '{}': {}",
                 proposalId, sessionId, proposal.description());
+        // (0) Refuse before anything is rebuilt if the proposal's model cannot be the target: closed, or,
+        // for one that followed the active model, no longer active. The rebuild would otherwise resolve
+        // against the wrong model. Thrown before removeProposal, so the card stays. An addressed
+        // proposal targets its own instance whichever model is active.
+        IArchimateModel active = proposal.modelAddressed() ? proposalTarget(proposal) : modelSupplier.get();
+        ModelAccessException early = proposalRefusal(proposal, active);
+        // An approval made while this session has a batch open is queued into it, and the queue
+        // refuses a command for another model only after the proposal is removed below. Check that
+        // here too, so the refusal keeps the card on screen like every other approve-time refusal.
+        MutationContext batch = batchSessions.get(sessionId);
+        if (early == null && batch != null && batch.getMode() == OperationalMode.BATCH) {
+            rebindIfBoundInstanceClosed(batch, active);
+            early = boundModelRefusal(batch, active, "Approving " + proposalId + " into the open batch");
+        }
+        if (early != null) {
+            throw approverRefusal(proposalId, early);
+        }
+        // Everything below resolves its model through the selection, so bind it to the target: the
+        // rebuild, the staleness check and the dispatch then all act on the same instance.
+        ModelSelection.Call outer = selection.bind(sessionId, active);
+        try {
+            return approveBound(sessionId, proposalId, proposal, active);
+        } finally {
+            selection.restore(outer);
+        }
+    }
+
+    private ApprovalResult approveBound(String sessionId, String proposalId, PendingProposal proposal,
+            IArchimateModel target) throws MutationException {
         // Store-the-request approve path — re-resolve + re-check + build fresh, never run a frozen
         // command, and DON'T remove the proposal until the rebuild succeeds (so a stale rejection keeps the
         // card on screen with its named reason). (1) Reject-stale if the human edited/removed a
@@ -1138,10 +2062,10 @@ public class MutationDispatcher {
         // blast radius no longer matches the one printed on the card. (3) Only now remove from the queue
         // and dispatch through the same seam as immediate ops, preserving the agent-authored tag.
         ProposalStalenessGuard.StaleVerdict verdict = stalenessGuard.vet(proposal.capture(),
-                id -> queuedAny(sessionId, id));
+                id -> queuedAny(sessionId, id), target);
         if (verdict.stale()) {
             logger.info("Proposal '{}' rejected as stale (kept in queue): {}", proposalId, verdict.reason());
-            throw new MutationException(verdict.reason());
+            throw new ProposalStaleException(verdict.reason());
         }
         PreparedMutation<?> fresh = proposalBuilder.rebuild(proposal); // may throw stale — proposal still queued
         // (2b) The card the human read is a propose-time photograph; the command just rebuilt measured the
@@ -1153,10 +2077,43 @@ public class MutationDispatcher {
         if (divergence != null) {
             logger.info("Proposal '{}' refused (kept in queue): the reviewed card no longer describes what "
                     + "approving would do: {}", proposalId, divergence);
-            throw new MutationException(divergence);
+            throw new ProposalStaleException(divergence);
         }
         removeProposal(sessionId, proposalId); // commit point: fresh command built, now drain + dispatch
-        Integer batchSeq = dispatchApproved(sessionId, fresh.command(), proposal.description());
+        Integer batchSeq;
+        try {
+            batchSeq = dispatchApproved(sessionId, proposal, fresh.command(), proposal.description());
+        } catch (ModelAccessException late) {
+            if (!isBindingRefusal(late) && !(late instanceof BatchClosingCommand.Refusal)) {
+                throw late;
+            }
+            // A model switched after the checks above, or the open batch is closed to this command —
+            // the queue or the UI-thread guard refused before anything ran. Put the card back so the
+            // human still sees it, with the reason.
+            restoreProposal(sessionId, proposal);
+            throw approverRefusal(proposalId, late);
+        }
+        // (4) A dispatched command can still decline as it runs, when the model moved in a way the card
+        // did not cover. Say so instead of "approved". The card goes back only when the command vouches
+        // it wrote nothing; otherwise part of it may have run, and the card no longer describes the model.
+        // A command queued into an open batch has not run: its decline is reported at commit.
+        if (batchSeq == null) {
+            List<String> reasons = CommitSkippableCommand.collectSkipReasons(fresh.command());
+            if (!reasons.isEmpty()) {
+                String reason = String.join("; ", reasons);
+                if (!reason.endsWith(".")) {
+                    reason += ".";
+                }
+                logger.warn("Approved proposal '{}' declined as it ran: {}", proposalId, reason);
+                if (changedNothing(fresh.command())) {
+                    restoreProposal(sessionId, proposal);
+                    throw new MutationException(reason + " Nothing was changed. Reject this proposal and ask "
+                            + "the agent to make the change again.");
+                }
+                throw new MutationException(reason + " Part of this change may have been applied. Check the "
+                        + "model in Archi before going on.");
+            }
+        }
         // Prefer the freshly re-resolved entity (e.g. a create's real new id) over the propose-time DTO.
         Object entity = fresh.entity() != null ? fresh.entity() : proposal.entity();
         return new ApprovalResult(entity, batchSeq, proposal.tool(), proposal.description());
@@ -1182,7 +2139,8 @@ public class MutationDispatcher {
                 proposal.description(), proposal.currentState(),
                 proposal.proposedChanges(), proposal.validationSummary(),
                 proposal.createdAt().toString(),
-                proposal.effectDescription(), proposal.intent());
+                proposal.effectDescription(), proposal.intent(),
+                proposal.modelId(), proposal.modelName());
     }
 
     private ProposalDto toProposalDto(PendingProposal p) {
@@ -1190,7 +2148,7 @@ public class MutationDispatcher {
                 p.proposalId(), p.tool(), "pending",
                 p.description(), p.currentState(), p.proposedChanges(),
                 p.validationSummary(), p.createdAt().toString(),
-                p.effectDescription(), p.intent());
+                p.effectDescription(), p.intent(), p.modelId(), p.modelName());
     }
 
     /**
@@ -1238,13 +2196,16 @@ public class MutationDispatcher {
             if (ex instanceof MutationException me) {
                 throw me;
             }
+            if (ex instanceof ModelAccessException refusal && isBindingRefusal(refusal)) {
+                throw refusal; // a guard refusal from guardedStack: nothing ran, keep it structured
+            }
             throw new MutationException("Mutation failed on UI thread", ex);
         }
         return result.get();
     }
 
     private IArchimateModel requireModel() throws MutationException {
-        IArchimateModel model = modelSupplier.get();
+        IArchimateModel model = selection.peekModelForCall(modelSupplier.get());
         if (model == null) {
             throw new MutationException("No model loaded — cannot execute mutation");
         }
@@ -1257,6 +2218,480 @@ public class MutationDispatcher {
             throw new MutationException("CommandStack not available for model");
         }
         return stack;
+    }
+
+    // ---- Model binding ----
+
+    /**
+     * Admits a mutating call against {@code model} for this session, returning the model unchanged.
+     *
+     * <p>Called at a mutating tool's entry, before anything is prepared, with the model that call
+     * captured and will prepare against. A session whose open batch is bound to a different model
+     * is refused here, naming the operation, so the caller learns of the divergence at its first
+     * call rather than at commit — and before a prepare against the wrong model can fail in some
+     * way that does not name the cause. Outside a batch this is a pass-through.</p>
+     *
+     * @param sessionId the session identifier
+     * @param operation the tool operation being admitted, for the refusal message
+     * @param model     the model the call captured
+     * @return {@code model}
+     * @throws ModelAccessException with {@link ErrorCode#BOUND_MODEL_NOT_ACTIVE} or
+     *         {@link ErrorCode#BOUND_MODEL_CLOSED} when the batch is bound elsewhere
+     */
+    public IArchimateModel admit(String sessionId, String operation, IArchimateModel model) {
+        admission.remove();
+        selection.requireUnambiguous(operation);
+        requireAdmissible(sessionId, operation, model);
+        if (model != null) {
+            admission.set(new Admission(epochOf(model), model, operation, false, sessionId, selection.inScope()));
+        }
+        return model;
+    }
+
+    /**
+     * As {@link #admit}, for an operation that acts on the active model's {@code CommandStack}
+     * directly and prepares nothing that is later queued or stored (undo, redo). Refused exactly as
+     * a mutating call would be. The admitted instance binds the {@link #undo} or {@link #redo} that
+     * follows, which is refused if another model became active in between; a queue or a store never
+     * reads it.
+     */
+    public void admitStackOperation(String sessionId, String operation, IArchimateModel model) {
+        admission.remove();
+        selection.requireUnambiguous(operation);
+        requireAdmissible(sessionId, operation, model);
+        requireNotShared(sessionId, operation, model);
+        if (model != null) {
+            admission.set(new Admission(epochOf(model), model, operation, true, sessionId, selection.inScope()));
+        }
+    }
+
+    /**
+     * Ends the tool call on this thread: nothing it was admitted against stays bound to the thread.
+     * Run by the tool registry once per call, after the handler returns or throws.
+     */
+    public void endCall() {
+        admission.remove();
+    }
+
+    /**
+     * Refuses an undo or redo while another session is working on the same model. Archi keeps one undo
+     * history per model, not per session, so the step could reverse the other session's change. Read
+     * against each session's latest call, so a session that has moved to another model stops counting.
+     */
+    private void requireNotShared(String sessionId, String operation, IArchimateModel model) {
+        if (model == null || !selection.inScope()) {
+            return;
+        }
+        int others = selection.otherSessionsHolding(sessionId, model);
+        if (others == 0) {
+            return;
+        }
+        String name = describeModel(model.getName(), model.getId());
+        ModelAccessException refusal = new ModelAccessException("'" + operation + "' refused: model " + name
+                + " is shared — " + others + " other session(s) are working on it. Archi keeps one undo history "
+                + "per model, not per session, so this step could reverse another session's change. Nothing was "
+                + (operation.equals("redo") ? "redone." : "undone."), ErrorCode.MODEL_SHARED, null,
+                "This is available again once no other session is working on " + name + " (a session stops "
+                        + "counting once its calls act on another model). To revert your own change now, make a "
+                        + "new change that restores the earlier state.", null);
+        logger.info("{}", CallerText.loggedMessage(refusal.getMessage()));
+        throw refusal;
+    }
+
+    /** Removes this thread's admission, returning it when it is a mutating call's. */
+    private Admission consumeMutationAdmission() {
+        Admission admitted = admission.get();
+        admission.remove();
+        return admitted == null || admitted.stackOperation ? null : admitted;
+    }
+
+    private void requireAdmissible(String sessionId, String operation, IArchimateModel model) {
+        MutationContext context = batchSessions.get(sessionId);
+        if (context != null && context.getMode() == OperationalMode.BATCH) {
+            rebindIfBoundInstanceClosed(context, model);
+            if (selection.inScope()) {
+                requireBatchModel(context, model, operation);
+            }
+            requireBatchBoundTo(context, model, "'" + operation + "'");
+        }
+    }
+
+    /**
+     * Refuses a tool call that resolved a different model from the one its session's open batch is
+     * bound to, while that instance is open: the call named another model inside the batch. A closed
+     * binding is left to {@link #requireBatchBoundTo}, whose refusal says so.
+     */
+    private void requireBatchModel(MutationContext context, IArchimateModel model, String operation) {
+        IArchimateModel bound = openInstance(context.getBoundModelEpoch());
+        if (bound == null || bound == model) {
+            return;
+        }
+        String boundName = describeModel(context.getBoundModelName(), context.getBoundModelId());
+        String called = model != null ? describeModel(model.getName(), model.getId()) : "(none)";
+        if (model != null && Objects.equals(model.getId(), bound.getId())) {
+            boundName += " " + describeCopy(bound);
+            called += " " + describeCopy(model);
+        }
+        List<String> queued = context.getQueuedDescriptions();
+        ModelAccessException refusal = new ModelAccessException("'" + operation + "' refused: this call "
+                + "addresses model " + called + ", but this session's batch is bound to model " + boundName
+                + ". Nothing was queued, and the " + queued.size() + " operation(s) already queued are "
+                + "unchanged.", ErrorCode.BATCH_MODEL_MISMATCH,
+                queued.isEmpty() ? "No operations are queued." : "Queued operations (" + queued.size() + "): "
+                        + enumerate(queued),
+                "Either end the batch first (end-batch commits it; end-batch rollback=true discards it) and "
+                        + "then retry, or correct the call: pass the batch's model id " + context.getBoundModelId()
+                        + " as modelId, or omit modelId, which defaults to the batch's model.", null);
+        logger.info("{}", CallerText.loggedMessage(refusal.getMessage()));
+        throw refusal;
+    }
+
+    /**
+     * The instance an addressed proposal is approved into: the one it was proposed on while that is
+     * open, else the one open instance with its id (a request rebuilds correctly against a reopened
+     * file); null when there is none, or more than one.
+     */
+    private IArchimateModel proposalTarget(PendingProposal proposal) {
+        IArchimateModel own = proposal.modelEpoch() != 0L ? openInstance(proposal.modelEpoch()) : null;
+        return own != null ? own : soleOpenInstanceWithId(proposal.modelId());
+    }
+
+    /** How many open, observed instances carry this id. */
+    private int openInstancesWithId(String modelId) {
+        int count = 0;
+        synchronized (instanceEpochs) {
+            for (Map.Entry<IArchimateModel, Long> entry : instanceEpochs.entrySet()) {
+                if (Objects.equals(modelId, entry.getKey().getId()) && !isClosed(entry.getValue())) {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Rebinds an <em>empty</em> batch whose bound instance has closed to {@code target}, when that is
+     * an open instance with the same id. Its queue references no instance, so nothing is re-pointed;
+     * this is what lets an empty batch outlive a close and reopen of its file. Only ever called on
+     * the entry side (admission, approval, end of batch) and never from {@link #queueForBatch}: a call
+     * admitted before the close must meet the strict check there, not follow the id to the new
+     * instance.
+     */
+    private void rebindIfBoundInstanceClosed(MutationContext context, IArchimateModel target) {
+        long bound = context.getBoundModelEpoch();
+        if (target == null || !isClosed(bound) || !Objects.equals(target.getId(), context.getBoundModelId())) {
+            return;
+        }
+        long targetEpoch = epochOf(target);
+        if (!isClosed(targetEpoch) && context.rebindEmpty(bound, targetEpoch, target.getName())) {
+            logger.info("Empty batch rebound from a closed instance of model '{}' to the open one",
+                    context.getBoundModelId());
+        }
+    }
+
+    /**
+     * Refuses a command whose call was admitted against a different instance from the one active
+     * now: the model it was prepared against was closed, or another model was made active, while
+     * the call was in progress.
+     */
+    private void requireAdmittedInstance(Admission admitted, IArchimateModel active, String refused,
+            MutationContext context) {
+        if (active != null && epochOf(active) == admitted.epoch && !isClosed(admitted.epoch)) {
+            return;
+        }
+        throw admittedRefusal(admitted, active, refused, "Nothing was queued, and the "
+                + context.getQueuedCount() + " operation(s) already queued are unchanged.",
+                "; or discard this batch with end-batch rollback=true");
+    }
+
+    /**
+     * The refusal for an admitted call whose instance closed, or stopped being the active one, while
+     * the call was in progress. {@code outcome} states what the refusal left behind and must be true;
+     * {@code batchRemedy} is appended to the remedy when a batch is involved.
+     */
+    private ModelAccessException admittedRefusal(Admission admitted, IArchimateModel active, String refused,
+            String outcome, String batchRemedy) {
+        String prepared = describeModel(admitted.modelName, admitted.modelId);
+        String subject = refused + " refused: this call was " + (admitted.stackOperation ? "made" : "prepared")
+                + " against model " + prepared;
+        ModelAccessException refusal;
+        if (isClosed(admitted.epoch) || admitted.instance.get() == null) {
+            refusal = new ModelAccessException(subject + ", which was closed in Archi while the call was in "
+                    + "progress. " + outcome, ErrorCode.BOUND_MODEL_CLOSED, null,
+                    (admitted.stackOperation
+                            ? "Its changes closed with it; confirm which model is active with get-model-info "
+                                    + "before undoing or redoing anything there"
+                            : "Retry the call, which prepares it against the model open now (reopen " + prepared
+                                    + " in Archi first if it is not open)") + batchRemedy + ".", null);
+        } else {
+            String now = active != null ? describeModel(active.getName(), active.getId()) : null;
+            refusal = new ModelAccessException(subject + ", but " + (now != null ? "the active model became "
+                    + now : "no model is active") + " while the call was in progress. " + outcome,
+                    ErrorCode.BOUND_MODEL_NOT_ACTIVE, null,
+                    switchBackRemedy(prepared, now) + ", then retry" + batchRemedy + ".", null);
+        }
+        logger.info("{}", CallerText.loggedMessage(refusal.getMessage()));
+        return refusal;
+    }
+
+    private boolean isClosed(long epoch) {
+        return epoch != 0L && closedInstances.containsKey(epoch);
+    }
+
+    /** The open instance with this epoch, or null when it has closed or is no longer referenced. */
+    private IArchimateModel openInstance(long epoch) {
+        if (isClosed(epoch)) {
+            return null;
+        }
+        synchronized (instanceEpochs) {
+            for (Map.Entry<IArchimateModel, Long> entry : instanceEpochs.entrySet()) {
+                if (entry.getValue() == epoch) {
+                    return entry.getKey();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Whether a model with this id has been seen closing and no instance with it is open now. The
+     * id-level view of closure, derived from the per-instance record: it is what a refusal names
+     * when the active model has a different id, and the remedy is to reopen the file.
+     */
+    private boolean closedWithNoOpenCopy(String modelId) {
+        if (!closedInstances.containsValue(modelId)) {
+            return false;
+        }
+        synchronized (instanceEpochs) {
+            for (Map.Entry<IArchimateModel, Long> entry : instanceEpochs.entrySet()) {
+                if (modelId.equals(entry.getKey().getId()) && !isClosed(entry.getValue())) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private void requireBatchBoundTo(MutationContext context, IArchimateModel target, String refused) {
+        ModelAccessException refusal = boundModelRefusal(context, target, refused);
+        if (refusal != null) {
+            logger.info("{}", CallerText.loggedMessage(refusal.getMessage()));
+            throw refusal;
+        }
+    }
+
+    /**
+     * The refusal for doing {@code refused} on this batch with {@code target} active, or null when
+     * the batch may proceed (bound to {@code target}, or not bound to any model).
+     */
+    private ModelAccessException boundModelRefusal(MutationContext context, IArchimateModel target,
+            String refused) {
+        String boundId = context.getBoundModelId();
+        if (boundId == null) {
+            return null;
+        }
+        String bound = describeModel(context.getBoundModelName(), boundId);
+        List<String> queued = context.getQueuedDescriptions();
+        String queuedDetails = queued.isEmpty() ? "No operations are queued."
+                : "Queued operations (" + queued.size() + "): " + enumerate(queued);
+        long boundEpoch = context.getBoundModelEpoch();
+        // Queued work bound to a closed instance is orphaned whether the close was seen with the work
+        // already queued or the work reached the queue in the moment after it.
+        if (context.isBoundModelOrphaned() || (isClosed(boundEpoch) && !queued.isEmpty())) {
+            return new ModelAccessException(refused + " refused: this batch is bound to model " + bound
+                    + ", which was closed while the batch held " + queued.size()
+                    + " queued operation(s). Those operations belong to the closed copy of the model and "
+                    + "cannot be committed, even after it is reopened. Nothing was applied to any model.",
+                    ErrorCode.BOUND_MODEL_CLOSED, queuedDetails,
+                    "Discard this batch with end-batch rollback=true, reopen " + bound
+                            + " in Archi if it is not open, and replay the operations listed in details "
+                            + "in a new batch.", null);
+        }
+        if (target != null && boundId.equals(target.getId())) {
+            if (boundEpoch == 0L || epochOf(target) == boundEpoch) {
+                return null;
+            }
+            if (isClosed(boundEpoch)) {
+                // Only reachable where an empty batch may not be rebound: the queue, mid-call.
+                return new ModelAccessException(refused + " refused: this batch is bound to a copy of "
+                        + "model " + bound + " that has been closed in Archi; the open model with that id "
+                        + "is a different copy. Nothing was applied to any model.",
+                        ErrorCode.BOUND_MODEL_CLOSED, queuedDetails,
+                        "Retry the call, which binds the empty batch to the open copy; or discard this "
+                                + "batch with end-batch rollback=true.", null);
+            }
+            String boundCopy = describeCopy(openInstance(boundEpoch));
+            String activeCopy = describeCopy(target);
+            return new ModelAccessException(refused + " refused: this batch is bound to model " + bound
+                    + " " + boundCopy + ", but the active model is another open copy with the same id, "
+                    + activeCopy + ". Nothing was applied to either copy, and the " + queued.size()
+                    + " operation(s) already queued are unchanged.",
+                    ErrorCode.BOUND_MODEL_NOT_ACTIVE, queuedDetails,
+                    sameIdRemedy(boundCopy, activeCopy) + ", then retry; or discard this batch with "
+                            + "end-batch rollback=true.", null);
+        }
+        if (closedWithNoOpenCopy(boundId)) {
+            return new ModelAccessException(refused + " refused: this batch is bound to model " + bound
+                    + ", which has been closed in Archi. Nothing was applied to any model.",
+                    ErrorCode.BOUND_MODEL_CLOSED, queuedDetails,
+                    "Reopen " + bound + " in Archi, then retry; or discard this batch with "
+                            + "end-batch rollback=true.", null);
+        }
+        if (context.isBoundModelAddressed()) {
+            // Its own instance is gone and no single open copy can stand in for it.
+            boolean copies = openInstancesWithId(boundId) > 1;
+            return new ModelAccessException(refused + " refused: this batch is bound to model " + bound
+                    + (copies ? ", whose instance was closed, and that id is now open more than once"
+                            : ", which is no longer open in Archi") + ". Nothing was applied to any model.",
+                    ErrorCode.BOUND_MODEL_CLOSED, queuedDetails,
+                    (copies ? "Close the copies you do not mean in Archi, then retry"
+                            : "Reopen " + bound + " in Archi, then retry")
+                            + "; or discard this batch with end-batch rollback=true.", null);
+        }
+        String active = target != null ? describeModel(target.getName(), target.getId()) : null;
+        return new ModelAccessException(refused + " refused: this batch is bound to model " + bound
+                + (active != null ? ", but the active model is now " + active : ", but no model is active")
+                + ". Nothing was applied to either model, and the " + queued.size()
+                + " operation(s) already queued are unchanged.",
+                ErrorCode.BOUND_MODEL_NOT_ACTIVE, queuedDetails,
+                switchBackRemedy(bound, active) + ", then retry; or discard this batch with "
+                        + "end-batch rollback=true.", null);
+    }
+
+    /**
+     * The refusal for approving this proposal with {@code target} active, or null when it may proceed
+     * (its model is active and open, or it is bound to no model).
+     */
+    private ModelAccessException proposalRefusal(PendingProposal proposal, IArchimateModel target) {
+        String boundId = proposal.modelId();
+        if (boundId == null) {
+            return null;
+        }
+        String bound = describeModel(proposal.modelName(), boundId);
+        String subject = "This change was proposed against model " + bound;
+        long stamped = proposal.modelEpoch();
+        if (target != null && boundId.equals(target.getId())) {
+            // A proposal stores the request and rebuilds against the live instance, so once the
+            // instance it was made on has closed, the open one with its id is the right target. While
+            // that instance is still open, though, another copy being active is a divergence.
+            if (stamped == 0L || stamped == epochOf(target) || isClosed(stamped)) {
+                return null;
+            }
+            String stampedCopy = describeCopy(openInstance(stamped));
+            String activeCopy = describeCopy(target);
+            return new ModelAccessException(subject + " " + stampedCopy + ", but the active model is "
+                    + "another open copy with the same id, " + activeCopy + ". Nothing was applied to "
+                    + "either copy.", ErrorCode.BOUND_MODEL_NOT_ACTIVE, null,
+                    sameIdRemedy(stampedCopy, activeCopy) + ", then approve; or reject this proposal.",
+                    null);
+        }
+        if (closedWithNoOpenCopy(boundId)) {
+            return new ModelAccessException(subject + ", which has been closed in Archi. Nothing was "
+                    + "applied to any model.", ErrorCode.BOUND_MODEL_CLOSED, null,
+                    "Reopen " + bound + ", then approve; or reject this proposal.", null);
+        }
+        if (proposal.modelAddressed()) {
+            boolean copies = openInstancesWithId(boundId) > 1;
+            return new ModelAccessException(subject + (copies ? ", whose instance was closed, and that id is "
+                    + "now open more than once" : ", which is no longer open in Archi") + ". Nothing was "
+                    + "applied to any model.", ErrorCode.BOUND_MODEL_CLOSED, null,
+                    (copies ? "Close the copies you do not mean" : "Reopen " + bound)
+                            + ", then approve; or reject this proposal.", null);
+        }
+        String active = target != null ? describeModel(target.getName(), target.getId()) : null;
+        return new ModelAccessException(subject
+                + (active != null ? ", but the active model is now " + active : ", but no model is active")
+                + ". Nothing was applied to either model.", ErrorCode.BOUND_MODEL_NOT_ACTIVE, null,
+                switchBackRemedy(bound, active) + ", then approve; or reject this proposal.", null);
+    }
+
+    /**
+     * An approve-time refusal as the human at the Pending Approvals card sees it. The view shows a
+     * {@link MutationException}'s message, so the remedy goes into it — written for the approver: a
+     * batch refusal's own remedy (roll the batch back) is the agent's to act on, not theirs.
+     */
+    private MutationException approverRefusal(String proposalId, ModelAccessException refusal) {
+        String remedy;
+        if (refusal instanceof BatchClosingCommand.Refusal
+                && refusal.getErrorCode() == ErrorCode.BATCH_ALREADY_ACTIVE) {
+            remedy = "Ask the agent to end its batch, then approve; or reject this proposal.";
+        } else if (refusal instanceof BatchClosingCommand.Refusal
+                && refusal.getErrorCode() == ErrorCode.VIEW_OBJECT_NOT_FOUND) {
+            remedy = "Reject this proposal: an operation already queued in the agent's batch takes that object off "
+                    + "the view when the batch commits.";
+        } else if (refusal instanceof BatchClosingCommand.Refusal) {
+            remedy = "Reject this proposal: the merge already queued in the agent's batch deletes that element "
+                    + "when the batch commits, so this proposal cannot be approved as it stands.";
+        } else if (refusal.getMessage().contains("into the open batch")) {
+            remedy = refusal.getErrorCode() == ErrorCode.BOUND_MODEL_CLOSED
+                    ? "Ask the agent to roll back its batch, then approve; or reject this proposal."
+                    : "Make the batch's model active again in Archi (confirm with get-model-info), or ask "
+                            + "the agent to roll back its batch, then approve; or reject this proposal.";
+        } else {
+            remedy = refusal.getSuggestedCorrection();
+        }
+        String reason = refusal.getMessage() + " " + remedy;
+        logger.info("Proposal '{}' refused (kept in queue): {}", proposalId, reason);
+        return new MutationException(reason);
+    }
+
+    private static boolean isBindingRefusal(ModelAccessException e) {
+        return e.getErrorCode() == ErrorCode.BOUND_MODEL_NOT_ACTIVE
+                || e.getErrorCode() == ErrorCode.BOUND_MODEL_CLOSED;
+    }
+
+    /** Returns a proposal removed for dispatch to its session's queue, under the same id. */
+    private void restoreProposal(String sessionId, PendingProposal proposal) {
+        batchSessions.computeIfAbsent(sessionId, k -> new MutationContext()).restoreProposal(proposal);
+        fireQueueChanged();
+    }
+
+    /**
+     * How the human makes the bound model active again. Archi offers no "make active" action: the
+     * server follows the most recently opened model, and on closing the active one falls back to
+     * another open model, which is not necessarily the bound one — hence the confirmation step.
+     */
+    private static String switchBackRemedy(String bound, String active) {
+        return (active != null ? "Close " + active + " in Archi so that " + bound + " becomes active again"
+                : "Make " + bound + " the active model in Archi")
+                + " (confirm with get-model-info)";
+    }
+
+    /**
+     * How the human makes one copy of a model active again when another copy with the same id is
+     * active. Id and name are identical across copies, so only the files tell them apart.
+     */
+    private static String sameIdRemedy(String boundCopy, String activeCopy) {
+        if (boundCopy.equals(activeCopy)) {
+            // Neither copy has a file, so nothing the server can print tells them apart.
+            return "Both copies are unsaved, so they cannot be told apart here: save the copy this work "
+                    + "belongs to under a file name, make it the active model in Archi";
+        }
+        return "Make the copy " + boundCopy + " the active model again in Archi, for example by closing "
+                + "the copy " + activeCopy + " (save it first if it holds changes you want to keep)";
+    }
+
+    /**
+     * Names one copy of a model by its file. Two open copies share their id and usually their name,
+     * so the file is the only thing that tells them apart.
+     */
+    private static String describeCopy(IArchimateModel model) {
+        if (model == null) {
+            return "(no longer open)";
+        }
+        return model.getFile() != null ? "at " + model.getFile().getPath() : "(unsaved, no file)";
+    }
+
+    private static String describeModel(String name, String id) {
+        return "'" + (name != null ? name : "(unnamed)") + "' (id " + id + ")";
+    }
+
+    private static String enumerate(List<String> items) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size(); i++) {
+            sb.append(i == 0 ? "" : "; ").append(i + 1).append(". ").append(items.get(i));
+        }
+        return sb.toString();
     }
 
     private MutationContext getActiveContext(String sessionId) {

@@ -38,6 +38,25 @@ Each tool defines:
 - **Description**: product-quality documentation (purpose, parameters, related tools)
 - **Input schema**: JSON Schema defining parameters with types and descriptions
 - **Call handler**: `BiFunction<McpSyncServerExchange, CallToolRequest, CallToolResult>`
+- **Annotations**: `readOnlyHint` and, for a tool that can change something, `destructiveHint` (see below)
+
+### Read and Write Tools
+
+Every tool is classified once, in `handlers/ToolAccess.java`, as **READ** (never changes the model or writes to the server's disk) or **WRITE** (can change either, or exists only to serve such a change, as the batch and approval tools do). There is no default: a tool missing from the table cannot be registered. The classification is applied at registration, in every mode, as MCP tool annotations:
+
+- `readOnlyHint: true` on the 20 READ tools, `false` on the rest.
+- `destructiveHint: true` on the WRITE tools that remove or destroy something (the `delete-*` tools, `remove-from-view`, `clear-view` and `merge-elements`), `false` on the other WRITE tools, and absent on a READ tool, where the hint has no meaning.
+
+Some clients use these hints to decide whether to ask before running a tool.
+
+**Read-only serving.** With the `mcp.server.readOnly` preference on (a checkbox on the MCP preference page, or a `-pluginCustomization` preset), the server registers only the READ tools. It reads the setting once each time it starts. On such a server:
+
+- `tools/list` does not list a WRITE tool, and a call to one is answered by the SDK as an unknown tool (JSON-RPC `-32602`, `Tool not found: <name>` in `data`).
+- The `initialize` reply carries `instructions` saying the server is read-only, and `get-model-info` reports `readOnly: true`.
+- `nextSteps` leave out any suggestion that names a withheld tool. Tool descriptions and other response text can still name one; the instructions say so.
+- `export-view` is READ because it only returns the picture; it refuses `inline: false`, so nothing is written to the server's disk.
+
+[headless-deployment.md](headless-deployment.md) shows a read-only server in a container.
 
 ### Thread Safety
 
@@ -66,52 +85,56 @@ All tool responses use a consistent JSON envelope built by `ResponseFormatter`.
     "Use search-elements to find related elements"
   ],
   "_meta": {
-    "modelVersion": "v-1042",
+    "modelVersion": "42",
     "resultCount": 1,
-    "totalCount": 1,
     "isTruncated": false,
+    "totalCount": 1,
     "sessionActive": true,
-    "durationMs": 42
+    "durationMs": 42,
+    "model": { "id": "model-1", "name": "Bank", "resolution": "sole-model" }
   }
 }
 ```
 
-### Response Fields
+### Which keys each envelope carries
 
-| Field | Always Present | Description |
-|-------|---------------|-------------|
-| `result` | Yes (success) | DTO object or collection |
-| `error` | Yes (error) | ErrorResponse object |
-| `nextSteps` | Yes | Array of suggested next actions for LLM guidance |
-| `_meta.modelVersion` | Yes | Current model hash (for change detection) |
-| `_meta.resultCount` | Yes | Items in this response |
-| `_meta.totalCount` | Yes | Total available items |
-| `_meta.isTruncated` | Yes | Whether results were truncated |
-| `_meta.sessionActive` | Yes | Whether session is valid |
-| `_meta.durationMs` | Yes | Execution time in milliseconds |
-| `_meta.modelChanged` | Optional | Set if model changed since last query |
-| `_meta.cursor` | Optional | Pagination cursor (Base64) |
-| `_meta.cacheHit` | Optional | Set if response served from cache |
-| `_meta.dryRun` | Optional | Set for cost estimation responses |
+`ResponseFormatter` has one method per envelope shape, and every key below is written only where the table says. The registry then adds `durationMs` (and `model`, when the call acted on one) to every tool response, errors included.
 
-### Alternative Response Formats
+| Key | Success (`formatSuccess`) | Graph (`formatGraph`) | Summary (`formatSummary`) | Error (`formatError`) | Error with extras (`formatErrorWithExtras`) | Dry run (`formatDryRun`) |
+|-----|---------|-------|---------|-------|------------------|---------|
+| top-level body | `result` | `graph` (`nodes`, `edges`) | `summary` (a string) | `error` | `error`, with the extra fields merged in | `dryRun` |
+| `nextSteps` | when the tool gives any | when the tool gives any | when the tool gives any | never | when the tool gives any | when the tool gives any |
+| `_meta.modelVersion` | yes | yes | yes | — | yes | yes |
+| `_meta.resultCount` | yes | yes (the node count) | yes | — | — | — |
+| `_meta.edgeCount` | — | yes | — | — | — | — |
+| `_meta.totalCount` | yes | yes | yes | — | — | — |
+| `_meta.isTruncated` | yes | yes | always `false` | — | — | — |
+| `_meta.dryRun` | — | — | — | — | — | always `true` |
+| `_meta.sessionActive` | yes | yes | yes | yes | yes | yes |
+| `_meta.durationMs` | yes | yes | yes | yes | yes | yes |
+| `_meta.model` | when the call acted on a model | same | same | same | same | same |
 
-| Method | Top-Level Key | Use Case |
-|--------|--------------|----------|
-| `formatSuccess()` | `result` | Standard queries and mutations |
-| `formatError()` | `error` | Error responses |
-| `formatGraph()` | `graph` | Graph-format queries (nodes + edges) |
-| `formatSummary()` | `summary` | Natural language summaries |
-| `formatDryRun()` | `dryRun` | Cost estimation responses |
+| Key | Meaning |
+|-----|---------|
+| `nextSteps` | Suggested next actions for the agent. Omitted, not empty, when the tool gives none. On a read-only server, entries naming a tool the server does not offer are dropped from a success response, which can leave an empty array |
+| `_meta.modelVersion` | The model's mutation counter as a decimal string (`"42"`); compare it as an integer (see below) |
+| `_meta.resultCount` / `totalCount` / `isTruncated` | Items in this response, items available, and whether the response holds fewer than are available |
+| `_meta.edgeCount` | Edges in a graph response |
+| `_meta.dryRun` | Marks a cost estimate, which carries no result |
+| `_meta.sessionActive` | Always `true`. It carries no information and is kept so existing clients do not break |
+| `_meta.durationMs` | Time the call took, in milliseconds |
+| `_meta.model` | The model the call acted on: `id`, `name` and `resolution` (`addressed`, `session-default` or `sole-model`). Present on every call that acted on a model, in immediate, batched and proposal modes alike |
 
-### Post-Call Meta Mutations
+Handlers add these to the `_meta` of the envelope they built, when they apply:
 
-Handlers can add flags to the envelope after initial formatting:
-
-- `addModelChangedFlag(envelope)` — model updated since last session query
-- `addCursorToken(envelope, cursor)` — pagination cursor for next page
-- `addCacheHitFlag(envelope)` — response served from session cache
-- `addSessionWarning(envelope, warning)` — session health warning
+| Key | Set when |
+|-----|----------|
+| `_meta.modelChanged` | The model changed since this session's last query (`addModelChangedFlag`) |
+| `_meta.cursor` | More pages are available; pass it back to get the next one (`addCursorToken`) |
+| `_meta.cacheHit` | The response was served from the session cache (`addCacheHitFlag`) |
+| `_meta.sessionWarning` | The session is approaching an unhealthy state, such as a high error count (`addSessionWarning`) |
+| `_meta.warning` | A query tool did not use what was asked for, such as an unknown `fields` preset it replaced with the default |
+| `_meta.notFound` | `get-element` was given several ids and some name no element; it lists them |
 
 ### Render Staleness Stamp (`export-view`)
 
@@ -161,12 +184,22 @@ All errors follow a structured format for consistent LLM parsing.
 
 | Category | Codes |
 |----------|-------|
-| **Query errors** | ELEMENT_NOT_FOUND, RELATIONSHIP_NOT_FOUND, VIEW_NOT_FOUND, FOLDER_NOT_FOUND |
-| **Mutation errors** | MUTATION_FAILED, RELATIONSHIP_NOT_ALLOWED, INVALID_RELATIONSHIP_TYPE |
-| **Validation errors** | INVALID_PARAMETER, BULK_VALIDATION_FAILED |
-| **Mode errors** | BATCH_NOT_ACTIVE, APPROVAL_NOT_ACTIVE, BATCH_ALREADY_ACTIVE |
-| **State errors** | MODEL_NOT_LOADED, PROPOSAL_STALE, PROPOSAL_NOT_FOUND |
+| **Query errors** | ELEMENT_NOT_FOUND, RELATIONSHIP_NOT_FOUND, VIEW_NOT_FOUND, FOLDER_NOT_FOUND, VIEW_OBJECT_NOT_FOUND, OBJECT_NOT_FOUND, IMAGE_NOT_FOUND, SOURCE_ELEMENT_NOT_FOUND, TARGET_ELEMENT_NOT_FOUND |
+| **Mutation errors** | MUTATION_FAILED, RELATIONSHIP_NOT_ALLOWED, RELATIONSHIP_MISMATCH, POTENTIAL_DUPLICATES, CONNECTION_ALREADY_ON_VIEW |
+| **Folder errors** | FOLDER_NOT_EMPTY, CANNOT_DELETE_DEFAULT_FOLDER, CANNOT_MOVE_DEFAULT_FOLDER, CANNOT_CREATE_ROOT_FOLDER, CIRCULAR_FOLDER_REFERENCE, ALREADY_IN_TARGET_FOLDER, INVALID_MOVE_TARGET, FOLDER_LAYER_MISMATCH |
+| **Validation errors** | INVALID_PARAMETER, BULK_VALIDATION_FAILED, INVALID_ELEMENT_TYPE, INVALID_RELATIONSHIP_TYPE, INVALID_CURSOR, FORMAT_NOT_AVAILABLE |
+| **Model addressing** | MODEL_AMBIGUOUS, MODEL_NOT_OPEN, MODEL_COPIES_AMBIGUOUS, BATCH_MODEL_MISMATCH, MODEL_SHARED, BOUND_MODEL_CLOSED, BOUND_MODEL_NOT_ACTIVE |
+| **Mode errors** | BATCH_NOT_ACTIVE, BATCH_ALREADY_ACTIVE |
+| **State errors** | MODEL_NOT_LOADED, PROPOSAL_STALE |
 | **System errors** | INTERNAL_ERROR |
+
+`PROPOSAL_STALE` is raised on the human's approve seam in Archi only, when a proposal no longer describes what approving it would do; the proposal stays queued and its card shows the reason. No tool returns it to an agent.
+
+`INVALID_ELEMENT_TYPE` and `INVALID_RELATIONSHIP_TYPE` also answer an abstract ArchiMate type (`BusinessElement`, `StructuralRelationship`, …), naming concrete types to use instead. An `INTERNAL_ERROR` is written to the Archi log with its stack trace; a caller's own mistake is never answered as one.
+
+**Unknown arguments are refused, on every tool.** Nothing validates a call against the tool's input schema, so before any tool runs the call scope refuses an argument the tool does not read with `INVALID_PARAMETER`, naming every such key and the keys the tool accepts; nothing is written, queued or proposed. `bulk-mutate` applies the same rule to each operation's `params`, as that operation's failure row. A call missing a required argument still reaches the tool, which names a near-miss spelling (see `model/ToolArguments.java`, `model/ParamNameDiagnostics.java`).
+
+**Declared arguments are read strictly, by one rule on a tool and its bulk operation.** A boolean argument takes a JSON boolean or the string `"true"`/`"false"` in any case. Any other value (`"yes"`, `1`, `""`) is refused naming the key and the value, instead of being read as `false` or as the default. An id or type filter whose absence means "act on all" (`connectionIds`, `elementIds`, `relationshipTypes`, `relationshipIds`, `groupIds`) refuses a value that is not an array, an empty array, and an entry that is not a non-empty string: omit the filter to act on everything. `auto-route-connections` `snapThreshold`/`perimeterMargin` take any whole number and clamp it as published; a fraction or a string is refused. Every other whole-number argument (coordinates, sizes, styling numbers, layout options, `limit`, `depth`, `steps`, bendpoint coordinates) is read the same way: `20` and `20.0` are read, and a fraction, a string, a boolean or a value past the integer range is refused rather than truncated, read as the default or wrapped round; its published range is checked after the read. A string argument such as `set-session-filter` `type` or `create-view` `connectionRouterType` refuses a blank or non-string value instead of reading it as absent. A `bulk-mutate` operation that cannot honour a key its tool declares refuses it as that operation's row, instead of dropping it: `update-view-object` there refuses the four anchor keys. A note's `position` (`above-content`/`below-content`) is refused in `bulk-mutate` and inside `begin-batch` when an earlier operation of the call or the batch has changed the view's content, because that change has not run when the note is placed (see `model/ToolArguments.java`, `model/QueuedViewGeometry.java`).
 
 **Source:** `response/ErrorResponse.java`, `response/ErrorCode.java`
 
@@ -197,23 +230,22 @@ flowchart LR
 
 **Precedence:** Per-query parameters override session filters. Session filters apply when the query omits the parameter.
 
-**Reach on `get-view-contents`.** `fields` routes only the element and relationship rows through its verbosity filter. The other five arrays a view response carries — `visualMetadata`, `connections`, `groups`, `notes` and `images` — go in whole at every preset, so `exclude` is the parameter that drops a whole visual array and is normally the one that moves the response size. Both are inert on `format: "summary"` and `format: "tree"`, which return before the field selector runs.
+**Reach on `get-view-contents`.** `fields` routes only the element and relationship rows through its verbosity filter. A `format: "graph"` edge names its `type`, `sourceId` and `targetId` at every preset, `minimal` included; an `exclude` of `type` leaves the type out. The other arrays a view response carries — `visualMetadata`, `connections`, `groups`, `notes`, `images`, `viewReferences` and `nonArchimateConnections` — go in whole at every preset, so `exclude` is the parameter that drops a whole visual array and is normally the one that moves the response size. Both are inert on `format: "summary"` and `format: "tree"`, which return before the field selector runs.
 
 ### Session Caching
 
-- Query results are cached per-session with keys encoding command name + effective filters
-- `ModelVersionTracker` invalidates all caches when the model changes
+- Query results are cached per session, with keys encoding the model instance, the command name and the effective filters
+- Model versions are tracked per session and per model instance, so one model's changes never stale another's cached answers
 - `dryRun=true` queries use cached results when available
-- Cache entries are cleared when the active model changes in Archi's UI
 
 ### Model Change Detection
 
-The SessionManager implements `ModelChangeListener`. When the active ArchiMate model changes:
-1. All session states are cleared
-2. All version trackers are reset
-3. All session caches are invalidated
+The SessionManager implements `ModelChangeListener`, and keeps every session's state when models open, close or change:
 
-Subsequent queries detect the version change and set `_meta.modelChanged = true`.
+1. **The active model changes:** nothing is cleared. Caches and versions are keyed by model instance, so a different active model is simply a different key, and session filters belong to their session.
+2. **A model closes:** only the cache entries and version tracking keyed by that model instance are dropped.
+
+A query on a model that changed since the session last read it sets `_meta.modelChanged = true`.
 
 ### Session ID
 
@@ -324,6 +356,10 @@ The plugin embeds a Jetty server supporting two MCP transport protocols.
 | Server-Sent Events (SSE) | `/sse` | SSE streaming | Cline |
 
 Both transports serve the same tool and resource registrations. Tools registered at runtime are added to both simultaneously.
+
+The server negotiates MCP protocol versions up to `2025-06-18`: a client that asks for a later version is answered with `2025-06-18`, and one that asks for `2025-03-26` or `2024-11-05` gets the version it asked for. `serverInfo.version` in the `initialize` reply is the installed plug-in's version, build stamp included.
+
+**Clients that speak only stdio** (Claude Desktop's configuration file, for one) reach the server through a bridge that runs as a local process: `mcp-remote` (Node.js) passes the client's own `initialize` through, while `mcp-proxy` (Python) ends the session itself and re-serves the server through the Python MCP SDK. The README gives both configurations.
 
 ### TLS/HTTPS
 

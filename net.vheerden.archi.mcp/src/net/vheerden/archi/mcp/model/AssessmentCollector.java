@@ -28,6 +28,9 @@ import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IJunction;
 import com.archimatetool.model.ITextPosition;
 
+import net.vheerden.archi.mcp.model.geometry.GeometryUtils;
+import net.vheerden.archi.mcp.response.dto.BendpointDto;
+
 /**
  * Collects assessment nodes and connections from diagram models for
  * layout quality assessment and routing.
@@ -85,7 +88,7 @@ final class AssessmentCollector {
                     // ElementSizer.fitTextBoxHeightToContentOrElse. The fallback is honest: the
                     // one field that could not be measured stays at its zero sentinel and every
                     // geometric field on the node is unaffected.
-                    logger.warn("Failed to measure text for '{}': {}", name, e.getMessage());
+                    logger.warn("Failed to measure text for '{}': {}", CallerText.logged(name), CallerText.loggedMessage(e.getMessage()));
                 }
             }
 
@@ -144,7 +147,7 @@ final class AssessmentCollector {
                     // have to work out which of these three walks is the one that can kill the
                     // process on a host without a display.
                     logger.warn("Failed to read image dimensions for id={}: {}",
-                            child.getId(), e.getMessage());
+                            child.getId(), CallerText.loggedMessage(e.getMessage()));
                 }
             }
 
@@ -170,7 +173,7 @@ final class AssessmentCollector {
                         // Measures through the same SWT path as the label above, so it carries the
                         // same Error-vs-Exception hazard and takes the same guard.
                         logger.warn("Failed to measure note content for id={}: {}",
-                                child.getId(), e.getMessage());
+                                child.getId(), CallerText.loggedMessage(e.getMessage()));
                     }
                 }
             }
@@ -223,6 +226,19 @@ final class AssessmentCollector {
     static List<AssessmentConnection> collectAssessmentConnections(
             IArchimateDiagramModel diagramModel,
             List<AssessmentNode> nodes) {
+        return collectAssessmentConnections(diagramModel, nodes, null);
+    }
+
+    /**
+     * Collects the view's connections with reconstructed paths, deciding each label's visibility by
+     * {@link LabelVisibilityReadback#isShown}.
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside
+     *                         batch mode, in which case the model's visibility is read
+     */
+    static List<AssessmentConnection> collectAssessmentConnections(
+            IArchimateDiagramModel diagramModel,
+            List<AssessmentNode> nodes, Map<String, Boolean> queuedVisibility) {
         Map<String, AssessmentNode> nodeMap = new LinkedHashMap<>();
         for (AssessmentNode node : nodes) {
             nodeMap.put(node.id(), node);
@@ -250,64 +266,104 @@ final class AssessmentCollector {
             double tgtCenterX = tgtNode.x() + tgtNode.width() / 2;
             double tgtCenterY = tgtNode.y() + tgtNode.height() / 2;
 
-            List<double[]> pathPoints = new ArrayList<>();
-            pathPoints.add(new double[]{srcCenterX, srcCenterY});
+            List<BendpointDto> stored = new ArrayList<>(conn.getBendpoints().size());
+            for (IDiagramModelBendpoint bp : conn.getBendpoints()) {
+                stored.add(new BendpointDto(bp.getStartX(), bp.getStartY(), bp.getEndX(), bp.getEndY()));
+            }
+            List<double[]> pathPoints = readBackPath(stored, srcNode, tgtNode);
 
             // The largest disagreement between a bendpoint's two stored reconstructions, per axis.
-            // Measured BEFORE the blend below discards it: the midpoint hands every detector a
+            // Measured off the unblended reconstructions: the blend hands every detector a
             // plausible-looking polyline whichever way the anchors disagree, so this is the only
             // point at which the disagreement is observable.
             double anchorDriftX = 0.0;
             double anchorDriftY = 0.0;
-
-            // Archi draws bendpoint i of n at weight (i + 1) / (n + 1) along the bendpoint list,
-            // interpolating from the source-anchored reconstruction toward the target-anchored one.
-            // Measuring over a flat one-half blend would hand every detector a polyline the
-            // renderer draws only at the exact centre of an odd-length list: while the two
-            // reconstructions disagree the drawn path is sheared, most at its terminal bendpoints,
-            // and the terminal segments are precisely what the terminal-geometry dimensions judge.
-            // Centres stay untruncated here — the drift measured just above is read off them before
-            // the blend, and rounding them would quantise away the sub-pixel disagreement that is
-            // the whole of what it reports.
             int bendpointCount = conn.getBendpoints().size();
             int bendpointIndex = 0;
+            // The same bendpoints where the renderer draws them (whole-pixel reference points, float
+            // weight, floored): only the off-face hug reads these, because the router decides that
+            // question over the integer points it writes and the two must agree on a pixel.
+            List<double[]> drawnBendpoints = new ArrayList<>(bendpointCount);
+            int srcX = (int) Math.round(srcNode.x());
+            int srcY = (int) Math.round(srcNode.y());
+            int srcW = (int) Math.round(srcNode.width());
+            int srcH = (int) Math.round(srcNode.height());
+            int tgtX = (int) Math.round(tgtNode.x());
+            int tgtY = (int) Math.round(tgtNode.y());
+            int tgtW = (int) Math.round(tgtNode.width());
+            int tgtH = (int) Math.round(tgtNode.height());
             for (IDiagramModelBendpoint bp : conn.getBendpoints()) {
+                drawnBendpoints.add(new double[]{
+                        GeometryUtils.drawnBendpointCoordinate(bp.getStartX(), bp.getEndX(),
+                                srcX, srcW, tgtX, tgtW, bendpointIndex, bendpointCount),
+                        GeometryUtils.drawnBendpointCoordinate(bp.getStartY(), bp.getEndY(),
+                                srcY, srcH, tgtY, tgtH, bendpointIndex, bendpointCount)});
                 double srcDerivedX = bp.getStartX() + srcCenterX;
                 double tgtDerivedX = bp.getEndX() + tgtCenterX;
                 double srcDerivedY = bp.getStartY() + srcCenterY;
                 double tgtDerivedY = bp.getEndY() + tgtCenterY;
                 anchorDriftX = Math.max(anchorDriftX, Math.abs(srcDerivedX - tgtDerivedX));
                 anchorDriftY = Math.max(anchorDriftY, Math.abs(srcDerivedY - tgtDerivedY));
-
-                double weight = (bendpointIndex + 1.0) / (bendpointCount + 1.0);
-                double absX = srcDerivedX * (1.0 - weight) + tgtDerivedX * weight;
-                double absY = srcDerivedY * (1.0 - weight) + tgtDerivedY * weight;
-                pathPoints.add(new double[]{absX, absY});
                 bendpointIndex++;
             }
 
-            pathPoints.add(new double[]{tgtCenterX, tgtCenterY});
-
-            // A connection whose label is suppressed (name not visible) reserves no
-            // label box: an unrendered label cannot overlap anything, so resolve it to
+            // A connection whose label is suppressed (name not visible, or hidden by the batch)
+            // reserves no label box: an unrendered label cannot overlap anything, so resolve it to
             // empty and let the assessor's empty-label guard skip it. Keeps label
             // suppression an honest escape hatch and matches the layout-reservation path.
             String labelText = "";
-            if (conn.isNameVisible() && conn instanceof IDiagramModelArchimateConnection archConn) {
+            if (LabelVisibilityReadback.isShown(conn, queuedVisibility)
+                    && conn instanceof IDiagramModelArchimateConnection archConn) {
                 IArchimateRelationship rel = archConn.getArchimateRelationship();
                 labelText = (rel != null && rel.getName() != null) ? rel.getName() : "";
             }
             int textPosition = conn.getTextPosition();
-            // The applied "Label Offset" anchor (CENTER on a platform without the feature) so the own-endpoint
-            // check can credit a label that has already been lifted off its box.
+            // The applied "Label Offset" anchor (CENTER on a platform without the feature): every label
+            // detector scores a Middle label where this offset draws it.
             int relativePosition = RelativePositionFeature.get(conn);
 
             connections.add(new AssessmentConnection(
                     conn.getId(), source.getId(), target.getId(), pathPoints,
-                    labelText, textPosition, relativePosition, anchorDriftX, anchorDriftY));
+                    labelText, textPosition, relativePosition, anchorDriftX, anchorDriftY,
+                    drawnBendpoints));
         }
 
         return connections;
+    }
+
+    /**
+     * The polyline a connection's stored relative bendpoints describe, as every assessment reads it: the source
+     * centre, each bendpoint, the target centre. Each bendpoint is stored twice, as an offset from the source centre
+     * and from the target centre; both are added back to the element's untruncated centre ({@code x + width / 2} in
+     * doubles), then blended.
+     *
+     * <p>Archi draws bendpoint i of n at weight (i + 1) / (n + 1) along the bendpoint list, interpolating from the
+     * source-anchored reconstruction toward the target-anchored one. Measuring over a flat one-half blend would hand
+     * every detector a polyline the renderer draws only at the exact centre of an odd-length list: while the two
+     * reconstructions disagree the drawn path is sheared, most at its terminal bendpoints, and the terminal segments
+     * are precisely what the terminal-geometry dimensions judge. Centres stay untruncated: the anchor drift read off
+     * them before the blend is a sub-pixel disagreement that rounding would quantise away.</p>
+     *
+     * <p>The one reconstruction: anything that reports a figure about routes a call is about to write (the after-count
+     * of {@code auto-route-connections}) builds its polyline here, so the figure is the one the next read measures.</p>
+     */
+    static List<double[]> readBackPath(List<BendpointDto> bendpoints, AssessmentNode source, AssessmentNode target) {
+        double srcCenterX = source.x() + source.width() / 2;
+        double srcCenterY = source.y() + source.height() / 2;
+        double tgtCenterX = target.x() + target.width() / 2;
+        double tgtCenterY = target.y() + target.height() / 2;
+        List<double[]> pathPoints = new ArrayList<>(bendpoints.size() + 2);
+        pathPoints.add(new double[]{srcCenterX, srcCenterY});
+        int count = bendpoints.size();
+        for (int i = 0; i < count; i++) {
+            BendpointDto bp = bendpoints.get(i);
+            double weight = (i + 1.0) / (count + 1.0);
+            double absX = (bp.startX() + srcCenterX) * (1.0 - weight) + (bp.endX() + tgtCenterX) * weight;
+            double absY = (bp.startY() + srcCenterY) * (1.0 - weight) + (bp.endY() + tgtCenterY) * weight;
+            pathPoints.add(new double[]{absX, absY});
+        }
+        pathPoints.add(new double[]{tgtCenterX, tgtCenterY});
+        return pathPoints;
     }
 
     static List<IDiagramModelConnection> collectAllConnections(

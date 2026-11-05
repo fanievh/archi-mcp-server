@@ -1,10 +1,14 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.eclipse.gef.commands.Command;
 
-import com.archimatetool.model.IDiagramModelArchimateConnection;
+import com.archimatetool.model.IDiagramModelComponent;
+import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelObject;
@@ -35,7 +39,7 @@ import com.archimatetool.model.IIdentifier;
  * eContainer at execute time. This is the architectural inverse of the
  * silent-acceptance class, applied at the mutation exit boundary.</p>
  */
-public class RemoveFromViewCommand extends Command {
+public class RemoveFromViewCommand extends Command implements RemovesViewObject {
 
     private final IDiagramModelArchimateObject diagramObject;
     private final IDiagramModelContainer parent;
@@ -45,7 +49,9 @@ public class RemoveFromViewCommand extends Command {
     // the object directly BEFORE this surviving anchor rather than at a stale
     // absolute index — see undo() for why this matters under compound undo.
     private final IDiagramModelObject successorAnchor;
-    private final List<IDiagramModelArchimateConnection> attachedConnections;
+    private final List<IDiagramModelConnection> attachedConnections;
+    // Deferred-capture: populated on first execute(), reused on redo() and undo()
+    private List<IDiagramModelConnection> capturedConnections;
 
     /**
      * Creates a command to remove a diagram object from its immediate parent
@@ -59,17 +65,23 @@ public class RemoveFromViewCommand extends Command {
      *
      * <p>Attached connections are stored for cascade disconnect/reconnect.
      * Archi's {@code disconnect()} preserves internal source/target refs,
-     * so {@code reconnect()} can restore them without explicit capture.</p>
+     * so {@code reconnect()} can restore them without explicit capture. The caller passes
+     * every connection Archi's own delete would take ({@link ViewRemoval#cascade}), not only
+     * the ArchiMate ones on the object itself: one left attached is saved pointing at
+     * something no longer in the model, and the file fails to reopen. That list is a floor,
+     * not the whole cascade: the first {@code execute()} adds whatever is attached by then
+     * (a connection an earlier operation of the same batch drew to the object, say) and
+     * {@code redo()} reuses the result.</p>
      *
      * @param diagramObject       the diagram object to remove
      * @param parent              the immediate container holding the object
      *                            (the view itself for top-level placements,
      *                            or a nested group / component / node)
-     * @param attachedConnections all connections attached to this object (source + target)
+     * @param attachedConnections every connection the removal takes with it
      */
     public RemoveFromViewCommand(IDiagramModelArchimateObject diagramObject,
                                   IDiagramModelContainer parent,
-                                  List<IDiagramModelArchimateConnection> attachedConnections) {
+                                  List<? extends IDiagramModelConnection> attachedConnections) {
         this.diagramObject = diagramObject;
         this.parent = parent;
         this.originalIndex = parent.getChildren().indexOf(diagramObject);
@@ -104,7 +116,12 @@ public class RemoveFromViewCommand extends Command {
         // This preserves the refuse-to-mutate contract: if execute() throws,
         // both the parent's child list AND all attached connections are
         // byte-unchanged from their pre-execute state.
-        for (IDiagramModelArchimateConnection conn : attachedConnections) {
+        if (capturedConnections == null) {
+            Set<IDiagramModelConnection> all = new LinkedHashSet<>(attachedConnections);
+            all.addAll(ViewRemoval.cascade(diagramObject));
+            capturedConnections = new ArrayList<>(all);
+        }
+        for (IDiagramModelConnection conn : capturedConnections) {
             conn.disconnect();
         }
     }
@@ -135,7 +152,7 @@ public class RemoveFromViewCommand extends Command {
         // Then reconnect all connections.
         // disconnect() preserves internal source/target refs on the connection,
         // so reconnect() can re-add to the source/target connection lists.
-        for (IDiagramModelArchimateConnection conn : attachedConnections) {
+        for (IDiagramModelConnection conn : capturedConnections) {
             conn.reconnect();
         }
     }
@@ -147,7 +164,12 @@ public class RemoveFromViewCommand extends Command {
     IDiagramModelContainer getParent() { return parent; }
 
     /** Package-visible for testing. */
-    List<IDiagramModelArchimateConnection> getAttachedConnections() {
+    List<IDiagramModelConnection> getAttachedConnections() {
         return attachedConnections;
+    }
+
+    @Override
+    public IDiagramModelComponent removedViewObject() {
+        return diagramObject;
     }
 }

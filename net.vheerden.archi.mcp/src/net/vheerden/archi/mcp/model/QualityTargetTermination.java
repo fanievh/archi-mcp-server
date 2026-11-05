@@ -14,7 +14,8 @@ import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
  *
  * <h2>Why a termination reason exists beside {@code limitingFactor}</h2>
  *
- * <p>The loop has five structurally distinct exits, and two of them demand opposite behaviour from
+ * <p>The loop has five structurally distinct exits (one of them, all metrics passing, unreachable
+ * while every metric passing rates the view {@code excellent}), and two of them demand opposite behaviour from
  * the caller. A run that stopped because the worst metric is one no further layout iteration can
  * move has <em>proved</em> that lever useless; a run that stopped because it used up its iteration
  * budget was merely cut short and may well converge if run again. Both carry a
@@ -62,7 +63,14 @@ public final class QualityTargetTermination {
     public static final String REASON_LIMITING_FACTOR_NOT_REMEDIABLE_PREFIX =
             "limiting_factor_not_remediable_";
 
-    /** Exit 3 prefix — every measured metric passed on iteration N; nothing further is measurable. */
+    /**
+     * Exit 3 prefix — every measured metric passed on iteration N; nothing further is measurable.
+     *
+     * <p>Not reachable today, and kept as the loop's last word on a state that should not occur. Every
+     * metric passing puts both tier folds at their best level, so the overall rating is
+     * {@code excellent}, which meets any target, and both loops test the target before the limiting
+     * factor: {@link #REASON_GOAL_REACHED_PREFIX} is reported first.</p>
+     */
     public static final String REASON_ALL_METRICS_PASS_PREFIX = "all_metrics_pass_at_iteration_";
 
     /**
@@ -583,9 +591,10 @@ public final class QualityTargetTermination {
     // ------------------------------------------------------------------
 
     /**
-     * Finds the worst-performing metric from the rating breakdown.
-     * Skips "overall" and "pass" ratings. Tie-breaks by count from the assessment.
-     * When counts are equal (e.g. spacing and alignment both have count 0),
+     * Finds the worst-performing metric from the rating breakdown, or null when every measured metric
+     * passes. Skips the breakdown's fold outputs (the headline ratings computed from the metrics, read
+     * from {@link LayoutQualityAssessor#isRatingFoldOutput}) and "pass" ratings. Tie-breaks by count
+     * from the assessment. When counts are equal (e.g. spacing and alignment both have count 0),
      * the first metric in iteration order wins (LinkedHashMap from LayoutQualityAssessor).
      */
     public static String findLimitingFactor(AssessLayoutResultDto assessment) {
@@ -598,8 +607,8 @@ public final class QualityTargetTermination {
             String metric = entry.getKey();
             String rating = entry.getValue();
 
-            // Skip the aggregate "overall" entry and "pass" (not-applicable) metrics
-            if ("overall".equals(metric) || "pass".equals(rating)) {
+            // Skip the fold outputs, which are ratings and not metrics, and "pass" (not-applicable) metrics
+            if (LayoutQualityAssessor.isRatingFoldOutput(metric) || "pass".equals(rating)) {
                 continue;
             }
 
@@ -616,17 +625,24 @@ public final class QualityTargetTermination {
     }
 
     /**
+     * The pass-through crossings the passThroughs band charges: the route crossings of other
+     * elements plus the routes through their own source or target. Every reader that ranks,
+     * vetoes or steps on pass-throughs reads this one sum, so none can disagree with the rating.
+     */
+    public static int chargedPassThroughCount(AssessLayoutResultDto a) {
+        return a.crossElementPassThroughCount() + a.ownEndpointPassThroughCount();
+    }
+
+    /**
      * Computes a tier-weighted quality score reflecting the M6 two-dimensional severity
      * hierarchy (layout-tier × routing-tier — see {@code LayoutQualityAssessor.computeLayoutTier}
      * + {@code computeRoutingTier}). Lower is better.
      * <p>Layout tier 1L: overlaps ×10, boundaryViolations ×10, parentLabelObscured ×6.
      * Routing tier 1R: passThroughs ×8, interiorTerminations ×8, zigzags ×8, coincidentSegments ×6.
      * <p>passThroughs and boundaryViolations are weighed on the CHARGED counts —
-     * {@code crossElementPassThroughCount} and {@code boundaryViolationCount} — not on the
-     * sizes of their description lists. Both lists are capped at ten entries, and the
-     * pass-through list also names the self-element pass-throughs the rating charges at zero,
-     * so ranking candidates on it both stops separating them past ten and spends eight points
-     * an iteration on geometry none of the loop's levers can move.
+     * {@link #chargedPassThroughCount} and {@code boundaryViolationCount} — not on the sizes of
+     * their description lists. Both lists are capped at ten entries, so ranking candidates on
+     * them stops separating them past ten.
      * Routing tier 2R: nonOrthogonalTerminals ×3, connectionEdgeCoincidence ×3,
      * hubPortQuality (binary &lt; FAIR threshold) ×2, labelOverlaps ×2, labelTruncations ×2.
      * Routing tier 3R: edgeCrossings ×1.
@@ -634,7 +650,7 @@ public final class QualityTargetTermination {
      * informational/cosmetic metrics covered by the rating ordinal at the iteration callsite.
      */
     public static int tierWeightedScore(AssessLayoutResultDto a) {
-        int chargedPtCount = a.crossElementPassThroughCount();
+        int chargedPtCount = chargedPassThroughCount(a);
         int boundaryCount = a.boundaryViolationCount();
         int hubPortLowQuality = a.hubPortQualityScore() < LayoutQualityAssessor.HUB_PORT_QUALITY_FAIR_THRESHOLD ? 1 : 0;
         return (a.overlapCount() * 10)
@@ -658,12 +674,10 @@ public final class QualityTargetTermination {
      * regardless of improvements in lower tiers.
      * <p>Tier-1L (layout): overlaps, boundaryViolations, parentLabelObscured.
      * Tier-1R (routing): passThroughs, interiorTerminations, zigzags, coincidentSegments.
-     * <p>The pass-through comparison reads the CHARGED count
-     * ({@code crossElementPassThroughCount}), as the boundary-violation comparison beside it
-     * reads {@code boundaryViolationCount}. Comparing description-list sizes instead would miss
-     * every regression past the ten-entry cap and would veto a candidate whose only new
-     * pass-throughs are self-element — unrated geometry that no further iteration could have
-     * avoided.
+     * <p>The pass-through comparison reads the CHARGED count ({@link #chargedPassThroughCount}),
+     * as the boundary-violation comparison beside it reads {@code boundaryViolationCount}.
+     * Comparing description-list sizes instead would miss every regression past the ten-entry
+     * cap.
      * Mirrors {@code LayoutQualityAssessor.computeLayoutTier}
      * /{@code computeRoutingTier} Tier-1 classification.
      */
@@ -671,8 +685,8 @@ public final class QualityTargetTermination {
         if (best == null) {
             return false; // No baseline to regress against (first iteration)
         }
-        int currentPt = current.crossElementPassThroughCount();
-        int bestPt = best.crossElementPassThroughCount();
+        int currentPt = chargedPassThroughCount(current);
+        int bestPt = chargedPassThroughCount(best);
         int currentBoundary = current.boundaryViolationCount();
         int bestBoundary = best.boundaryViolationCount();
         return current.overlapCount() > best.overlapCount()
@@ -695,11 +709,10 @@ public final class QualityTargetTermination {
      * connectionEdgeCoincidence, hubPortQuality (binary low-quality flag).
      * <p>Default branch: {@code spacing} + {@code alignment} (informational with no integer count).
      * <p>Two keys map to a charged tally rather than to the same-named description list:
-     * {@code passThroughs} reads {@code crossElementPassThroughCount} and
+     * {@code passThroughs} reads {@link #chargedPassThroughCount} and
      * {@code boundaryViolations} reads {@code boundaryViolationCount}. Both lists are capped at
-     * ten entries, and the pass-through list also names the self-element pass-throughs the rating
-     * charges at zero — so a count taken from either list is neither the number the view was
-     * marked down for nor a number that keeps growing past ten. This count is the tie-break in
+     * ten entries, so a count taken from either list is not a number that keeps growing past
+     * ten. This count is the tie-break in
      * {@code findLimitingFactor} and the value the published rating-regression clause carries.
      */
     public static int getMetricCount(String metric, AssessLayoutResultDto assessment) {
@@ -707,7 +720,7 @@ public final class QualityTargetTermination {
             case "overlaps" -> assessment.overlapCount();
             case "edgeCrossings" -> assessment.edgeCrossingCount();
             case "labelOverlaps" -> assessment.labelOverlapCount();
-            case "passThroughs" -> assessment.crossElementPassThroughCount();
+            case "passThroughs" -> chargedPassThroughCount(assessment);
             case "coincidentSegments" -> assessment.coincidentSegmentCount();
             case "nonOrthogonalTerminals" -> assessment.nonOrthogonalTerminalCount();
             case "boundaryViolations" -> assessment.boundaryViolationCount();

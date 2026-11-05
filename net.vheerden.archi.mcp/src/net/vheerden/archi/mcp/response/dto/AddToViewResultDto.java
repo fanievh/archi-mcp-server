@@ -44,6 +44,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  *                               name; the entry type is deliberately not that tool's, because a
  *                               placement can also name the relationship id and that tool cannot
  * @param skippedByCap           the pairs {@code skippedAutoConnections} counts
+ * @param structuredWarnings     warnings about state this call changed besides the placement
+ * @param recededParent          the parent this placement receded and the fill it now holds; omitted
+ *                               when it receded none, and when the placement has not run yet
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AddToViewResultDto(
@@ -52,13 +55,37 @@ public record AddToViewResultDto(
     Integer skippedAutoConnections,
     @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedAncestors,
     @JsonInclude(JsonInclude.Include.NON_EMPTY) List<SkippedConnection> skippedDueToNesting,
-    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<SkippedConnection> skippedByCap
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<SkippedConnection> skippedByCap,
+    // A container this call grew now overlaps a sibling it did not overlap before (appended);
+    // see StructuredWarningCodes.CASCADE_GROWN_INTO_SIBLING. Omitted when empty.
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<StructuredWarningDto> structuredWarnings,
+    // The parent this placement receded to a backdrop, and the fill it now holds; omitted when none.
+    @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RecededParentDto.NoneRecorded.class)
+    RecededParentDto recededParent
 ) {
 
     /** Never null: the canonical constructor normalizes null lists to empty. */
     public AddToViewResultDto {
         skippedDueToNesting = skippedDueToNesting != null ? skippedDueToNesting : List.of();
         skippedByCap = skippedByCap != null ? skippedByCap : List.of();
+        structuredWarnings = structuredWarnings != null ? structuredWarnings : List.of();
+    }
+
+    /** The shape before the recede report: delegates with none. */
+    public AddToViewResultDto(ViewObjectDto viewObject, List<ViewConnectionDto> autoConnections,
+            Integer skippedAutoConnections, List<MovedViewObjectDto> resizedAncestors,
+            List<SkippedConnection> skippedDueToNesting, List<SkippedConnection> skippedByCap,
+            List<StructuredWarningDto> structuredWarnings) {
+        this(viewObject, autoConnections, skippedAutoConnections, resizedAncestors,
+                skippedDueToNesting, skippedByCap, structuredWarnings, null);
+    }
+
+    /** The shape before the cascade overlap warning: delegates with none. */
+    public AddToViewResultDto(ViewObjectDto viewObject, List<ViewConnectionDto> autoConnections,
+            Integer skippedAutoConnections, List<MovedViewObjectDto> resizedAncestors,
+            List<SkippedConnection> skippedDueToNesting, List<SkippedConnection> skippedByCap) {
+        this(viewObject, autoConnections, skippedAutoConnections, resizedAncestors,
+                skippedDueToNesting, skippedByCap, List.of());
     }
 
     /**

@@ -159,10 +159,11 @@ public class RecipeCopyContractTest {
      * {@code source/target} entries and reporting every source whose {@code relations} attribute
      * toward {@code ApplicationComponent} contains an {@code i} — the answer is none.</p>
      *
-     * <p>The matrix is deliberately <em>not</em> read from this test: it lives outside the repo
-     * under an install path that differs between a developer machine and CI, so a test that could
-     * not find it would skip — and a skipped test is a green scan, which is the failure mode this
-     * whole class exists to avoid.</p>
+     * <p>This class does not read the matrix. {@link RecipeRelationshipMatrixTest} does, from the
+     * model bundle that holds Archi's model classes, and fails rather than skips when it cannot
+     * find it. It checks the pages' declared {@code forbidden Assignment * ApplicationComponent}
+     * line against every source concept. This constant stays because it reads the prose, which a
+     * declaration does not.</p>
      */
     private static final String NEVER_AN_ASSIGNMENT_TARGET = "ApplicationComponent";
 
@@ -727,10 +728,9 @@ public class RecipeCopyContractTest {
      * direct/derived split is inert for validity. A lower-case {@code t} is a permitted Triggering,
      * full stop.</p>
      *
-     * <p><strong>Why the matrix is not read from this test.</strong> It lives outside the repo,
-     * under an install path that differs between a developer machine and CI, so a test that could
-     * not find it would skip — and a skipped test is a green scan, which is the failure mode this
-     * whole class exists to avoid. Same reasoning as {@link #NEVER_AN_ASSIGNMENT_TARGET}.</p>
+     * <p><strong>Where the matrix is read.</strong> Not here: {@link RecipeRelationshipMatrixTest}
+     * checks the roadmap page's declared {@code forbidden} Composition and Aggregation lines between
+     * these two types, both directions, against the matrix. This constant holds the prose.</p>
      */
     private static final String NEVER_PART_OF_A_WORK_PACKAGE = "ImplementationEvent";
 
@@ -755,10 +755,10 @@ public class RecipeCopyContractTest {
      * <p><strong>Targeted, deliberately.</strong> The corpus-wide {@link #NAMED_PAIR} scan reads
      * arrow-form pairs inside an {@code AssignmentRelationship} clause; this defect was written as
      * free prose with no arrow, so no arrow scan could see it — the class's own documented known
-     * limit, which says such sites are held by targeted assertions instead. Generalising it would
-     * mean a relationship-pair parser over the whole freeform corpus, and that is separately filed
-     * work whose stated prerequisite is a front-matter redesign of these pages so the pairs are
-     * data rather than prose. It is deliberately not started here.</p>
+     * limit, which says such sites are held by targeted assertions instead. The pages now declare
+     * their pairs as data, which {@link RecipeRelationshipMatrixTest} checks against the matrix;
+     * this assertion stays because it reads what the prose says, which the declaration does
+     * not.</p>
      */
     @Test
     public void shouldNotMakeAnEventPartOfAWorkPackage_soTheSubsetNamesOnlyALegalPair() {

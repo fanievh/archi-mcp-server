@@ -23,16 +23,25 @@ import org.eclipse.emf.ecore.EObject;
  *
  * <p>Cascade removal order on execute:</p>
  * <ol>
- *   <li>Disconnect all view connections (visual connections on diagrams)</li>
+ *   <li>Disconnect all view connections (visual connections on diagrams), and every connection
+ *       attached to one of them or to a view object below</li>
  *   <li>Remove all view objects (diagram representations of the element)</li>
- *   <li>Disconnect and remove all model relationships involving this element</li>
+ *   <li>Disconnect and remove all model relationships involving this element, and every
+ *       relationship attached to one of those, transitively</li>
  *   <li>Remove the element from its folder</li>
  * </ol>
  *
- * <p>All cascade state is discovered at prepare time by the accessor and passed
- * to the constructor. The command does not perform any model traversal itself.
- * Relationships must be sorted by descending folder index within each folder
- * so that removal does not shift indices of not-yet-removed items.</p>
+ * <p>What the delete takes with it is found when the command first runs, by {@link DeleteCascade},
+ * against the model exactly as the command meets it. Inside a batch or a bulk call an earlier
+ * operation can have cloned a view that draws the element, placed it on a view, or connected a
+ * relationship to it; none of those were in the model when the delete was prepared, and each is
+ * removed with it. Redo replays what the first run removed and finds nothing again. An element an
+ * earlier operation already removed is not removed a second time, and its undo restores nothing.</p>
+ *
+ * <p>The cascade found at prepare is kept as a projection: until the first run,
+ * {@link #getViewObjectsRemoved()} and {@link #getViewConnectionsToDisconnect()} answer it, for the
+ * batch's readers that ask a queued delete what it will take off a view; after it, they answer what
+ * the run removed.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -41,142 +50,92 @@ import org.eclipse.emf.ecore.EObject;
 public class DeleteElementCommand extends Command implements NameCapturingCommand {
 
     private final IArchimateElement element;
-    private final IFolder elementFolder;
-    private final int elementIndex;
-    private final List<CascadedRelationship> cascadedRelationships;
-    private final List<CascadedViewReference> cascadedViewReferences;
-    private final List<IDiagramModelConnection> viewConnectionsToDisconnect;
+    private final DeleteCascade.OfElement projection;
 
-    // Successor anchors captured at construction (prepare time, when every folder
-    // and container still holds its full original membership). undo() restores
-    // each removed object directly BEFORE its surviving successor rather than at a
-    // stale absolute index. This keeps paint order (view z-order) AND model-tree
-    // folder order exact when SEVERAL delete commands are grouped in one compound:
-    // such a compound undoes its members in reverse, so a later member restores
-    // into a list whose earlier members are not yet back — an absolute index then
-    // lands in the wrong slot, whereas the surviving successor is a stable anchor.
-    //
-    // Exactness guarantee: order is restored exactly whenever each removed item's
-    // captured successor is a SURVIVOR or is restored before the item (always true
-    // for single deletes, for the intra-command cascade — sorted descending and
-    // restored ascending — and for a compound whose same-container removals are
-    // listed in ascending index order, which is what the discovery walk and a
-    // top-to-bottom bulk request produce). Residual: a run of 3+ co-deleted
-    // siblings listed in a non-monotonic order (e.g. indices [2,0,1]) can leave a
-    // middle item whose only anchor is another not-yet-restored co-deleted sibling;
-    // the absolute-index fallback then mis-places it among the collapsed survivors.
-    // Membership/connection integrity is always preserved; only paint order can
-    // drift in that rare case. A fully order-independent fix would require the
-    // compound itself to restore same-container removals in global index order.
-    private final EObject elementSuccessor;
-    private final List<EObject> relationshipSuccessors;
-    private final List<IDiagramModelObject> viewReferenceSuccessors;
+    /** What the first run removed and where each piece goes back; {@code null} until it runs. */
+    private Removal removal;
 
     private String nameAtExecute;
 
     /**
      * Creates a command to delete an element and cascade-remove all dependencies.
      *
-     * <p>The caller (accessor prepare method) is responsible for discovering
-     * all cascade targets and passing them here. Lists are defensively copied.</p>
-     *
-     * @param element                    the element to delete
-     * @param elementFolder              the folder containing the element
-     * @param elementIndex               the element's index in the folder
-     * @param cascadedRelationships      relationships to cascade-delete (sorted by descending index per folder)
-     * @param cascadedViewReferences     view objects to remove (sorted by descending index per container)
-     * @param viewConnectionsToDisconnect unique view connections to disconnect
+     * @param element    the element to delete
+     * @param projection its cascade as found at prepare; answered to the batch's readers until the
+     *                   command runs, never removed as such
      */
-    public DeleteElementCommand(IArchimateElement element,
-                                 IFolder elementFolder,
-                                 int elementIndex,
-                                 List<CascadedRelationship> cascadedRelationships,
-                                 List<CascadedViewReference> cascadedViewReferences,
-                                 List<IDiagramModelConnection> viewConnectionsToDisconnect) {
+    DeleteElementCommand(IArchimateElement element, DeleteCascade.OfElement projection) {
         this.element = Objects.requireNonNull(element, "element must not be null");
-        this.elementFolder = Objects.requireNonNull(elementFolder, "elementFolder must not be null");
-        this.elementIndex = elementIndex;
-        this.cascadedRelationships = List.copyOf(cascadedRelationships);
-        this.cascadedViewReferences = List.copyOf(cascadedViewReferences);
-        this.viewConnectionsToDisconnect = List.copyOf(viewConnectionsToDisconnect);
-        // Capture surviving-successor anchors NOW, while the model is still intact.
-        this.elementSuccessor = successorOf(elementFolder.getElements(), element);
-        List<EObject> relSuccessors = new ArrayList<>(this.cascadedRelationships.size());
-        for (CascadedRelationship rel : this.cascadedRelationships) {
-            relSuccessors.add(successorOf(rel.folder().getElements(), rel.relationship()));
-        }
-        // Note: successor lists may legitimately contain null (a removed item
-        // that was last in its container has no successor anchor), so they use
-        // unmodifiableList rather than List.copyOf, which rejects null elements.
-        this.relationshipSuccessors = Collections.unmodifiableList(relSuccessors);
-        List<IDiagramModelObject> viewSuccessors =
-                new ArrayList<>(this.cascadedViewReferences.size());
-        for (CascadedViewReference ref : this.cascadedViewReferences) {
-            viewSuccessors.add(successorOf(ref.container().getChildren(), ref.viewObject()));
-        }
-        this.viewReferenceSuccessors = Collections.unmodifiableList(viewSuccessors);
+        this.projection = Objects.requireNonNull(projection, "projection must not be null");
         setLabel("Delete " + element.eClass().getName() + ": " + element.getName());
     }
 
     @Override
     public void execute() {
         nameAtExecute = null;
+        if (removal == null) {
+            removal = Removal.of(element);
+        }
+        if (removal.folder == null) {
+            return;
+        }
 
         // 1. Disconnect all view connections
-        for (IDiagramModelConnection conn : viewConnectionsToDisconnect) {
+        for (IDiagramModelConnection conn : removal.cascade.viewConnections()) {
             conn.disconnect();
         }
 
         // 2. Remove all view objects from their containers
-        for (CascadedViewReference ref : cascadedViewReferences) {
+        for (CascadedViewReference ref : removal.cascade.viewObjects()) {
             ref.container.getChildren().remove(ref.viewObject);
         }
 
         // 3. Disconnect and remove all relationships
-        for (CascadedRelationship rel : cascadedRelationships) {
+        for (CascadedRelationship rel : removal.cascade.relationships()) {
             rel.relationship.disconnect();
             rel.folder.getElements().remove(rel.relationship);
         }
 
         // 4. Remove element from folder, recording what it was called as it goes. Read here rather
-        // than on the way in, and kept only when the removal actually removed something: an
-        // earlier command in the same compound may have renamed this element, and may equally
-        // have already deleted it — a detached element is still reachable and still writable, so
-        // reporting the name it carries when a redundant delete runs would name it by something
-        // it never was while it existed.
+        // than on the way in: an earlier command in the same compound may have renamed it.
         String subjectName = element.getName();
-        if (elementFolder.getElements().remove(element)) {
+        if (removal.folder.getElements().remove(element)) {
             nameAtExecute = subjectName;
         }
     }
 
     @Override
     public void undo() {
+        if (removal == null || removal.folder == null) {
+            return;
+        }
         // 4. Re-add element to folder
-        safeAddElement(elementFolder, elementIndex, element, elementSuccessor);
+        safeAddElement(removal.folder, removal.index, element, removal.successor);
 
         // 3. Re-add and reconnect relationships (reverse order preserves indices)
-        for (int i = cascadedRelationships.size() - 1; i >= 0; i--) {
-            CascadedRelationship rel = cascadedRelationships.get(i);
+        List<CascadedRelationship> relationships = removal.cascade.relationships();
+        for (int i = relationships.size() - 1; i >= 0; i--) {
+            CascadedRelationship rel = relationships.get(i);
             safeAddElement(rel.folder, rel.indexInFolder, rel.relationship,
-                    relationshipSuccessors.get(i));
+                    removal.relationshipSuccessors.get(i));
             rel.relationship.connect(rel.source, rel.target);
         }
 
         // 2. Re-add view objects (reverse order preserves indices)
-        for (int i = cascadedViewReferences.size() - 1; i >= 0; i--) {
-            CascadedViewReference ref = cascadedViewReferences.get(i);
+        List<CascadedViewReference> viewObjects = removal.cascade.viewObjects();
+        for (int i = viewObjects.size() - 1; i >= 0; i--) {
+            CascadedViewReference ref = viewObjects.get(i);
             safeAddChild(ref.container, ref.indexInContainer, ref.viewObject,
-                    viewReferenceSuccessors.get(i));
+                    removal.viewObjectSuccessors.get(i));
         }
 
         // 1. Reconnect all view connections
-        for (IDiagramModelConnection conn : viewConnectionsToDisconnect) {
+        for (IDiagramModelConnection conn : removal.cascade.viewConnections()) {
             conn.reconnect();
         }
     }
 
-    // Default redo() calls execute() — safe because all state is in final fields
+    // Default redo() calls execute(), which replays the first run's removal.
 
     @Override
     public String getNameAtExecute() {
@@ -185,7 +144,7 @@ public class DeleteElementCommand extends Command implements NameCapturingComman
 
     /** The item that immediately followed {@code item} in {@code list}, or
      *  {@code null} if it was last / not present. Used to capture a stable
-     *  re-insertion anchor at construction time. Relies on EMF default identity
+     *  re-insertion anchor just before the removal. Relies on EMF default identity
      *  equality for {@code indexOf} (the model types here do not override
      *  {@code equals}), so a value-equal twin cannot shadow the real anchor. */
     private static <T> T successorOf(List<T> list, T item) {
@@ -195,10 +154,11 @@ public class DeleteElementCommand extends Command implements NameCapturingComman
 
     private static void safeAddElement(IFolder folder, int index, EObject element,
                                        EObject successorAnchor) {
-        // Already restored → nothing to do. A batch that removes the same element twice (queued
-        // twice, or an element delete overlapping the delete of a folder that cascades it) undoes
-        // in reverse and would re-add the element a second time; EMF containment lists forbid
-        // duplicates and would throw. See SiblingUndoAnchor.restore for the shared-helper twin.
+        // Already restored → nothing to do. A delete restores only what its own run removed, so a
+        // second delete of the same element (queued twice, or overlapping the delete of a folder
+        // that holds it) restores nothing; this stays as the net, since re-adding into an EMF
+        // containment list, which forbids duplicates, would throw. See SiblingUndoAnchor.restore
+        // for the shared-helper twin.
         if (folder.getElements().contains(element)) {
             return;
         }
@@ -216,9 +176,8 @@ public class DeleteElementCommand extends Command implements NameCapturingComman
     private static void safeAddChild(IDiagramModelContainer container, int index,
                                       IDiagramModelObject child,
                                       IDiagramModelObject successorAnchor) {
-        // Already restored → nothing to do (see safeAddElement): a redundant/overlapping delete's
-        // reverse-order undo can re-add the same cascaded view child twice, which the unique
-        // containment list would reject.
+        // Already restored → nothing to do (see safeAddElement): the unique containment list
+        // would reject a second add of the same view child.
         if (container.getChildren().contains(child)) {
             return;
         }
@@ -237,13 +196,69 @@ public class DeleteElementCommand extends Command implements NameCapturingComman
     IArchimateElement getElement() { return element; }
 
     /** Package-visible for testing. */
-    int getRelationshipsRemoved() { return cascadedRelationships.size(); }
+    int getRelationshipsRemoved() { return cascade().relationships().size(); }
+
+    /** Whether {@code relationship} is one this delete removes along with the element. */
+    boolean removesRelationship(Object relationship) {
+        return cascade().relationships().stream().anyMatch(cascaded -> cascaded.relationship() == relationship);
+    }
 
     /** Package-visible for testing. */
-    int getViewReferencesRemoved() { return cascadedViewReferences.size(); }
+    int getViewReferencesRemoved() { return cascade().viewObjects().size(); }
 
     /** Package-visible for testing. */
-    int getViewConnectionsRemoved() { return viewConnectionsToDisconnect.size(); }
+    int getViewConnectionsRemoved() { return cascade().viewConnections().size(); }
+
+    /**
+     * The view objects this delete takes off their diagrams, read by the batch's queue readers: the
+     * projection until the command runs, then what it removed.
+     */
+    List<IDiagramModelObject> getViewObjectsRemoved() {
+        return cascade().viewObjects().stream().<IDiagramModelObject>map(CascadedViewReference::viewObject).toList();
+    }
+
+    /** The view connections this delete disconnects: the projection until it runs, then what it disconnected. */
+    List<IDiagramModelConnection> getViewConnectionsToDisconnect() { return cascade().viewConnections(); }
+
+    private DeleteCascade.OfElement cascade() {
+        return removal == null ? projection : removal.cascade;
+    }
+
+    /**
+     * What one run removes, with the anchors undo restores each piece by. Every anchor is the item
+     * that followed the removed one when this command met the model, so undo puts the model back as
+     * this command found it, which is what a compound undoing its members in reverse needs: each
+     * member's undo meets the model as that member left it. The absolute index stays as the
+     * fallback for an anchor this command removed too.
+     *
+     * @param folder {@code null} when the element was in no folder when the command ran: an
+     *               earlier operation already removed it, and there is nothing to remove or restore
+     */
+    private record Removal(IFolder folder, int index, EObject successor, DeleteCascade.OfElement cascade,
+            List<EObject> relationshipSuccessors, List<IDiagramModelObject> viewObjectSuccessors) {
+
+        static Removal of(IArchimateElement element) {
+            if (!(element.eContainer() instanceof IFolder folder)) {
+                return new Removal(null, -1, null, new DeleteCascade.OfElement(List.of(), List.of(), List.of(), 0),
+                        List.of(), List.of());
+            }
+            DeleteCascade.OfElement cascade = DeleteCascade.ofElement(element);
+            // A removed item that was last in its container has no successor, so these lists can
+            // hold null and use unmodifiableList rather than List.copyOf.
+            List<EObject> relationshipSuccessors = new ArrayList<>(cascade.relationships().size());
+            for (CascadedRelationship rel : cascade.relationships()) {
+                relationshipSuccessors.add(successorOf(rel.folder().getElements(), rel.relationship()));
+            }
+            List<IDiagramModelObject> viewObjectSuccessors = new ArrayList<>(cascade.viewObjects().size());
+            for (CascadedViewReference ref : cascade.viewObjects()) {
+                viewObjectSuccessors.add(successorOf(ref.container().getChildren(), ref.viewObject()));
+            }
+            return new Removal(folder, folder.getElements().indexOf(element),
+                    successorOf(folder.getElements(), element), cascade,
+                    Collections.unmodifiableList(relationshipSuccessors),
+                    Collections.unmodifiableList(viewObjectSuccessors));
+        }
+    }
 
     /**
      * Holds cascade state for a relationship that will be removed when

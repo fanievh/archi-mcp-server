@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import org.eclipse.jface.preference.PreferenceStore;
 import org.junit.Test;
 
 /**
@@ -137,5 +138,23 @@ public class KeystorePasswordMigrationTest {
         assertFalse("must not even read secure storage when there is nothing to migrate", readerCalled.get());
         assertFalse(written.get());
         assertFalse(cleared.get());
+    }
+
+    @Test
+    public void shouldIgnoreAKeystorePassword_whenItExistsOnlyAsADefault() {
+        // An administrator's -pluginCustomization default must not be migrated or used as the password
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(McpPlugin.PREF_KEYSTORE_PASSWORD, "admin-default-pw");
+        assertEquals("", McpPlugin.legacyKeystorePassword(store));
+    }
+
+    @Test
+    public void shouldReturnTheUsersOwnKeystorePassword_whenOneIsStored() {
+        PreferenceStore store = new PreferenceStore();
+        store.setDefault(McpPlugin.PREF_KEYSTORE_PASSWORD, "admin-default-pw");
+        store.setValue(McpPlugin.PREF_KEYSTORE_PASSWORD, LEGACY);
+        assertEquals(LEGACY, McpPlugin.legacyKeystorePassword(store));
+        assertEquals("no default and no value reads as empty", "",
+                McpPlugin.legacyKeystorePassword(new PreferenceStore()));
     }
 }

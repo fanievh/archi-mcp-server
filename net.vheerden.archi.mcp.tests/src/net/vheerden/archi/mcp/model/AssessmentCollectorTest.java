@@ -5,6 +5,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Before;
 import org.junit.Test;
@@ -229,6 +230,27 @@ public class AssessmentCollectorTest {
 
         assertEquals(1, connections.size());
         assertEquals("", connections.get(0).labelText());
+    }
+
+    @Test
+    public void shouldResolveTheLabel_asTheBatchWillLeaveIt() {
+        assertEquals("control: shown in the model", "Serving",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes(), null).get(0).labelText());
+        assertEquals("a label the batch will hide is collected as no label", "",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes(), Map.of("c1", false))
+                        .get(0).labelText());
+
+        connection.setNameVisible(false);
+        assertEquals("control: hidden in the model", "",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes(), null).get(0).labelText());
+        assertEquals("a label the batch will show is collected with its text", "Serving",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes(), Map.of("c1", true))
+                        .get(0).labelText());
+        assertEquals("a map that does not name the connection reads the model", "",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes(), Map.of("other", true))
+                        .get(0).labelText());
+        assertEquals("the two-argument form reads the model", "",
+                AssessmentCollector.collectAssessmentConnections(view, endpointNodes()).get(0).labelText());
     }
 
     @Test

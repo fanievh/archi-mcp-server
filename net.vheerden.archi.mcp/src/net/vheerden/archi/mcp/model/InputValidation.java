@@ -92,4 +92,21 @@ final class InputValidation {
                     null);
         }
     }
+
+    /**
+     * Rejects a content-relative note {@code position} on a nested note: the placement is computed
+     * against the whole view's content, which means nothing inside a parent. One rule for the
+     * {@code add-note-to-view} tool and its {@code bulk-mutate} operation, checked before the position
+     * value itself so a call carrying both answers with this.
+     *
+     * @throws ModelAccessException with {@link ErrorCode#INVALID_PARAMETER} when both are present
+     */
+    static void requireTopLevelForPosition(String position, boolean nested) {
+        if (position != null && nested) {
+            throw new ModelAccessException(
+                    "Cannot use 'position' with 'parentViewObjectId'. "
+                            + "Position-based placement only works for top-level notes.",
+                    ErrorCode.INVALID_PARAMETER);
+        }
+    }
 }

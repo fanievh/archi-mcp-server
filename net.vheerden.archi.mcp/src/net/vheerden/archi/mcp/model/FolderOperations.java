@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import org.eclipse.emf.ecore.EObject;
@@ -71,7 +72,8 @@ final class FolderOperations {
     }
 
     static List<FolderDto> searchFolders(IArchimateModel model, String nameQuery) {
-        String lowerQuery = nameQuery.toLowerCase();
+        // Names are the user's own text: folded in the user's locale on purpose, not in Locale.ROOT.
+        String lowerQuery = nameQuery.toLowerCase(Locale.getDefault());
         List<FolderDto> result = new ArrayList<>();
         for (IFolder folder : model.getFolders()) {
             collectMatchingFolders(folder, lowerQuery, result);
@@ -133,7 +135,7 @@ final class FolderOperations {
     }
 
     static void collectMatchingFolders(IFolder folder, String lowerQuery, List<FolderDto> result) {
-        if (folder.getName() != null && folder.getName().toLowerCase().contains(lowerQuery)) {
+        if (folder.getName() != null && folder.getName().toLowerCase(Locale.getDefault()).contains(lowerQuery)) {
             result.add(convertToFolderDto(folder));
         }
         for (IFolder child : folder.getFolders()) {
@@ -145,32 +147,6 @@ final class FolderOperations {
         StringBuilder path = new StringBuilder();
         buildFolderPathRecursive(folder, path);
         return path.toString();
-    }
-
-    /**
-     * Builds the path a folder will have once a pending rename executes.
-     *
-     * <p>A rename has not been applied yet when the response is built — the command runs later, and
-     * later still when the call is queued in a batch — so the path cannot simply be read off the
-     * folder. It is rebuilt from the folder's live ancestry plus the name that will actually be
-     * written, which is the closest thing to effective state available before execution and, more
-     * importantly, is sourced from the same value the command receives rather than from the raw
-     * request. Should any name normalisation ever land on the write path, the reported path follows
-     * it instead of silently disagreeing with it.</p>
-     *
-     * @param folder        the folder being renamed
-     * @param effectiveName the name the write will actually store
-     * @param renaming      false when no rename is pending, in which case the live path is returned
-     * @return the folder's path after the pending rename
-     */
-    static String pathAfterRename(IFolder folder, String effectiveName, boolean renaming) {
-        if (!renaming) {
-            return buildFolderPath(folder);
-        }
-        EObject parent = folder.eContainer();
-        return (parent instanceof IFolder parentFolder)
-                ? buildFolderPath(parentFolder) + "/" + effectiveName
-                : effectiveName;
     }
 
     private static void buildFolderPathRecursive(IFolder folder, StringBuilder path) {

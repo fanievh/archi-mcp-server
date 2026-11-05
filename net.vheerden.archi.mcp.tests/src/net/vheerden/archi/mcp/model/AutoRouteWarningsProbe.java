@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import net.vheerden.archi.mcp.model.routing.EgressOutcome;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.NudgedElementDto;
@@ -44,6 +45,14 @@ public final class AutoRouteWarningsProbe {
         return new Emitted(structured.get(0), free);
     }
 
+    public static Emitted egressLiftPreGated(DispatchArm arm) {
+        List<String> free = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitEgressLiftPreGated(new EgressOutcome(0, 5.0, List.of("conn-1", "conn-2")),
+                arm, free, structured);
+        return new Emitted(structured.get(0), free);
+    }
+
     public static Emitted netZeroNudge(DispatchArm arm) {
         List<String> free = new ArrayList<>();
         List<StructuredWarningDto> structured = new ArrayList<>();
@@ -73,6 +82,14 @@ public final class AutoRouteWarningsProbe {
                         node("tgt", 500, 200, 100, 55, false),
                         node("obj-note-a", 280, 190, 60, 60, true)),
                 arm, free, structured);
+        return new Emitted(structured.get(0), free);
+    }
+
+    public static Emitted selfConnectionsNotRouted(DispatchArm arm) {
+        List<String> free = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitSelfConnectionsNotRouted(List.of("sc-kept"), List.of("sc-bare"), arm,
+                free, structured);
         return new Emitted(structured.get(0), free);
     }
 

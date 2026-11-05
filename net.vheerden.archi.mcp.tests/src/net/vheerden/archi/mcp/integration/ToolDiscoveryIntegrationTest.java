@@ -100,6 +100,9 @@ public class ToolDiscoveryIntegrationTest {
         assertTrue("Missing create-view", toolNames.contains("create-view"));
         assertTrue("Missing update-element", toolNames.contains("update-element"));
         assertTrue("Missing update-relationship", toolNames.contains("update-relationship"));
+        assertTrue("Missing merge-elements", toolNames.contains("merge-elements"));
+        assertTrue("Missing change-element-type", toolNames.contains("change-element-type"));
+        assertTrue("Missing change-relationship-type", toolNames.contains("change-relationship-type"));
         assertTrue("Missing get-or-create-element", toolNames.contains("get-or-create-element"));
         assertTrue("Missing search-and-create", toolNames.contains("search-and-create"));
         assertTrue("Missing bulk-mutate", toolNames.contains("bulk-mutate"));
@@ -177,12 +180,14 @@ public class ToolDiscoveryIntegrationTest {
     @SuppressWarnings("unchecked")
     @Test
     public void shouldHaveAccurateInputSchemas() {
-        // get-model-info: no required params
+        // get-model-info: its only property is the optional modelId every model tool declares
         McpSchema.JsonSchema modelInfoSchema = findTool("get-model-info").inputSchema();
         assertNotNull(modelInfoSchema);
         assertEquals("object", modelInfoSchema.type());
-        assertTrue("get-model-info should have empty properties",
-                modelInfoSchema.properties() == null || modelInfoSchema.properties().isEmpty());
+        assertEquals("get-model-info should declare only modelId",
+                java.util.Set.of("modelId"), modelInfoSchema.properties().keySet());
+        assertTrue("modelId is optional on get-model-info",
+                modelInfoSchema.required() == null || modelInfoSchema.required().isEmpty());
 
         // get-element: has "id" (string) and "ids" (array), neither required
         McpSchema.JsonSchema elementSchema = findTool("get-element").inputSchema();
@@ -379,8 +384,8 @@ public class ToolDiscoveryIntegrationTest {
         assertNotNull(beginBatchSchema);
         assertTrue("begin-batch should have 'description' property",
                 beginBatchSchema.properties().containsKey("description"));
-        assertTrue("begin-batch should have no required params",
-                beginBatchSchema.required() == null || beginBatchSchema.required().isEmpty());
+        assertEquals("begin-batch requires exactly modelId: a batch declares its model",
+                List.of("modelId"), beginBatchSchema.required());
 
         // end-batch: optional rollback
         McpSchema.JsonSchema endBatchSchema = findTool("end-batch").inputSchema();

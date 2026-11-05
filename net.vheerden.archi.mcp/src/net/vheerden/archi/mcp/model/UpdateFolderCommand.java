@@ -136,4 +136,9 @@ public class UpdateFolderCommand extends Command {
     IFolder getFolder() {
         return folder;
     }
+
+    /** The name this update gives the folder, or null when it leaves the name as it is. */
+    String getNewName() {
+        return newName;
+    }
 }

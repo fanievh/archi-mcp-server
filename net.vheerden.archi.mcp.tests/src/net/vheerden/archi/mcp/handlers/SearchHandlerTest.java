@@ -1168,12 +1168,12 @@ public class SearchHandlerTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void shouldTreatIntegerTypeAsNoFilter() throws Exception {
+    public void shouldRefuseAnIntegerType_ratherThanSearchUnfiltered() throws Exception {
         StubAccessor accessor = new StubAccessor(true);
         SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
         handler.registerTools();
 
-        // Integer type value should be ignored (not instanceof String)
+        // A type that is not a string used to be read as no filter, answering every element.
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("search-elements");
         Map<String, Object> args = new HashMap<>();
         args.put("query", "o");
@@ -1181,21 +1181,21 @@ public class SearchHandlerTest {
         McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("search-elements", args);
         McpSchema.CallToolResult result = spec.callHandler().apply(null, request);
 
-        assertFalse(result.isError());
+        assertTrue(result.isError());
         Map<String, Object> envelope = parseJson(result);
-        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
-        assertNotNull(resultList);
-        assertEquals(3, resultList.size());
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        assertEquals("type must be a string, got the integer 42. Nothing was changed.", error.get("message"));
     }
 
     @SuppressWarnings("unchecked")
     @Test
-    public void shouldTreatIntegerLayerAsNoFilter() throws Exception {
+    public void shouldRefuseAnIntegerLayer_ratherThanSearchUnfiltered() throws Exception {
         StubAccessor accessor = new StubAccessor(true);
         SearchHandler handler = new SearchHandler(accessor, formatter, registry, null);
         handler.registerTools();
 
-        // Integer layer value should be ignored (not instanceof String)
+        // A layer that is not a string used to be read as no filter, answering every element.
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("search-elements");
         Map<String, Object> args = new HashMap<>();
         args.put("query", "o");
@@ -1203,11 +1203,11 @@ public class SearchHandlerTest {
         McpSchema.CallToolRequest request = new McpSchema.CallToolRequest("search-elements", args);
         McpSchema.CallToolResult result = spec.callHandler().apply(null, request);
 
-        assertFalse(result.isError());
+        assertTrue(result.isError());
         Map<String, Object> envelope = parseJson(result);
-        List<Map<String, Object>> resultList = (List<Map<String, Object>>) envelope.get("result");
-        assertNotNull(resultList);
-        assertEquals(3, resultList.size());
+        Map<String, Object> error = (Map<String, Object>) envelope.get("error");
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        assertEquals("layer must be a string, got the integer 42. Nothing was changed.", error.get("message"));
     }
 
     // ---- Type/Layer Filter with No Text Matches (edge case) ----

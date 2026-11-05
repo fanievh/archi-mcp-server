@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
+import net.vheerden.archi.mcp.model.exceptions.ProposalStaleException;
 
 /**
  * The shared "stored request → fresh {@code Command} + preconditions" seam used by the approve path
@@ -253,14 +254,16 @@ final class ProposalBuilder {
      *
      * @param proposal the approved proposal carrying the deferred rebuild handle
      * @return a fresh {@link PreparedMutation} (command + re-resolved entity)
-     * @throws MutationException if a targeted object can no longer be resolved or fails preconditions
-     *                           (reported as stale, not as a raw exception)
+     * @throws ProposalStaleException if the proposal can no longer be rebuilt against the current model
+     *                                 (reported as stale, not as a raw exception)
+     * @throws MutationException       carrying the domain sentence, when a precondition of the rebuilt
+     *                                 change refuses it (not staleness)
      */
     PreparedMutation<?> rebuild(PendingProposal proposal) throws MutationException {
         try {
             PreparedMutation<?> fresh = proposal.rebuild().get();
             if (fresh == null || fresh.command() == null) {
-                throw new MutationException(staleMessage());
+                throw new ProposalStaleException(staleMessage());
             }
             return fresh;
         } catch (MutationException e) {
@@ -279,12 +282,12 @@ final class ProposalBuilder {
             // ABOVE the prepare step and are never entered from here, so no wrapped stack detail can reach
             // the approval dock. The cause is retained for the log/diagnostics.
             logger.info("Proposal '{}' refused at rebuild by a domain precondition [{}]: {}",
-                    proposal.proposalId(), e.getErrorCode(), e.getMessage());
+                    proposal.proposalId(), e.getErrorCode(), CallerText.loggedMessage(e.getMessage()));
             throw new MutationException(e.getMessage(), e);
         } catch (RuntimeException e) {
             logger.info("Proposal '{}' could not be rebuilt against the current model: {}",
-                    proposal.proposalId(), e.getMessage());
-            throw new MutationException(staleMessage(), e);
+                    proposal.proposalId(), CallerText.loggedMessage(e.getMessage()));
+            throw new ProposalStaleException(staleMessage(), e);
         }
     }
 

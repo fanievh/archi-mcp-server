@@ -5,10 +5,10 @@ import org.eclipse.gef.commands.Command;
 import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelImageProvider;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IFontAttribute;
-import com.archimatetool.model.IGrouping;
 import com.archimatetool.model.IIconic;
 import com.archimatetool.model.ILineObject;
 import com.archimatetool.model.ITextAlignment;
@@ -20,10 +20,32 @@ import com.archimatetool.model.ITextPosition;
  * diagram object on a view, and optionally updates text and styling
  * for groups/notes/elements (Stories 7-8, 8-6, 11-2).
  *
- * <p>Captures the old bounds, text, and styling at construction time
- * for undo support. The caller merges partial updates (only provided
- * fields) before creating this command — the command always receives
- * complete bounds and merged styling values.</p>
+ * <p><strong>When it reads the object.</strong> The constructor keeps only what the caller asked
+ * for and which fields this kind of object holds. Everything undo restores is read in
+ * {@link #execute()}, from the object as it stands when the update runs. The two moments differ
+ * whenever something runs between them: a proposal is built when the agent proposes and runs when
+ * the human approves, and a batched update is built when it is queued and runs when the batch
+ * commits. A snapshot taken when the command was built made Undo throw away whatever ran in
+ * between — the agent's own later change, an edit the human made while the batch was open, or an
+ * earlier update in the same batch.</p>
+ *
+ * <p><strong>Only what was named is written.</strong> A styling or image field is written only
+ * when the caller named it and this kind of object holds it, and undo restores only the fields
+ * that were written. A field the caller did not name is neither written nor restored, so two
+ * queued updates on one object each keep what the other set. The caller merges partial bounds
+ * into a complete rectangle before creating this command, and says which of its four axes the
+ * update sets ({@link NamedAxes}); an axis it does not set keeps the value the object holds when the
+ * update runs. Every constructor without that argument sets all four.</p>
+ *
+ * <p><strong>The snapshot is re-armed by undo.</strong> {@code execute()} takes its snapshot when
+ * the command is armed: it is armed when built and again by every {@code undo()}. A second
+ * {@code execute()} with no undo between keeps the snapshot it has, because the object then holds
+ * what this command wrote. Re-arming matters because the layout tools run and undo these commands
+ * outside the command stack while they measure candidates, before the real run; a snapshot kept
+ * from such a run would make Undo land on the speculative state. That is where this command differs
+ * from {@link UpdateViewConnectionCommand}, which keeps its first snapshot for redo. {@code redo()}
+ * is GEF's default — run {@code execute()} again — and after an undo it reads the state that undo
+ * left.</p>
  *
  * <p><strong>Text update support:</strong> Added optional text update support.
  * Groups use {@code setName()} for their label; notes use
@@ -40,7 +62,8 @@ import com.archimatetool.model.ITextPosition;
  * {@code ITextAlignment.setTextAlignment(int)}), and {@code verticalTextAlignment}
  * (mapped to {@code ITextPosition.setTextPosition(int)}) to the styling rail.
  * All three ride the existing {@link StylingParams} parameter — same single-
- * undo-unit guarantee as the colour/opacity/lineWidth fields.</p>
+ * undo-unit guarantee as the colour/opacity/lineWidth fields. For these three an empty string
+ * means "no change".</p>
  *
  * <p><strong>Label-expression rail:</strong> Added the fifth rail — optional
  * {@code labelExpression}, Archi's per-view-object dynamic label template
@@ -53,14 +76,16 @@ import com.archimatetool.model.ITextPosition;
  *
  * <p><strong>Typography &amp; styling extensions:</strong> Extended the styling rail (NOT a new rail —
  * fields ride the existing {@link StylingParams} parameter) with typography
- * (fontName / fontSize / fontStyle merged through {@code IFontAttribute.setFont}),
+ * (fontName / fontSize / fontStyle merged through {@code IFontAttribute.setFont} into the font the
+ * object holds when the update runs),
  * {@code gradient} (typed {@code IDiagramModelObject.setGradient(int)}, default
  * {@code GRADIENT_NONE=-1}), note-only {@code borderType} (typed
  * {@code IBorderType.setBorderType(int)} on {@code IDiagramModelNote}),
  * {@code deriveLineColor} (typed {@code setDeriveElementLineColor(boolean)}, Archi
  * default {@code true}), and {@code outlineOpacity} (typed {@code setLineAlpha(int)},
  * Archi default 255). All discovered in an EMF spike — typed setters
- * on Archi 5.8, no IFeatures-backed storage needed. Constructor arity unchanged at 8 args.</p>
+ * on Archi 5.8, no IFeatures-backed storage needed. For gradient, border type and line style an
+ * empty string resets to the default.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -69,61 +94,60 @@ import com.archimatetool.model.ITextPosition;
 public class UpdateViewObjectCommand extends Command {
 
     private final IDiagramModelObject diagramObject;
-    private final int oldX;
-    private final int oldY;
-    private final int oldWidth;
-    private final int oldHeight;
     private final int newX;
     private final int newY;
     private final int newWidth;
     private final int newHeight;
+    // Which of the four the update sets; the rest keep what the object holds when it runs.
+    private final NamedAxes axes;
 
     // Text update support
-    private final String oldText;
     private final String newText;
     private final boolean hasTextChange;
 
-    // Styling update support
-    private final String oldFillColor;
-    private final String newFillColor;
-    private final String oldLineColor;
-    private final String newLineColor;
-    private final String oldFontColor;
-    private final String newFontColor;
-    private final int oldAlpha;
-    private final int newAlpha;
-    private final int oldLineWidth;
-    private final int newLineWidth;
+    // Styling: what the caller named, decided once because an object's kind never changes. A
+    // String field carries a *Given gate because null is a value it can write (an empty string
+    // clears it); a boxed field is null when the caller did not name it or this kind of object
+    // does not hold it.
     private final boolean hasStylingChange;
-
-    // Figure type + horizontal + vertical text alignment.
-    // Integer rather than int: null means "not applicable for this target type" (figureType is null
-    // for objects that are neither group nor archimateObject; the two alignment fields can in principle
-    // be captured for any IDiagramModelObject but we follow the same null-when-unapplicable shape).
-    private final Integer oldFigureType;
+    private final boolean fillColorGiven;
+    private final String newFillColor;
+    private final boolean lineColorGiven;
+    private final String newLineColor;
+    private final boolean fontColorGiven;
+    private final String newFontColor;
+    private final Integer newAlpha;
+    private final Integer newLineWidth;
     private final Integer newFigureType;
-    private final Integer oldTextAlignment;
     private final Integer newTextAlignment;
-    private final Integer oldVerticalTextAlignment;
     private final Integer newVerticalTextAlignment;
+    // hasFontChange = true only when at least one typography field (fontName/Size/Style) was
+    // named on an object that holds a font. The three are merged into the font the object holds
+    // when the update runs, so an earlier change to another typography field survives.
+    private final boolean hasFontChange;
+    private final String fontName;
+    private final Integer fontSize;
+    private final String fontStyle;
+    private final Integer newGradient;
+    private final Integer newBorderType;          // note-only
+    private final Boolean newDeriveLineColor;
+    private final Integer newOutlineOpacity;
+    private final Integer newLineStyle;
 
-    // Image update support
-    private final String oldImagePath;
-    private final String newImagePath;
-    private final int oldImagePosition;
-    private final int newImagePosition;
-    private final int oldImageSource;
-    private final int newImageSource;
-    private final int oldShowIcon;
-    private final int newShowIcon;
+    // Image: the same rule. The image source is never named: it follows a named image path
+    // (custom when a path is set, the profile's when it is cleared) and is not written otherwise.
     private final boolean hasImageChange;
+    private final boolean imagePathGiven;
+    private final String newImagePath;
+    private final Integer newImagePosition;
+    private final Integer newImageSource;
+    private final Integer newShowIcon;
 
     // Label-expression rail. Stored as a generic IFeatures
     // entry on the diagram object (key "labelExpression"), NOT a typed EMF
     // getter/setter (EMF finding).
     // hasLabelExpressionChange = true when caller passed a non-null value
     // (including empty string, which clears the feature).
-    private final String oldLabelExpression;
     private final String newLabelExpression;
     private final boolean hasLabelExpressionChange;
 
@@ -133,22 +157,19 @@ public class UpdateViewObjectCommand extends Command {
     // Anchor rail — view-anchored positioning. Four generic IFeatures entries on the
     // child object recording that its position is relative to a target container
     // (anchorTarget id + anchorEdge + anchorDx/anchorDy) rather than a frozen absolute
-    // snapshot. Same single-undo-unit + capture-at-construction discipline as the
-    // label-expression rail. hasAnchorChange = true when the caller passed a non-null
+    // snapshot. Same single-undo-unit discipline as the label-expression rail, and the same
+    // execute-time snapshot. hasAnchorChange = true when the caller passed a non-null
     // anchorTarget (empty string clears all four entries).
-    private final String oldAnchorTarget;
     private final String newAnchorTarget;
-    private final String oldAnchorEdge;
     private final String newAnchorEdge;
-    private final String oldAnchorDx;
     private final String newAnchorDx;
-    private final String oldAnchorDy;
     private final String newAnchorDy;
     private final boolean hasAnchorChange;
 
     // The anchor target's bounds as they stood when this command was built, or null when the
     // target did not resolve in the same diagram then (which includes every command that sets no
-    // anchor at all — see newAnchorTarget, which gates the whole rail).
+    // anchor at all — see newAnchorTarget, which gates the whole rail). This is NOT undo state:
+    // it is the prepare-time comparison below, and stays a build-time read on purpose.
     //
     // The caller resolves an anchor into a concrete newX/newY while preparing the request. On the
     // deferred paths — a queued batch — nothing has executed yet, which breaks that resolution in
@@ -166,25 +187,48 @@ public class UpdateViewObjectCommand extends Command {
     //     information the prepare lacked is available.
     private final int[] anchorTargetBoundsAtPrepare;
 
-    // Styling extensions — all ride the same hasStylingChange boundary.
-    // Captured-old / captured-new pairs. The font composite string is captured as ONE
-    // value; the merge happens through StylingHelper.assembleFontString.
-    private final String oldFont;
-    private final String newFont;
-    // hasFontChange = true only when at least one typography field (fontName/Size/Style)
-    // was provided in styling. Prevents idempotent setFont(null) writes during prior
-    // styling-only updates (byte-identical discipline).
-    private final boolean hasFontChange;
-    private final int oldGradient;
-    private final int newGradient;
-    private final Integer oldBorderType;          // null on non-note objects
-    private final Integer newBorderType;
-    private final boolean oldDeriveLineColor;
-    private final boolean newDeriveLineColor;
-    private final int oldOutlineOpacity;
-    private final int newOutlineOpacity;
-    private final int oldLineStyle;
-    private final int newLineStyle;
+    // ---- the snapshot undo restores, read by execute() from the object as it meets it -------
+    // Each field is read only when the field it restores is written. Before the first execute the
+    // getters answer null, 0 or false.
+
+    /** Whether execute has taken the snapshot that undo restores; undo clears it (re-arms). */
+    private boolean snapshotTaken;
+    private int oldX;
+    private int oldY;
+    private int oldWidth;
+    private int oldHeight;
+    private String oldText;
+    private String oldFillColor;
+    private String oldLineColor;
+    private String oldFontColor;
+    private int oldAlpha;
+    private int oldLineWidth;
+    private Integer oldFigureType;
+    /**
+     * Whether the object takes a figure type when this update runs. It is read with the snapshot, not
+     * when built: whether an ArchiMate box takes one depends on its element being a Grouping, and an
+     * earlier queued change can make it something else. Undo writes back exactly what execute wrote.
+     */
+    private boolean figureTypeHeld;
+    private Integer oldTextAlignment;
+    private Integer oldVerticalTextAlignment;
+    private String oldFont;
+    /** The font the last execute wrote: the named typography merged into the font it met. */
+    private String newFont;
+    private int oldGradient;
+    private Integer oldBorderType;
+    private boolean oldDeriveLineColor;
+    private int oldOutlineOpacity;
+    private int oldLineStyle;
+    private String oldImagePath;
+    private int oldImagePosition;
+    private int oldImageSource;
+    private int oldShowIcon;
+    private String oldLabelExpression;
+    private String oldAnchorTarget;
+    private String oldAnchorEdge;
+    private String oldAnchorDx;
+    private String oldAnchorDy;
 
     /**
      * Creates a command to update a diagram object's bounds (no text or styling change).
@@ -303,11 +347,36 @@ public class UpdateViewObjectCommand extends Command {
                                     ImageParams imageParams, String newLabelExpression,
                                     String anchorTarget, String anchorEdge,
                                     Integer anchorDx, Integer anchorDy) {
+        this(diagramObject, newX, newY, newWidth, newHeight, newText, styling, imageParams,
+                newLabelExpression, anchorTarget, anchorEdge, anchorDx, anchorDy, NamedAxes.ALL);
+    }
+
+    /**
+     * As the label-expression constructor, setting only the axes {@code axes} names: the merged
+     * rectangle supplies a value for every axis, and an axis not named keeps, when the update runs,
+     * the value the object holds then.
+     */
+    public UpdateViewObjectCommand(IDiagramModelObject diagramObject,
+                                    int newX, int newY, int newWidth, int newHeight,
+                                    String newText, StylingParams styling,
+                                    ImageParams imageParams, String newLabelExpression,
+                                    NamedAxes axes) {
+        this(diagramObject, newX, newY, newWidth, newHeight, newText, styling, imageParams,
+                newLabelExpression, null, null, null, null, axes);
+    }
+
+    /**
+     * As the anchor constructor, setting only the axes {@code axes} names. See
+     * {@link NamedAxes#forUpdate} for which axes a partial update sets.
+     */
+    public UpdateViewObjectCommand(IDiagramModelObject diagramObject,
+                                    int newX, int newY, int newWidth, int newHeight,
+                                    String newText, StylingParams styling,
+                                    ImageParams imageParams, String newLabelExpression,
+                                    String anchorTarget, String anchorEdge,
+                                    Integer anchorDx, Integer anchorDy, NamedAxes axes) {
         this.diagramObject = diagramObject;
-        this.oldX = diagramObject.getBounds().getX();
-        this.oldY = diagramObject.getBounds().getY();
-        this.oldWidth = diagramObject.getBounds().getWidth();
-        this.oldHeight = diagramObject.getBounds().getHeight();
+        this.axes = axes;
         this.newX = newX;
         this.newY = newY;
         this.newWidth = newWidth;
@@ -315,209 +384,81 @@ public class UpdateViewObjectCommand extends Command {
         this.newText = newText;
         this.hasTextChange = (newText != null);
 
-        // Capture old text for undo
-        if (newText != null) {
-            if (diagramObject instanceof IDiagramModelGroup group) {
-                this.oldText = group.getName();
-            } else if (diagramObject instanceof ITextContent textContent) {
-                this.oldText = textContent.getContent();
-            } else {
-                this.oldText = null;
-            }
-        } else {
-            this.oldText = null;
-        }
-
-        // Styling support
+        // Styling: each field is named when the caller passed it and this kind of object holds it.
         this.hasStylingChange = (styling != null && styling.hasAnyValue());
+        StylingParams s = hasStylingChange ? styling : StylingParams.NONE;
+        this.fillColorGiven = s.fillColor() != null;
+        this.newFillColor = emptyToNull(s.fillColor());
+        this.lineColorGiven = s.lineColor() != null && diagramObject instanceof ILineObject;
+        this.newLineColor = lineColorGiven ? emptyToNull(s.lineColor()) : null;
+        this.fontColorGiven = s.fontColor() != null && diagramObject instanceof IFontAttribute;
+        this.newFontColor = fontColorGiven ? emptyToNull(s.fontColor()) : null;
+        this.newAlpha = s.opacity();
+        this.newLineWidth = (diagramObject instanceof ILineObject) ? s.lineWidth() : null;
+        // For figure type and the two alignments an empty string means "no change".
+        this.newFigureType = (named(s.figureType()) && ViewObjectFieldsByKind.holdsFigureType(diagramObject))
+                ? Integer.valueOf(StylingHelper.mapFigureTypeToInt(s.figureType())) : null;
+        this.newTextAlignment = (named(s.textAlignment()) && diagramObject instanceof ITextAlignment)
+                ? Integer.valueOf(StylingHelper.mapTextAlignmentToInt(s.textAlignment())) : null;
+        this.newVerticalTextAlignment = (named(s.verticalTextAlignment())
+                && ViewObjectFieldsByKind.holdsVerticalTextAlignment(diagramObject))
+                ? Integer.valueOf(StylingHelper.mapVerticalTextAlignmentToInt(s.verticalTextAlignment())) : null;
+        this.hasFontChange = (diagramObject instanceof IFontAttribute)
+                && (s.fontName() != null || s.fontSize() != null || s.fontStyle() != null);
+        this.fontName = s.fontName();
+        this.fontSize = s.fontSize();
+        this.fontStyle = s.fontStyle();
+        // For gradient, border type and line style an empty string resets to the default.
+        this.newGradient = (s.gradient() == null) ? null
+                : s.gradient().isEmpty() ? Integer.valueOf(IDiagramModelObject.GRADIENT_NONE)
+                : Integer.valueOf(StylingHelper.mapGradientToInt(s.gradient()));
+        // Note-only borderType — a note, NOT any IBorderType
+        // (which would also match IDiagramModelGroup and collide with figureType).
+        this.newBorderType = (s.borderType() == null || !ViewObjectFieldsByKind.holdsBorderType(diagramObject)) ? null
+                : s.borderType().isEmpty() ? Integer.valueOf(IDiagramModelNote.BORDER_DOGEAR)
+                : Integer.valueOf(StylingHelper.mapBorderTypeToInt(s.borderType()));
+        this.newDeriveLineColor = s.deriveLineColor();
+        this.newOutlineOpacity = s.outlineOpacity();
+        this.newLineStyle = (s.lineStyle() == null) ? null
+                : s.lineStyle().isEmpty() ? Integer.valueOf(IDiagramModelObject.LINE_STYLE_DEFAULT)
+                : Integer.valueOf(StylingHelper.mapLineStyleToInt(s.lineStyle()));
 
-        if (hasStylingChange) {
-            // Capture old values for undo
-            this.oldFillColor = diagramObject.getFillColor();
-            this.oldLineColor = (diagramObject instanceof ILineObject lo) ? lo.getLineColor() : null;
-            this.oldFontColor = (diagramObject instanceof IFontAttribute fa) ? fa.getFontColor() : null;
-            this.oldAlpha = diagramObject.getAlpha();
-            this.oldLineWidth = (diagramObject instanceof ILineObject lo) ? lo.getLineWidth() : 0;
-            this.oldFigureType = readFigureTypeInt(diagramObject);
-            this.oldTextAlignment = (diagramObject instanceof ITextAlignment ta) ? ta.getTextAlignment() : null;
-            this.oldVerticalTextAlignment = (diagramObject instanceof ITextPosition tp) ? tp.getTextPosition() : null;
-
-            // Compute new values — null in StylingParams means "no change", keep old value
-            this.newFillColor = (styling.fillColor() != null) ? emptyToNull(styling.fillColor()) : oldFillColor;
-            this.newLineColor = (styling.lineColor() != null)
-                ? ((diagramObject instanceof ILineObject) ? emptyToNull(styling.lineColor()) : oldLineColor)
-                : oldLineColor;
-            this.newFontColor = (styling.fontColor() != null)
-                ? ((diagramObject instanceof IFontAttribute) ? emptyToNull(styling.fontColor()) : oldFontColor)
-                : oldFontColor;
-            this.newAlpha = (styling.opacity() != null) ? styling.opacity() : oldAlpha;
-            this.newLineWidth = (styling.lineWidth() != null)
-                ? ((diagramObject instanceof ILineObject) ? styling.lineWidth() : oldLineWidth)
-                : oldLineWidth;
-            // Integer.valueOf wrapping avoids JLS §15.25 ternary type-unification unboxing the
-            // (potentially-null) old* Integer when the int-returning branch is the other arm.
-            this.newFigureType = (styling.figureType() != null && !styling.figureType().isEmpty() && oldFigureType != null)
-                ? Integer.valueOf(StylingHelper.mapFigureTypeToInt(styling.figureType()))
-                : oldFigureType;
-            this.newTextAlignment = (styling.textAlignment() != null && !styling.textAlignment().isEmpty() && oldTextAlignment != null)
-                ? Integer.valueOf(StylingHelper.mapTextAlignmentToInt(styling.textAlignment()))
-                : oldTextAlignment;
-            this.newVerticalTextAlignment = (styling.verticalTextAlignment() != null && !styling.verticalTextAlignment().isEmpty() && oldVerticalTextAlignment != null)
-                ? Integer.valueOf(StylingHelper.mapVerticalTextAlignmentToInt(styling.verticalTextAlignment()))
-                : oldVerticalTextAlignment;
-
-            // Typography composite-string (one EMF field for all 3 sub-knobs).
-            // hasFontChange guard prevents idempotent setFont(null) writes when prior styling
-            // triggers hasStylingChange but no typography field was provided.
-            this.oldFont = (diagramObject instanceof IFontAttribute fa) ? fa.getFont() : null;
-            boolean typographyProvided = styling.fontName() != null
-                    || styling.fontSize() != null
-                    || styling.fontStyle() != null;
-            this.hasFontChange = (diagramObject instanceof IFontAttribute) && typographyProvided;
-            if (hasFontChange) {
-                this.newFont = StylingHelper.assembleFontString(
-                        oldFont, styling.fontName(), styling.fontSize(), styling.fontStyle());
-            } else {
-                this.newFont = oldFont;
-            }
-
-            // Gradient (typed setter, always available on IDiagramModelObject).
-            this.oldGradient = diagramObject.getGradient();
-            this.newGradient = computeNewGradient(oldGradient, styling.gradient());
-
-            // Note-only borderType — instanceof IDiagramModelNote, NOT IBorderType
-            // (which would also match IDiagramModelGroup and collide with predecessor figureType).
-            this.oldBorderType = (diagramObject instanceof IDiagramModelNote note) ? note.getBorderType() : null;
-            this.newBorderType = computeNewBorderType(oldBorderType, styling.borderType());
-
-            // deriveLineColor (typed boolean setter, Archi default true).
-            this.oldDeriveLineColor = diagramObject.getDeriveElementLineColor();
-            this.newDeriveLineColor = (styling.deriveLineColor() != null)
-                    ? styling.deriveLineColor() : oldDeriveLineColor;
-
-            // outlineOpacity (typed int setter, sibling of setAlpha).
-            this.oldOutlineOpacity = diagramObject.getLineAlpha();
-            this.newOutlineOpacity = (styling.outlineOpacity() != null)
-                    ? styling.outlineOpacity() : oldOutlineOpacity;
-
-            // lineStyle (typed int setter on IDiagramModelObject).
-            // Empty-string clears to LINE_STYLE_DEFAULT (-1). Non-null applies mapped int.
-            this.oldLineStyle = diagramObject.getLineStyle();
-            this.newLineStyle = computeNewLineStyle(oldLineStyle, styling.lineStyle());
-        } else {
-            this.oldFillColor = null;
-            this.newFillColor = null;
-            this.oldLineColor = null;
-            this.newLineColor = null;
-            this.oldFontColor = null;
-            this.newFontColor = null;
-            this.oldAlpha = 0;
-            this.newAlpha = 0;
-            this.oldLineWidth = 0;
-            this.newLineWidth = 0;
-            this.oldFigureType = null;
-            this.newFigureType = null;
-            this.oldTextAlignment = null;
-            this.newTextAlignment = null;
-            this.oldVerticalTextAlignment = null;
-            this.newVerticalTextAlignment = null;
-            this.oldFont = null;
-            this.newFont = null;
-            this.hasFontChange = false;
-            this.oldGradient = 0;
-            this.newGradient = 0;
-            this.oldBorderType = null;
-            this.newBorderType = null;
-            this.oldDeriveLineColor = false;
-            this.newDeriveLineColor = false;
-            this.oldOutlineOpacity = 0;
-            this.newOutlineOpacity = 0;
-            this.oldLineStyle = 0;
-            this.newLineStyle = 0;
-        }
-
-        // Image support
-        boolean imageChangeRequested = (imageParams != null && imageParams.hasAnyValue());
-
-        if (imageChangeRequested && diagramObject instanceof IIconic iconic) {
-            this.hasImageChange = true;
-            // Capture old values for undo
-            this.oldImagePath = iconic.getImagePath();
-            this.oldImagePosition = iconic.getImagePosition();
-            this.oldShowIcon = ImageHelper.readShowIconInt(diagramObject);
-            this.oldImageSource = (diagramObject instanceof IDiagramModelArchimateObject archiObj)
-                ? archiObj.getImageSource() : 0;
-
-            // Compute new values — null in ImageParams means "no change", keep old value
-            this.newImagePath = (imageParams.imagePath() != null)
-                ? (imageParams.imagePath().isEmpty() ? null : imageParams.imagePath())
-                : oldImagePath;
-            this.newImagePosition = (imageParams.imagePosition() != null)
-                ? ImageParams.positionToInt(imageParams.imagePosition())
-                : oldImagePosition;
-            this.newShowIcon = (imageParams.showIcon() != null)
-                ? ImageParams.showIconToInt(imageParams.showIcon())
-                : oldShowIcon;
-            // Compute imageSource based on whether image is being set or cleared
-            if (imageParams.imagePath() != null) {
-                this.newImageSource = (newImagePath != null && !newImagePath.isEmpty())
-                    ? IDiagramModelArchimateObject.IMAGE_SOURCE_CUSTOM
-                    : IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE;
-            } else {
-                this.newImageSource = oldImageSource;
-            }
-        } else {
-            this.hasImageChange = false;
-            this.oldImagePath = null;
-            this.newImagePath = null;
-            this.oldImagePosition = 0;
-            this.newImagePosition = 0;
-            this.oldImageSource = 0;
-            this.newImageSource = 0;
-            this.oldShowIcon = 0;
-            this.newShowIcon = 0;
-        }
+        // An object with an icon holds an icon path; a standalone image visual holds its picture on the
+        // same attribute, which the update replaces. Its other image fields are refused before this
+        // command is built, so for an image only the path ever changes.
+        this.hasImageChange = imageParams != null && imageParams.hasAnyValue()
+                && diagramObject instanceof IDiagramModelImageProvider;
+        ImageParams i = hasImageChange ? imageParams : ImageParams.NONE;
+        this.imagePathGiven = i.imagePath() != null;
+        this.newImagePath = emptyToNull(i.imagePath());
+        this.newImagePosition = (i.imagePosition() != null && diagramObject instanceof IIconic)
+                ? Integer.valueOf(ImageParams.positionToInt(i.imagePosition())) : null;
+        this.newShowIcon = (i.showIcon() != null) ? Integer.valueOf(ImageParams.showIconToInt(i.showIcon())) : null;
+        this.newImageSource = (imagePathGiven && diagramObject instanceof IDiagramModelArchimateObject)
+                ? Integer.valueOf(newImagePath != null
+                        ? IDiagramModelArchimateObject.IMAGE_SOURCE_CUSTOM
+                        : IDiagramModelArchimateObject.IMAGE_SOURCE_PROFILE)
+                : null;
 
         // Label-expression rail. Generic IFeatures storage,
         // not a typed setter — see class-level note.
         this.hasLabelExpressionChange = (newLabelExpression != null);
-        if (hasLabelExpressionChange) {
-            this.oldLabelExpression = diagramObject.getFeatures().getString(LABEL_EXPRESSION_FEATURE, null);
-            this.newLabelExpression = emptyToNull(newLabelExpression);
-        } else {
-            this.oldLabelExpression = null;
-            this.newLabelExpression = null;
-        }
+        this.newLabelExpression = emptyToNull(newLabelExpression);
 
         // Anchor rail. Generic IFeatures storage (four keys), mirroring the label-expression
         // rail. Non-null anchorTarget = change requested; empty string clears all four.
         this.hasAnchorChange = (anchorTarget != null);
-        if (hasAnchorChange) {
-            this.oldAnchorTarget = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_TARGET_FEATURE, null);
-            this.oldAnchorEdge = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_EDGE_FEATURE, null);
-            this.oldAnchorDx = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DX_FEATURE, null);
-            this.oldAnchorDy = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DY_FEATURE, null);
-            if (anchorTarget.isEmpty()) {
-                // Clear — remove all four entries.
-                this.newAnchorTarget = null;
-                this.newAnchorEdge = null;
-                this.newAnchorDx = null;
-                this.newAnchorDy = null;
-            } else {
-                this.newAnchorTarget = anchorTarget;
-                this.newAnchorEdge = (anchorEdge != null && !anchorEdge.isEmpty())
-                        ? anchorEdge : AnchorResolver.DEFAULT_EDGE;
-                this.newAnchorDx = String.valueOf(anchorDx != null ? anchorDx : 0);
-                this.newAnchorDy = String.valueOf(anchorDy != null ? anchorDy : 0);
-            }
+        if (hasAnchorChange && !anchorTarget.isEmpty()) {
+            this.newAnchorTarget = anchorTarget;
+            this.newAnchorEdge = (anchorEdge != null && !anchorEdge.isEmpty())
+                    ? anchorEdge : AnchorResolver.DEFAULT_EDGE;
+            this.newAnchorDx = String.valueOf(anchorDx != null ? anchorDx : 0);
+            this.newAnchorDy = String.valueOf(anchorDy != null ? anchorDy : 0);
         } else {
-            this.oldAnchorTarget = null;
+            // No anchor change, or a clear — which removes all four entries.
             this.newAnchorTarget = null;
-            this.oldAnchorEdge = null;
             this.newAnchorEdge = null;
-            this.oldAnchorDx = null;
             this.newAnchorDx = null;
-            this.oldAnchorDy = null;
             this.newAnchorDy = null;
         }
         this.anchorTargetBoundsAtPrepare = captureBounds(
@@ -526,25 +467,47 @@ public class UpdateViewObjectCommand extends Command {
         setLabel("Update view object");
     }
 
+    private static boolean named(String value) {
+        return value != null && !value.isEmpty();
+    }
+
+    /**
+     * Snapshots, from the object as it is now, every field this update writes — unless a snapshot
+     * is already held because execute ran with no undo since — then writes them. See the class
+     * comment for why the snapshot is taken here and not in the constructor.
+     */
     @Override
     public void execute() {
-        int execX = newX;
-        int execY = newY;
+        if (!snapshotTaken) {
+            takeSnapshot();
+            snapshotTaken = true;
+        }
+        // An axis the update does not set keeps what the object holds now, which the snapshot
+        // just read (or, on a second run with no undo between, what the first run left there).
+        int execX = axes.x() ? newX : oldX;
+        int execY = axes.y() ? newY : oldY;
+        int execWidth = axes.width() ? newWidth : oldWidth;
+        int execHeight = axes.height() ? newHeight : oldHeight;
         // Gated on the anchor being set rather than on the snapshot existing: a null snapshot is
         // also what "the target was unresolvable at prepare" looks like, and that case still has
         // to be resolved here. A snapshot can only be non-null when newAnchorTarget is, so this
         // strictly widens the old condition — commands built with the short constructors, and
         // every anchor-clearing update, leave newAnchorTarget null and never enter.
         if (newAnchorTarget != null) {
-            int[] moved = resolveAgainstMovedAnchorTarget();
+            int[] moved = resolveAgainstMovedAnchorTarget(execWidth, execHeight);
             if (moved != null) {
                 execX = moved[0];
                 execY = moved[1];
             }
         }
-        diagramObject.setBounds(execX, execY, newWidth, newHeight);
-        applyText(newText);
+        diagramObject.setBounds(execX, execY, execWidth, execHeight);
+        if (hasTextChange) {
+            applyText(newText);
+        }
         if (hasStylingChange) {
+            if (hasFontChange) {
+                newFont = StylingHelper.assembleFontString(oldFont, fontName, fontSize, fontStyle);
+            }
             applyStyling(newFillColor, newLineColor, newFontColor, newAlpha, newLineWidth,
                     newFigureType, newTextAlignment, newVerticalTextAlignment,
                     newFont, newGradient, newBorderType, newDeriveLineColor, newOutlineOpacity,
@@ -561,10 +524,22 @@ public class UpdateViewObjectCommand extends Command {
         }
     }
 
+    /**
+     * Restores what execute wrote, as the snapshot found it, and re-arms the snapshot for the next
+     * execute. A bounds axis the update does not set is left as it is now: execute kept it, so
+     * restoring it would only undo a change made to it since.
+     */
     @Override
     public void undo() {
-        diagramObject.setBounds(oldX, oldY, oldWidth, oldHeight);
-        applyText(oldText);
+        if (!snapshotTaken) {
+            return; // nothing was written, so there is nothing to restore
+        }
+        IBounds now = diagramObject.getBounds();
+        diagramObject.setBounds(axes.x() ? oldX : now.getX(), axes.y() ? oldY : now.getY(),
+                axes.width() ? oldWidth : now.getWidth(), axes.height() ? oldHeight : now.getHeight());
+        if (hasTextChange) {
+            applyText(oldText);
+        }
         if (hasStylingChange) {
             applyStyling(oldFillColor, oldLineColor, oldFontColor, oldAlpha, oldLineWidth,
                     oldFigureType, oldTextAlignment, oldVerticalTextAlignment,
@@ -579,6 +554,59 @@ public class UpdateViewObjectCommand extends Command {
         }
         if (hasAnchorChange) {
             applyAnchor(oldAnchorTarget, oldAnchorEdge, oldAnchorDx, oldAnchorDy);
+        }
+        snapshotTaken = false;
+    }
+
+    /** Reads the old value of every field this update writes, from the object as it is now. */
+    private void takeSnapshot() {
+        IBounds b = diagramObject.getBounds();
+        oldX = b.getX();
+        oldY = b.getY();
+        oldWidth = b.getWidth();
+        oldHeight = b.getHeight();
+        if (hasTextChange) {
+            if (diagramObject instanceof IDiagramModelGroup group) {
+                oldText = group.getName();
+            } else if (diagramObject instanceof ITextContent textContent) {
+                oldText = textContent.getContent();
+            }
+        }
+        if (hasStylingChange) {
+            if (fillColorGiven) oldFillColor = diagramObject.getFillColor();
+            if (lineColorGiven) oldLineColor = ((ILineObject) diagramObject).getLineColor();
+            if (fontColorGiven) oldFontColor = ((IFontAttribute) diagramObject).getFontColor();
+            if (newAlpha != null) oldAlpha = diagramObject.getAlpha();
+            if (newLineWidth != null) oldLineWidth = ((ILineObject) diagramObject).getLineWidth();
+            figureTypeHeld = newFigureType != null && ViewObjectFieldsByKind.holdsFigureType(diagramObject);
+            if (figureTypeHeld) oldFigureType = readFigureTypeInt(diagramObject);
+            if (newTextAlignment != null) oldTextAlignment = ((ITextAlignment) diagramObject).getTextAlignment();
+            if (newVerticalTextAlignment != null) {
+                oldVerticalTextAlignment = ((ITextPosition) diagramObject).getTextPosition();
+            }
+            if (hasFontChange) oldFont = ((IFontAttribute) diagramObject).getFont();
+            if (newGradient != null) oldGradient = diagramObject.getGradient();
+            if (newBorderType != null) oldBorderType = ((IDiagramModelNote) diagramObject).getBorderType();
+            if (newDeriveLineColor != null) oldDeriveLineColor = diagramObject.getDeriveElementLineColor();
+            if (newOutlineOpacity != null) oldOutlineOpacity = diagramObject.getLineAlpha();
+            if (newLineStyle != null) oldLineStyle = diagramObject.getLineStyle();
+        }
+        if (hasImageChange) {
+            if (imagePathGiven) oldImagePath = ((IDiagramModelImageProvider) diagramObject).getImagePath();
+            if (newImagePosition != null) oldImagePosition = ((IIconic) diagramObject).getImagePosition();
+            if (newImageSource != null) {
+                oldImageSource = ((IDiagramModelArchimateObject) diagramObject).getImageSource();
+            }
+            if (newShowIcon != null) oldShowIcon = ImageHelper.readShowIconInt(diagramObject);
+        }
+        if (hasLabelExpressionChange) {
+            oldLabelExpression = diagramObject.getFeatures().getString(LABEL_EXPRESSION_FEATURE, null);
+        }
+        if (hasAnchorChange) {
+            oldAnchorTarget = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_TARGET_FEATURE, null);
+            oldAnchorEdge = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_EDGE_FEATURE, null);
+            oldAnchorDx = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DX_FEATURE, null);
+            oldAnchorDy = diagramObject.getFeatures().getString(AnchorResolver.ANCHOR_DY_FEATURE, null);
         }
     }
 
@@ -601,7 +629,7 @@ public class UpdateViewObjectCommand extends Command {
      * replaces was computed with the anchor ignored, so keeping it would silently drop the
      * caller's request.</p>
      */
-    private int[] resolveAgainstMovedAnchorTarget() {
+    private int[] resolveAgainstMovedAnchorTarget(int width, int height) {
         IDiagramModelObject target = AnchorResolver.findInSameDiagram(diagramObject, newAnchorTarget);
         if (target == null || target == diagramObject
                 || target.eContainer() != diagramObject.eContainer()) {
@@ -617,7 +645,7 @@ public class UpdateViewObjectCommand extends Command {
         }
         return AnchorResolver.resolveByEdge(newAnchorEdge,
                 live.getX(), live.getY(), live.getWidth(), live.getHeight(),
-                newWidth, newHeight,
+                width, height,
                 AnchorResolver.parseOffset(newAnchorDx), AnchorResolver.parseOffset(newAnchorDy));
     }
 
@@ -630,7 +658,6 @@ public class UpdateViewObjectCommand extends Command {
     }
 
     private void applyText(String text) {
-        if (!hasTextChange) return;
         if (diagramObject instanceof IDiagramModelGroup group) {
             group.setName(text);
         } else if (diagramObject instanceof ITextContent textContent) {
@@ -638,102 +665,50 @@ public class UpdateViewObjectCommand extends Command {
         }
     }
 
+    /**
+     * Writes the styling fields this update names, and no other: the gates are the fields of the
+     * caller's request, so execute and undo write the same set. The values are either the caller's
+     * or the snapshot's.
+     */
     private void applyStyling(String fillColor, String lineColor, String fontColor,
-                               int alpha, int lineWidth,
+                               Integer alpha, Integer lineWidth,
                                Integer figureType, Integer textAlignment, Integer verticalTextAlignment,
-                               String font, int gradient, Integer borderType,
-                               boolean deriveLineColor, int outlineOpacity, int lineStyle) {
-        diagramObject.setFillColor(fillColor);
-        diagramObject.setAlpha(alpha);
-        if (diagramObject instanceof ILineObject lo) {
-            lo.setLineColor(lineColor);
-            lo.setLineWidth(lineWidth);
-        }
-        if (diagramObject instanceof IFontAttribute fa) {
-            fa.setFontColor(fontColor);
-            // Typography composite-string (merged via assembleFontString at capture).
-            // Guarded so prior styling-only updates do NOT call setFont with a null/unchanged
-            // value (preserves byte-identical EMF dirty-flag semantics).
-            if (hasFontChange) {
-                fa.setFont(font);
-            }
-        }
-        if (figureType != null) {
+                               String font, Integer gradient, Integer borderType,
+                               Boolean deriveLineColor, Integer outlineOpacity, Integer lineStyle) {
+        if (fillColorGiven) diagramObject.setFillColor(fillColor);
+        if (newAlpha != null) diagramObject.setAlpha(alpha);
+        if (lineColorGiven) ((ILineObject) diagramObject).setLineColor(lineColor);
+        if (newLineWidth != null) ((ILineObject) diagramObject).setLineWidth(lineWidth);
+        if (fontColorGiven) ((IFontAttribute) diagramObject).setFontColor(fontColor);
+        if (hasFontChange) ((IFontAttribute) diagramObject).setFont(font);
+        if (figureTypeHeld) {
             if (diagramObject instanceof IDiagramModelGroup g) {
                 g.setBorderType(figureType);
-            } else if (diagramObject instanceof IDiagramModelArchimateObject a
-                    && a.getArchimateElement() instanceof IGrouping) {
-                a.setType(figureType);
+            } else {
+                ((IDiagramModelArchimateObject) diagramObject).setType(figureType);
             }
         }
-        if (textAlignment != null && diagramObject instanceof ITextAlignment ta) {
-            ta.setTextAlignment(textAlignment);
-        }
-        if (verticalTextAlignment != null && diagramObject instanceof ITextPosition tp) {
-            tp.setTextPosition(verticalTextAlignment);
-        }
-        // Typed setters on IDiagramModelObject.
-        diagramObject.setGradient(gradient);
-        diagramObject.setDeriveElementLineColor(deriveLineColor);
-        diagramObject.setLineAlpha(outlineOpacity);
-        diagramObject.setLineStyle(lineStyle);
-        if (borderType != null && diagramObject instanceof IDiagramModelNote note) {
-            note.setBorderType(borderType);
-        }
-    }
-
-    /**
-     * Computes the new lineStyle int from the captured old + the StylingParams lineStyle string.
-     * Null = unchanged (returns old); empty = clear to default (LINE_STYLE_DEFAULT = -1);
-     * otherwise mapped via {@link StylingHelper#mapLineStyleToInt}.
-     */
-    private static int computeNewLineStyle(int oldLineStyle, String stylingLineStyle) {
-        if (stylingLineStyle == null) return oldLineStyle;
-        if (stylingLineStyle.isEmpty()) return IDiagramModelObject.LINE_STYLE_DEFAULT;
-        return StylingHelper.mapLineStyleToInt(stylingLineStyle);
-    }
-
-    /**
-     * Computes the new gradient int from the captured old + the StylingParams gradient string.
-     * Null = unchanged (returns old); empty = clear to default (-1); otherwise mapped via
-     * {@link StylingHelper#mapGradientToInt}.
-     */
-    private static int computeNewGradient(int oldGradient, String stylingGradient) {
-        if (stylingGradient == null) return oldGradient;
-        if (stylingGradient.isEmpty()) return IDiagramModelObject.GRADIENT_NONE;
-        return StylingHelper.mapGradientToInt(stylingGradient);
-    }
-
-    /**
-     * Computes the new borderType Integer for IDiagramModelNote targets. Returns null when
-     * the target is not a note (no-op). Null styling value = unchanged; empty = back to dogear default.
-     */
-    private static Integer computeNewBorderType(Integer oldBorderType, String stylingBorderType) {
-        if (oldBorderType == null) return null;   // not a note — no-op
-        if (stylingBorderType == null) return oldBorderType;
-        if (stylingBorderType.isEmpty()) return IDiagramModelNote.BORDER_DOGEAR;
-        return StylingHelper.mapBorderTypeToInt(stylingBorderType);
+        if (newTextAlignment != null) ((ITextAlignment) diagramObject).setTextAlignment(textAlignment);
+        if (newVerticalTextAlignment != null) ((ITextPosition) diagramObject).setTextPosition(verticalTextAlignment);
+        if (newGradient != null) diagramObject.setGradient(gradient);
+        if (newDeriveLineColor != null) diagramObject.setDeriveElementLineColor(deriveLineColor);
+        if (newOutlineOpacity != null) diagramObject.setLineAlpha(outlineOpacity);
+        if (newLineStyle != null) diagramObject.setLineStyle(lineStyle);
+        if (newBorderType != null) ((IDiagramModelNote) diagramObject).setBorderType(borderType);
     }
 
     private static Integer readFigureTypeInt(IDiagramModelObject obj) {
         if (obj instanceof IDiagramModelGroup g) return g.getBorderType();
-        if (obj instanceof IDiagramModelArchimateObject a
-                && a.getArchimateElement() instanceof IGrouping) {
-            return a.getType();
-        }
-        return null;
+        return ((IDiagramModelArchimateObject) obj).getType();
     }
 
-    private void applyImage(String imagePath, int imagePosition, int imageSource, int showIcon) {
-        if (diagramObject instanceof IIconic iconic) {
-            iconic.setImagePath(imagePath);
-            iconic.setImagePosition(imagePosition);
-        }
-        if (diagramObject instanceof IDiagramModelArchimateObject archiObj) {
-            archiObj.setImageSource(imageSource);
-        }
+    /** Writes the image fields this update names, and no other. */
+    private void applyImage(String imagePath, Integer imagePosition, Integer imageSource, Integer showIcon) {
+        if (imagePathGiven) ((IDiagramModelImageProvider) diagramObject).setImagePath(imagePath);
+        if (newImagePosition != null) ((IIconic) diagramObject).setImagePosition(imagePosition);
+        if (newImageSource != null) ((IDiagramModelArchimateObject) diagramObject).setImageSource(imageSource);
         // showIcon (iconVisibleState) is on IDiagramModelObject, available for all types
-        diagramObject.setIconVisibleState(showIcon);
+        if (newShowIcon != null) diagramObject.setIconVisibleState(showIcon);
     }
 
     /**
@@ -779,131 +754,76 @@ public class UpdateViewObjectCommand extends Command {
         return (value != null && value.isEmpty()) ? null : value;
     }
 
+    // ---- getters. The getOld* getters answer the last execute's snapshot, and null, 0 or false
+    // before the first execute or for a field the update does not write. getNewX/Y/Width/Height and
+    // the anchor getters are the caller's intent, which the batch readers project queued geometry
+    // from; the styling getNew* getters are the caller's intent too, null when not named.
+
     /** Package-visible for testing. */
     IDiagramModelObject getDiagramObject() { return diagramObject; }
 
-    /** Package-visible for testing. */
+    /** The text this update gives the object (a group's name, a note's content), or null when it leaves it alone. */
+    String getNewText() { return hasTextChange ? newText : null; }
+
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldX() { return oldX; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldY() { return oldY; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldWidth() { return oldWidth; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldHeight() { return oldHeight; }
 
-    /** Package-visible for testing. */
+    /** The x the caller asked for, which the batch readers project queued geometry from. */
     int getNewX() { return newX; }
 
-    /** Package-visible for testing. */
+    /** The y the caller asked for, which the batch readers project queued geometry from. */
     int getNewY() { return newY; }
 
-    /** Package-visible for testing. */
+    /** The width the caller asked for, which the batch readers project queued geometry from. */
     int getNewWidth() { return newWidth; }
 
-    /** Package-visible for testing. */
+    /** The height the caller asked for, which the batch readers project queued geometry from. */
     int getNewHeight() { return newHeight; }
 
-    /** Package-visible for testing. */
-    String getOldText() { return oldText; }
-
-    /** Package-visible for testing. */
-    String getNewText() { return newText; }
+    /** Which of the four bounds this update writes when it runs; read by the batch readers. */
+    NamedAxes getAxes() { return axes; }
 
     /** Package-visible for testing. */
     boolean hasStylingChange() { return hasStylingChange; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     String getOldFillColor() { return oldFillColor; }
 
-    /** Package-visible for testing. */
+    /** Package-visible for testing; null when the caller did not name it (or cleared it). */
     String getNewFillColor() { return newFillColor; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     String getOldLineColor() { return oldLineColor; }
 
-    /** Package-visible for testing. */
+    /** Package-visible for testing; null when the caller did not name it (or cleared it). */
     String getNewLineColor() { return newLineColor; }
 
-    /** Package-visible for testing. */
-    String getOldFontColor() { return oldFontColor; }
-
-    /** Package-visible for testing. */
-    String getNewFontColor() { return newFontColor; }
-
-    /** Package-visible for testing. */
-    int getOldAlpha() { return oldAlpha; }
-
-    /** Package-visible for testing. */
-    int getNewAlpha() { return newAlpha; }
-
-    /** Package-visible for testing. */
-    int getOldLineWidth() { return oldLineWidth; }
-
-    /** Package-visible for testing. */
-    int getNewLineWidth() { return newLineWidth; }
-
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     Integer getOldFigureType() { return oldFigureType; }
 
     /** Package-visible for testing. */
     Integer getNewFigureType() { return newFigureType; }
 
     /** Package-visible for testing. */
-    Integer getOldTextAlignment() { return oldTextAlignment; }
-
-    /** Package-visible for testing. */
-    Integer getNewTextAlignment() { return newTextAlignment; }
-
-    /** Package-visible for testing. */
-    Integer getOldVerticalTextAlignment() { return oldVerticalTextAlignment; }
-
-    /** Package-visible for testing. */
-    Integer getNewVerticalTextAlignment() { return newVerticalTextAlignment; }
-
-    /** Package-visible for testing. */
-    boolean hasImageChange() { return hasImageChange; }
-
-    /** Package-visible for testing. */
-    String getOldImagePath() { return oldImagePath; }
-
-    /** Package-visible for testing. */
-    String getNewImagePath() { return newImagePath; }
-
-    /** Package-visible for testing. */
-    int getOldImagePosition() { return oldImagePosition; }
-
-    /** Package-visible for testing. */
-    int getNewImagePosition() { return newImagePosition; }
-
-    /** Package-visible for testing. */
-    int getOldImageSource() { return oldImageSource; }
-
-    /** Package-visible for testing. */
-    int getNewImageSource() { return newImageSource; }
-
-    /** Package-visible for testing. */
-    int getOldShowIcon() { return oldShowIcon; }
-
-    /** Package-visible for testing. */
-    int getNewShowIcon() { return newShowIcon; }
-
-    /** Package-visible for testing. */
     boolean hasLabelExpressionChange() { return hasLabelExpressionChange; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     String getOldLabelExpression() { return oldLabelExpression; }
 
     /** Package-visible for testing. */
     String getNewLabelExpression() { return newLabelExpression; }
 
-    /** Package-visible for testing. */
+    /** Whether this update sets or clears the anchor; read by the batch readers. */
     boolean hasAnchorChange() { return hasAnchorChange; }
-
-    /** Package-visible for testing. */
-    String getOldAnchorTarget() { return oldAnchorTarget; }
 
     /** Package-visible for testing. */
     String getNewAnchorTarget() { return newAnchorTarget; }
@@ -917,39 +837,27 @@ public class UpdateViewObjectCommand extends Command {
     /** Package-visible for testing. */
     String getNewAnchorDy() { return newAnchorDy; }
 
-    /** Package-visible for testing. */
-    String getOldFont() { return oldFont; }
-
-    /** Package-visible for testing. */
-    String getNewFont() { return newFont; }
-
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldGradient() { return oldGradient; }
 
     /** Package-visible for testing. */
-    int getNewGradient() { return newGradient; }
+    Integer getNewGradient() { return newGradient; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     Integer getOldBorderType() { return oldBorderType; }
 
     /** Package-visible for testing. */
     Integer getNewBorderType() { return newBorderType; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     boolean getOldDeriveLineColor() { return oldDeriveLineColor; }
 
     /** Package-visible for testing. */
-    boolean getNewDeriveLineColor() { return newDeriveLineColor; }
+    Boolean getNewDeriveLineColor() { return newDeriveLineColor; }
 
-    /** Package-visible for testing. */
+    /** The value the last run's snapshot read; package-visible for testing. */
     int getOldOutlineOpacity() { return oldOutlineOpacity; }
 
     /** Package-visible for testing. */
-    int getNewOutlineOpacity() { return newOutlineOpacity; }
-
-    /** Package-visible for testing. */
-    int getOldLineStyle() { return oldLineStyle; }
-
-    /** Package-visible for testing. */
-    int getNewLineStyle() { return newLineStyle; }
+    Integer getNewOutlineOpacity() { return newOutlineOpacity; }
 }

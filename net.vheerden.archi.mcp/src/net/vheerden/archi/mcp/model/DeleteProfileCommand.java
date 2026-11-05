@@ -62,6 +62,9 @@ public class DeleteProfileCommand extends Command
     /** Whether the profile was actually removed, so {@link #undo()} reverses only what happened. */
     private boolean removed;
 
+    /** Set where the last run declined with nothing it wrote left behind. */
+    private boolean changedNothing;
+
     /** Concepts the force path stripped the profile from, so {@link #undo()} can re-attach it. */
     private final List<IArchimateConcept> clearedConcepts = new ArrayList<>();
 
@@ -96,6 +99,7 @@ public class DeleteProfileCommand extends Command
     @Override
     public void execute() {
         removed = false;
+        changedNothing = false;
         skipReason = null;
         // Cleared with the other per-run state and set only past the two declines below, so a run
         // that refuses reports no name and the name the operation was prepared with stands.
@@ -106,11 +110,13 @@ public class DeleteProfileCommand extends Command
         if (!usages.isEmpty()) {
             if (!force) {
                 skipReason = describeRemainingUsage(usages.size());
+                changedNothing = true;
                 return;
             }
             String collateral = describeCollateralProfiles(usages);
             if (collateral != null) {
                 skipReason = collateral;
+                changedNothing = true;
                 return;
             }
             for (IArchimateConcept concept : usages) {
@@ -163,6 +169,12 @@ public class DeleteProfileCommand extends Command
         return skipReason;
     }
 
+    /** True when the last run declined: both declines come before the profile is stripped or removed. */
+    @Override
+    public boolean changedNothing() {
+        return changedNothing;
+    }
+
     /** Concepts currently carrying this profile. */
     private List<IArchimateConcept> currentUsages() {
         List<IArchimateConcept> usages = new ArrayList<>();
@@ -185,8 +197,8 @@ public class DeleteProfileCommand extends Command
     private String describeRemainingUsage(int usageCount) {
         return "Specialization '" + profile.getName() + "' was still applied to " + usageCount
                 + " concept" + (usageCount == 1 ? "" : "s") + " when the changes were applied, so it "
-                + "was left in the model rather than deleted out from under them — an earlier "
-                + "operation in the same request attached it. Delete it in a separate request, or "
+                + "was left in the model rather than deleted out from under them — it was attached "
+                + CHANGED_SINCE_PREPARED + ". Delete it in a separate request, or "
                 + "use force: true so those references are cleared in the same undoable operation.";
     }
 
@@ -223,7 +235,7 @@ public class DeleteProfileCommand extends Command
     }
 
     /**
-     * Package-visible for testing.
+     * Package-visible for testing. Also read by {@link StagedProfiles}.
      */
     IProfile getProfile() {
         return profile;

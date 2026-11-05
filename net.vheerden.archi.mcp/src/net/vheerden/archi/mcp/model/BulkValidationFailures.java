@@ -5,6 +5,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.BulkOperationFailure;
 
 /**
@@ -32,15 +36,35 @@ final class BulkValidationFailures {
     private final List<BulkOperationFailure> rows = new ArrayList<>();
     private final Set<Integer> failedIndices = new HashSet<>();
 
+    private final Logger log;
+
     private ModelAccessException firstCause;
     private int firstIndex;
     private String firstTool;
 
+    /** Logs through the class logger. */
+    BulkValidationFailures() {
+        this(LoggerFactory.getLogger(BulkValidationFailures.class));
+    }
+
+    /** Logs through {@code log}, so what {@link #record} logs can be observed. */
+    BulkValidationFailures(Logger log) {
+        this.log = log;
+    }
+
     /**
      * Records an operation that failed with an exception of its own, keeping that operation's own
      * error code rather than flattening it to the whole-call code.
+     *
+     * <p>An {@code INTERNAL_ERROR} is logged here, through the shared rule, because nowhere later
+     * can: a row keeps only the code's name, the refusal carries the whole-call code and no cause,
+     * and a continue-on-error result carries the rows alone. Every failed operation passes through
+     * here once, on both paths, so each server fault reaches the log once, with its stack.</p>
      */
     void record(int index, String tool, ModelAccessException cause) {
+        if (cause.getErrorCode() == ErrorCode.INTERNAL_ERROR) {
+            ToolErrorLog.log(log, cause);
+        }
         if (rows.isEmpty()) {
             firstCause = cause;
             firstIndex = index;

@@ -872,4 +872,70 @@ public class LayoutMultiFailureReportTest {
         @Override public void saveState() throws IOException {}
         @Override public void firePropertyChange(Object src, String p, Object oldV, Object newV) {}
     }
+
+    // ---------- the refusal's bytes do not move when its logging does ----------
+
+    /** A single-entry refusal, captured from the handler before the logging change, kept unedited. */
+    private static final String BASELINE_SINGLE_REFUSAL =
+            "{\"error\":{\"code\":\"VIEW_OBJECT_NOT_FOUND\",\"message\":\"Position entry [0] (viewObj"
+            + "ectId='ghost-1'): View object not found: ghost-1\"},\"nextSteps\":[\"Fix positions entry"
+            + " 0: Position entry [0] (viewObjectId='ghost-1'): View object not found: ghost-1\",\"Noth"
+            + "ing was applied \u2014 fix every entry listed and resend the whole call\"],\"_meta\":{\""
+            + "modelVersion\":\"2\",\"sessionActive\":true,\"model\":{\"id\":\"model-layout-multi-failu"
+            + "re\",\"name\":\"Layout Multi Failure Fixture\",\"resolution\":\"sole-model\"}}}";
+
+    /**
+     * A two-entry refusal, captured from the handler before the logging change. Edited once since: the
+     * back-reference advice it carries now also lists an image and a view reference.
+     */
+    private static final String BASELINE_TWO_ENTRY_REFUSAL =
+            "{\"error\":{\"code\":\"VIEW_OBJECT_NOT_FOUND\",\"message\":\"Position entry [0] (viewObj"
+            + "ectId='ghost-1'): View object not found: ghost-1 \u2014 2 entries failed validation; eve"
+            + "ry one is listed.\",\"failed\":[{\"index\":0,\"array\":\"positions\",\"id\":\"ghost-1\","
+            + "\"errorCode\":\"VIEW_OBJECT_NOT_FOUND\",\"message\":\"Position entry [0] (viewObjectId='"
+            + "ghost-1'): View object not found: ghost-1\",\"correctionRef\":\"VIEW_OBJECT_NOT_FOUND\"}"
+            + ",{\"index\":1,\"array\":\"positions\",\"id\":\"ghost-2\",\"errorCode\":\"VIEW_OBJECT_NOT"
+            + "_FOUND\",\"message\":\"Position entry [1] (viewObjectId='ghost-2'): View object not foun"
+            + "d: ghost-2\",\"correctionRef\":\"VIEW_OBJECT_NOT_FOUND\"}],\"corrections\":{\"VIEW_OBJEC"
+            + "T_NOT_FOUND\":\"Use get-view-contents to find valid view object IDs and connection IDs o"
+            + "n the view. A back-reference \u2014 $N.id by position, or $name.id when the operation de"
+            + "clared as: \\\"name\\\" \u2014 resolves only to something addressable ON a view: a note,"
+            + " group, image, view reference, element view object or connection this call created. An element or relationship "
+            + "created in this call is a model concept with no view object until an add-to-view or add-"
+            + "connection-to-view places it \u2014 back-reference THAT operation instead.\"}},\"nextSte"
+            + "ps\":[\"Fix positions entry 0: Position entry [0] (viewObjectId='ghost-1'): View object "
+            + "not found: ghost-1\",\"Fix positions entry 1: Position entry [1] (viewObjectId='ghost-2'"
+            + "): View object not found: ghost-2\",\"Nothing was applied \u2014 fix every entry listed "
+            + "and resend the whole call\"],\"_meta\":{\"modelVersion\":\"2\",\"sessionActive\":true,\""
+            + "model\":{\"id\":\"model-layout-multi-failure\",\"name\":\"Layout Multi Failure Fixture\""
+            + ",\"resolution\":\"sole-model\"}}}";
+
+    private String applyRawText(Object positions) throws Exception {
+        Map<String, Object> args = new LinkedHashMap<>();
+        args.put("viewId", "view-1");
+        args.put("positions", positions);
+        io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification spec =
+                registryOverLiveAccessor().getToolSpecifications().stream()
+                        .filter(x -> x.tool().name().equals("apply-positions"))
+                        .findFirst().orElseThrow();
+        io.modelcontextprotocol.spec.McpSchema.CallToolResult result = spec.callHandler()
+                .apply(null, new io.modelcontextprotocol.spec.McpSchema.CallToolRequest(
+                        "apply-positions", args));
+        assertEquals(Boolean.TRUE, result.isError());
+        assertEquals(1, result.content().size());
+        // The call's timing is the one field that legitimately differs from run to run.
+        return ((io.modelcontextprotocol.spec.McpSchema.TextContent) result.content().get(0))
+                .text().replaceAll("\"durationMs\":\\d+,", "");
+    }
+
+    /**
+     * A refusal is logged through the shared rule for model errors, which decides only the log
+     * line. What the caller receives must be exactly what it was before that rule was wired in.
+     */
+    @Test
+    public void shouldReturnBaselineJson_whenTheRefusalIsLoggedThroughTheSharedRule() throws Exception {
+        assertEquals(BASELINE_SINGLE_REFUSAL, applyRawText(List.of(pos("ghost-1", 10, 10))));
+        assertEquals(BASELINE_TWO_ENTRY_REFUSAL,
+                applyRawText(List.of(pos("ghost-1", 10, 10), pos("ghost-2", 20, 20))));
+    }
 }

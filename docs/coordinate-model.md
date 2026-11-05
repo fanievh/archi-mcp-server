@@ -164,10 +164,10 @@ Used for: routing pipeline output, layout engine output, absolute bendpoint API 
 
 ```text
 For bendpoint i of n (i counted from 0):
-  srcWeight = n - i
-  tgtWeight = i + 1
-  absX = ((bp.startX + srcCenterX) * srcWeight + (bp.endX + tgtCenterX) * tgtWeight) / (n + 1)
-  absY = ((bp.startY + srcCenterY) * srcWeight + (bp.endY + tgtCenterY) * tgtWeight) / (n + 1)
+  weight = (i + 1) / ((float) n + 1)          -- a float, as draw2d holds it
+  absX = floor((bp.startX + srcCenterX) * (1 - weight) + weight * (bp.endX + tgtCenterX) + 1e-9)
+  absY = floor((bp.startY + srcCenterY) * (1 - weight) + weight * (bp.endY + tgtCenterY) + 1e-9)
+  -- every product and sum in double; floor, not truncation toward zero
 ```
 
 This interpolates between the source-referenced and target-referenced positions at the weight Archi
@@ -177,8 +177,8 @@ renderer sets that weight in `DiagramConnectionEditPart.refreshBendpoints` and a
 `x + width / 2` on integer division, the same whole-pixel centres used here.
 
 The midpoint is the special case `n = 1`, and only that case. For a single bendpoint the formula
-above reduces to `(startX + srcCenterX + endX + tgtCenterX) / 2` exactly, so a single-bendpoint
-connection reports the same coordinate under either form.
+above is the floor of `(startX + srcCenterX + endX + tgtCenterX) / 2`, so an odd negative sum rounds
+down, as Archi draws it, not toward zero.
 
 While both reconstructions of a bendpoint agree — which is true of every path the router writes,
 because it derives both offsets from one absolute point — every weight yields the same coordinate and
@@ -187,11 +187,15 @@ written; `assess-layout` reports that disagreement as `anchorDriftCount`. While 
 drawn polyline is sheared, each point displaced from the halfway position by
 `(weight − 0.5) × drift`, most at the first and last bendpoints and least in the middle.
 
-The interpolation is carried in integer arithmetic with a single division, which keeps a bendpoint
-whose reconstructions agree exact at every weight. Evaluating the same weight in floating point — as
-`DiagramModelUtils.getAbsoluteBendpointPositions` does — loses the last bits on a weight that is not
-a binary fraction, and the truncation can then land a whole pixel low on a point that should be
-exact.
+The arithmetic is draw2d's own (`GeometryUtils.drawnBendpointCoordinate`), so the reported point is
+the whole pixel the line is drawn through, on a drifted connection as well as an aligned one. Two
+other arithmetics are each a pixel off on a drifted connection: an exact integer blend truncated
+toward zero lands a pixel high where the blend is negative and not whole, and an exact weight lands a
+pixel high where draw2d's float weight puts a whole blend just below itself. While the two
+reconstructions agree the blend is that point at every weight, exactly — the `1e-9` absorbs the
+double's last-bit error at canvas magnitudes — so the absolute-to-relative round trip is lossless.
+`DiagramModelUtils.getAbsoluteBendpointPositions` evaluates the weight in floating point without that
+margin, and can land a whole pixel low on a point that should be exact.
 
 **Absolute to Relative** (`convertAbsoluteToRelative`):
 
@@ -224,7 +228,7 @@ absolute position and its two offsets agree by construction.
 
 ### Mutual Exclusion
 
-In mutation requests, `bendpoints` and `absoluteBendpoints` parameters are **mutually exclusive**. The server validates this via `validateBendpointMutualExclusion()`. If `absoluteBendpoints` are provided, they are converted to relative format before storage.
+In mutation requests, `bendpoints` and `absoluteBendpoints` parameters are **mutually exclusive**. The server validates this via `validateBendpointMutualExclusion()`. If `absoluteBendpoints` are provided, they are converted to relative format before storage. On `add-connection-to-view`, `update-view-connection` and `apply-positions`, and on `add-connection-to-view` and `update-view-connection` inside `bulk-mutate`, the conversion happens **when the change is applied** (for `add-connection-to-view`, when the connection is created), against the endpoints' positions at that moment — including positions the same call, an earlier operation of the same `bulk-mutate`, or an earlier queued operation of the batch sets, and an end such an operation places inside a group — so the stored route passes through the points sent from both ends. A self-connection that `add-connection-to-view` adds with no bendpoints, or that `auto-connect-view` adds for a relationship from an element to itself, is likewise given Archi's default loop sized from the object at that moment, so a resize queued before it counts. An operation that runs *after* the route and moves an end shears it like any later move (see [Ordering hazards](ordering-hazards.md)). A connection the same batch or `bulk-mutate` added has no ends until it is committed, so it cannot take `absoluteBendpoints` from a later `update-view-connection` or `apply-positions` until then: until `end-batch` commits the batch, or, with no batch open, until the `bulk-mutate` returns (inside a batch, a `bulk-mutate` only queues its operations). Give its route on the `add-connection-to-view` itself.
 
 ## View Object Hierarchy
 
@@ -284,12 +288,10 @@ element's centre when it does not — and always the other element's centre on a
 other figure's centre is replaced by the midpoint of the two boxes' overlap, which is what makes
 Archi draw a straight horizontal line between two boxes that overlap on one axis.
 
-**One pixel, on negative coordinates.** The reference the derivation uses on a connection with
-bendpoints is the published `absoluteBendpoints` value, whose single division truncates toward zero.
-The renderer blends the same two reconstructions in `double` and converts with `floor`. The two
-agree everywhere the blend is non-negative and can differ by one pixel where it is not — and at a
-band boundary one pixel changes the face. The field takes the published value, so on such a
-coordinate it declines where the renderer attaches: it under-claims rather than guessing.
+**The drawn pixel, at a band boundary too.** The reference the derivation uses on a connection with
+bendpoints is the published `absoluteBendpoints` value, which is the pixel the renderer draws the
+bendpoint at: the same float weight, `double` blend and `floor`. At a band boundary, where one pixel
+changes the face, the face therefore follows the line as drawn.
 
 **When it is absent, and why.** Absence never means "no face" — it means no single face is the
 truthful answer:

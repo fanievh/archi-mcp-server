@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.gef.commands.Command;
@@ -361,11 +362,11 @@ final class NestedLayoutOperations {
         int startX = padding;
         int startY = padding + labelHeight;
 
-        List<int[]> positions = arrange(childSizes, levelArrangement, startX, startY,
-                spacing, padding, columns);
+        LoopRoom room = arrangeAroundLoops(children, childSizes, footprints -> arrange(footprints,
+                levelArrangement, startX, startY, spacing, padding, columns));
 
         for (int i = 0; i < children.size(); i++) {
-            int[] p = positions.get(i);
+            int[] p = room.boxes().get(i);
             UpdateViewObjectCommand placement = new UpdateViewObjectCommand(children.get(i),
                     p[0], p[1], p[2], p[3]);
             acc.commands.add(placement);
@@ -382,7 +383,51 @@ final class NestedLayoutOperations {
         acc.elementsRepositioned += children.size();
         acc.maxDepthReached = Math.max(acc.maxDepthReached, depth);
 
-        return GroupLayoutCalculator.computeAutoResizeDimensions(positions, padding);
+        return GroupLayoutCalculator.computeAutoResizeDimensions(room.footprints(), padding);
+    }
+
+    /**
+     * Where each child goes when the children are arranged with room for their loops, and the
+     * room each one takes: {@code boxes} are the rectangles to write, {@code footprints} what a
+     * container must be fitted around.
+     */
+    record LoopRoom(List<int[]> boxes, List<int[]> footprints) {}
+
+    /**
+     * Arranges {@code children}, sized {@code sizes}, with room for their self-connections' loops.
+     *
+     * <p>A loop is drawn outside its object's box. Arranged and fitted by the box alone, it lands
+     * over a neighbour or past the container's border. Each child is therefore arranged at its box
+     * plus the loop's reach ({@link SelfConnectionLoop#reach}), and its box is written inside that
+     * footprint at the side the loop leaves free: the box keeps its size and the loop its shape,
+     * even where the arrangement widens the cell. A child without a self-connection has no reach,
+     * so its box is exactly where the arrangement put it, and a container holding none is laid out
+     * as before, except that a junction is never stretched to its cell.</p>
+     */
+    static LoopRoom arrangeAroundLoops(List<IDiagramModelObject> children, List<int[]> sizes,
+            Function<List<int[]>, List<int[]>> arrangement) {
+        List<int[]> reaches = new ArrayList<>(children.size());
+        List<int[]> footprintSizes = new ArrayList<>(children.size());
+        for (int i = 0; i < children.size(); i++) {
+            int[] size = sizes.get(i);
+            int[] reach = SelfConnectionLoop.reach(children.get(i), size[0], size[1]);
+            reaches.add(reach);
+            footprintSizes.add(new int[]{ size[0] + reach[0] + reach[2], size[1] + reach[1] + reach[3] });
+        }
+        List<int[]> footprints = arrangement.apply(footprintSizes);
+        List<int[]> boxes = new ArrayList<>(footprints.size());
+        for (int i = 0; i < footprints.size(); i++) {
+            int[] f = footprints.get(i);
+            int[] r = reaches.get(i);
+            // An arrangement may widen a cell (a grid column). An ordinary box takes the cell less
+            // the reach, as before. A box with a loop keeps its own size, since its loop's room was
+            // measured on that size, and so does a junction, which keeps its palette size.
+            boolean ownSize = r[0] + r[1] + r[2] + r[3] > 0 || !PaletteDefaultSize.sizesToLabel(children.get(i));
+            boxes.add(ownSize
+                    ? new int[]{ f[0] + r[0], f[1] + r[1], sizes.get(i)[0], sizes.get(i)[1] }
+                    : new int[]{ f[0] + r[0], f[1] + r[1], f[2] - r[0] - r[2], f[3] - r[1] - r[3] });
+        }
+        return new LoopRoom(boxes, footprints);
     }
 
     /**
@@ -502,7 +547,8 @@ final class NestedLayoutOperations {
     /**
      * Resolves a leaf child's size. A container that is NOT being recursed into
      * (depth cap) preserves its existing size so its untouched contents still
-     * fit; a true leaf honours elementWidth / elementHeight / autoWidth.
+     * fit; a true leaf honours elementWidth / elementHeight / autoWidth, except that autoWidth leaves a
+     * junction's width alone (it draws no label).
      *
      * <p>Every axis the caller did NOT override is a fallback, and the fallback reads the child's
      * {@link AnchorResolver#effectiveRect effective} rectangle rather than its stored bounds. Inside
@@ -523,7 +569,8 @@ final class NestedLayoutOperations {
             return new int[]{b[2], b[3]};
         }
         int w = (elementWidth != null) ? elementWidth
-                : autoWidth ? GroupLayoutCalculator.computeAutoWidth(getDisplayName(child))
+                : autoWidth && PaletteDefaultSize.sizesToLabel(child)
+                        ? GroupLayoutCalculator.computeAutoWidth(getDisplayName(child))
                 : b[2];
         int h = (elementHeight != null) ? elementHeight : b[3];
         return new int[]{w, h};

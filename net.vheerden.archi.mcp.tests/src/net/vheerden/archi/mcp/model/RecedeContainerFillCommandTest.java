@@ -173,4 +173,79 @@ public class RecedeContainerFillCommandTest {
                 base, RecedeContainerFillCommand.wrap(base, parent, recede(Boolean.FALSE)));
         assertNull("parent fill stays null under opt-out", parent.getFillColor());
     }
+
+    // ---- decided when it runs ----
+
+    @Test
+    public void execute_writesNothing_andUndoRestoresNothing_whenAFillArrivedAfterThePrepare() {
+        IDiagramModelArchimateObject parent = element("p");
+        RecedeContainerFillCommand cmd = new RecedeContainerFillCommand(parent);
+        parent.setFillColor("#123456"); // an earlier operation of the same batch, run before this one
+        cmd.execute();
+        assertEquals("#123456", parent.getFillColor());
+        assertFalse(RecedeContainerFillCommand.reportOf(cmd).receded());
+        cmd.undo();
+        assertEquals("undo must not clear a fill the recede never wrote", "#123456", parent.getFillColor());
+    }
+
+    @Test
+    public void execute_takesTheNextShade_whenTheParentHoldsTheFirst() {
+        IDiagramModelGroup outer = factory.createDiagramModelGroup();
+        outer.setFillColor("#f4f4f4"); // compared ignoring case
+        IDiagramModelGroup inner = factory.createDiagramModelGroup();
+        outer.getChildren().add(inner);
+        new RecedeContainerFillCommand(inner).execute();
+        assertEquals("#FFFFFF", inner.getFillColor());
+    }
+
+    @Test
+    public void execute_takesAShadeNoChildHolds_theIncomingOneIncluded() {
+        IDiagramModelGroup parent = factory.createDiagramModelGroup();
+        IDiagramModelGroup existing = factory.createDiagramModelGroup();
+        existing.setFillColor("#F4F4F4");
+        parent.getChildren().add(existing);
+        IDiagramModelArchimateObject incoming = element("c");
+        incoming.setFillColor("#ffffff");
+        RecedeContainerFillCommand cmd = new RecedeContainerFillCommand(parent, incoming);
+        cmd.execute();
+        assertEquals("#E8E8E8", parent.getFillColor());
+        assertEquals("#E8E8E8", RecedeContainerFillCommand.reportOf(cmd).getFillColor());
+    }
+
+    @Test
+    public void execute_leavesTheContainerUnauthored_whenEveryShadeIsTaken() {
+        IDiagramModelGroup outer = factory.createDiagramModelGroup();
+        outer.setFillColor("#F4F4F4");
+        IDiagramModelGroup inner = factory.createDiagramModelGroup();
+        outer.getChildren().add(inner);
+        for (String fill : new String[] {"#FFFFFF", "#E8E8E8"}) {
+            IDiagramModelGroup child = factory.createDiagramModelGroup();
+            child.setFillColor(fill);
+            inner.getChildren().add(child);
+        }
+        RecedeContainerFillCommand cmd = new RecedeContainerFillCommand(inner);
+        cmd.execute();
+        assertNull(inner.getFillColor());
+        assertFalse(RecedeContainerFillCommand.reportOf(cmd).receded());
+        cmd.undo();
+        assertNull(inner.getFillColor());
+    }
+
+    @Test
+    public void reportOf_findsTheRecedeThroughTheWrap_andNothingWithoutOne() {
+        IDiagramModelArchimateObject parent = element("p");
+        parent.setId("vo-parent");
+        Command base = new AddToViewCommand(element("c"), parent);
+        Command wrapped = RecedeContainerFillCommand.wrap(base, parent, null);
+        // nothing is recorded before the recede runs: a queued placement reports no forecast
+        assertFalse(RecedeContainerFillCommand.reportOf(wrapped).receded());
+        // the compound's own execute needs the editor plugin, so run only the recede it holds
+        for (Object child : ((org.eclipse.gef.commands.CompoundCommand) wrapped).getCommands()) {
+            if (child instanceof RecedeContainerFillCommand recede) {
+                recede.execute();
+            }
+        }
+        assertEquals("vo-parent -> #F4F4F4", RecedeContainerFillCommand.reportOf(wrapped).toString());
+        assertNull(RecedeContainerFillCommand.reportOf(base));
+    }
 }

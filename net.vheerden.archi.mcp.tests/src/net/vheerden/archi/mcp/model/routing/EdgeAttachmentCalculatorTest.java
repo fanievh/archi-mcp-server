@@ -89,15 +89,40 @@ public class EdgeAttachmentCalculatorTest {
 
     // =============================================
     // Task 4.2: computeAttachmentPoint() single connection → face midpoint
+    //
+    // These four are the class's VALUE PINS for
+    // EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN. Their expected coordinates are written as
+    // literals on purpose: deriving them from the constant would make them pass at any margin,
+    // and the margin's value is the one thing a terminal-placement test must actually assert.
+    // Every other test in this file needs only "a point on the face line" and derives it through
+    // faceLine(), so changing the constant lands here and nowhere else.
+    //
+    // Element (100, 100, 120, 80): left 100, top 100, right 220, bottom 180.
     // =============================================
+
+    /**
+     * The face-line coordinate, read from production. Used by every test that needs a terminal to
+     * be <em>on</em> its face line but is not asserting where that line is — distribution, slot
+     * nudging, face unification, hub port reduction. The line's position is pinned by the four
+     * midpoint tests below, so deriving it here loses no coverage and keeps those tests about
+     * what they are named for.
+     */
+    private static int faceLine(RoutingRect r, Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
+    @Test
+    public void shouldPinTheTerminalFaceMargin_soTheLiteralsBelowHaveAStatedProvenance() {
+        assertEquals("the literal coordinates in this class are derived from this margin",
+                4, EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN);
+    }
 
     @Test
     public void shouldReturnBottomMidpoint_whenSingleConnectionOnBottomFace() {
-        // Element at (100, 100, 120, 80) → bottom edge at y=180, 1px outside → y=181
         RoutingRect element = new RoutingRect(100, 100, 120, 80, "e1");
         int[] point = calculator.computeAttachmentPoint(element, Face.BOTTOM, 0, 1);
         assertEquals(160, point[0]); // midpoint x
-        assertEquals(181, point[1]); // bottom edge y + 1px outside
+        assertEquals(184, point[1]); // bottom edge 180 + margin
     }
 
     @Test
@@ -105,14 +130,14 @@ public class EdgeAttachmentCalculatorTest {
         RoutingRect element = new RoutingRect(100, 100, 120, 80, "e1");
         int[] point = calculator.computeAttachmentPoint(element, Face.TOP, 0, 1);
         assertEquals(160, point[0]); // midpoint x
-        assertEquals(99, point[1]); // top edge y - 1px outside
+        assertEquals(96, point[1]); // top edge 100 - margin
     }
 
     @Test
     public void shouldReturnLeftMidpoint_whenSingleConnectionOnLeftFace() {
         RoutingRect element = new RoutingRect(100, 100, 120, 80, "e1");
         int[] point = calculator.computeAttachmentPoint(element, Face.LEFT, 0, 1);
-        assertEquals(99, point[0]); // left edge x - 1px outside
+        assertEquals(96, point[0]); // left edge 100 - margin
         assertEquals(140, point[1]); // midpoint y
     }
 
@@ -120,7 +145,7 @@ public class EdgeAttachmentCalculatorTest {
     public void shouldReturnRightMidpoint_whenSingleConnectionOnRightFace() {
         RoutingRect element = new RoutingRect(100, 100, 120, 80, "e1");
         int[] point = calculator.computeAttachmentPoint(element, Face.RIGHT, 0, 1);
-        assertEquals(221, point[0]); // right edge x = 100 + 120 + 1px outside
+        assertEquals(224, point[0]); // right edge 220 + margin
         assertEquals(140, point[1]); // midpoint y
     }
 
@@ -139,10 +164,10 @@ public class EdgeAttachmentCalculatorTest {
         int[] p1 = calculator.computeAttachmentPoint(element, Face.BOTTOM, 1, 3);
         int[] p2 = calculator.computeAttachmentPoint(element, Face.BOTTOM, 2, 3);
 
-        // All on bottom edge + 1px outside
-        assertEquals(181, p0[1]);
-        assertEquals(181, p1[1]);
-        assertEquals(181, p2[1]);
+        // All on the bottom face line
+        assertEquals(faceLine(element, Face.BOTTOM), p0[1]);
+        assertEquals(faceLine(element, Face.BOTTOM), p1[1]);
+        assertEquals(faceLine(element, Face.BOTTOM), p2[1]);
 
         // Distributed left-to-right
         assertTrue("Points should be ordered left-to-right", p0[0] < p1[0]);
@@ -167,9 +192,9 @@ public class EdgeAttachmentCalculatorTest {
         int[] p0 = calculator.computeAttachmentPoint(element, Face.LEFT, 0, 2);
         int[] p1 = calculator.computeAttachmentPoint(element, Face.LEFT, 1, 2);
 
-        // Both on left edge - 1px outside
-        assertEquals(99, p0[0]);
-        assertEquals(99, p1[0]);
+        // Both on the left face line
+        assertEquals(faceLine(element, Face.LEFT), p0[0]);
+        assertEquals(faceLine(element, Face.LEFT), p1[0]);
 
         // Distributed top-to-bottom
         assertTrue("Points should be ordered top-to-bottom", p0[1] < p1[1]);
@@ -194,8 +219,8 @@ public class EdgeAttachmentCalculatorTest {
         // Both should be within element bounds
         assertTrue("Attachment x should be >= element left", p0[0] >= 100);
         assertTrue("Attachment x should be <= element right", p4[0] <= 120);
-        assertEquals("All on bottom edge + 1px", 181, p0[1]);
-        assertEquals("All on bottom edge + 1px", 181, p4[1]);
+        assertEquals("All on the bottom face line", faceLine(smallElement, Face.BOTTOM), p0[1]);
+        assertEquals("All on the bottom face line", faceLine(smallElement, Face.BOTTOM), p4[1]);
     }
 
     @Test
@@ -242,7 +267,7 @@ public class EdgeAttachmentCalculatorTest {
         int centerY = hub.y() + hub.height() / 2; // 167
 
         int[] slot3 = calculator.computeAttachmentPoint(hub, Face.LEFT, 3, 7);
-        assertEquals("LEFT perimeter x", 471, slot3[0]);
+        assertEquals("LEFT perimeter x", faceLine(hub, Face.LEFT), slot3[0]);
         assertNotEquals("B72-c: slot at centerY must be nudged off center",
                 centerY, slot3[1]);
         assertEquals("B72-c: nudge should be +1", centerY + 1, slot3[1]);
@@ -256,7 +281,7 @@ public class EdgeAttachmentCalculatorTest {
         int centerX = element.x() + element.width() / 2; // 160
 
         int[] slot1 = calculator.computeAttachmentPoint(element, Face.TOP, 1, 3);
-        assertEquals("TOP perimeter y", 99, slot1[1]);
+        assertEquals("TOP perimeter y", faceLine(element, Face.TOP), slot1[1]);
         assertNotEquals("B72-c: slot at centerX must be nudged off center",
                 centerX, slot1[0]);
         assertEquals("B72-c: nudge should be +1", centerX + 1, slot1[0]);
@@ -268,7 +293,7 @@ public class EdgeAttachmentCalculatorTest {
         int centerY = hub.y() + hub.height() / 2; // 167
 
         int[] slot3 = calculator.computeAttachmentPoint(hub, Face.RIGHT, 3, 7);
-        assertEquals("RIGHT perimeter x", 580, slot3[0]); // 472 + 107 + 1
+        assertEquals("RIGHT perimeter x", faceLine(hub, Face.RIGHT), slot3[0]);
         assertNotEquals("B72-c: slot at centerY must be nudged off center",
                 centerY, slot3[1]);
         assertEquals("B72-c: nudge should be +1", centerY + 1, slot3[1]);
@@ -294,7 +319,7 @@ public class EdgeAttachmentCalculatorTest {
 
         for (int i = 0; i < 4; i++) {
             int[] slot = calculator.computeAttachmentPoint(hub, Face.LEFT, i, 4);
-            assertEquals("LEFT perimeter x", 471, slot[0]);
+            assertEquals("LEFT perimeter x", faceLine(hub, Face.LEFT), slot[0]);
             // None of these should be exactly at centerY=167, so no nudge fires
         }
     }
@@ -314,7 +339,7 @@ public class EdgeAttachmentCalculatorTest {
         int[] positions = new int[17];
         for (int i = 0; i < 17; i++) {
             int[] point = calculator.computeAttachmentPoint(hub, Face.LEFT, i, 17);
-            assertEquals("LEFT perimeter x", 99, point[0]);
+            assertEquals("LEFT perimeter x", faceLine(hub, Face.LEFT), point[0]);
             positions[i] = point[1];
         }
 
@@ -511,8 +536,10 @@ public class EdgeAttachmentCalculatorTest {
         // Source terminal on right face, target terminal on left face (horizontal arrangement)
         AbsoluteBendpointDto srcTerm = result.get(0);
         AbsoluteBendpointDto tgtTerm = result.get(1);
-        assertEquals("Source should exit from right face + 1px", 101, srcTerm.x()); // x=0+100+1
-        assertEquals("Target should enter from left face - 1px", 399, tgtTerm.x()); // x=400-1
+        assertEquals("Source should exit from the right face line",
+                faceLine(source, Face.RIGHT), srcTerm.x());
+        assertEquals("Target should enter from the left face line",
+                faceLine(target, Face.LEFT), tgtTerm.x());
     }
 
     @Test
@@ -538,9 +565,9 @@ public class EdgeAttachmentCalculatorTest {
         AbsoluteBendpointDto tgt1 = bendpointLists.get(0).get(bendpointLists.get(0).size() - 1);
         AbsoluteBendpointDto tgt2 = bendpointLists.get(1).get(bendpointLists.get(1).size() - 1);
 
-        // Both on left face of target (x=400 - 1px outside = 399)
-        assertEquals(399, tgt1.x());
-        assertEquals(399, tgt2.x());
+        // Both on the target's LEFT face line
+        assertEquals(faceLine(target, Face.LEFT), tgt1.x());
+        assertEquals(faceLine(target, Face.LEFT), tgt2.x());
 
         // Different y positions (distributed)
         assertNotEquals("Attachment points should be distributed", tgt1.y(), tgt2.y());
@@ -984,9 +1011,9 @@ public class EdgeAttachmentCalculatorTest {
         AbsoluteBendpointDto c3TgtTerminal = bendpointLists.get(2).get(bendpointLists.get(2).size() - 1);
 
         // All three should be on the RIGHT face of element A (x = 100 + 120 + 1 = 221)
-        assertEquals("c1 should exit RIGHT face of A", 221, c1SrcTerminal.x());
-        assertEquals("c2 should exit RIGHT face of A", 221, c2SrcTerminal.x());
-        assertEquals("c3 should enter RIGHT face of A", 221, c3TgtTerminal.x());
+        assertEquals("c1 should exit RIGHT face of A", faceLine(elementA, Face.RIGHT), c1SrcTerminal.x());
+        assertEquals("c2 should exit RIGHT face of A", faceLine(elementA, Face.RIGHT), c2SrcTerminal.x());
+        assertEquals("c3 should enter RIGHT face of A", faceLine(elementA, Face.RIGHT), c3TgtTerminal.x());
 
         // All three Y positions should be DIFFERENT (unified distribution with totalOnFace=3)
         assertTrue("c1 and c2 should have different Y (unified group)",
@@ -1359,7 +1386,7 @@ public class EdgeAttachmentCalculatorTest {
 
     /**
      * Classifies which face a terminal bendpoint is on, based on its position
-     * relative to the element (1px outside logic).
+     * relative to the element (TERMINAL_FACE_MARGIN px outside).
      */
     private String classifyFace(AbsoluteBendpointDto terminal, RoutingRect element) {
         int x = terminal.x(), y = terminal.y();
@@ -1397,17 +1424,17 @@ public class EdgeAttachmentCalculatorTest {
     }
 
     /**
-     * Checks if a BP is 1px outside an element edge (the edge attachment offset).
+     * Checks if a BP is TERMINAL_FACE_MARGIN px outside an element edge (the attachment offset).
      */
     private boolean isOnElementEdge(AbsoluteBendpointDto bp, RoutingRect rect) {
         int x = bp.x(), y = bp.y();
         int left = rect.x(), top = rect.y();
         int right = left + rect.width(), bottom = top + rect.height();
 
-        boolean onTopEdge = y == top - 1 && x >= left && x <= right;
-        boolean onBottomEdge = y == bottom + 1 && x >= left && x <= right;
-        boolean onLeftEdge = x == left - 1 && y >= top && y <= bottom;
-        boolean onRightEdge = x == right + 1 && y >= top && y <= bottom;
+        boolean onTopEdge = y == faceLine(rect, Face.TOP) && x >= left && x <= right;
+        boolean onBottomEdge = y == faceLine(rect, Face.BOTTOM) && x >= left && x <= right;
+        boolean onLeftEdge = x == faceLine(rect, Face.LEFT) && y >= top && y <= bottom;
+        boolean onRightEdge = x == faceLine(rect, Face.RIGHT) && y >= top && y <= bottom;
 
         return onTopEdge || onBottomEdge || onLeftEdge || onRightEdge;
     }
@@ -1662,8 +1689,8 @@ public class EdgeAttachmentCalculatorTest {
 
         // Target terminal on RIGHT face (Phase 1.3 reverts the TOP correction)
         AbsoluteBendpointDto targetTerminal = result.get(result.size() - 1);
-        assertEquals("Target terminal X on RIGHT face (target.x + w + 1)",
-                137, targetTerminal.x());
+        assertEquals("Target terminal X on the RIGHT face line",
+                faceLine(target, Face.RIGHT), targetTerminal.x());
         assertEquals("Target terminal Y at target center on RIGHT face",
                 240, targetTerminal.y());
     }
@@ -1733,8 +1760,8 @@ public class EdgeAttachmentCalculatorTest {
         AbsoluteBendpointDto targetTerminal = result.get(result.size() - 1);
 
         // Terminal on RIGHT face (Phase 1.3 reverts the TOP correction)
-        assertEquals("Target terminal X on RIGHT face",
-                target.x() + target.width() + 1, targetTerminal.x());
+        assertEquals("Target terminal X on the RIGHT face line",
+                faceLine(target, Face.RIGHT), targetTerminal.x());
         // Center-aligned on RIGHT face for ChopboxAnchor compatibility
         assertEquals("Target terminal Y at center for ChopboxAnchor alignment",
                 target.centerY(), targetTerminal.y());

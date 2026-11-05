@@ -339,7 +339,14 @@ public class RoutingRecommendationEngine {
         }
     }
 
-    private static String buildReason(int dx, int dy, int count) {
+    /**
+     * The sentence a recommendation carries for a move of {@code (dx, dy)} that clears
+     * {@code count} connections.
+     *
+     * <p>Public so a recommendation the model layer shortens to what its parent allows is
+     * re-described by this same sentence rather than a copy of it that could drift.</p>
+     */
+    public static String buildReason(int dx, int dy, int count) {
         String direction;
         if (dx == 0 && dy == 0) {
             direction = "reposition";

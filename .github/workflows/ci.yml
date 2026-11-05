@@ -81,8 +81,9 @@
 #   Current public latest is 5.10.0, published 2026-09-03, and it is what is pinned.
 #
 #   TWO THINGS TO KNOW BEFORE THE NEXT BUMP.
-#     1. The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
-#        assets keep the dots. The download step tries both forms and names both on failure.
+#     1. The release TAG is not the version string, and upstream keeps changing it: 5.10.0 has
+#        been tagged `5_10_0`, `5.10_0` and now `5.10`, while its assets keep the dots. The
+#        download step tries every form seen so far and names them all on failure.
 #     2. Only ONE release is presently published on that repo. The 5.9.0 URL this file used
 #        to pin now 404s, so the previous pin survived solely on a warm Actions cache and
 #        would have gone red, with no change on our side, the moment that cache was evicted.
@@ -128,6 +129,9 @@ jobs:
   ci-junit:
     name: ci-junit (headless harness)
     runs-on: ubuntu-latest
+    # A ceiling for a hang outside any test class (download, compile, packaging). A class that
+    # stops making progress is ended sooner by the harness's own per-class deadline.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -173,19 +177,28 @@ jobs:
           VERSION: ${{ steps.archi.outputs.version }}
         run: |
           set -euo pipefail
-          # The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
-          # asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases were tagged with
-          # dots. Try the underscore form first, then the dotted one, and name both if neither
-          # resolves -- a bare 404 here reads like a network fault rather than a tag rename.
+          # The release TAG is not the version string, and upstream has changed its form. 5.10.0
+          # was first tagged `5_10_0`, then retagged `5.10_0` (seen 2026-10-02, when a cache miss
+          # hit the 404), then `5.10` (seen 2026-10-17, same way); its asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases
+          # were tagged with dots. Try the current form first, then the older ones, and name all
+          # of them if none resolves -- a bare 404 here reads like a network fault, not a rename.
+          # archi.io hosts only the current release. Older ones (5.6.0 to 5.9.0, seen 2026-11-03)
+          # live on the publisher's archive, so a manual run with an older archi_version (the
+          # supported floor, say) falls back to it.
           mkdir -p ~/archi-dist
           downloaded=""
-          for TAG in "${VERSION//./_}" "${VERSION}"; do
+          for TAG in "${VERSION%.*}" "${VERSION%.*}_${VERSION##*.}" "${VERSION//./_}" "${VERSION}"; do
             URL="https://github.com/archimatetool/archi.io/releases/download/${TAG}/Archi-Linux64-${VERSION}.tgz"
             echo "Trying $URL"
             if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; break; fi
           done
+          if [ -z "$downloaded" ]; then
+            URL="https://www.archimatetool.com/downloads/archi/archive/${VERSION}/Archi-Linux64-${VERSION}.tgz"
+            echo "Trying $URL"
+            if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; fi
+          fi
           [ -n "$downloaded" ] || {
-            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases — check the tag name and that a Linux64 tgz asset exists for this version."
+            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION%.*}', '${VERSION%.*}_${VERSION##*.}', '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases, then www.archimatetool.com/downloads/archi/archive/${VERSION}/ — check the tag name and that a Linux64 tgz asset exists for this version."
             exit 1
           }
           echo "Downloaded $downloaded"
@@ -256,6 +269,19 @@ jobs:
           RESULTS_DIR="$GITHUB_WORKSPACE/build/test-results" \
           bash tools/run-tests.sh | tee "$RUNNER_TEMP/harness.log"
 
+      # Build the installable plug-in exactly as a release does. The packager checks the archive
+      # against build.properties `bin.includes` and fails if any file is missing — a dropped
+      # META-INF/services file once silenced all plugin logging on installed copies, and only
+      # the packaged archive can show that. Runs after the harness, so a red suite is reported
+      # first; the two always() steps below still run if this one fails.
+      - name: Package plug-in (archive checked against bin.includes)
+        run: |
+          set -euo pipefail
+          ARCHI_HOME="$ARCHI_HOME" \
+          BUILD_DIR="$GITHUB_WORKSPACE/build/plugin-build" \
+          DIST_DIR="$GITHUB_WORKSPACE/build/dist" \
+          bash tools/ci/package-plugin.sh
+
       # Publish the surefire XML as an artifact even when the suite is red.
       - name: Upload JUnit XML
         if: always()
@@ -281,7 +307,7 @@ jobs:
             echo ""
             if [ -f "$LOG" ]; then
               echo '```'
-              grep -E '^SUMMARY:|^KNOWN-FAILING|^RESULT:' "$LOG" || echo "(no summary lines — see the step log)"
+              grep -E '^SUMMARY:|^KNOWN-FAILING|^RESULT:|^\[TIMEOUT' "$LOG" || echo "(no summary lines — see the step log)"
               echo '```'
               echo ""
               echo "Quarantined (non-gating, tools/known-failing-tests.txt):"
@@ -318,6 +344,8 @@ jobs:
   ci-pde:
     name: ci-pde (display bucket under xvfb)
     runs-on: ubuntu-latest
+    # Same ceiling and reason as ci-junit.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -366,19 +394,28 @@ jobs:
           VERSION: ${{ steps.archi.outputs.version }}
         run: |
           set -euo pipefail
-          # The release TAG is not the version string. 5.10.0 is tagged `5_10_0` while its
-          # asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases were tagged with
-          # dots. Try the underscore form first, then the dotted one, and name both if neither
-          # resolves -- a bare 404 here reads like a network fault rather than a tag rename.
+          # The release TAG is not the version string, and upstream has changed its form. 5.10.0
+          # was first tagged `5_10_0`, then retagged `5.10_0` (seen 2026-10-02, when a cache miss
+          # hit the 404), then `5.10` (seen 2026-10-17, same way); its asset keeps the dots (Archi-Linux64-5.10.0.tgz); earlier releases
+          # were tagged with dots. Try the current form first, then the older ones, and name all
+          # of them if none resolves -- a bare 404 here reads like a network fault, not a rename.
+          # archi.io hosts only the current release. Older ones (5.6.0 to 5.9.0, seen 2026-11-03)
+          # live on the publisher's archive, so a manual run with an older archi_version (the
+          # supported floor, say) falls back to it.
           mkdir -p ~/archi-dist
           downloaded=""
-          for TAG in "${VERSION//./_}" "${VERSION}"; do
+          for TAG in "${VERSION%.*}" "${VERSION%.*}_${VERSION##*.}" "${VERSION//./_}" "${VERSION}"; do
             URL="https://github.com/archimatetool/archi.io/releases/download/${TAG}/Archi-Linux64-${VERSION}.tgz"
             echo "Trying $URL"
             if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; break; fi
           done
+          if [ -z "$downloaded" ]; then
+            URL="https://www.archimatetool.com/downloads/archi/archive/${VERSION}/Archi-Linux64-${VERSION}.tgz"
+            echo "Trying $URL"
+            if curl -fsSL --retry 3 -o /tmp/archi.tgz "$URL"; then downloaded="$URL"; fi
+          fi
           [ -n "$downloaded" ] || {
-            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases — check the tag name and that a Linux64 tgz asset exists for this version."
+            echo "::error::Archi ${VERSION} not downloadable. Tried tags '${VERSION%.*}', '${VERSION%.*}_${VERSION##*.}', '${VERSION//./_}' and '${VERSION}' at github.com/archimatetool/archi.io/releases, then www.archimatetool.com/downloads/archi/archive/${VERSION}/ — check the tag name and that a Linux64 tgz asset exists for this version."
             exit 1
           }
           echo "Downloaded $downloaded"
@@ -478,7 +515,7 @@ jobs:
             echo ""
             if [ -f "$LOG" ]; then
               echo '```'
-              grep -E '^SUMMARY:|^RESULT:|^\[(ok|FAIL)' "$LOG" || echo "(no summary lines — see the step log)"
+              grep -E '^SUMMARY:|^RESULT:|^\[(ok|FAIL|TIMEOUT)' "$LOG" || echo "(no summary lines — see the step log)"
               echo '```'
             else
               echo "_Harness log not found — the suite likely failed to compile; see the run step log._"

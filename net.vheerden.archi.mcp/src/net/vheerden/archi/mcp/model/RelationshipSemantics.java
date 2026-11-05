@@ -43,7 +43,7 @@ final class RelationshipSemantics {
             case "write" -> IAccessRelationship.WRITE_ACCESS;
             case "readwrite" -> IAccessRelationship.READ_WRITE_ACCESS;
             default -> throw new ModelAccessException(
-                    "Invalid accessType '" + wireValue + "'. Valid: access, read, write, readwrite.",
+                    "Invalid accessType " + CallerText.quoted(wireValue) + ". Valid: access, read, write, readwrite.",
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Use one of: access, read, write, readwrite (or omit to leave unchanged)",

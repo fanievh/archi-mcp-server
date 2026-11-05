@@ -51,8 +51,52 @@ public record ViewGroupDto(
     String gradient,
     Boolean deriveLineColor,
     Integer outlineOpacity,
-    String lineStyle
+    String lineStyle,
+    // add-group-to-view only: the parent the placement receded and the fill it now holds
+    @JsonInclude(value = JsonInclude.Include.CUSTOM, valueFilter = RecededParentDto.NoneRecorded.class)
+    RecededParentDto recededParent
 ) {
+
+    /** The 27-field shape every read builds: no recede to report. */
+    public ViewGroupDto(
+            String viewObjectId, String label,
+            int x, int y, int width, int height,
+            String parentViewObjectId, List<String> childViewObjectIds,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String imagePath, String imagePosition, String showIcon,
+            String figureType, String textAlignment, String verticalTextAlignment,
+            String labelExpression, String fontName, Integer fontSize, String fontStyle,
+            String gradient, Boolean deriveLineColor, Integer outlineOpacity, String lineStyle) {
+        this(viewObjectId, label, x, y, width, height,
+                parentViewObjectId, childViewObjectIds,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                imagePath, imagePosition, showIcon,
+                figureType, textAlignment, verticalTextAlignment,
+                labelExpression, fontName, fontSize, fontStyle, gradient, deriveLineColor, outlineOpacity,
+                lineStyle, null);
+    }
+
+    /**
+     * The 19-field shape {@code add-group-to-view} builds, with the parent it receded (or a report
+     * recording none).
+     */
+    public ViewGroupDto(
+            String viewObjectId, String label,
+            int x, int y, int width, int height,
+            String parentViewObjectId, List<String> childViewObjectIds,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String imagePath, String imagePosition, String showIcon,
+            String figureType, String textAlignment, String verticalTextAlignment,
+            RecededParentDto recededParent) {
+        this(viewObjectId, label, x, y, width, height,
+                parentViewObjectId, childViewObjectIds,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                imagePath, imagePosition, showIcon,
+                figureType, textAlignment, verticalTextAlignment,
+                null, null, null, null, null, null, null, null, recededParent);
+    }
 
     /**
      * Constructor matching the prior 16-field shape

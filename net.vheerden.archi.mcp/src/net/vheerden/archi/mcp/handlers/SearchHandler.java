@@ -17,7 +17,10 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
+import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.CostEstimator;
 import net.vheerden.archi.mcp.response.ErrorCode;
@@ -250,6 +253,7 @@ public class SearchHandler {
         logger.info("Handling search-elements request");
         try {
             // Extract and validate required query parameter
+            ToolArguments.requireTextType(request.arguments(), "query");
             Object queryObj = (request.arguments() != null) ? request.arguments().get("query") : null;
             if (!(queryObj instanceof String query)) {
                 ErrorResponse error = new ErrorResponse(
@@ -264,7 +268,7 @@ public class SearchHandler {
             // Extract optional type filter (blank treated as no filter)
             String typeFilter = null;
             if (request.arguments() != null) {
-                Object typeObj = request.arguments().get("type");
+                Object typeObj = ToolArguments.optionalText(request.arguments(), "type", false);
                 if (typeObj instanceof String t && !t.isBlank()) {
                     typeFilter = t;
                 }
@@ -274,7 +278,7 @@ public class SearchHandler {
             if (typeFilter != null && !VALID_TYPES.contains(typeFilter)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid element type: '" + typeFilter + "'",
+                        "Invalid element type: " + CallerText.quoted(typeFilter),
                         "The 'type' parameter must be a valid ArchiMate element type name "
                         + "(e.g., ApplicationComponent, BusinessProcess, Node)",
                         "Use get-model-info to see all available element types in this model",
@@ -285,7 +289,7 @@ public class SearchHandler {
             // Extract optional layer filter (blank treated as no filter)
             String layerFilter = null;
             if (request.arguments() != null) {
-                Object layerObj = request.arguments().get("layer");
+                Object layerObj = ToolArguments.optionalText(request.arguments(), "layer", false);
                 if (layerObj instanceof String l && !l.isBlank()) {
                     layerFilter = l;
                 }
@@ -295,7 +299,7 @@ public class SearchHandler {
             if (layerFilter != null && !VALID_LAYERS.contains(layerFilter)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid layer: '" + layerFilter + "'",
+                        "Invalid layer: " + CallerText.quoted(layerFilter),
                         "The 'layer' parameter must be a valid ArchiMate layer name",
                         "Valid layers: Business, Application, Technology, Physical, "
                         + "Strategy, Motivation, Implementation & Migration",
@@ -306,7 +310,7 @@ public class SearchHandler {
             // Extract optional specialization filter (blank treated as no filter)
             String specializationFilter = null;
             if (request.arguments() != null) {
-                Object specObj = request.arguments().get("specialization");
+                Object specObj = ToolArguments.optionalText(request.arguments(), "specialization", false);
                 if (specObj instanceof String s && !s.isBlank()) {
                     specializationFilter = s;
                 }
@@ -316,7 +320,7 @@ public class SearchHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (request.arguments() != null) {
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -324,7 +328,7 @@ public class SearchHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -336,7 +340,7 @@ public class SearchHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -346,24 +350,18 @@ public class SearchHandler {
             }
 
             // Extract dryRun parameter
-            boolean dryRun = false;
-            if (request.arguments() != null) {
-                Object dryRunObj = request.arguments().get("dryRun");
-                if (dryRunObj instanceof Boolean b) {
-                    dryRun = b;
-                }
-            }
+            boolean dryRun = ToolArguments.flag(request.arguments(), "dryRun", false);
 
             // Extract and validate format parameter
             ResponseFormat format = ResponseFormat.JSON;
             if (request.arguments() != null) {
-                Object formatObj = request.arguments().get("format");
+                Object formatObj = ToolArguments.optionalText(request.arguments(), "format", false);
                 if (formatObj instanceof String f && !f.isBlank()) {
                     ResponseFormat parsed = ResponseFormat.fromString(f);
                     if (parsed == null) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid format: '" + f + "'",
+                                "Invalid format: " + CallerText.quoted(f),
                                 null,
                                 "Valid formats: json, graph, summary",
                                 null);
@@ -377,14 +375,11 @@ public class SearchHandler {
             String cursorParam = null;
             Integer limitParam = null;
             if (request.arguments() != null) {
-                Object cursorObj = request.arguments().get("cursor");
+                Object cursorObj = ToolArguments.optionalText(request.arguments(), "cursor", false);
                 if (cursorObj instanceof String c && !c.isBlank()) {
                     cursorParam = c;
                 }
-                Object limitObj = request.arguments().get("limit");
-                if (limitObj instanceof Number n) {
-                    limitParam = n.intValue();
-                }
+                limitParam = ToolArguments.wholeInt(request.arguments(), "limit");
             }
 
             // Validate limit parameter
@@ -408,30 +403,12 @@ public class SearchHandler {
             String effectiveSpecialization = specializationFilter;
 
             if (cursorParam != null && !dryRun) {
-                PaginationCursor.CursorData cursorData;
-                try {
-                    cursorData = PaginationCursor.decode(cursorParam);
-                } catch (PaginationCursor.InvalidCursorException e) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            e.getMessage(),
-                            null,
-                            "Re-run the original query without a cursor parameter",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                // Well formed, same model instance, same version (the helper owns all three checks)
+                CursorModelCheck.Decoded decoded = CursorModelCheck.decode(cursorParam, accessor);
+                if (decoded.refusal() != null) {
+                    return buildResult(formatter.toJsonString(formatter.formatError(decoded.refusal())), true);
                 }
-
-                // Validate model version
-                String currentModelVersion = accessor.getModelVersion();
-                if (!cursorData.modelVersion().equals(currentModelVersion)) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            "The model has been modified since this cursor was created",
-                            null,
-                            "Re-run the original query without a cursor parameter to get fresh results",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
-                }
+                PaginationCursor.CursorData cursorData = decoded.cursor();
 
                 // Use cursor params (override request params for page consistency)
                 offset = cursorData.offset();
@@ -457,8 +434,8 @@ public class SearchHandler {
                 effectiveFieldsPreset = sessionManager.getEffectiveFieldsPreset(sessionId, fieldsParam);
                 effectiveExclude = sessionManager.getEffectiveExcludeFields(sessionId, excludeParam);
                 logger.debug("Effective filters — type: {} (source: {}), layer: {} (source: {})",
-                        effectiveType, typeFilter != null ? "per-query" : "session",
-                        effectiveLayer, layerFilter != null ? "per-query" : "session");
+                        CallerText.logged(effectiveType), typeFilter != null ? "per-query" : "session",
+                        CallerText.logged(effectiveLayer), layerFilter != null ? "per-query" : "session");
             } else if (sessionManager != null) {
                 // Cursor mode: still merge field selection (per-page, not in cursor)
                 effectiveFieldsPreset = sessionManager.getEffectiveFieldsPreset(sessionId, fieldsParam);
@@ -473,11 +450,11 @@ public class SearchHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
-            logger.debug("Field selection — preset: {}, exclude: {}", preset, effectiveExclude);
+            logger.debug("Field selection — preset: {}, exclude: {}", preset, CallerText.logged(effectiveExclude));
 
             String modelVersion = accessor.getModelVersion();
 
@@ -495,7 +472,8 @@ public class SearchHandler {
             // Summary format ignores pagination, so use 0 for offset/limit to share cache entries
             String cacheKey = CacheKeyBuilder.buildCacheKey("search", effectiveQuery, "type", effectiveType,
                     "layer", effectiveLayer, "specialization", effectiveSpecialization,
-                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "fields", preset, "warning", warningMessage,
+                    "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
                     "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
                     "format", format.value());
@@ -503,7 +481,7 @@ public class SearchHandler {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -514,7 +492,7 @@ public class SearchHandler {
             }
 
             // Execute query (full result set)
-            logger.debug("Search query: '{}', type: {}, layer: {}", effectiveQuery, effectiveType, effectiveLayer);
+            logger.debug("Search query: '{}', type: {}, layer: {}", CallerText.logged(effectiveQuery), CallerText.logged(effectiveType), CallerText.logged(effectiveLayer));
             List<ElementDto> allMatches = accessor.searchElements(effectiveQuery, effectiveType, effectiveLayer, effectiveSpecialization);
             int totalCount = allMatches.size();
 
@@ -668,8 +646,8 @@ public class SearchHandler {
                 cursorParams.put("type", effectiveType);
                 cursorParams.put("layer", effectiveLayer);
                 cursorParams.put("specialization", effectiveSpecialization);
-                String nextCursor = PaginationCursor.encode(
-                        modelVersion, offset + limit, limit, totalCount, cursorParams);
+                String nextCursor = PaginationCursor.encode(modelVersion, CursorModelCheck.current(accessor),
+                        offset + limit, limit, totalCount, cursorParams);
                 ResponseFormatter.addCursorToken(envelope, nextCursor);
             }
 
@@ -690,7 +668,7 @@ public class SearchHandler {
             // Store in cache — skip when model changed (cache already invalidated)
             if (sessionManager != null && sessionId != null && !modelChanged) {
                 sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
             }
 
             return buildResult(jsonResult, false);
@@ -703,6 +681,10 @@ public class SearchHandler {
                     "Open an ArchiMate model in ArchimateTool",
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
 
         } catch (Exception e) {
             logger.error("Unexpected error handling search-elements", e);
@@ -845,6 +827,7 @@ public class SearchHandler {
         logger.info("Handling search-relationships request");
         try {
             // Extract and validate required query parameter
+            ToolArguments.requireTextType(request.arguments(), "query");
             Object queryObj = (request.arguments() != null) ? request.arguments().get("query") : null;
             if (!(queryObj instanceof String query)) {
                 ErrorResponse error = new ErrorResponse(
@@ -859,7 +842,7 @@ public class SearchHandler {
             // Extract optional type filter
             String typeFilter = null;
             if (request.arguments() != null) {
-                Object typeObj = request.arguments().get("type");
+                Object typeObj = ToolArguments.optionalText(request.arguments(), "type", false);
                 if (typeObj instanceof String t && !t.isBlank()) {
                     typeFilter = t;
                 }
@@ -869,7 +852,7 @@ public class SearchHandler {
             if (typeFilter != null && !TraversalHandler.VALID_RELATIONSHIP_TYPES.contains(typeFilter)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid relationship type: '" + typeFilter + "'",
+                        "Invalid relationship type: " + CallerText.quoted(typeFilter),
                         "The 'type' parameter must be a valid ArchiMate relationship type name",
                         "Valid types: AccessRelationship, AggregationRelationship, "
                         + "AssignmentRelationship, AssociationRelationship, CompositionRelationship, "
@@ -882,7 +865,7 @@ public class SearchHandler {
             // Extract optional source layer filter
             String sourceLayerFilter = null;
             if (request.arguments() != null) {
-                Object layerObj = request.arguments().get("sourceLayer");
+                Object layerObj = ToolArguments.optionalText(request.arguments(), "sourceLayer", false);
                 if (layerObj instanceof String l && !l.isBlank()) {
                     sourceLayerFilter = l;
                 }
@@ -892,7 +875,7 @@ public class SearchHandler {
             if (sourceLayerFilter != null && !VALID_LAYERS.contains(sourceLayerFilter)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid sourceLayer: '" + sourceLayerFilter + "'",
+                        "Invalid sourceLayer: " + CallerText.quoted(sourceLayerFilter),
                         "The 'sourceLayer' parameter must be a valid ArchiMate layer name",
                         "Valid layers: Business, Application, Technology, Physical, "
                         + "Strategy, Motivation, Implementation & Migration",
@@ -903,7 +886,7 @@ public class SearchHandler {
             // Extract optional target layer filter
             String targetLayerFilter = null;
             if (request.arguments() != null) {
-                Object layerObj = request.arguments().get("targetLayer");
+                Object layerObj = ToolArguments.optionalText(request.arguments(), "targetLayer", false);
                 if (layerObj instanceof String l && !l.isBlank()) {
                     targetLayerFilter = l;
                 }
@@ -913,7 +896,7 @@ public class SearchHandler {
             if (targetLayerFilter != null && !VALID_LAYERS.contains(targetLayerFilter)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid targetLayer: '" + targetLayerFilter + "'",
+                        "Invalid targetLayer: " + CallerText.quoted(targetLayerFilter),
                         "The 'targetLayer' parameter must be a valid ArchiMate layer name",
                         "Valid layers: Business, Application, Technology, Physical, "
                         + "Strategy, Motivation, Implementation & Migration",
@@ -924,7 +907,7 @@ public class SearchHandler {
             // Extract optional specialization filter (blank treated as no filter)
             String specializationFilter = null;
             if (request.arguments() != null) {
-                Object specObj = request.arguments().get("specialization");
+                Object specObj = ToolArguments.optionalText(request.arguments(), "specialization", false);
                 if (specObj instanceof String s && !s.isBlank()) {
                     specializationFilter = s;
                 }
@@ -934,7 +917,7 @@ public class SearchHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (request.arguments() != null) {
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -942,7 +925,7 @@ public class SearchHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -954,7 +937,7 @@ public class SearchHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -964,24 +947,18 @@ public class SearchHandler {
             }
 
             // Extract dryRun parameter
-            boolean dryRun = false;
-            if (request.arguments() != null) {
-                Object dryRunObj = request.arguments().get("dryRun");
-                if (dryRunObj instanceof Boolean b) {
-                    dryRun = b;
-                }
-            }
+            boolean dryRun = ToolArguments.flag(request.arguments(), "dryRun", false);
 
             // Extract and validate format parameter
             ResponseFormat format = ResponseFormat.JSON;
             if (request.arguments() != null) {
-                Object formatObj = request.arguments().get("format");
+                Object formatObj = ToolArguments.optionalText(request.arguments(), "format", false);
                 if (formatObj instanceof String f && !f.isBlank()) {
                     ResponseFormat parsed = ResponseFormat.fromString(f);
                     if (parsed == null) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid format: '" + f + "'",
+                                "Invalid format: " + CallerText.quoted(f),
                                 null,
                                 "Valid formats: json, graph, summary",
                                 null);
@@ -995,14 +972,11 @@ public class SearchHandler {
             String cursorParam = null;
             Integer limitParam = null;
             if (request.arguments() != null) {
-                Object cursorObj = request.arguments().get("cursor");
+                Object cursorObj = ToolArguments.optionalText(request.arguments(), "cursor", false);
                 if (cursorObj instanceof String c && !c.isBlank()) {
                     cursorParam = c;
                 }
-                Object limitObj = request.arguments().get("limit");
-                if (limitObj instanceof Number n) {
-                    limitParam = n.intValue();
-                }
+                limitParam = ToolArguments.wholeInt(request.arguments(), "limit");
             }
 
             // Validate limit parameter
@@ -1027,30 +1001,12 @@ public class SearchHandler {
             String effectiveSpecialization = specializationFilter;
 
             if (cursorParam != null && !dryRun) {
-                PaginationCursor.CursorData cursorData;
-                try {
-                    cursorData = PaginationCursor.decode(cursorParam);
-                } catch (PaginationCursor.InvalidCursorException e) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            e.getMessage(),
-                            null,
-                            "Re-run the original query without a cursor parameter",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+                // Well formed, same model instance, same version (the helper owns all three checks)
+                CursorModelCheck.Decoded decoded = CursorModelCheck.decode(cursorParam, accessor);
+                if (decoded.refusal() != null) {
+                    return buildResult(formatter.toJsonString(formatter.formatError(decoded.refusal())), true);
                 }
-
-                // Validate model version
-                String currentModelVersion = accessor.getModelVersion();
-                if (!cursorData.modelVersion().equals(currentModelVersion)) {
-                    ErrorResponse error = new ErrorResponse(
-                            ErrorCode.INVALID_CURSOR,
-                            "The model has been modified since this cursor was created",
-                            null,
-                            "Re-run the original query without a cursor parameter to get fresh results",
-                            null);
-                    return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
-                }
+                PaginationCursor.CursorData cursorData = decoded.cursor();
 
                 offset = cursorData.offset();
                 limit = cursorData.limit();
@@ -1095,8 +1051,8 @@ public class SearchHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
 
@@ -1116,7 +1072,8 @@ public class SearchHandler {
                     "type", effectiveType,
                     "sourceLayer", effectiveSourceLayer, "targetLayer", effectiveTargetLayer,
                     "specialization", effectiveSpecialization,
-                    "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "fields", preset, "warning", warningMessage,
+                    "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "offset", format == ResponseFormat.SUMMARY ? 0 : offset,
                     "limit", format == ResponseFormat.SUMMARY ? 0 : limit,
                     "format", format.value());
@@ -1124,7 +1081,7 @@ public class SearchHandler {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -1136,7 +1093,7 @@ public class SearchHandler {
 
             // Execute query (full result set)
             logger.debug("Search relationships query: '{}', type: {}, sourceLayer: {}, targetLayer: {}",
-                    effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer);
+                    CallerText.logged(effectiveQuery), CallerText.logged(effectiveType), CallerText.logged(effectiveSourceLayer), CallerText.logged(effectiveTargetLayer));
             List<RelationshipDto> allMatches = accessor.searchRelationships(
                     effectiveQuery, effectiveType, effectiveSourceLayer, effectiveTargetLayer,
                     effectiveSpecialization);
@@ -1292,8 +1249,8 @@ public class SearchHandler {
                 cursorParams.put("sourceLayer", effectiveSourceLayer);
                 cursorParams.put("targetLayer", effectiveTargetLayer);
                 cursorParams.put("specialization", effectiveSpecialization);
-                String nextCursor = PaginationCursor.encode(
-                        modelVersion, offset + limit, limit, totalCount, cursorParams);
+                String nextCursor = PaginationCursor.encode(modelVersion, CursorModelCheck.current(accessor),
+                        offset + limit, limit, totalCount, cursorParams);
                 ResponseFormatter.addCursorToken(envelope, nextCursor);
             }
 
@@ -1322,6 +1279,10 @@ public class SearchHandler {
                     "Open an ArchiMate model in ArchimateTool",
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
 
         } catch (Exception e) {
             logger.error("Unexpected error handling search-relationships", e);

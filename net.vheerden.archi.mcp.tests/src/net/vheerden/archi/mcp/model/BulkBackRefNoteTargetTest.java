@@ -250,18 +250,14 @@ public class BulkBackRefNoteTargetTest {
                     "a note as a parent", false);
             throw new AssertionError("expected a note to be rejected as a parentViewObjectId");
         } catch (ModelAccessException e) {
-            // MEASURED, not assumed. The rejection arrives as a not-found rather than as the
-            // group-or-element message, because a note this call created is never in the container
-            // registry the parent lookup reads and is still detached from the view, so parent
-            // resolution misses it before it can ever reach the type check. Routing it to the
-            // type check would mean making the container finder answer for notes — the widening
-            // that would re-open the drift the single container finder exists to prevent. The
-            // rejection is the invariant; the message is pinned as-is so a later change to either
-            // has to be deliberate.
-            assertTrue("the failure must name the operation that used the note as a parent: "
-                    + e.getMessage(), e.getMessage().startsWith("Operation 1 (add-to-view):"));
-            assertTrue("the message must say the parent could not be used: " + e.getMessage(),
-                    e.getMessage().contains("Parent view object not found:"));
+            // The parent lookup reads the container registry and the view, and a note this call
+            // places is in neither, so it used to answer "Parent view object not found" for an id
+            // the caller could see in the same response. The refusal now comes from the same-call
+            // map of placed notes, images and view references, checked before any lookup, so the
+            // container finder still answers only for containers.
+            assertEquals("Operation 1 (add-to-view): Parent view object must be a group or element: "
+                    + "<id> is the note operation 0 places",
+                    e.getMessage().replaceAll("id-[0-9a-f]{32}", "<id>"));
             assertEquals("BULK_VALIDATION_FAILED", e.getErrorCode().name());
             assertTrue("and the batch must have rolled back wholly", view.getChildren().isEmpty());
         }

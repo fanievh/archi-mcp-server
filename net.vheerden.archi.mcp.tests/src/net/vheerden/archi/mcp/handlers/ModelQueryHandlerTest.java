@@ -53,8 +53,10 @@ public class ModelQueryHandlerTest {
         ModelQueryHandler handler = new ModelQueryHandler(accessor, formatter, registry, null);
         handler.registerTools();
 
-        // registerTools now registers 5 tools — get-model-info, update-model, get-element, find-concept-usage, list-specializations
-        assertEquals(5, registry.getToolCount());
+        // registerTools registers 6 tools — get-model-info, get-models, update-model, get-element,
+        // find-concept-usage, list-specializations
+        assertEquals(6, registry.getToolCount());
+        assertEquals("get-models", findToolSpec("get-models").tool().name());
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("get-model-info");
         assertEquals("get-model-info", spec.tool().name());
     }
@@ -168,6 +170,45 @@ public class ModelQueryHandlerTest {
         assertEquals("cached envelope reused — accessor not called again", 1, accessor.getModelInfoCount);
         assertEquals("approvalMode must be re-stamped live, not served stale",
                 Boolean.FALSE, ((Map<String, Object>) env2.get("result")).get("approvalMode"));
+    }
+
+    // ---- Read-only reporting ----
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldReportReadOnly_inGetModelInfo_whatever_the_mode() throws Exception {
+        new ModelQueryHandler(new StubAccessor(true), formatter, registry, null, true).registerTools();
+        Map<String, Object> readOnly = (Map<String, Object>) parseJson(invokeHandler()).get("result");
+        assertEquals(Boolean.TRUE, readOnly.get("readOnly"));
+
+        registry = new CommandRegistry();
+        new ModelQueryHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        Map<String, Object> full = (Map<String, Object>) parseJson(invokeHandler()).get("result");
+        assertEquals("present as false on a full server", Boolean.FALSE, full.get("readOnly"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void shouldReportThisServersReadOnly_overACachedEnvelope() throws Exception {
+        SessionManager sm = new SessionManager(SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS);
+        CountingAccessor accessor = new CountingAccessor();
+        new ModelQueryHandler(accessor, formatter, registry, sm).registerTools();
+        assertEquals(Boolean.FALSE, ((Map<String, Object>) parseJson(invokeHandler()).get("result")).get("readOnly"));
+
+        registry = new CommandRegistry();
+        new ModelQueryHandler(accessor, formatter, registry, sm, true).registerTools();
+        Map<String, Object> env = parseJson(invokeHandler());
+        assertEquals("a cache hit", true, ((Map<String, Object>) env.get("_meta")).get("cacheHit"));
+        assertEquals(Boolean.TRUE, ((Map<String, Object>) env.get("result")).get("readOnly"));
+    }
+
+    @Test
+    public void shouldNameTheReadOnlyField_inTheGetModelInfoDescription() {
+        new ModelQueryHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        String desc = registry.getToolSpecifications().stream()
+                .filter(s -> s.tool().name().equals("get-model-info")).findFirst().orElseThrow()
+                .tool().description();
+        assertTrue(desc, desc.contains("readOnly"));
     }
 
     // ---- Success Path Tests ----
@@ -1246,25 +1287,26 @@ public class ModelQueryHandlerTest {
 
     @SuppressWarnings("unchecked")
     @Test
-    public void shouldInvalidateCache_whenModelChanges() throws Exception {
+    public void shouldServeEachModelItsOwnCachedAnswer_whenTheCallsModelChanges() throws Exception {
         CountingAccessor accessor = new CountingAccessor();
         SessionManager sm = new SessionManager(SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS);
+        String[] model = {"1"};
+        sm.setModelKeySupplier(() -> model[0]);
         ModelQueryHandler handler = new ModelQueryHandler(accessor, formatter, registry, sm);
         handler.registerTools();
 
-        // First call — populate cache
-        invokeHandler();
-        assertEquals(1, accessor.getModelInfoCount);
+        invokeHandler();                    // model 1: fetched and cached
+        sm.onModelChanged("Model 2", "model-2");
+        model[0] = "2";
+        McpSchema.CallToolResult onTwo = invokeHandler();   // model 2: a different key, fetched
+        model[0] = "1";
+        McpSchema.CallToolResult backOnOne = invokeHandler(); // model 1: still cached
 
-        // Model changes — clear cache
-        sm.onModelChanged("New Model", "model-id");
-
-        // Next call — cache miss (re-fetched)
-        McpSchema.CallToolResult result = invokeHandler();
-        Map<String, Object> env = parseJson(result);
-        Map<String, Object> meta = (Map<String, Object>) env.get("_meta");
-        assertFalse("Should not have cacheHit after model change", meta.containsKey("cacheHit"));
-        assertEquals("Accessor should be called again after cache clear", 2, accessor.getModelInfoCount);
+        assertFalse("model 2 is not served model 1's answer",
+                ((Map<String, Object>) parseJson(onTwo).get("_meta")).containsKey("cacheHit"));
+        assertTrue("model 1's cached answer survived the change",
+                ((Map<String, Object>) parseJson(backOnOne).get("_meta")).containsKey("cacheHit"));
+        assertEquals(2, accessor.getModelInfoCount);
     }
 
     @SuppressWarnings("unchecked")

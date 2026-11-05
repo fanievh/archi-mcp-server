@@ -62,6 +62,15 @@ public class CompoundChildTargetsTest {
     }
 
     @Test
+    public void shouldTrackConnectionId_forSelfConnectionLoopCommand() {
+        // a self-connection the human removes during review must make the proposal stale
+        CompoundCommand compound = new CompoundCommand();
+        compound.add(new SelfConnectionLoop.LoopCommand(conn("c-self")));
+
+        assertTrue(CompoundChildTargets.collect(compound, "view-1").contains("c-self"));
+    }
+
+    @Test
     public void shouldTrackConnectionId_forSetTextPositionCommand() {
         CompoundCommand compound = new CompoundCommand();
         compound.add(new SetTextPositionCommand(conn("c2"), 1));

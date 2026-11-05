@@ -14,6 +14,7 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -360,6 +361,9 @@ public class DiscoveryHandler {
             String typeFilter = HandlerUtils.optionalStringParam(args, "type");
             String createType = HandlerUtils.requireStringParam(args, "createType");
             String createName = HandlerUtils.requireStringParam(args, "createName");
+            // Read before the search, so a wrong type is refused whether or not the search finds a match.
+            String createDoc = HandlerUtils.optionalStringParam(args, "createDocumentation");
+            String createFolderId = HandlerUtils.optionalStringParam(args, "createFolderId");
 
             // Search phase (always immediate, read-only)
             List<ElementDto> searchResults = accessor.searchElements(query, typeFilter, null, null);
@@ -369,9 +373,7 @@ public class DiscoveryHandler {
             }
 
             // Create phase — no results found
-            String createDoc = HandlerUtils.optionalStringParam(args, "createDocumentation");
             Map<String, String> createProps = HandlerUtils.optionalMapParam(args, "createProperties");
-            String createFolderId = HandlerUtils.optionalStringParam(args, "createFolderId");
             Map<String, String> createSource = HandlerUtils.optionalMapParam(args, "createSource");
 
             MutationResult<ElementDto> result = accessor.createElement(
@@ -465,7 +467,7 @@ public class DiscoveryHandler {
         List<String> nextSteps = List.of(
                 "Use get-element with id '" + id + "' to verify the new element",
                 "Use create-relationship to connect to other elements",
-                "Search returned 0 results for '" + query + "' before creating");
+                "Search returned 0 results for " + CallerText.quoted(query) + " before creating");
 
         Map<String, Object> envelope = formatter.formatSuccess(
                 resultMap, nextSteps, modelVersion, 1, 1, false);

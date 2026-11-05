@@ -55,7 +55,7 @@ import net.vheerden.archi.mcp.response.dto.ViewPositionSpec;
  * follow it in that same unit: a connection added by an earlier {@code add-connection-to-view}, a
  * view created by an earlier {@code create-view} and named as a {@code referencedViewId}, the view
  * objects and relationship an {@code add-connection-to-view} draws between, and all three ids
- * {@code apply-view-layout} takes.
+ * {@code apply-positions} takes.
  *
  * <p>They are all the same seam. The prepare resolves the id through
  * {@code ArchimateModelUtils.getObjectByID}, which walks committed containment, while the command
@@ -266,6 +266,10 @@ public class BatchQueuedViewConnectionUpdateTest {
         return null;
     }
 
+    private static final String QUEUED_END_ADVICE = "A relationship's connection joins the element view objects of its "
+            + "source and target. A group, a note, an image and a view reference stand for no element, so none "
+            + "can be its end.";
+
     private static void assertThrows(Runnable call, String expectedMessage, ErrorCode expectedCode) {
         assertThrows(call, expectedMessage, expectedCode, null);
     }
@@ -394,13 +398,16 @@ public class BatchQueuedViewConnectionUpdateTest {
         dispatcher.endBatch(SESSION, true);
 
         assertTrue("the batch must dispatch as one compound", lastDispatched instanceof CompoundCommand);
-        Command queued = (Command) ((CompoundCommand) lastDispatched).getCommands().get(0);
-        assertTrue("the queued entry must be the outer endpoint guard",
+        Command queued = (Command) MutationContextTest.queuedIn(lastDispatched).getCommands().get(0);
+        assertTrue("the queued entry must be the relationship guard",
                 queued instanceof RequireAttachedContainerCommand);
-        Command inner = ((RequireAttachedContainerCommand) queued).getGuarded();
+        Command outer = ((RequireAttachedContainerCommand) queued).getGuarded();
+        assertTrue("the relationship guard must wrap the outer endpoint guard",
+                outer instanceof RequireAttachedContainerCommand);
+        Command inner = ((RequireAttachedContainerCommand) outer).getGuarded();
         assertTrue("the guard must wrap the second endpoint guard",
                 inner instanceof RequireAttachedContainerCommand);
-        assertTrue("the add command must sit two levels down, never at the top of the queue",
+        assertTrue("the add command must sit three levels down, never at the top of the queue",
                 ((RequireAttachedContainerCommand) inner).getGuarded()
                         instanceof AddConnectionToViewCommand);
     }
@@ -499,8 +506,12 @@ public class BatchQueuedViewConnectionUpdateTest {
         try {
             assertThrows(() -> accessor.updateViewConnection(
                             SESSION, queuedConn, null, absolute, null, null, null),
-                    "Cannot use absoluteBendpoints: connection endpoints are not ArchiMate view objects",
-                    ErrorCode.INVALID_PARAMETER);
+                    "Cannot use absoluteBendpoints: connection '" + queuedConn + "' was added earlier in "
+                            + "this batch or bulk-mutate and is not connected to its ends until that is committed",
+                    ErrorCode.INVALID_PARAMETER,
+                    "Give the route as absoluteBendpoints on the add-connection-to-view that adds it, use "
+                            + "relative bendpoints (startX/startY/endX/endY), or update the connection once it is "
+                            + "committed: after end-batch, or after the bulk-mutate returns when no batch is open");
         } finally {
             dispatcher.endBatch(SESSION, false);
         }
@@ -777,10 +788,10 @@ public class BatchQueuedViewConnectionUpdateTest {
     }
 
     /**
-     * A queued object of the <em>wrong kind</em> still takes the ordinary not-found path. A
-     * connection endpoint has to be an ArchiMate view object, because the relationship is validated
-     * against the element behind it; a group, note or image has no element. The narrowing lives in
-     * the lookup so this message is unchanged rather than becoming a later, stranger failure.
+     * A queued object of the <em>wrong kind</em> is refused by name. A connection endpoint has to be
+     * an ArchiMate view object, because the relationship is validated against the element behind it;
+     * a group, note or image has no element. The lookup used to answer null, so the caller was told
+     * "not found" for an id the batch had just handed back; it now says what the object is.
      */
     @Test
     public void shouldStillThrow_whenAQueuedGroupIsNamedAsAnEndpoint() throws Exception {
@@ -791,8 +802,8 @@ public class BatchQueuedViewConnectionUpdateTest {
             assertThrows(() -> accessor.addConnectionToView(SESSION, view.getId(),
                             relationship.getId(), queuedGroup, targetObj.getId(),
                             null, null, null, null, null),
-                    "Source view object not found: " + queuedGroup,
-                    ErrorCode.VIEW_OBJECT_NOT_FOUND, ENDPOINT_SUGGESTION);
+                    "Connection end must be an element view object: " + queuedGroup + " is the group this batch places",
+                    ErrorCode.INVALID_PARAMETER, QUEUED_END_ADVICE);
         } finally {
             dispatcher.endBatch(SESSION, false);
         }
@@ -808,8 +819,8 @@ public class BatchQueuedViewConnectionUpdateTest {
             assertThrows(() -> accessor.addConnectionToView(SESSION, view.getId(),
                             relationship.getId(), sourceObj.getId(), queuedNote,
                             null, null, null, null, null),
-                    "Target view object not found: " + queuedNote,
-                    ErrorCode.VIEW_OBJECT_NOT_FOUND, ENDPOINT_SUGGESTION);
+                    "Connection end must be an element view object: " + queuedNote + " is the note this batch places",
+                    ErrorCode.INVALID_PARAMETER, QUEUED_END_ADVICE);
         } finally {
             dispatcher.endBatch(SESSION, false);
         }
@@ -1638,10 +1649,10 @@ public class BatchQueuedViewConnectionUpdateTest {
         }
     }
 
-    // ---- apply-view-layout: every id it takes must be addressable inside the batch ---------------
+    // ---- apply-positions: every id it takes must be addressable inside the batch ---------------
 
     /**
-     * {@code apply-view-layout} is the one remaining caller of the connection prepare that takes the
+     * {@code apply-positions} is the one remaining caller of the connection prepare that takes the
      * id path, so a connection an earlier operation in the batch added could not be laid out in that
      * same batch — the exact unit of work an agent draws a view in.
      */

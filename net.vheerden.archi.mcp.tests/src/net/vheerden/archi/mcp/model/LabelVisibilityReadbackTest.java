@@ -11,6 +11,10 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import com.archimatetool.model.IArchimateFactory;
+import com.archimatetool.model.IArchimateRelationship;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
+
 import net.vheerden.archi.mcp.model.routing.LabelPolicy;
 import net.vheerden.archi.mcp.response.dto.HiddenLabelDto;
 
@@ -90,6 +94,57 @@ public class LabelVisibilityReadbackTest {
     public void excludeQueuedHides_shouldTolerateAnEmptyHideList() {
         assertTrue(LabelVisibilityReadback.excludeQueuedHides(List.of(), Map.of("a", false)).isEmpty());
         assertTrue(LabelVisibilityReadback.excludeQueuedHides(null, Map.of("a", false)).isEmpty());
+    }
+
+    // --- isShown / drawnLabelText: the router sees only a label Archi will draw ---
+
+    @Test
+    public void isShown_shouldReadTheModel_outsideABatch() {
+        assertTrue(LabelVisibilityReadback.isShown(connection("c1", "reads", true), null));
+        assertFalse(LabelVisibilityReadback.isShown(connection("c1", "reads", false), null));
+    }
+
+    @Test
+    public void isShown_shouldReadTheModel_whenNothingIsQueuedForTheConnection() {
+        Map<String, Boolean> queued = Map.of("other", false);
+
+        assertTrue(LabelVisibilityReadback.isShown(connection("c1", "reads", true), queued));
+        assertFalse(LabelVisibilityReadback.isShown(connection("c1", "reads", false), Map.of()));
+    }
+
+    @Test
+    public void isShown_shouldPreferTheQueuedValue_inEitherDirection() {
+        assertTrue("a queued show of a hidden label",
+                LabelVisibilityReadback.isShown(connection("c1", "reads", false), Map.of("c1", true)));
+        assertFalse("a queued hide of a shown label",
+                LabelVisibilityReadback.isShown(connection("c1", "reads", true), Map.of("c1", false)));
+    }
+
+    @Test
+    public void drawnLabelText_shouldBeTheName_onlyWhenTheLabelIsShown() {
+        assertEquals("reads", LabelVisibilityReadback.drawnLabelText(connection("c1", "reads", true), null));
+        assertEquals("", LabelVisibilityReadback.drawnLabelText(connection("c1", "reads", false), null));
+        assertEquals("", LabelVisibilityReadback.drawnLabelText(connection("c1", "reads", true), Map.of("c1", false)));
+        assertEquals("reads", LabelVisibilityReadback.drawnLabelText(connection("c1", "reads", false), Map.of("c1", true)));
+    }
+
+    @Test
+    public void drawnLabelText_shouldBeEmpty_whenThereIsNoNameToDraw() {
+        assertEquals("", LabelVisibilityReadback.drawnLabelText(connection("c1", null, true), null));
+        assertEquals("", LabelVisibilityReadback.drawnLabelText(connection("c1", "", true), null));
+        IDiagramModelArchimateConnection unbound = IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        unbound.setId("c2");
+        assertEquals("", LabelVisibilityReadback.drawnLabelText(unbound, null));
+    }
+
+    private static IDiagramModelArchimateConnection connection(String id, String name, boolean shown) {
+        IArchimateRelationship relationship = IArchimateFactory.eINSTANCE.createAssociationRelationship();
+        relationship.setName(name);
+        IDiagramModelArchimateConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelArchimateConnection();
+        conn.setId(id);
+        conn.setArchimateRelationship(relationship);
+        conn.setNameVisible(shown);
+        return conn;
     }
 
     // --- projected / report: what a deferred response may say ---

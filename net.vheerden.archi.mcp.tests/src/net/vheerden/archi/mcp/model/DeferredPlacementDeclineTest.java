@@ -397,7 +397,9 @@ public class DeferredPlacementDeclineTest {
      * endpoints, so a queued {@code remove-from-view} of one left the connection connecting into a
      * detached object — created, unreachable from the model root, and reported as a success.
      *
-     * <p>Only reachable from the standalone tool: the bulk arm forces {@code autoConnect} false.</p>
+     * <p>The scan now reads the view as the batch leaves it, so it does not propose the line at all,
+     * and reports none. Each line still carries its endpoint guard; a removal queued after the
+     * placement takes the line along with the object it removes.</p>
      */
     @Test
     public void shouldNotDrawAnAutoConnection_whenItsOtherEndpointWasRemovedInTheSameBatch()
@@ -407,14 +409,13 @@ public class DeferredPlacementDeclineTest {
 
         dispatcher.beginBatch(SESSION, "remove one end, then auto-connect to it");
         accessor.removeFromView(SESSION, view.getId(), aId);
-        accessor.addToView(SESSION, view.getId(), actorB.getId(), 200, 10, 120, 55,
-                true, null, null, null);
+        AddToViewResultDto placed = accessor.addToView(SESSION, view.getId(), actorB.getId(), 200, 10, 120, 55,
+                true, null, null, null).entity();
         BatchSummaryDto summary = dispatcher.endBatch(SESSION, true);
 
-        assertEquals("the auto-connection must decline and say so", 1, skipped(summary).size());
-        assertTrue("naming the relationship it did not draw: " + skipped(summary).get(0),
-                skipped(summary).get(0).contains("Rel One"));
-        assertTrue("the placement itself must still have landed — only the connection declined",
+        assertEquals("no line is proposed to an object the batch removed", List.of(), placed.autoConnections());
+        assertEquals("so none declines either", 0, skipped(summary).size());
+        assertTrue("the placement itself must still have landed",
                 findObject(view.getChildren(), actorB.getId()) != null);
         assertTrue("and no connection may hang off the detached object",
                 actorA.getReferencingDiagramObjects().stream()

@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.Locale;
+
 /**
  * Pure-unit-testable decision for the density-aware default-resolution code
  * path inside {@code arrangeGroups}
@@ -190,7 +192,7 @@ public record ArrangeGroupsDefaultResolutionDecision(
         int target = GroupSpacingHeuristic
                 .targetSpacingForConnectionCount(
                         connectionCount, true, hasLargeHubs);
-        String reason = String.format(
+        String reason = String.format(Locale.ROOT,
                 "spacing omitted; isConnected=true with %d inter-group "
                 + "connection%s; heuristic for connectionCount=%d => "
                 + "target=%d px (connected column)",

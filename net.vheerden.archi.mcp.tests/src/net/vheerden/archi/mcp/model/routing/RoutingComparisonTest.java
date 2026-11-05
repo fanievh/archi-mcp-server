@@ -572,10 +572,11 @@ public class RoutingComparisonTest {
      * Counts terminals that sit on <em>no</em> face line of their own element, per fixture,
      * as {@code {source, target}} pairs.
      *
-     * <p>The predicate is {@link RoutingPipeline#isOnElementPerimeter}: a terminal one pixel
-     * outside any of the four element edges is on a face line. A terminal that fails it is off
-     * every face line — the shape edge attachment exists to prevent, because ChopboxAnchor then
-     * clips the terminal segment diagonally instead of perpendicular.
+     * <p>The predicate is {@link RoutingPipeline#isOnElementPerimeter}: a terminal
+     * {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} px outside any of the four element
+     * edges is on a face line. A terminal that fails it is off every face line — the shape edge
+     * attachment exists to prevent, because the renderer's anchor then clips the terminal segment
+     * diagonally instead of perpendicular.
      *
      * @param channelNudging value for the stage gate whose contribution the census isolates
      */
@@ -665,13 +666,31 @@ public class RoutingComparisonTest {
      *
      * <p><strong>Frame.</strong> This census routes the corpus the way {@link ViewFixture} builds it
      * — every parent is an obstacle — and counts the terminals sitting on no face line at all at the
-     * routed output: 21 across the six fixtures, over 169 routed connections. It was 46 before the
+     * routed output: 24 across the six fixtures, over 169 routed connections. It was 46 before the
      * second realignment described above and the terminal repositioning in obstacle re-validation;
-     * the v4 and hh fixtures are the same substrate, so the deduplicated figures are 21 of 139 now
+     * the v4 and hh fixtures are the same substrate, so the deduplicated figures are 24 of 139 now
      * and 35 of 139 before. The per-stage attribution above was taken in a
      * container-aware frame, where parents are routing boundaries instead, and its counts are per-
      * stage creation events rather than survivors. The two are different quantities in different
      * frames and do not sum to each other; the numbers pinned below are this test's own.
+     *
+     * <p><strong>Why the population is 24 and not 21.</strong> It rose by three when
+     * {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} rose from 1 to 4, and the denominator
+     * did not move — {@link #CENSUS_ROUTED} is asserted inside the census and stayed at 169, so the
+     * counts before and after are over the same population. Measured across margins 1, 2, 3, 4, 6
+     * and 8 the total runs 21, 22, 24, 24, 26, 27: monotone non-decreasing in the offset, with no
+     * step at the value this project ships. The three are attributed, not assumed:
+     * <ul>
+     *   <li><b>st-source-clone target, 8 &rarr; 10.</b> Present with channel nudging both enabled
+     *       and disabled, so it is created upstream of that pass — see the companion census below,
+     *       where the same two terminals appear. Moving a terminal further from its element moves
+     *       it further into the corridors the clearance passes operate in, and the two realignment
+     *       passes compensate only the displacements they are seeded for.</li>
+     *   <li><b>retail-bank-application-collaboration target, 0 &rarr; 1.</b> Absent at every
+     *       measured margin when channel nudging is disabled, so this one <em>is</em> that pass —
+     *       whose write guard tests orthogonality to the element centre, a weaker property than
+     *       staying on the assigned face line, as described above.</li>
+     * </ul>
      *
      * <p>Red means the off-face-line population moved. That is not automatically a regression —
      * but it must be explained, and the explanation belongs beside the new numbers.
@@ -680,7 +699,7 @@ public class RoutingComparisonTest {
     public void shouldReportTerminalsOffEveryFaceline_whenTheCorpusIsRoutedAsShipped()
             throws IOException {
         assertCensus("Off-face-line terminal census", "off every face line",
-                new int[][]{{4, 4}, {0, 0}, {0, 0}, {1, 8}, {0, 4}, {0, 0}},
+                new int[][]{{4, 4}, {0, 0}, {0, 0}, {1, 10}, {0, 4}, {0, 1}},
                 offFacelineCensus(true));
     }
 
@@ -694,13 +713,19 @@ public class RoutingComparisonTest {
      * <p>The pass guards its writes with a terminal-alignment check that tests orthogonality to
      * the element <em>centre</em>, which is a weaker property than staying on the assigned face
      * line — so a nudge that keeps the centre alignment can still move the terminal off its face.
+     *
+     * <p><strong>Why st-source-clone reads 10 and not 8.</strong> The same two terminals the
+     * shipped-frame census gained when {@code TERMINAL_FACE_MARGIN} rose from 1 to 4. They are
+     * here as well as there, which is what identifies them as created upstream of this pass rather
+     * than by it; the pass's own contribution — the difference between the two censuses — moved by
+     * exactly one terminal, and that one is retail-bank-application-collaboration's target.
      */
     @Test
     public void shouldReportFewerTerminalsOffEveryFaceline_whenChannelNudgingIsDisabled()
             throws IOException {
         assertCensus("Off-face-line terminal census with channel nudging disabled",
                 "off every face line",
-                new int[][]{{0, 0}, {0, 0}, {0, 0}, {1, 8}, {0, 0}, {0, 0}},
+                new int[][]{{0, 0}, {0, 0}, {0, 0}, {1, 10}, {0, 0}, {0, 0}},
                 offFacelineCensus(false));
     }
 
@@ -715,14 +740,26 @@ public class RoutingComparisonTest {
      * scores such a terminal as correct while a perimeter check that also tests the extent
      * rejects it. The two predicates disagree by construction and this one names the difference.
      *
-     * <p>Uses the same 1-px-outside convention as the predicate it complements, so a terminal is
+     * <p>Uses the same face-line convention as the predicate it complements, so a terminal is
      * classified by exactly one of: on a face segment, on a line past the extent, off every line.
      */
+
+    /**
+     * The face-line coordinate, read from production rather than restated as an offset.
+     *
+     * <p>These tests need terminals to be <em>on</em> their face line; where that line sits is
+     * pinned by {@code EdgeAttachmentCalculatorTest}, so restating the offset here would only
+     * create a second copy to keep in step.
+     */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
     private static boolean isOnFaceLinePastExtent(AbsoluteBendpointDto bp, RoutingRect elem) {
-        int left = elem.x() - 1;
-        int right = elem.x() + elem.width() + 1;
-        int top = elem.y() - 1;
-        int bottom = elem.y() + elem.height() + 1;
+        int left = faceLine(elem, EdgeAttachmentCalculator.Face.LEFT);
+        int right = faceLine(elem, EdgeAttachmentCalculator.Face.RIGHT);
+        int top = faceLine(elem, EdgeAttachmentCalculator.Face.TOP);
+        int bottom = faceLine(elem, EdgeAttachmentCalculator.Face.BOTTOM);
         boolean onVertical = bp.x() == left || bp.x() == right;
         boolean onHorizontal = bp.y() == top || bp.y() == bottom;
         if (!onVertical && !onHorizontal) {
@@ -923,8 +960,9 @@ public class RoutingComparisonTest {
      *
      * <p><strong>The frames disagree, and only this one is visible to those gates.</strong> Over
      * the same six fixture files and the same 169 routed connections, this frame carries
-     * <em>sixteen</em> past-extent terminals against the shipped frame's four, and sixty terminals
-     * off every face line against the shipped frame's twenty-one. Those are not the same terminals
+     * <em>twenty</em> past-extent terminals against the shipped frame's four, and sixty-two
+     * terminals off every face line against the shipped frame's twenty-four. Those are not the same
+     * terminals
      * measured twice — on the hardest fixture the two frames' off-face-line populations share only
      * three of the shipped frame's nine, and even those three sit at different coordinates. A count
      * quoted without naming its frame therefore says nothing, and a corrective measured only in the
@@ -938,6 +976,21 @@ public class RoutingComparisonTest {
      * past the bottom of the element's extent. This census moves under all three. It is the
      * measurement that would have ruled them out before a pin did.
      *
+     * <p><strong>Why the past-extent population is 20 and not 16.</strong> It moved when
+     * {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} rose from 1 to 4, and the denominator
+     * did not — {@link #CENSUS_ROUTED} is asserted inside the census and stayed at 169. The whole
+     * of the change is v4-integration-architecture-oracle and hh-source-clone each moving from
+     * {@code 0/1} to {@code 1/2}; those two fixture files are the same substrate, so it is
+     * <em>two</em> distinct terminals counted on both clones, not four.
+     *
+     * <p>It is characterised, not explained. Measured across margins 1, 2, 3, 4, 6 and 8 the total
+     * runs 16, 16, 20, 20, 18, 13 — it rises between 2 and 3, holds, and then falls away entirely
+     * by 8. A count that is not monotone in the offset is not a direct consequence of the offset:
+     * these two terminals are a re-routing outcome on this corpus, and any account of them as
+     * "the face line moved outward so the corner is easier to overshoot" would be a story the
+     * numbers refuse. The shipped-frame past-extent census below is unmoved at 4 at every margin
+     * from 1 to 6, which is the same point from the other side.
+     *
      * <p>Red means the past-extent population moved in the perimeter frame. Explain it beside the
      * new numbers; a fall is as much in need of explanation as a rise, because the cheapest way to
      * lower this count is to stop routing a connection at all.
@@ -947,7 +1000,7 @@ public class RoutingComparisonTest {
             throws IOException {
         assertCensus("Past-extent terminal census in the perimeter frame",
                 "on a face line past the element extent",
-                new int[][]{{1, 6}, {0, 1}, {0, 1}, {4, 1}, {0, 1}, {1, 0}},
+                new int[][]{{1, 6}, {1, 2}, {1, 2}, {4, 1}, {0, 1}, {1, 0}},
                 pastExtentCensus(true));
     }
 
@@ -958,10 +1011,26 @@ public class RoutingComparisonTest {
      * <p><strong>Why it is pinned rather than stated.</strong> The frame divergence is the whole
      * reason the past-extent companion above is pinned twice, and quoting it as prose beside two
      * checked-in numbers would leave the load-bearing figure the only one free to rot. Over the
-     * same six fixture files and the same 169 routed connections, this frame carries <em>sixty</em>
-     * terminals off every face line against the shipped frame's twenty-one — the shipped census
-     * understates the population by roughly three times, in the frame the perimeter gates do not
-     * route in.
+     * same six fixture files and the same 169 routed connections, this frame carries
+     * <em>sixty-two</em> terminals off every face line against the shipped frame's twenty-four —
+     * the shipped census understates the population by roughly three times, in the frame the
+     * perimeter gates do not route in.
+     *
+     * <p><strong>Why it is 62 and not 60.</strong> Net +2 when
+     * {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} rose from 1 to 4, over an unmoved
+     * denominator ({@link #CENSUS_ROUTED}, still 169), and it is a net of four movements in two
+     * directions rather than two new terminals:
+     * <ul>
+     *   <li>v4-integration-architecture-oracle and hh-source-clone source, 3 &rarr; 4 each — one
+     *       terminal on the substrate those two files share, counted on both clones;</li>
+     *   <li>st-source-clone target, 13 &rarr; 12 — one terminal that now lands <em>on</em> a face
+     *       line, the only movement in this direction anywhere in the four censuses;</li>
+     *   <li>retail-bank-application-collaboration target, 0 &rarr; 1 — the channel-nudging
+     *       terminal the shipped-frame census also gained, visible in both frames.</li>
+     * </ul>
+     * Measured across margins 1, 2, 3, 4, 6 and 8 the total runs 60, 59, 62, 62, 64, 63. Like the
+     * past-extent companion this frame is not monotone in the offset, so the movement is
+     * characterised rather than attributed to the offset directly.
      *
      * <p>Red means the perimeter-frame off-face-line population moved. Explain it beside the new
      * numbers.
@@ -970,7 +1039,7 @@ public class RoutingComparisonTest {
     public void shouldReportMoreTerminalsOffEveryFaceline_whenTheCorpusIsRoutedInThePerimeterFrame()
             throws IOException {
         assertCensus("Off-face-line terminal census in the perimeter frame", "off every face line",
-                new int[][]{{1, 5}, {3, 10}, {3, 10}, {13, 13}, {1, 1}, {0, 0}},
+                new int[][]{{1, 5}, {4, 10}, {4, 10}, {13, 12}, {1, 1}, {0, 1}},
                 offFacelineCensusInPerimeterFrame());
     }
 
@@ -981,7 +1050,7 @@ public class RoutingComparisonTest {
      * one view where the self-element pass-through correction re-selects a face, not what it should
      * produce.
      *
-     * <p>Two connections meet on the same element face at x=1291. The correction moves one of them
+     * <p>Two connections meet on the same element face. The correction moves one of them
      * to a different face; before the refresh the anchoring record went on naming the face that
      * terminal had left, so every later wrap site measured the connection against a line it was no
      * longer on and declined offsets it had no business declining. With the record re-derived, the
@@ -1005,9 +1074,17 @@ public class RoutingComparisonTest {
         assertNotNull("the entering connection must be routed", entering);
         assertNotNull("the leaving connection must be routed", leaving);
 
+        // The shared face is the LEFT face of the entering connection's target, which is also the
+        // leaving connection's source. Read the line from production: the slots below are what this
+        // test characterises, the line they sit on is not.
+        RoutingRect shared = endpoints.stream()
+                .filter(e -> "id-123d02ef39184fcbad4ee915e4df90fc".equals(e.connectionId()))
+                .findFirst().orElseThrow().target();
+        int sharedFace = faceLine(shared, EdgeAttachmentCalculator.Face.LEFT);
+
         assertEquals("entering terminal seats at the lower slot of the shared face",
-                new AbsoluteBendpointDto(1291, 980), entering.get(entering.size() - 1));
+                new AbsoluteBendpointDto(sharedFace, 980), entering.get(entering.size() - 1));
         assertEquals("leaving terminal seats at the upper slot of the shared face",
-                new AbsoluteBendpointDto(1291, 958), leaving.get(0));
+                new AbsoluteBendpointDto(sharedFace, 958), leaving.get(0));
     }
 }

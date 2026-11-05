@@ -1,3 +1,18 @@
+---
+relationships:
+  - permitted Influence Driver Goal
+  - permitted Influence Assessment Goal
+  - permitted Influence Principle Requirement
+  - permitted Realization Requirement Goal
+  - permitted Realization Outcome Goal
+  - permitted Association Stakeholder Driver
+  - permitted Association Driver Stakeholder
+  - permitted Aggregation Driver Driver
+  - permitted Aggregation Goal Goal
+  - forbidden Aggregation Driver Goal
+  - forbidden Aggregation Goal Driver
+---
+
 # Recipe Family — Motivation
 
 Topology archetype: **a directed influence chain in stacked bands** — *why* the architecture exists, read top-down from stakeholders to concrete requirements. Apply the invariant build sequence from the index; only the deltas below change.

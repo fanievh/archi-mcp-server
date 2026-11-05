@@ -16,6 +16,7 @@ import com.archimatetool.model.IDiagramModelComponent;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelImage;
 import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IGrouping;
@@ -65,6 +66,22 @@ final class TopLevelGroupTargets {
      */
     static boolean isTarget(IDiagramModelObject obj) {
         return obj instanceof IDiagramModelGroup || isGroupingZone(obj);
+    }
+
+    /**
+     * Whether {@code obj} holds at least one child — the "holds children" half of the vocabulary.
+     *
+     * <p>Two questions are asked about a box on the canvas, and they are kept apart on purpose.
+     * {@link #isTarget} asks whether it is a <em>grouping container</em>, the kind the arrange and
+     * spacing tools act on. This asks whether it holds anything at all, which is what every tool
+     * notices and reports: a {@code BusinessRole} drawn as a swimlane around process steps holds
+     * children without being a grouping container, and {@link #collectSkipped} is exactly the
+     * objects for which this is true and {@link #isTarget} is not.</p>
+     *
+     * <p>A note counts as a child here, as it always has in the collectors this replaces.</p>
+     */
+    static boolean holdsChildren(IDiagramModelObject obj) {
+        return !childrenOf(obj).isEmpty();
     }
 
     /**
@@ -212,7 +229,7 @@ final class TopLevelGroupTargets {
     static List<IDiagramModelObject> collectOutermostPopulated(IDiagramModelContainer view) {
         List<IDiagramModelObject> populated = new ArrayList<>();
         for (IDiagramModelObject target : collectOutermost(view)) {
-            if (!childrenOf(target).isEmpty()) {
+            if (holdsChildren(target)) {
                 populated.add(target);
             }
         }
@@ -226,7 +243,7 @@ final class TopLevelGroupTargets {
     static List<IDiagramModelObject> collectPopulated(IDiagramModelContainer view) {
         List<IDiagramModelObject> targets = new ArrayList<>();
         for (IDiagramModelObject child : view.getChildren()) {
-            if (isTarget(child) && !childrenOf(child).isEmpty()) {
+            if (isTarget(child) && holdsChildren(child)) {
                 targets.add(child);
             }
         }
@@ -335,7 +352,7 @@ final class TopLevelGroupTargets {
     static List<IDiagramModelObject> collectSkipped(IDiagramModelContainer view) {
         List<IDiagramModelObject> skipped = new ArrayList<>();
         for (IDiagramModelObject child : view.getChildren()) {
-            if (!isTarget(child) && !childrenOf(child).isEmpty()) {
+            if (!isTarget(child) && holdsChildren(child)) {
                 skipped.add(child);
             }
         }
@@ -628,6 +645,66 @@ final class TopLevelGroupTargets {
         return describeSkipped(view, java.util.Set.of(), java.util.Set.of(), java.util.Set.of());
     }
 
+    /**
+     * Why a spacing tool left an element container alone, repeated on each entry it reports.
+     *
+     * <p>Short because it is per entry. The spacing tools measure, recommend for and move native
+     * groups and {@code Grouping} elements only, by contract; an ArchiMate element that holds
+     * children is reported rather than spaced, and the tool that does space inside one is named so
+     * the entry leads somewhere.</p>
+     */
+    static final String SPACING_SKIP_REASON = "holds children but is not a native group or a "
+            + "Grouping element, so the spacing tools neither measure nor space inside it; to space "
+            + "the elements inside it, call layout-within-group on it";
+
+    /**
+     * The ArchiMate elements drawn on the view that hold content of their own — at least one child
+     * that is not a note or an image — and so read on the canvas as containers.
+     *
+     * <p>{@link #collectSkipped} narrowed by what a child is. A {@code Node} carrying only an
+     * annotation is not a container a caller would expect a spacing tool to space inside, and
+     * naming it as one sends the caller to {@code layout-within-group} for a box with nothing in it
+     * to arrange. The narrowing is for the spacing tools and the shared refusal only:
+     * {@code arrange-groups} keeps {@link #collectSkipped} as it is, because what it does not
+     * report as skipped it offers to its standalone lane, which can move the object.</p>
+     */
+    static List<IDiagramModelObject> collectElementContainers(IDiagramModelContainer view) {
+        List<IDiagramModelObject> containers = new ArrayList<>();
+        for (IDiagramModelObject obj : collectSkipped(view)) {
+            if (holdsContent(obj)) {
+                containers.add(obj);
+            }
+        }
+        return containers;
+    }
+
+    /** Whether {@code obj} holds at least one child that is not a note or an image. */
+    static boolean holdsContent(IDiagramModelObject obj) {
+        for (IDiagramModelObject child : childrenOf(obj)) {
+            if (!(child instanceof IDiagramModelNote) && !(child instanceof IDiagramModelImage)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The element containers on the canvas a spacing tool did not measure:
+     * {@link #collectElementContainers}, with the spacing tools' reason.
+     *
+     * <p>Read from the view as it stands, before any measurement, so every return path of a
+     * spacing tool reports the same list — a dry run, a declined call and a queued one alike. It
+     * describes what the tool does not act on, never an outcome. Empty when the view holds none,
+     * and a response then carries no field at all.</p>
+     */
+    static List<SkippedContainerDto> describeSkippedForSpacing(IDiagramModelContainer view) {
+        List<SkippedContainerDto> described = new ArrayList<>();
+        for (IDiagramModelObject obj : collectElementContainers(view)) {
+            described.add(describe(obj, SPACING_SKIP_REASON));
+        }
+        return described;
+    }
+
     /** As below, for a call that neither arranged nor declined any host's zones. */
     static List<SkippedContainerDto> describeSkipped(
             IDiagramModelContainer view, java.util.Set<String> positionedIds) {
@@ -824,7 +901,9 @@ final class TopLevelGroupTargets {
     }
 
     /**
-     * The refusal a tool owes a view whose containers are all drawn inside a host.
+     * The refusal a tool owes a view with no native group or {@code Grouping} element of its own
+     * to act on: every container is drawn inside a host, or the only boxes holding children are
+     * ArchiMate elements.
      *
      * <p>Three tools position the view's OWN containers and have nothing to position on such a
      * view. Each used to say so in words that were false about it — "View has no groups",
@@ -833,17 +912,23 @@ final class TopLevelGroupTargets {
      * canvas has no way to contradict. The count is read rather than assumed, and the remedy names
      * the tool that DOES position these containers, so the refusal leads somewhere.</p>
      *
+     * <p>The element-container case is the same defect one shape over: a canvas of
+     * {@code BusinessRole} swimlanes holding process steps was answered "no groups". The tools act
+     * on grouping containers only, by contract, so they still refuse — on exactly the views they
+     * refused before, with the same error code — and the refusal now names the element containers
+     * and the tool that spaces inside one.</p>
+     *
      * <p>Shared so the three cannot drift into three different accounts of one view. Returns null
      * when the view genuinely holds no container at any depth — the caller keeps whatever it
      * already said for that case, which is the case its old wording was actually about.</p>
      *
-     * @param toolClause what this tool does, completing "… and has none to reorder here"
+     * @param toolClause what this tool does, as a sentence
      */
-    static ModelAccessException containersAreAllNested(
+    static ModelAccessException noOwnGroupingContainersRefusal(
             String viewId, IDiagramModelContainer view, String toolClause) {
         int nested = nestedContainerCount(view);
         if (nested == 0) {
-            return null;
+            return elementContainersOnlyRefusal(viewId, view, toolClause);
         }
         return new ModelAccessException(
                 "View " + viewId + " has " + nested + " top-level container"
@@ -854,6 +939,48 @@ final class TopLevelGroupTargets {
                 null,
                 "arrange-groups positions those containers inside their host. To arrange the "
                         + "elements within one of them, call layout-within-group on that container.",
+                null);
+    }
+
+    /** How many element-container ids a refusal lists before it says how many it left out. */
+    static final int REFUSAL_ID_CAP = 10;
+
+    /**
+     * The refusal {@link #noOwnGroupingContainersRefusal} owes a view on which nothing is nested
+     * but ArchiMate elements hold children, or null when none does.
+     *
+     * <p>Safe for all three callers' conditions, which differ: {@code adjust-view-spacing} and
+     * grouped {@code auto-layout-and-route} reach it when {@link #collectPopulated} is empty, and
+     * {@code optimize-group-order} when {@link #collect} is — no grouping container at all, a
+     * stronger condition. "No native group or Grouping element holding children" is true under
+     * both. The ids listed are the {@link #collectElementContainers} population the spacing tools
+     * report in {@code skippedContainers}.</p>
+     */
+    private static ModelAccessException elementContainersOnlyRefusal(
+            String viewId, IDiagramModelContainer view, String toolClause) {
+        List<IDiagramModelObject> skipped = collectElementContainers(view);
+        if (skipped.isEmpty()) {
+            return null;
+        }
+        List<String> ids = new ArrayList<>();
+        for (IDiagramModelObject obj : skipped.subList(0, Math.min(skipped.size(), REFUSAL_ID_CAP))) {
+            ids.add(obj.getId());
+        }
+        int omitted = skipped.size() - ids.size();
+        int n = skipped.size();
+        return new ModelAccessException(
+                "View " + viewId + " has no native group or Grouping element holding children, but "
+                        + n + " ArchiMate element" + (n == 1 ? "" : "s") + " drawn on it hold"
+                        + (n == 1 ? "s" : "") + " children: " + String.join(", ", ids)
+                        + (omitted > 0 ? " (and " + omitted + " more)" : "") + ". " + toolClause
+                        + " It acts on native groups and Grouping elements only, so it does not "
+                        + "act on these element containers.",
+                ErrorCode.INVALID_PARAMETER,
+                null,
+                "To space the elements inside one of them, call layout-within-group on that "
+                        + "element container. arrange-groups does not move them either: it treats "
+                        + "an element that holds children as a host and reports it in "
+                        + "skippedContainers.",
                 null);
     }
 
@@ -876,7 +1003,7 @@ final class TopLevelGroupTargets {
             String viewId, IDiagramModelContainer view,
             int containersTheStepNeeds, String stepClause) {
         if (!positioningStepIsShortOfOwnContainers(view, containersTheStepNeeds)) {
-            return null;
+            return elementContainersNotSpacedBy(viewId, view, containersTheStepNeeds, stepClause);
         }
         // The DECISION above is taken from the step's own collection; the counts below describe
         // the view's TOPOLOGY. They are different questions and the sentence needs the second:
@@ -886,6 +1013,50 @@ final class TopLevelGroupTargets {
         int nested = nestedCountIn(view, outermost);
         return SpacingEntryGuardTermination.containersNotPositionedByThisTool(
                 viewId, outermost.size() - nested, nested, stepClause);
+    }
+
+    /**
+     * The reason a spacing step owes a view it is short of grouping containers on while ArchiMate
+     * elements on the canvas hold children, or null when that is not this view.
+     *
+     * <p><b>It replaces a reason; it never adds a refusal.</b> It fires only when the step's own
+     * frame — the very collection its tool measures and its decision record gates on — is below
+     * what the step needs, which is exactly when that record already short-circuits with "no
+     * groups" or "fewer than 2 top-level groups". So the set of views each step acts on, and what
+     * it moves on them, is unchanged: on a view holding one populated {@code Grouping}, one empty
+     * native group and two {@code BusinessRole} lanes the group step's frame is two, it widens
+     * that corridor as it always did, and this returns null. Deciding from
+     * {@link #collectPopulated} instead would have declined that view.</p>
+     *
+     * <p>The nested-host refusal outranks it: when anything is drawn inside a host the caller has
+     * already decided, and this is only reached with nothing nested.</p>
+     */
+    private static String elementContainersNotSpacedBy(String viewId, IDiagramModelContainer view,
+            int containersTheStepNeeds, String stepClause) {
+        List<IDiagramModelObject> skipped = collectElementContainers(view);
+        if (skipped.isEmpty() || nestedContainerCount(view) > 0) {
+            return null;
+        }
+        // Which step is speaking decides which frame it measures. Only the two named thresholds
+        // identify a step; anything else would be read silently as the group step, so refuse it.
+        boolean elementStep;
+        if (containersTheStepNeeds == CONTAINERS_AN_ELEMENT_STEP_NEEDS) {
+            elementStep = true;
+        } else if (containersTheStepNeeds == CONTAINERS_A_GROUP_STEP_NEEDS) {
+            elementStep = false;
+        } else {
+            throw new IllegalArgumentException("containersTheStepNeeds must be "
+                    + CONTAINERS_AN_ELEMENT_STEP_NEEDS + " or " + CONTAINERS_A_GROUP_STEP_NEEDS
+                    + ", got " + containersTheStepNeeds);
+        }
+        List<IDiagramModelObject> frame = elementStep
+                ? elementStepFrame(view, collectOutermostPopulated(view))
+                : groupStepFrame(view, collectOutermost(view));
+        if (frame.size() >= containersTheStepNeeds) {
+            return null;
+        }
+        return SpacingEntryGuardTermination.elementContainersNotSpacedByThisTool(
+                viewId, frame.size(), elementStep, skipped.size(), stepClause);
     }
 
     /**

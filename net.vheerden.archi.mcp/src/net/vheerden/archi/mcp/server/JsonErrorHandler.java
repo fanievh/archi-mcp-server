@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.server;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 
 import org.eclipse.jetty.http.HttpHeader;
 import org.eclipse.jetty.server.Request;
@@ -52,6 +53,18 @@ public class JsonErrorHandler extends ErrorHandler {
 
     private static final String CONTENT_TYPE_JSON = "application/json;charset=utf-8";
 
+    private final Logger log;
+
+    /** Logs through the class logger. */
+    public JsonErrorHandler() {
+        this(logger);
+    }
+
+    /** Logs through {@code log}, so what {@link #handle} logs can be observed. */
+    JsonErrorHandler(Logger log) {
+        this.log = log;
+    }
+
     @Override
     public boolean handle(Request request, Response response, Callback callback) throws Exception {
         int httpStatus = response.getStatus();
@@ -67,11 +80,7 @@ public class JsonErrorHandler extends ErrorHandler {
         // Guard against null URI for severely malformed requests
         String uri = request.getHttpURI() != null ? request.getHttpURI().toString() : "<unknown>";
 
-        logger.warn("HTTP error {} on {}: {} (JSON-RPC code: {})",
-                httpStatus, uri, message, jsonRpcCode);
-        if (cause != null) {
-            logger.debug("Error cause", cause);
-        }
+        logHttpError(log, httpStatus, uri, message, jsonRpcCode, cause);
 
         String json = buildJsonRpcError(jsonRpcCode, message, httpStatus, uri);
 
@@ -81,6 +90,32 @@ public class JsonErrorHandler extends ErrorHandler {
         response.write(true, ByteBuffer.wrap(bytes), callback);
 
         return true;
+    }
+
+    /**
+     * Logs an HTTP-level error before its JSON-RPC envelope is written.
+     *
+     * <p>A 5xx that carries a cause is a server fault the client learns nothing about beyond its
+     * status, so it is logged at ERROR with the cause as the last argument and its stack reaches
+     * the Archi log. A 5xx without a cause has no stack to print and stays at WARN. Any status
+     * below 500 is a client error: WARN without the throwable, the cause at DEBUG, so a malformed
+     * request does not put a stack trace in a user's log.</p>
+     *
+     * <p>Takes the {@link Logger} as a parameter so the rule can be exercised without an SLF4J
+     * binding.</p>
+     */
+    static void logHttpError(Logger log, int httpStatus, String uri, String message,
+            int jsonRpcCode, Throwable cause) {
+        if (httpStatus >= 500 && cause != null) {
+            log.error("HTTP error {} on {}: {} (JSON-RPC code: {})",
+                    httpStatus, uri, message, jsonRpcCode, cause);
+            return;
+        }
+        log.warn("HTTP error {} on {}: {} (JSON-RPC code: {})",
+                httpStatus, uri, message, jsonRpcCode);
+        if (cause != null) {
+            log.debug("Error cause", cause);
+        }
     }
 
     /**
@@ -167,7 +202,7 @@ public class JsonErrorHandler extends ErrorHandler {
                 case '\t' -> sb.append("\\t");
                 default -> {
                     if (ch < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) ch));
+                        sb.append(String.format(Locale.ROOT, "\\u%04x", (int) ch));
                     } else if (Character.isHighSurrogate(ch)) {
                         // Handle surrogate pairs: high surrogate must be followed by low surrogate
                         if (i + 1 < value.length() && Character.isLowSurrogate(value.charAt(i + 1))) {

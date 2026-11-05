@@ -14,6 +14,7 @@ import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.ModelChangeListener;
 import net.vheerden.archi.mcp.model.ModelVersionTracker;
 import net.vheerden.archi.mcp.response.FieldSelector;
@@ -29,8 +30,10 @@ import net.vheerden.archi.mcp.response.FieldSelector;
  * Each session gets a {@link SessionCache} instance for storing
  * JSON results keyed by command + effective parameters.</p>
  *
- * <p>Implements {@link ModelChangeListener} to clear all sessions when the
- * active ArchiMate model changes.</p>
+ * <p>Caches and version tracking are keyed by the model instance a call acts on, so one session can
+ * read several models without one model's answers being served for another. A model change never
+ * clears anything: filters are a client's preference, and another session opening or closing a model
+ * must not reconfigure this one. Closing a model drops only the entries keyed by that instance.</p>
  *
  * <p><strong>Thread safety:</strong> All operations use {@link ConcurrentHashMap}
  * with atomic {@code compute()} for safe concurrent access from Jetty threads.</p>
@@ -75,6 +78,15 @@ public class SessionManager implements ModelChangeListener {
      */
     private volatile Supplier<Instant> clock = Instant::now;
     private final ModelVersionTracker versionTracker = new ModelVersionTracker();
+    /** Separates a session id or cache key from the model key it is scoped to. */
+    private static final char MODEL_SEPARATOR = '\u0001';
+    /**
+     * Names the model instance the current call acts on: empty outside a tool call (one shared key),
+     * null when the call's model cannot be resolved (nothing is cached for it).
+     */
+    private volatile Supplier<String> modelKey = () -> "";
+    /** Told each session id the idle sweep evicts; null for none. */
+    private volatile java.util.function.Consumer<String> evictionListener;
     private final Set<String> validTypes;
     private final Set<String> validLayers;
 
@@ -127,7 +139,7 @@ public class SessionManager implements ModelChangeListener {
      * @param fieldsPreset  the field preset ("minimal"/"standard"/"full"), or null to keep existing
      * @param excludeFields field names to exclude, or null to keep existing
      * @return the updated session state
-     * @throws IllegalArgumentException if type, layer, fieldsPreset, or excludeFields is invalid
+     * @throws SessionFilterRefusal if type, layer, fieldsPreset, or excludeFields is invalid, naming which
      */
     public SessionState setSessionFilter(String sessionId, String type, String layer,
                                           String fieldsPreset, Set<String> excludeFields) {
@@ -135,20 +147,24 @@ public class SessionManager implements ModelChangeListener {
             sessionId = DEFAULT_SESSION_ID;
         }
         if (type != null && !validTypes.contains(type)) {
-            throw new IllegalArgumentException("Invalid element type: '" + type + "'");
+            throw new SessionFilterRefusal(SessionFilterRefusal.Parameter.TYPE,
+                    "Invalid element type: " + CallerText.quoted(type));
         }
         if (layer != null && !validLayers.contains(layer)) {
-            throw new IllegalArgumentException("Invalid layer: '" + layer + "'");
+            throw new SessionFilterRefusal(SessionFilterRefusal.Parameter.LAYER,
+                    "Invalid layer: " + CallerText.quoted(layer));
         }
         if (fieldsPreset != null && FieldSelector.FieldPreset.fromString(fieldsPreset).isEmpty()) {
-            throw new IllegalArgumentException("Invalid fields preset: '" + fieldsPreset
-                    + "'. Valid presets: minimal, standard, full");
+            throw new SessionFilterRefusal(SessionFilterRefusal.Parameter.FIELDS,
+                    "Invalid fields preset: " + CallerText.quoted(fieldsPreset)
+                    + ". Valid presets: minimal, standard, full");
         }
         if (excludeFields != null) {
             for (String field : excludeFields) {
                 if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
-                    throw new IllegalArgumentException("Invalid exclude field: '" + field
-                            + "'. Valid fields: " + String.join(", ",
+                    throw new SessionFilterRefusal(SessionFilterRefusal.Parameter.EXCLUDE,
+                            "Invalid exclude field: " + CallerText.quoted(field)
+                            + ". Valid fields: " + String.join(", ",
                                     FieldSelector.VALID_EXCLUDE_FIELDS.stream().sorted().toList()));
                 }
             }
@@ -328,6 +344,32 @@ public class SessionManager implements ModelChangeListener {
         return (sessionId != null && !sessionId.isBlank()) ? sessionId : DEFAULT_SESSION_ID;
     }
 
+    /**
+     * Sets how the model instance the current call acts on is named, so caches and version tracking
+     * are scoped to it.
+     *
+     * @param modelKey the current call's model key: empty for none, null when it cannot be resolved
+     */
+    public void setModelKeySupplier(Supplier<String> modelKey) {
+        this.modelKey = Objects.requireNonNull(modelKey, "modelKey must not be null");
+    }
+
+    /**
+     * Sets what is told each session id the idle sweep evicts, so state kept for a session elsewhere
+     * can go with it.
+     *
+     * @param listener the listener, or null for none
+     */
+    public void setSessionEvictionListener(java.util.function.Consumer<String> listener) {
+        this.evictionListener = listener;
+    }
+
+    /** {@code key} scoped to the current call's model, or null when that model cannot be resolved. */
+    private String scoped(String key) {
+        String model = modelKey.get();
+        return model == null ? null : model.isEmpty() ? key : model + MODEL_SEPARATOR + key;
+    }
+
     // ---- Session caching ----
 
     /**
@@ -342,8 +384,9 @@ public class SessionManager implements ModelChangeListener {
             sessionId = DEFAULT_SESSION_ID;
         }
         touchIfTracked(sessionId); // a cache read keeps a cache-only session alive
+        String key = scoped(cacheKey);
         SessionCache cache = sessionCaches.get(sessionId);
-        return cache != null ? cache.get(cacheKey) : null;
+        return cache != null && key != null ? cache.get(key) : null;
     }
 
     /**
@@ -357,8 +400,12 @@ public class SessionManager implements ModelChangeListener {
         if (sessionId == null) {
             sessionId = DEFAULT_SESSION_ID;
         }
+        String key = scoped(cacheKey);
+        if (key == null) {
+            return; // the call's model could not be resolved: nothing to key the answer to
+        }
         sessionCaches.computeIfAbsent(sessionId, k -> new SessionCache())
-                .put(cacheKey, jsonResult);
+                .put(key, jsonResult);
         // A cache write is a session access (and creates a cache-only session with no SessionState),
         // so register last-access here, then opportunistically sweep idle sessions (write-path trigger).
         touch(sessionId);
@@ -366,13 +413,22 @@ public class SessionManager implements ModelChangeListener {
     }
 
     /**
-     * Invalidates (clears) a single session's cache.
+     * Invalidates a single session's cache for the model the current call acts on; outside a tool call,
+     * the whole of that session's cache.
      *
      * @param sessionId the session identifier
      */
     public void invalidateSessionCache(String sessionId) {
         if (sessionId == null) {
             sessionId = DEFAULT_SESSION_ID;
+        }
+        String model = modelKey.get();
+        if (model != null && !model.isEmpty()) {
+            SessionCache scopedCache = sessionCaches.get(sessionId);
+            if (scopedCache != null) {
+                scopedCache.removeKeysStartingWith(model + MODEL_SEPARATOR);
+            }
+            return;
         }
         SessionCache cache = sessionCaches.remove(sessionId);
         if (cache != null) {
@@ -393,24 +449,42 @@ public class SessionManager implements ModelChangeListener {
      * Delegates to {@link ModelVersionTracker#checkAndUpdateVersion(String, String)}.
      *
      * @param sessionId      the MCP session identifier
-     * @param currentVersion the current model version string
+     * @param currentVersion the current model version string, or {@code null} when no model resolves for
+     *                       the call: nothing is compared or recorded, and the call's own model access
+     *                       reports why there is none
      * @return {@code true} if the version changed since the session's last check
      */
     public boolean checkModelVersionChanged(String sessionId, String currentVersion) {
         Objects.requireNonNull(sessionId, "sessionId must not be null");
-        Objects.requireNonNull(currentVersion, "currentVersion must not be null");
-        return versionTracker.checkAndUpdateVersion(sessionId, currentVersion);
+        if (currentVersion == null) {
+            return false; // no model resolved for this call: nothing to compare, nothing recorded
+        }
+        String model = modelKey.get();
+        String key = model == null || model.isEmpty() ? sessionId : sessionId + MODEL_SEPARATOR + model;
+        return versionTracker.checkAndUpdateVersion(key, currentVersion);
     }
 
     // ---- ModelChangeListener ----
 
+    /**
+     * Clears nothing: caches and versions are keyed by model instance, so a different active model is
+     * simply a different key, and filters belong to their session whatever another session opens.
+     */
     @Override
     public void onModelChanged(String modelName, String modelId) {
-        sessions.clear();
-        versionTracker.clearAll();
-        sessionCaches.clear();
-        lastAccess.clear(); // keep the last-access clock in lockstep with the wholesale clear
-        logger.info("All session state cleared due to model change (new model: {})", modelName);
+        logger.debug("Active model changed to '{}'; session state is kept, keyed by model", modelName);
+    }
+
+    /** Drops the cache entries and version tracking keyed by one closed model instance, and nothing else. */
+    @Override
+    public void onModelClosed(String modelKey) {
+        String suffix = MODEL_SEPARATOR + modelKey;
+        String prefix = modelKey + MODEL_SEPARATOR;
+        versionTracker.clearMatching(key -> key.endsWith(suffix));
+        for (SessionCache cache : sessionCaches.values()) {
+            cache.removeKeysStartingWith(prefix);
+        }
+        logger.debug("Session caches and versions for closed model instance {} dropped", modelKey);
     }
 
     /**
@@ -483,12 +557,24 @@ public class SessionManager implements ModelChangeListener {
                 if (cache != null) {
                     cache.clear();
                 }
+                String scopedPrefix = sessionId + MODEL_SEPARATOR;
+                versionTracker.clearMatching(key -> key.equals(sessionId) || key.startsWith(scopedPrefix));
                 evicted.add(sessionId);
             }
         }
         if (!evicted.isEmpty()) {
             logger.info("Swept {} idle session(s) past the {}h TTL: {}",
                     evicted.size(), SESSION_IDLE_TTL.toHours(), evicted);
+            java.util.function.Consumer<String> listener = evictionListener;
+            if (listener != null) {
+                for (String sessionId : evicted) {
+                    try {
+                        listener.accept(sessionId);
+                    } catch (RuntimeException e) {
+                        logger.warn("Session eviction listener threw (ignored)", e);
+                    }
+                }
+            }
         }
         return evicted;
     }

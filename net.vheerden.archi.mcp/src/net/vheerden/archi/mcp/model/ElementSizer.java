@@ -111,7 +111,8 @@ public final class ElementSizer {
      * → {@link #computeLabelHeightFromMetrics(String, FontMetrics, int)} pattern: SWT
      * measurement here, pure-geometry math in the {@code FromMetrics} overload.</p>
      *
-     * <p>Formula: {@code lineCount = simulateWordWrap(text, ..., width)},
+     * <p>Formula: the text is split into paragraphs at each {@code '\n'}, each paragraph wraps on
+     * its own ({@code simulateWordWrap} at {@code width}), and {@code lineCount} is the sum;
      * {@code height = lineCount × lineHeight + padding}, then clamped to
      * {@code [minHeight, maxHeight]}. Pathological wall-of-text degrades to
      * {@code maxHeight} (content beyond clamp keeps today's clipped behaviour).</p>
@@ -163,11 +164,12 @@ public final class ElementSizer {
      * {@link FontMetrics} record and call this directly; mirrors
      * {@link #computeLabelHeightFromMetrics(String, FontMetrics, int)}.
      *
-     * <p><strong>Forced line breaks:</strong> any explicit {@code '\n'} character in
-     * {@code text} adds one line beyond the horizontal-wrap count (errs toward over-grow
-     * — never under-grow). Callers that pre-interpret escape sequences must do so before
-     * calling, otherwise an un-interpreted {@code "\\n"} (literal backslash-n) will not
-     * be counted as a break.</p>
+     * <p><strong>Hard line breaks:</strong> each {@code '\n'} ends a paragraph, and each paragraph
+     * wraps on its own, so a break counts once: a line that fits the width is one line whatever
+     * its length. An empty paragraph (two breaks in a row, or a trailing break) is one line, as
+     * the note draws it. A {@code "\r\n"} is one break; a lone {@code '\r'} is whitespace, as the
+     * word wrap reads it. Callers that pre-interpret escape sequences must do so before calling,
+     * otherwise an un-interpreted {@code "\\n"} (literal backslash-n) is not a break.</p>
      *
      * <p><strong>Precondition:</strong> {@code metrics.wordWidths} should be
      * sized to {@code text.split("\\s+").length}. {@link #measureText(String)} produces a
@@ -184,22 +186,26 @@ public final class ElementSizer {
         }
         assert metrics.wordWidths.length == text.split("\\s+").length
                 : "FontMetrics.wordWidths length must match text word count";
-        int wrapLineCount = simulateWordWrap(text, metrics.wordWidths, metrics.spaceWidth, width);
-        int forcedBreaks = countNewlines(text);
-        int totalLineCount = wrapLineCount + forcedBreaks;
+        int totalLineCount = 0;
+        // The word widths are one array for the whole text, so the paragraphs share one cursor into
+        // it. Leading whitespace splits to an empty first token that holds a slot; skip it.
+        String[] wholeText = text.split("\\s+");
+        int cursor = wholeText.length > 0 && wholeText[0].isEmpty() ? 1 : 0;
+        for (String paragraph : text.split("\n", -1)) {
+            String[] words = paragraph.split("\\s+");
+            int[] widths = new int[words.length];
+            for (int i = 0; i < words.length; i++) {
+                // An empty token (a paragraph's leading whitespace, or an empty paragraph) is no
+                // word of the whole text and takes no slot.
+                widths[i] = words[i].isEmpty() || cursor >= metrics.wordWidths.length
+                        ? 0 : metrics.wordWidths[cursor++];
+            }
+            totalLineCount += simulateWordWrap(paragraph, widths, metrics.spaceWidth, width);
+        }
+        assert cursor == metrics.wordWidths.length
+                : "paragraph words must consume every FontMetrics.wordWidths slot";
         int height = totalLineCount * metrics.lineHeight + padding;
         return Math.max(minHeight, Math.min(maxHeight, height));
-    }
-
-    /** Counts explicit {@code '\n'} characters in the given text. */
-    private static int countNewlines(String text) {
-        int n = 0;
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '\n') {
-                n++;
-            }
-        }
-        return n;
     }
 
     /**

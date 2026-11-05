@@ -4,6 +4,8 @@ import static org.junit.Assert.*;
 
 import org.eclipse.core.runtime.preferences.DefaultScope;
 import org.eclipse.core.runtime.preferences.IEclipsePreferences;
+import org.eclipse.core.runtime.preferences.InstanceScope;
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
@@ -19,6 +21,11 @@ public class McpPreferenceInitializerTest {
 
     private McpPreferenceInitializer initializer;
     private IEclipsePreferences defaults;
+    private IEclipsePreferences instance;
+    private String savedInstanceAutoStart;
+    private String savedInstancePort;
+    private String savedDefaultAutoStart;
+    private String savedDefaultPort;
 
     @Before
     public void setUp() {
@@ -30,6 +37,31 @@ public class McpPreferenceInitializerTest {
                 isEclipseRuntimeRunning());
         initializer = new McpPreferenceInitializer();
         defaults = DefaultScope.INSTANCE.getNode(McpPlugin.PLUGIN_ID);
+        instance = InstanceScope.INSTANCE.getNode(McpPlugin.PLUGIN_ID);
+        savedInstanceAutoStart = instance.get(McpPlugin.PREF_AUTO_START, null);
+        savedInstancePort = instance.get(McpPlugin.PREF_PORT, null);
+        savedDefaultAutoStart = defaults.get(McpPlugin.PREF_AUTO_START, null);
+        savedDefaultPort = defaults.get(McpPlugin.PREF_PORT, null);
+    }
+
+    @After
+    public void tearDown() {
+        if (defaults == null || instance == null) {
+            return; // skipped outside OSGi
+        }
+        // Put back what was there, not our constants: the test runtime may itself carry a customization
+        restore(defaults, McpPlugin.PREF_AUTO_START, savedDefaultAutoStart);
+        restore(defaults, McpPlugin.PREF_PORT, savedDefaultPort);
+        restore(instance, McpPlugin.PREF_AUTO_START, savedInstanceAutoStart);
+        restore(instance, McpPlugin.PREF_PORT, savedInstancePort);
+    }
+
+    private static void restore(IEclipsePreferences node, String key, String saved) {
+        if (saved == null) {
+            node.remove(key);
+        } else {
+            node.put(key, saved);
+        }
     }
 
     /** True only under the Eclipse PDE JUnit Plug-in Test runtime (OSGi up). */
@@ -90,6 +122,22 @@ public class McpPreferenceInitializerTest {
     }
 
     @Test
+    public void shouldSetDefaultReadOnlyOff_whenInitialized() {
+        initializer.initializeDefaultPreferences();
+
+        assertEquals("Default read-only should be off", McpPlugin.DEFAULT_READ_ONLY,
+                defaults.getBoolean(McpPlugin.PREF_READ_ONLY, true));
+    }
+
+    @Test
+    public void shouldSetDefaultServerImageSourcesRefused_whenInitialized() {
+        initializer.initializeDefaultPreferences();
+
+        assertEquals("Default server image sources should be refused", false,
+                defaults.getBoolean(McpPlugin.PREF_ALLOW_SERVER_IMAGE_SOURCES, true));
+    }
+
+    @Test
     public void shouldSetDefaultKeystorePathEmpty_whenInitialized() {
         initializer.initializeDefaultPreferences();
 
@@ -121,5 +169,32 @@ public class McpPreferenceInitializerTest {
         assertEquals("Bind address default per AC#1", "127.0.0.1", McpPlugin.DEFAULT_BIND_ADDRESS);
         assertEquals("Auto-start default per AC#1", false, McpPlugin.DEFAULT_AUTO_START);
         assertEquals("Log level default per AC#1", "INFO", McpPlugin.DEFAULT_LOG_LEVEL);
+    }
+
+    /**
+     * An administrator's default (set here the way Equinox applies a {@code -pluginCustomization}
+     * file, on top of the initializer) is what the plugin reads, and a user's own setting still wins.
+     *
+     * <p>This pins only that the plugin's getters read through to the default scope. It cannot catch
+     * the plugin overwriting the default when it starts, because the plugin started before this test
+     * ran: it passes with or without that overwrite. {@code PreferenceDefaultsContractTest} refuses the
+     * overwrite.</p>
+     */
+    @Test
+    public void shouldReadACustomizedDefault_andLetTheUsersOwnSettingWin_whenTheAdministratorPresetsOne() {
+        instance.remove(McpPlugin.PREF_AUTO_START);
+        instance.remove(McpPlugin.PREF_PORT);
+        defaults.putBoolean(McpPlugin.PREF_AUTO_START, true);
+        defaults.putInt(McpPlugin.PREF_PORT, 18091);
+
+        McpPlugin plugin = McpPlugin.getDefault();
+        assertNotNull("the plugin must be active under the plug-in test runtime", plugin);
+        assertTrue("a customized auto-start default must be read", plugin.isAutoStartEnabled());
+        assertEquals("a customized port default must be read", 18091, plugin.getServerPort());
+
+        instance.putBoolean(McpPlugin.PREF_AUTO_START, false);
+        instance.putInt(McpPlugin.PREF_PORT, 18092);
+        assertFalse("the user's own auto-start setting wins over the default", plugin.isAutoStartEnabled());
+        assertEquals("the user's own port wins over the default", 18092, plugin.getServerPort());
     }
 }

@@ -62,6 +62,15 @@ public class ModelVersionTracker {
     }
 
     /**
+     * Clears every stored version whose key matches {@code key}.
+     *
+     * @param key the test applied to each tracked key
+     */
+    public void clearMatching(java.util.function.Predicate<String> key) {
+        sessionVersions.keySet().removeIf(key);
+    }
+
+    /**
      * Clears all stored session versions. Called on model lifecycle change
      * (open/close/switch) — clean slate for all sessions.
      */

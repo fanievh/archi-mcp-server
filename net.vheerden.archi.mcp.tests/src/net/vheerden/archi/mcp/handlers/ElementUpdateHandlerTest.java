@@ -60,8 +60,8 @@ public class ElementUpdateHandlerTest {
     // ---- Tool registration tests ----
 
     @Test
-    public void shouldRegisterTwoTools_whenHandlerRegistered() {
-        assertEquals(2, registry.getToolSpecifications().size());
+    public void shouldRegisterFiveTools_whenHandlerRegistered() {
+        assertEquals(5, registry.getToolSpecifications().size());
     }
 
     @Test
@@ -147,8 +147,8 @@ public class ElementUpdateHandlerTest {
      */
     @Test
     public void shouldDeclareNoSourceParameter_onAnyUpdateTool() {
-        assertEquals("both update tools must be registered for this guard to mean anything",
-                2, registry.getToolSpecifications().size());
+        assertEquals("every tool this handler registers must be here for this guard to mean anything",
+                5, registry.getToolSpecifications().size());
         registry.getToolSpecifications().forEach(spec -> {
             assertFalse(spec.tool().name() + " must not declare a source map: create-element's "
                     + "description tells agents no update tool takes one",

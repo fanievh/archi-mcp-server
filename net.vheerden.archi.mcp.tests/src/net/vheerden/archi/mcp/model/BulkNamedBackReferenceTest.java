@@ -645,7 +645,8 @@ public class BulkNamedBackReferenceTest {
     @Test
     public void shouldRefuseAMisspeltName_whileQueuedIntoAnOpenBatch() throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of("description", "queue a named placement"));
+        invokeTool(registry, "begin-batch", Map.of("description", "queue a named placement",
+                "modelId", "model-named-back-reference"));
 
         Map<String, Object> response = invokeTool(registry, "bulk-mutate", Map.of(
                 "operations", nonDegenerateOperations("$coreBankng.id"),
@@ -661,7 +662,8 @@ public class BulkNamedBackReferenceTest {
     @Test
     public void shouldResolveANameWhileQueuedIntoAnOpenBatch() throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of("description", "queue a named placement"));
+        invokeTool(registry, "begin-batch", Map.of("description", "queue a named placement",
+                "modelId", "model-named-back-reference"));
 
         Map<String, Object> queued = resultOf(invokeTool(registry, "bulk-mutate", Map.of(
                 "operations", nonDegenerateOperations("$coreBanking.id"),

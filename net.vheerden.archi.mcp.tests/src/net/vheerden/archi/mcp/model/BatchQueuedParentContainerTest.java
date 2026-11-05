@@ -10,10 +10,8 @@ import static org.junit.Assume.assumeTrue;
 
 import java.beans.PropertyChangeListener;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
@@ -263,6 +261,20 @@ public class BatchQueuedParentContainerTest {
     }
 
     /** Asserts the ordinary live-lookup failure — the same one a non-batch caller gets. */
+    /** A queued note named as a parent: refused by name, since the live lookup cannot see it. */
+    private void assertQueuedNoteRefusedAsParent(Runnable call, String noteId) {
+        try {
+            call.run();
+            fail("expected a queued note to be refused as parent " + noteId);
+        } catch (ModelAccessException e) {
+            assertEquals("Parent view object must be a group or element: " + noteId + " is the note this batch "
+                    + "places", e.getMessage());
+            assertEquals("A note, an image and a view reference hold no other objects. Name a group or an "
+                    + "element view object as parentViewObjectId.", e.getSuggestedCorrection());
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+        }
+    }
+
     private void assertParentNotFound(Runnable call, String parentId) {
         try {
             call.run();
@@ -370,8 +382,9 @@ public class BatchQueuedParentContainerTest {
 
     /**
      * The queued lookup matches only the two container-creating commands, so a queued note — which
-     * carries a real id but can never be a parent — falls through to the ordinary live lookup and
-     * produces exactly the error a non-batch caller would get. Groups and elements only, in both
+     * carries a real id but can never be a parent — is never answered as one. It used to fall
+     * through to the live lookup, which cannot see it, and be answered "not found" for an id the
+     * batch had just handed back; it is now refused by name. Groups and elements only, in both
      * batch and bulk.
      */
     @Test
@@ -380,7 +393,7 @@ public class BatchQueuedParentContainerTest {
         String note = accessor.addNoteToView(SESSION, view.getId(), "Not a parent", null, null,
                 0, 0, 150, 60, null, null, null).entity().viewObjectId();
 
-        assertParentNotFound(() -> element(actor.getId(), 5, 5, 100, 60, note), note);
+        assertQueuedNoteRefusedAsParent(() -> element(actor.getId(), 5, 5, 100, 60, note), note);
         dispatcher.endBatch(SESSION, false);
     }
 
@@ -713,7 +726,7 @@ public class BatchQueuedParentContainerTest {
 
         assertTrue("the batch must commit as a single compound",
                 lastDispatched instanceof CompoundCommand);
-        CompoundCommand compound = (CompoundCommand) lastDispatched;
+        CompoundCommand compound = MutationContextTest.queuedIn(lastDispatched);
         assertEquals("exactly the two queued operations", 2, compound.getCommands().size());
         assertTrue("the parent's add must be queued first",
                 containsAdd(compound.getCommands().get(0), outer));
@@ -761,12 +774,15 @@ public class BatchQueuedParentContainerTest {
         return false;
     }
 
-    /** A 1x1 transparent PNG — the smallest thing the archive manager will accept. */
+    /**
+     * A small transparent PNG, encoded by {@code ImageIO} so its pixel data is complete — the archive
+     * manager rejects an image whose compressed rows are short as "Not a supported image file".
+     */
     private static void writeMinimalPng(File file) throws IOException {
-        byte[] png = Base64.getDecoder().decode(
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=");
-        try (FileOutputStream out = new FileOutputStream(file)) {
-            out.write(png);
+        java.awt.image.BufferedImage image =
+                new java.awt.image.BufferedImage(2, 2, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        if (!javax.imageio.ImageIO.write(image, "png", file)) {
+            throw new IOException("no PNG writer available to ImageIO");
         }
     }
 

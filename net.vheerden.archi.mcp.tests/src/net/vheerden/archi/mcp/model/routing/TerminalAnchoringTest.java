@@ -33,6 +33,18 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  */
 public class TerminalAnchoringTest {
 
+    /**
+     * The face-line coordinate, read from production rather than written as a literal.
+     *
+     * <p>Tests that merely need an input <em>on</em> the face line use this, so they assert what
+     * they are actually about — the predicate's response to a terminal that is on its line — and
+     * not the margin's value. The value itself is pinned once, in
+     * {@link #lineCoordinate_sitsTheTerminalFaceMarginOutsideTheRect}.
+     */
+    private static int faceLine(RoutingRect r, Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
     // -----------------------------------------------------------------
     // Direct accessor sanity
     // -----------------------------------------------------------------
@@ -49,17 +61,29 @@ public class TerminalAnchoringTest {
         assertTrue(new TerminalAnchoring(Face.BOTTOM).parallelAxis() == TerminalAnchoring.Axis.X);
     }
 
+    /**
+     * The one test in this class that PINS the margin's value. Everything else here needs only
+     * "a point on the face line" and derives it, so a future change to
+     * {@link EdgeAttachmentCalculator#TERMINAL_FACE_MARGIN} moves those inputs automatically and
+     * lands here — deliberately — as the single place that has to be re-derived by hand.
+     *
+     * <p>The expected coordinates are written as literals rather than computed from the constant.
+     * Computing them would make this assertion true for any margin, which is exactly the thing it
+     * exists to catch.
+     */
     @Test
-    public void lineCoordinate_isOnePixelOutsideRect() {
+    public void lineCoordinate_sitsTheTerminalFaceMarginOutsideTheRect() {
+        assertTrue("this test's literals are derived from a margin of 4",
+                EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN == 4);
         RoutingRect r = new RoutingRect(100, 200, 80, 40, "id");
-        // LEFT  → x - 1
-        assertTrue(new TerminalAnchoring(Face.LEFT).lineCoordinate(r) == 99);
-        // RIGHT → x + width + 1
-        assertTrue(new TerminalAnchoring(Face.RIGHT).lineCoordinate(r) == 181);
-        // TOP   → y - 1
-        assertTrue(new TerminalAnchoring(Face.TOP).lineCoordinate(r) == 199);
-        // BOTTOM → y + height + 1
-        assertTrue(new TerminalAnchoring(Face.BOTTOM).lineCoordinate(r) == 241);
+        // LEFT  → x - margin
+        assertTrue(new TerminalAnchoring(Face.LEFT).lineCoordinate(r) == 96);
+        // RIGHT → x + width + margin
+        assertTrue(new TerminalAnchoring(Face.RIGHT).lineCoordinate(r) == 184);
+        // TOP   → y - margin
+        assertTrue(new TerminalAnchoring(Face.TOP).lineCoordinate(r) == 196);
+        // BOTTOM → y + height + margin
+        assertTrue(new TerminalAnchoring(Face.BOTTOM).lineCoordinate(r) == 244);
     }
 
     // -----------------------------------------------------------------
@@ -93,7 +117,7 @@ public class TerminalAnchoringTest {
 
     /**
      * Pre-collapse legitimate shape from the same fixture: bp[0] is on the
-     * LEFT face line (x=471) at the perimeter-distributed slot y=144 (off-center).
+     * LEFT face line at the perimeter-distributed slot y=144 (off-center).
      * The predicate must preserve.
      */
     @Test
@@ -103,7 +127,7 @@ public class TerminalAnchoringTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(Face.LEFT);
 
         List<AbsoluteBendpointDto> before = List.of(
-                new AbsoluteBendpointDto(471, 144),
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 144),
                 new AbsoluteBendpointDto(364, 144),
                 new AbsoluteBendpointDto(364, 559),
                 new AbsoluteBendpointDto(144, 559));
@@ -119,7 +143,7 @@ public class TerminalAnchoringTest {
 
     /**
      * Generic perimeter-distributed slot on a TOP face: rect (200, 300, 100, 60),
-     * center (250, 330). Slot at x=220, on top face line y=299. Predicate
+     * center (250, 330). Slot at x=220, on the TOP face line. Predicate
      * must preserve (off parallel-axis center but on face line).
      */
     @Test
@@ -129,7 +153,7 @@ public class TerminalAnchoringTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(Face.TOP);
 
         List<AbsoluteBendpointDto> path = List.of(
-                new AbsoluteBendpointDto(220, 299),  // off-center, on TOP face line
+                new AbsoluteBendpointDto(220, faceLine(source, Face.TOP)),  // off-centre, on TOP face line
                 new AbsoluteBendpointDto(220, 100));
 
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, path));
@@ -151,7 +175,7 @@ public class TerminalAnchoringTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(Face.BOTTOM);
 
         List<AbsoluteBendpointDto> path = List.of(
-                new AbsoluteBendpointDto(250, 361),  // centerX, BOTTOM face line
+                new AbsoluteBendpointDto(250, faceLine(source, Face.BOTTOM)),  // centreX, BOTTOM face line
                 new AbsoluteBendpointDto(250, 500));
 
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(anchoring, source, path));
@@ -164,8 +188,8 @@ public class TerminalAnchoringTest {
     /**
      * Interior pass-through: bp[0] is the source center itself. By
      * definition, collinear-on-parallel = TRUE and on-face-line = FALSE
-     * (centerY ≠ TOP line y-1 and ≠ BOTTOM line y+h+1 unless the rect is
-     * degenerate). Predicate rejects.
+     * (centerY is on neither the TOP nor the BOTTOM face line unless the rect
+     * is degenerate). Predicate rejects.
      */
     @Test
     public void rejects_interiorPassThrough_atSourceCenter() {
@@ -206,10 +230,10 @@ public class TerminalAnchoringTest {
 
         // Source on LEFT face slot, target on RIGHT face line at center
         List<AbsoluteBendpointDto> path = List.of(
-                new AbsoluteBendpointDto(471, 144),  // LEFT face line, off-center: PRESERVE
+                new AbsoluteBendpointDto(faceLine(src, Face.LEFT), 144),  // LEFT face line, off-centre: PRESERVE
                 new AbsoluteBendpointDto(364, 144),
                 new AbsoluteBendpointDto(364, 559),
-                new AbsoluteBendpointDto(189, 559)); // tgt RIGHT face line (100+88+1=189), at tc.y: PRESERVE
+                new AbsoluteBendpointDto(faceLine(tgt, Face.RIGHT), 559)); // tgt RIGHT face line, at tc.y: PRESERVE
 
         assertTrue(TerminalAnchoring.preservesEndpoints(
                 sa, src, sc, ta, tgt, tc, path));
@@ -224,9 +248,9 @@ public class TerminalAnchoringTest {
         TerminalAnchoring sa = new TerminalAnchoring(Face.LEFT);
         TerminalAnchoring ta = new TerminalAnchoring(Face.RIGHT);
 
-        // Target end collapsed to center (144, 559), NOT on RIGHT face line (189)
+        // Target end collapsed to centre (144, 559), which is NOT on the RIGHT face line
         List<AbsoluteBendpointDto> path = List.of(
-                new AbsoluteBendpointDto(471, 144),
+                new AbsoluteBendpointDto(faceLine(src, Face.LEFT), 144),
                 new AbsoluteBendpointDto(144, 559));   // target center, not on face
 
         assertFalse(TerminalAnchoring.preservesEndpoints(
@@ -243,7 +267,7 @@ public class TerminalAnchoringTest {
 
         List<AbsoluteBendpointDto> path = List.of(
                 new AbsoluteBendpointDto(0, 0),         // arbitrary, unchecked
-                new AbsoluteBendpointDto(189, 559));    // RIGHT face line at tc.y
+                new AbsoluteBendpointDto(faceLine(tgt, Face.RIGHT), 559));    // RIGHT face line at tc.y
 
         assertTrue(TerminalAnchoring.preservesEndpoints(
                 null, null, null, ta, tgt, tc, path));
@@ -258,7 +282,7 @@ public class TerminalAnchoringTest {
         RoutingRect src = new RoutingRect(100, 100, 100, 100, "src");
         TerminalAnchoring sa = new TerminalAnchoring(Face.RIGHT);
         List<AbsoluteBendpointDto> path = List.of(
-                new AbsoluteBendpointDto(400, 150),   // nowhere near the RIGHT face line (201)
+                new AbsoluteBendpointDto(400, 150),   // nowhere near the RIGHT face line
                 new AbsoluteBendpointDto(400, 500));
 
         assertFalse("Precondition: this terminal would fail the predicate if it were checked",

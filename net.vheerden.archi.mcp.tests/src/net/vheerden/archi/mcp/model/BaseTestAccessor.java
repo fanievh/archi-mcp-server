@@ -6,6 +6,11 @@ import java.util.Map;
 import java.util.Optional;
 
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.MergeClusterRequest;
+import net.vheerden.archi.mcp.response.dto.MergeElementsResultDto;
+import net.vheerden.archi.mcp.response.dto.ChangeElementTypeResultDto;
+import net.vheerden.archi.mcp.response.dto.ChangeRelationshipTypeResultDto;
+import net.vheerden.archi.mcp.response.dto.ElementTypeChangeRequest;
 import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.ArrangeGroupsResultDto;
@@ -40,6 +45,7 @@ import net.vheerden.archi.mcp.response.dto.ModelImageDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipSemanticAttributes;
+import net.vheerden.archi.mcp.response.dto.RelationshipTypeChangeRequest;
 import net.vheerden.archi.mcp.response.dto.RemoveFromViewResultDto;
 import net.vheerden.archi.mcp.response.dto.UndoRedoResultDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
@@ -262,13 +268,6 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     @Override
     public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
             String documentation, Map<String, String> properties, String folderId,
-            String specialization) {
-        throw new UnsupportedOperationException("createElement not implemented in test accessor");
-    }
-
-    @Override
-    public MutationResult<ElementDto> createElement(String sessionId, String type, String name,
-            String documentation, Map<String, String> properties, String folderId,
             Map<String, String> source, String specialization) {
         throw new UnsupportedOperationException("createElement not implemented in test accessor");
     }
@@ -346,7 +345,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     public MutationResult<EmbeddedViewDto> addViewReferenceToView(String sessionId,
             String viewId, String referencedViewId, Integer x, Integer y,
             Integer width, Integer height, String parentViewObjectId,
-            StylingParams styling) {
+            StylingParams styling, ImageParams imageParams) {
         throw new UnsupportedOperationException(
                 "addViewReferenceToView not implemented in test accessor");
     }
@@ -433,7 +432,7 @@ public class BaseTestAccessor implements ArchiModelAccessor {
 
     @Override
     public MutationResult<ResizeElementsResultDto> resizeElementsToFit(
-            String sessionId, String viewId, List<String> elementIds) {
+            String sessionId, String viewId, List<String> elementIds, boolean wrapFit) {
         throw new UnsupportedOperationException(
                 "resizeElementsToFit not implemented in test accessor");
     }
@@ -590,12 +589,31 @@ public class BaseTestAccessor implements ArchiModelAccessor {
     }
 
     @Override
-    public UndoRedoResultDto undo(int steps) {
+    public MutationResult<MergeElementsResultDto> mergeElements(String sessionId,
+            List<MergeClusterRequest> merges, String propertyPolicy, String selfRelationships,
+            boolean recordMergedIds, boolean collapseParallel) {
+        throw new UnsupportedOperationException("mergeElements not implemented in test accessor");
+    }
+
+    @Override
+    public MutationResult<ChangeElementTypeResultDto> changeElementType(String sessionId,
+            List<ElementTypeChangeRequest> changes, String invalidRelationships) {
+        throw new UnsupportedOperationException("changeElementType not implemented in test accessor");
+    }
+
+    @Override
+    public MutationResult<ChangeRelationshipTypeResultDto> changeRelationshipType(String sessionId,
+            List<RelationshipTypeChangeRequest> changes) {
+        throw new UnsupportedOperationException("changeRelationshipType not implemented in test accessor");
+    }
+
+    @Override
+    public UndoRedoResultDto undo(String sessionId, int steps) {
         throw new UnsupportedOperationException("undo not implemented in test accessor");
     }
 
     @Override
-    public UndoRedoResultDto redo(int steps) {
+    public UndoRedoResultDto redo(String sessionId, int steps) {
         throw new UnsupportedOperationException("redo not implemented in test accessor");
     }
 

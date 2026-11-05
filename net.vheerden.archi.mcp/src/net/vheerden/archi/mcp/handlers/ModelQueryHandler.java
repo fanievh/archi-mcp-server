@@ -20,7 +20,9 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.ModelAccessException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
@@ -33,6 +35,7 @@ import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.ConceptUsageDto;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
+import net.vheerden.archi.mcp.response.dto.OpenModelDto;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
@@ -59,6 +62,8 @@ public class ModelQueryHandler {
     private final ResponseFormatter formatter;
     private final CommandRegistry registry;
     private final SessionManager sessionManager;
+    /** Whether this server offers only the tools that read the model; fixed for the server's run. */
+    private final boolean readOnly;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     /**
@@ -73,6 +78,24 @@ public class ModelQueryHandler {
                              ResponseFormatter formatter,
                              CommandRegistry registry,
                              SessionManager sessionManager) {
+        this(accessor, formatter, registry, sessionManager, false);
+    }
+
+    /**
+     * Creates a ModelQueryHandler for a server that may be read-only, which get-model-info reports.
+     *
+     * @param accessor       the model accessor for querying ArchiMate data
+     * @param formatter      the response formatter for building JSON envelopes
+     * @param registry       the command registry for tool registration
+     * @param sessionManager the session manager for session-scoped filters, may be null
+     * @param readOnly       whether the server offers only the tools that read the model
+     */
+    public ModelQueryHandler(ArchiModelAccessor accessor,
+                             ResponseFormatter formatter,
+                             CommandRegistry registry,
+                             SessionManager sessionManager,
+                             boolean readOnly) {
+        this.readOnly = readOnly;
         this.accessor = Objects.requireNonNull(accessor, "accessor must not be null");
         this.formatter = Objects.requireNonNull(formatter, "formatter must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
@@ -85,6 +108,7 @@ public class ModelQueryHandler {
      */
     public void registerTools() {
         registry.registerTool(buildGetModelInfoSpec());
+        registry.registerTool(buildGetModelsSpec());
         registry.registerTool(buildUpdateModelSpec());
         registry.registerTool(buildGetElementSpec());
         registry.registerTool(buildFindConceptUsageSpec());
@@ -112,6 +136,8 @@ public class ModelQueryHandler {
                         + "approval and gets a different id — whereas ids of existing objects being "
                         + "updated or deleted are stable. bulk-mutate and the two discovery create "
                         + "tools shape this differently — see their own descriptions. "
+                        + "The result also carries readOnly: true when this server offers only the "
+                        + "tools that read the model, so no change can be made through it, and false otherwise. "
                         + "Related: get-views (browse diagrams), search-elements (find elements), "
                         + "set-session-filter (scope queries).")
                 .inputSchema(inputSchema)
@@ -121,6 +147,60 @@ public class ModelQueryHandler {
                 .tool(tool)
                 .callHandler(this::handleGetModelInfo)
                 .build();
+    }
+
+    private McpServerFeatures.SyncToolSpecification buildGetModelsSpec() {
+        McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
+                "object", Collections.emptyMap(), null, null, null, null);
+
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name("get-models")
+                .description("[Query] List every model open in Archi: id, name, file (absent for a "
+                        + "model never saved), whether it holds unsaved changes, and sessionActive — "
+                        + "whether a call from you that names no model resolves to it (with two or more "
+                        + "open, only a read does). Pass a model's id as modelId on any model tool to act "
+                        + "on that model. With one model open, modelId is optional except on "
+                        + "begin-batch, which always takes it. With two or more open, a change that names "
+                        + "no model is refused with MODEL_AMBIGUOUS, while a read follows the model "
+                        + "active in Archi. Every response from a call that acted on a model names it in "
+                        + "_meta.model. "
+                        + "Related: get-model-info (statistics of one model), begin-batch.")
+                .inputSchema(inputSchema)
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler(this::handleGetModels)
+                .build();
+    }
+
+    McpSchema.CallToolResult handleGetModels(
+            McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
+        logger.info("Handling get-models request");
+        try {
+            String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
+            List<OpenModelDto> models = accessor.getModels(sessionId);
+            List<String> nextSteps = new ArrayList<>();
+            if (models.isEmpty()) {
+                nextSteps.add("No model is open: open one in Archi first");
+            } else {
+                nextSteps.add("Pass a model's id as modelId to act on that model");
+                if (models.size() > 1) {
+                    nextSteps.add(models.size() + " models are open: a change that names no modelId "
+                            + "is refused, so name the model on every change");
+                }
+                nextSteps.add("Use get-model-info with modelId for one model's statistics");
+            }
+            Map<String, Object> envelope = formatter.formatSuccess(
+                    models, nextSteps, null, models.size(), models.size(), false);
+            return buildResult(formatter.toJsonString(envelope), false);
+        } catch (Exception e) {
+            logger.error("Unexpected error handling get-models", e);
+            ErrorResponse error = new ErrorResponse(
+                    ErrorCode.INTERNAL_ERROR,
+                    "An unexpected error occurred while listing the open models");
+            return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        }
     }
 
     private McpSchema.CallToolResult handleGetModelInfo(
@@ -158,12 +238,13 @@ public class ModelQueryHandler {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         // Stamp the LIVE approval bit over any cached value: the gate is
                         // dynamic but the rest of model-info is cacheable, so never serve it stale.
                         stampApprovalMode(cachedEnvelope, approvalMode);
+                        stampReadOnly(cachedEnvelope, readOnly);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
                     }
                 } catch (Exception e) {
@@ -172,7 +253,7 @@ public class ModelQueryHandler {
             }
 
             // Fresh query
-            ModelInfoDto info = accessor.getModelInfo().withApprovalMode(approvalMode);
+            ModelInfoDto info = accessor.getModelInfo().withApprovalMode(approvalMode).withReadOnly(readOnly);
 
             List<String> nextSteps = buildModelInfoNextSteps(info);
 
@@ -183,7 +264,7 @@ public class ModelQueryHandler {
             String jsonResult = formatter.toJsonString(envelope);
             if (sessionManager != null && sessionId != null) {
                 sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
             }
 
             // Add modelChanged flag if version changed
@@ -226,6 +307,20 @@ public class ModelQueryHandler {
             @SuppressWarnings("unchecked")
             Map<String, Object> resultMap = (Map<String, Object>) result;
             resultMap.put("approvalMode", approvalMode);
+        }
+    }
+
+    /**
+     * Stamps this server's read-only mode into a deserialised get-model-info envelope's {@code result}
+     * map, so an envelope cached by another server run, or by another handler, never reports a mode
+     * that is not this server's.
+     */
+    private static void stampReadOnly(Map<String, Object> envelope, boolean readOnly) {
+        Object result = envelope.get("result");
+        if (result instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> resultMap = (Map<String, Object>) result;
+            resultMap.put("readOnly", readOnly);
         }
     }
 
@@ -298,6 +393,7 @@ public class ModelQueryHandler {
         logger.info("Handling get-element request");
         try {
             Map<String, Object> args = request.arguments();
+            ToolArguments.requireTextType(args, "id");
             Object idObj = (args != null) ? args.get("id") : null;
             Object idsObj = (args != null) ? args.get("ids") : null;
 
@@ -316,7 +412,7 @@ public class ModelQueryHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (args != null) {
-                Object fieldsObj = args.get("fields");
+                Object fieldsObj = ToolArguments.optionalText(args, "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -324,7 +420,7 @@ public class ModelQueryHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -336,7 +432,7 @@ public class ModelQueryHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -365,11 +461,11 @@ public class ModelQueryHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
-            logger.debug("Field selection — preset: {}, exclude: {}", preset, effectiveExclude);
+            logger.debug("Field selection — preset: {}, exclude: {}", preset, CallerText.logged(effectiveExclude));
 
             // Route to batch or single path
             if (idsObj != null) {
@@ -387,6 +483,9 @@ public class ModelQueryHandler {
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
 
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (Exception e) {
             logger.error("Unexpected error handling get-element", e);
             ErrorResponse error = new ErrorResponse(
@@ -422,12 +521,13 @@ public class ModelQueryHandler {
         }
 
         // Cache check — skip if version just changed
-        String cacheKey = CacheKeyBuilder.buildCacheKey("element", id, "fields", preset, "exclude", CacheKeyBuilder.sortedSetKey(excludeFields));
+        String cacheKey = CacheKeyBuilder.buildCacheKey("element", id, "fields", preset, "warning", warningMessage,
+                "exclude", CacheKeyBuilder.sortedSetKey(excludeFields));
         if (sessionManager != null && sessionId != null && !modelChanged) {
             try {
                 String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                 if (cachedJson != null) {
-                    logger.debug("Cache hit for key: {}", cacheKey);
+                    logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                     Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                     ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                     return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -459,7 +559,7 @@ public class ModelQueryHandler {
             String jsonResult = formatter.toJsonString(envelope);
             if (sessionManager != null && sessionId != null) {
                 sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
             }
 
             // Add modelChanged flag if version changed
@@ -479,7 +579,7 @@ public class ModelQueryHandler {
             }
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.ELEMENT_NOT_FOUND,
-                    "No element found with ID '" + id + "'",
+                    "No element found with ID " + CallerText.quoted(id),
                     details,
                     "Use search-elements to find elements by name or type",
                     null);
@@ -632,7 +732,7 @@ public class ModelQueryHandler {
                 "New purpose / free-text description for the model (omit to leave unchanged). "
                 + "Set to empty string to clear the purpose. This IS the model-level free-text "
                 + "field Archi exposes — there is no separate model-level documentation field "
-                + "in Archi 5.7/5.8. "
+                + "in Archi. "
                 + "Example: \"Strategic enterprise architecture for retail bank XYZ — Q3 2026 cut\".");
 
         Map<String, Object> propertiesValueSchema = new LinkedHashMap<>();
@@ -665,7 +765,7 @@ public class ModelQueryHandler {
                         + "string to clear), properties (object with key-value pairs; set value "
                         + "to null to remove a property). Only provided fields are modified; "
                         + "omitted fields remain unchanged. The model's free-text field IS the "
-                        + "purpose — Archi 5.7/5.8 has no separate model-level documentation API; "
+                        + "purpose — Archi has no separate model-level documentation API; "
                         + "set the purpose field for descriptive model context. If a property "
                         + "key appears multiple times on the model, only the first occurrence "
                         + "is updated, and the response DTO may show the last value for that key "
@@ -795,6 +895,7 @@ public class ModelQueryHandler {
         logger.info("Handling find-concept-usage request");
         try {
             Map<String, Object> args = request.arguments();
+            ToolArguments.requireTextType(args, "conceptId");
             Object idObj = (args != null) ? args.get("conceptId") : null;
             if (!(idObj instanceof String conceptId) || conceptId.isBlank()) {
                 if (ParamNameDiagnostics.suppliedInsteadOf(args, "conceptId") != null) {
@@ -855,6 +956,9 @@ public class ModelQueryHandler {
                     ErrorCode.MODEL_NOT_LOADED, e.getMessage(), null,
                     "Open an ArchiMate model in ArchimateTool", null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (Exception e) {
             logger.error("Unexpected error handling find-concept-usage", e);
             ErrorResponse error = new ErrorResponse(
@@ -973,7 +1077,7 @@ public class ModelQueryHandler {
         try {
             String conceptTypeFilter = null;
             if (request.arguments() != null) {
-                Object ctObj = request.arguments().get("conceptType");
+                Object ctObj = ToolArguments.optionalText(request.arguments(), "conceptType", false);
                 if (ctObj instanceof String ct && !ct.isBlank()) {
                     conceptTypeFilter = ct;
                 }
@@ -1001,6 +1105,9 @@ public class ModelQueryHandler {
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.MODEL_NOT_LOADED, e.getMessage(), null, "Open a model in Archi first", null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (Exception e) {
             logger.error("Error in list-specializations", e);
             ErrorResponse error = new ErrorResponse(

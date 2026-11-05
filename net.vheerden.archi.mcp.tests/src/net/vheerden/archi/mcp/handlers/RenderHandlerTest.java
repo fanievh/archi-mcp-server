@@ -1265,6 +1265,330 @@ public class RenderHandlerTest {
         return new ExportResult(metadata, pngBytes, null);
     }
 
+    // ---- Read-only server ----
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldRefuseFileOutputBeforeRendering_whenTheServerIsReadOnly() throws Exception {
+        for (String outputDirectory : new String[] {null, "/custom/dir"}) {
+            registry = new CommandRegistry();
+            StubAccessor accessor = new StubAccessor(true);
+            new RenderHandler(accessor, formatter, registry, true).registerTools();
+            Map<String, Object> args = new HashMap<>();
+            args.put("viewId", "view-1");
+            args.put("format", "png");
+            args.put("inline", false);
+            if (outputDirectory != null) {
+                args.put("outputDirectory", outputDirectory);
+            }
+
+            McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+            assertTrue(result.isError());
+            Map<String, Object> error = (Map<String, Object>) parseJson(result).get("error");
+            assertEquals("INVALID_PARAMETER", error.get("code"));
+            assertTrue(String.valueOf(error.get("message")),
+                    String.valueOf(error.get("message")).contains("This server is read-only"));
+            assertFalse("nothing is rendered or written", accessor.exportCalled);
+        }
+    }
+
+    @Test
+    public void shouldStillReturnTheImageInline_whenTheServerIsReadOnly() throws Exception {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        ExportViewResultDto metadata = new ExportViewResultDto(
+                "view-1", "Test View", "png", "image/png", 800, 600, null, 150);
+        StubAccessor accessor = new StubAccessor(true, new ExportResult(metadata, pngBytes, null));
+        new RenderHandler(accessor, formatter, registry, true).registerTools();
+        Map<String, Object> args = new HashMap<>();
+        args.put("viewId", "view-1");
+        args.put("outputDirectory", "/custom/dir");
+
+        McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+        assertFalse(result.isError());
+        assertTrue(accessor.exportCalled);
+        assertTrue(accessor.lastInline);
+        assertNull("an inline export never passes a directory on", accessor.lastOutputDirectory);
+        assertTrue("the ignored directory is still disclosed",
+                ((McpSchema.TextContent) result.content().get(0)).text()
+                        .contains("outputDirectory is ignored when inline is true"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldSayInTheSchemaThatFilesAreNotWritten_onlyWhenTheServerIsReadOnly() {
+        new RenderHandler(new StubAccessor(true), formatter, registry, true).registerTools();
+        Map<String, Object> readOnlyProps = findToolSpec("export-view").tool().inputSchema().properties();
+        String inline = String.valueOf(((Map<String, Object>) readOnlyProps.get("inline")).get("description"));
+        String outputDirectory = String.valueOf(
+                ((Map<String, Object>) readOnlyProps.get("outputDirectory")).get("description"));
+        assertTrue(inline, inline.contains("This server is read-only"));
+        assertTrue(outputDirectory, outputDirectory.contains("This server is read-only"));
+
+        registry = new CommandRegistry();
+        new RenderHandler(new StubAccessor(true), formatter, registry).registerTools();
+        Map<String, Object> fullProps = findToolSpec("export-view").tool().inputSchema().properties();
+        assertFalse(String.valueOf(fullProps.get("inline")).contains("read-only"));
+        assertFalse(String.valueOf(fullProps.get("outputDirectory")).contains("read-only"));
+    }
+
+    // ---- The size of an inline response ----
+
+    /** Raw bytes whose base64 encoding is exactly the inline cap. */
+    private static final int RAW_AT_CAP = RenderHandler.MAX_INLINE_PAYLOAD_BYTES / 4 * 3;
+
+    private StubAccessor exporting(String format, byte[] bytes, String svg) {
+        String mime = switch (format) {
+            case "png" -> "image/png";
+            case "jpg" -> "image/jpeg";
+            case "svg" -> "image/svg+xml";
+            default -> "application/pdf";
+        };
+        return new StubAccessor(true, new ExportResult(
+                new ExportViewResultDto("view-1", "Test View", format, mime, 800, 600, null, 10), bytes, svg));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> errorOf(McpSchema.CallToolResult result) throws Exception {
+        assertTrue("expected an error response", result.isError());
+        return (Map<String, Object>) parseJson(result).get("error");
+    }
+
+    @Test
+    public void shouldRefuseAnInlinePngLargerThanTheCap_namingTheBytesTheCapAndAScale() throws Exception {
+        new RenderHandler(exporting("png", new byte[RAW_AT_CAP + 1], null), formatter, registry).registerTools();
+
+        Map<String, Object> error = errorOf(invokeExportView("view-1", "png", null, null));
+
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        String message = (String) error.get("message");
+        assertTrue(message, message.contains("5242884 bytes"));
+        assertTrue(message, message.contains("5242880 bytes"));
+        String correction = (String) error.get("suggestedCorrection");
+        assertTrue(correction, correction.contains("Retry at scale 0.99 or lower"));
+        assertTrue("a full server can write the file instead: " + correction, correction.contains("inline"));
+    }
+
+    @Test
+    public void shouldSuggestAScaleShrunkByTheSquareRootOfTheOverrun_forAnInlineJpg() throws Exception {
+        new RenderHandler(exporting("jpg", new byte[RAW_AT_CAP * 2], null), formatter, registry).registerTools();
+
+        Map<String, Object> error = errorOf(invokeExportView("view-1", "jpg", 2.0, null));
+
+        String correction = (String) error.get("suggestedCorrection");
+        assertTrue(correction, correction.contains("Retry at scale 1.41 or lower"));
+        assertTrue((String) error.get("message"), ((String) error.get("message")).contains("10485760 bytes"));
+    }
+
+    @Test
+    public void shouldFitTheScaleByTheSquareRootOfTheOverrun_evenBelowTheSmallestAccepted() {
+        assertEquals(0.02, RenderHandler.scaleWithinInlineCap(0.2,
+                RenderHandler.MAX_INLINE_PAYLOAD_BYTES * 100L), 0.0);
+        assertEquals(0.5, RenderHandler.scaleWithinInlineCap(1.0,
+                RenderHandler.MAX_INLINE_PAYLOAD_BYTES * 4L), 0.0);
+    }
+
+    @Test
+    public void shouldSayNoAcceptedScaleFits_ratherThanSuggestOneThatStillOverruns() throws Exception {
+        // At the smallest accepted scale, a payload four times the cap would need scale 0.05.
+        new RenderHandler(exporting("png", new byte[RAW_AT_CAP * 4], null), formatter, registry).registerTools();
+
+        String correction = (String) errorOf(invokeExportView("view-1", "png", RenderHandler.MIN_SCALE, null))
+                .get("suggestedCorrection");
+
+        assertTrue(correction, correction.startsWith("No accepted scale brings this view within the cap: the "
+                + "smallest is 0.1."));
+        assertFalse("no scale is suggested: " + correction, correction.contains("Retry at scale"));
+        assertTrue("a full server can still write the file: " + correction, correction.contains("inline to false"));
+    }
+
+    @Test
+    public void shouldSendAnInlineJpgAndPdfAtTheCap_andRefuseThemOneByteOver() {
+        for (String format : new String[] {"jpg", "pdf"}) {
+            registry = new net.vheerden.archi.mcp.registry.CommandRegistry();
+            new RenderHandler(exporting(format, new byte[RAW_AT_CAP], null), formatter, registry).registerTools();
+            assertFalse(format + " at the cap", invokeExportView("view-1", format, null, null).isError());
+
+            registry = new net.vheerden.archi.mcp.registry.CommandRegistry();
+            new RenderHandler(exporting(format, new byte[RAW_AT_CAP + 1], null), formatter, registry)
+                    .registerTools();
+            assertTrue(format + " one byte over", invokeExportView("view-1", format, null, null).isError());
+        }
+    }
+
+    @Test
+    public void shouldRefuseAnInlinePdfLargerThanTheCap_andPointToARasterAtALowerScale() throws Exception {
+        new RenderHandler(exporting("pdf", new byte[RAW_AT_CAP + 1], null), formatter, registry).registerTools();
+
+        Map<String, Object> error = errorOf(invokeExportView("view-1", "pdf", null, null));
+
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        String correction = (String) error.get("suggestedCorrection");
+        assertTrue(correction, correction.contains("ignore scale"));
+        assertTrue(correction, correction.contains("png"));
+        assertFalse(correction, correction.contains("Retry at scale"));
+    }
+
+    @Test
+    public void shouldCountAnInlineSvgInUtf8Bytes() throws Exception {
+        String svg = "\u00e9".repeat(RenderHandler.MAX_INLINE_PAYLOAD_BYTES / 2 + 1);
+        new RenderHandler(exporting("svg", null, svg), formatter, registry).registerTools();
+
+        Map<String, Object> error = errorOf(invokeExportView("view-1", "svg", null, null));
+
+        assertTrue((String) error.get("message"), ((String) error.get("message")).contains("5242882 bytes"));
+    }
+
+    @Test
+    public void shouldRefuseAnInlineSvgOneByteOverTheCap() throws Exception {
+        new RenderHandler(exporting("svg", null, "x".repeat(RenderHandler.MAX_INLINE_PAYLOAD_BYTES + 1)),
+                formatter, registry).registerTools();
+
+        assertEquals("INVALID_PARAMETER", errorOf(invokeExportView("view-1", "svg", null, null)).get("code"));
+    }
+
+    @Test
+    public void shouldSendAnInlineSvgAtTheCapAndOneByteUnder() {
+        for (int length : new int[] {RenderHandler.MAX_INLINE_PAYLOAD_BYTES, RenderHandler.MAX_INLINE_PAYLOAD_BYTES - 1}) {
+            registry = new net.vheerden.archi.mcp.registry.CommandRegistry();
+            new RenderHandler(exporting("svg", null, "x".repeat(length)), formatter, registry).registerTools();
+
+            McpSchema.CallToolResult result = invokeExportView("view-1", "svg", null, null);
+
+            assertFalse("length " + length, result.isError());
+            assertEquals(length, ((McpSchema.TextContent) result.content().get(1)).text().length());
+        }
+    }
+
+    @Test
+    public void shouldSendAnInlinePngWhoseEncodingIsExactlyTheCap_orUnder() {
+        for (int raw : new int[] {RAW_AT_CAP, RAW_AT_CAP - 1}) {
+            registry = new net.vheerden.archi.mcp.registry.CommandRegistry();
+            new RenderHandler(exporting("png", new byte[raw], null), formatter, registry).registerTools();
+
+            McpSchema.CallToolResult result = invokeExportView("view-1", "png", null, null);
+
+            assertFalse("raw " + raw, result.isError());
+            assertEquals(RenderHandler.MAX_INLINE_PAYLOAD_BYTES,
+                    ((McpSchema.ImageContent) result.content().get(1)).data().length());
+        }
+    }
+
+    @Test
+    public void shouldNotCapFileOutput() {
+        new RenderHandler(exporting("png", new byte[RAW_AT_CAP + 1], null), formatter, registry).registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", null, false);
+
+        assertFalse(result.isError());
+    }
+
+    @Test
+    public void shouldNotSuggestWritingAFile_onAReadOnlyServer() throws Exception {
+        new RenderHandler(exporting("png", new byte[RAW_AT_CAP + 1], null), formatter, registry, true)
+                .registerTools();
+
+        String correction = (String) errorOf(invokeExportView("view-1", "png", null, null))
+                .get("suggestedCorrection");
+
+        assertTrue(correction, correction.contains("Retry at scale 0.99 or lower"));
+        assertFalse(correction, correction.contains("inline"));
+    }
+
+    // ---- File output on a server other machines can reach ----
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldRefuseFileOutputBeforeRendering_whenTheServerIsReachableAndNotAllowed() throws Exception {
+        for (String outputDirectory : new String[] {null, "/custom/dir"}) {
+            registry = new CommandRegistry();
+            StubAccessor accessor = new StubAccessor(true);
+            new RenderHandler(accessor, formatter, registry, false, true).registerTools();
+            Map<String, Object> args = new HashMap<>();
+            args.put("viewId", "view-1");
+            args.put("format", "png");
+            args.put("inline", false);
+            if (outputDirectory != null) {
+                args.put("outputDirectory", outputDirectory);
+            }
+
+            McpSchema.CallToolResult result = invokeExportViewWithArgs(args);
+
+            Map<String, Object> error = (Map<String, Object>) parseJson(result).get("error");
+            assertTrue(result.isError());
+            assertEquals("INVALID_PARAMETER", error.get("code"));
+            assertEquals(RenderHandler.SERVER_FILES_REFUSED, error.get("message"));
+            assertEquals("Omit inline, or set it to true, to receive the image in the response",
+                    error.get("suggestedCorrection"));
+            assertFalse("nothing is rendered or written", accessor.exportCalled);
+        }
+    }
+
+    @Test
+    public void shouldStillReturnTheImageInline_whenTheServerIsReachableAndNotAllowed() {
+        byte[] pngBytes = new byte[] { (byte) 0x89, 0x50, 0x4E, 0x47 };
+        StubAccessor accessor = exporting("png", pngBytes, null);
+        new RenderHandler(accessor, formatter, registry, false, true).registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", null, null);
+
+        assertFalse(result.isError());
+        assertTrue(accessor.lastInline);
+    }
+
+    @Test
+    public void shouldNotSuggestWritingAFile_whenTheServerIsReachableAndNotAllowed() throws Exception {
+        new RenderHandler(exporting("png", new byte[RAW_AT_CAP + 1], null), formatter, registry, false, true)
+                .registerTools();
+
+        String correction = (String) errorOf(invokeExportView("view-1", "png", null, null))
+                .get("suggestedCorrection");
+
+        assertTrue(correction, correction.contains("Retry at scale 0.99 or lower"));
+        assertFalse(correction, correction.contains("inline"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldSayInTheSchemaThatFilesAreRefused_onlyWhenTheServerIsReachableAndNotAllowed() {
+        new RenderHandler(new StubAccessor(true), formatter, registry, false, true).registerTools();
+        Map<String, Object> props = findToolSpec("export-view").tool().inputSchema().properties();
+        assertTrue(String.valueOf(props.get("inline")).contains(RenderHandler.SERVER_FILES_REFUSED));
+        assertTrue(String.valueOf(props.get("outputDirectory")).contains(RenderHandler.SERVER_FILES_REFUSED));
+
+        for (boolean readOnly : new boolean[] {false, true}) {
+            registry = new CommandRegistry();
+            new RenderHandler(new StubAccessor(true), formatter, registry, readOnly, readOnly).registerTools();
+            Map<String, Object> other = findToolSpec("export-view").tool().inputSchema().properties();
+            assertFalse("readOnly " + readOnly, String.valueOf(other.get("inline"))
+                    .contains(RenderHandler.SERVER_FILES_REFUSED));
+            assertFalse("readOnly " + readOnly, String.valueOf(other.get("outputDirectory"))
+                    .contains(RenderHandler.SERVER_FILES_REFUSED));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldAnswerWithTheReadOnlyRefusal_onAReadOnlyServerThatIsAlsoReachable() throws Exception {
+        new RenderHandler(new StubAccessor(true), formatter, registry, true, true).registerTools();
+
+        Map<String, Object> error = errorOf(invokeExportView("view-1", "png", null, false));
+
+        assertEquals(RenderHandler.READ_ONLY_NO_FILES, error.get("message"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldStateTheInlineCapInTheDescription() {
+        new RenderHandler(new StubAccessor(true), formatter, registry).registerTools();
+
+        Map<String, Object> inline = (Map<String, Object>) findToolSpec("export-view").tool().inputSchema()
+                .properties().get("inline");
+        assertTrue(String.valueOf(inline.get("description")),
+                String.valueOf(inline.get("description")).contains("5242880 bytes (5 MiB)"));
+    }
+
     private McpSchema.CallToolResult invokeExportView(
             String viewId, String format, Double scale, Boolean inline) {
         Map<String, Object> args = new HashMap<>();
@@ -1356,5 +1680,84 @@ public class RenderHandlerTest {
             this.lastOutputDirectory = outputDirectory;
             return exportResult;
         }
+    }
+
+    // ---- The display's zoom ----
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> guardError(StubAccessor accessor) throws Exception {
+        McpSchema.CallToolResult result = invokeExportView("view-1", "jpg", 2.0, null);
+        assertTrue("expected the guard to refuse", result.isError());
+        assertFalse("the refusal comes before the render", accessor.exportCalled);
+        return (Map<String, Object>) parseJson(result).get("error");
+    }
+
+    @Test
+    public void shouldRefuseABitmapThatFitsAtOneHundredPercentButNotAtTheDisplaysZoom() throws Exception {
+        long plainBytes = RasterProjection.project(LARGE_VIEW_BOUNDS, 2.0).bytes();
+        long free = 2 * 2 * plainBytes;  // the budget is half of free: twice the 100% bitmap, half the 200% one
+        StubAccessor plain = new StubAccessor(true, createDefaultPngResult());
+        plain.contentBounds = LARGE_VIEW_BOUNDS;
+        new RenderHandler(plain, formatter, registry, () -> free, () -> 100).registerTools();
+        assertFalse(invokeExportView("view-1", "jpg", 2.0, null).isError());
+
+        registry = new net.vheerden.archi.mcp.registry.CommandRegistry();
+        StubAccessor retina = new StubAccessor(true, createDefaultPngResult());
+        retina.contentBounds = LARGE_VIEW_BOUNDS;
+        new RenderHandler(retina, formatter, registry, () -> free, () -> 200).registerTools();
+
+        Map<String, Object> error = guardError(retina);
+
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        String message = (String) error.get("message");
+        assertTrue(message, message.contains("drawn at the display's 200% zoom as"));
+    }
+
+    @Test
+    public void shouldRefuseTheCrashingExport_evenWithMemoryToSpare() throws Exception {
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        new RenderHandler(accessor, formatter, registry, () -> GENEROUS_MEMORY, () -> 200).registerTools();
+
+        Map<String, Object> error = guardError(accessor);
+
+        String suggestion = (String) error.get("suggestedCorrection");
+        double retry = Double.parseDouble(suggestion.replaceAll("^Retry at scale ([0-9.]+) .*$", "$1"));
+        assertTrue("the suggested scale fits at 200%: " + suggestion,
+                RasterProjection.project(LARGE_VIEW_BOUNDS, retry, 200).bytes() <= Integer.MAX_VALUE);
+    }
+
+    @Test
+    public void shouldAdmitABitmapJustUnderWhatAnIntCounts_withMemoryToSpare() {
+        // 256999 x 2089 pixels x 4 bytes = 2147483644, three bytes under Integer.MAX_VALUE.
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = new ContentBounds(0, 0, 256999 - 20, 2089 - 20);
+        new RenderHandler(accessor, formatter, registry, () -> GENEROUS_MEMORY, () -> 100).registerTools();
+
+        McpSchema.CallToolResult result = invokeExportView("view-1", "png", 1.0, null);
+
+        assertFalse(result.isError());
+        assertTrue(accessor.exportCalled);
+    }
+
+    @Test
+    public void shouldCountAnUnreadableOrNonPositiveZoomAsTwoHundred() {
+        assertEquals(200, DeviceZoom.effective(() -> 0));
+        assertEquals(200, DeviceZoom.effective(() -> -100));
+        assertEquals(200, DeviceZoom.effective(() -> {
+            throw new IllegalStateException("no display");
+        }));
+        assertEquals(150, DeviceZoom.effective(() -> 150));
+        assertEquals(100, DeviceZoom.effective(() -> 100));
+    }
+
+    @Test
+    public void shouldRefuse_whenTheZoomCannotBeRead() throws Exception {
+        long plainBytes = RasterProjection.project(LARGE_VIEW_BOUNDS, 2.0).bytes();
+        StubAccessor accessor = new StubAccessor(true, createDefaultPngResult());
+        accessor.contentBounds = LARGE_VIEW_BOUNDS;
+        new RenderHandler(accessor, formatter, registry, () -> 4 * plainBytes, () -> 0).registerTools();
+
+        guardError(accessor);
     }
 }

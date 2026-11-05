@@ -26,6 +26,9 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param createdAt         ISO 8601 timestamp when the proposal was created
  * @param effectDescription server-owned rich effect text; omitted from JSON when null
  * @param intent            the agent's optional stated intent; omitted from JSON when null
+ * @param modelId           id of the model the proposal will write to (the model active when it
+ *                          was proposed); omitted from JSON when null
+ * @param modelName         name of that model, for the approval card; omitted from JSON when null
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ProposalDto(
@@ -38,8 +41,29 @@ public record ProposalDto(
     String validationSummary,
     String createdAt,
     String effectDescription,
-    String intent
+    String intent,
+    String modelId,
+    String modelName
 ) {
+    /**
+     * Back-compat constructor at the prior canonical arity: no target model named.
+     */
+    public ProposalDto(
+        String proposalId,
+        String tool,
+        String status,
+        String description,
+        Map<String, Object> currentState,
+        Map<String, Object> proposedChanges,
+        String validationSummary,
+        String createdAt,
+        String effectDescription,
+        String intent
+    ) {
+        this(proposalId, tool, status, description, currentState, proposedChanges,
+                validationSummary, createdAt, effectDescription, intent, null, null);
+    }
+
     /**
      * Back-compat constructor for call-sites that carry neither the server
      * {@code effectDescription} nor the agent {@code intent}. Delegates with both null,

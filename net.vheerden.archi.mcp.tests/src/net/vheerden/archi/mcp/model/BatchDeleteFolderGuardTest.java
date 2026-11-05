@@ -312,11 +312,12 @@ public class BatchDeleteFolderGuardTest {
     @Test
     public void shouldNameTheSkippedCreateOnTheWire_whenTheBatchIsCommitted() throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of("description", "delete then create"));
+        invokeTool(registry, "begin-batch", Map.of("description", "delete then create",
+                "modelId", "model-batch-folder-guard"));
         invokeTool(registry, "delete-folder", Map.of("folderId", target.getId(), "force", false));
         invokeTool(registry, "create-element", Map.of(
                 "type", "BusinessActor", "name", "WireOrphan", "folderId", target.getId()));
-        String json = json(invokeTool(registry, "end-batch", Map.of("commit", true)));
+        String json = json(invokeTool(registry, "end-batch", Map.of()));
 
         assertFalse("the delete was legitimate and must still happen",
                 business.getFolders().contains(target));

@@ -13,9 +13,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param strategy            the routing strategy used ("orthogonal" or "clear")
  * @param routerTypeSwitched  true if the view's connectionRouterType was switched
  *                            from manhattan to manual (bendpoint) mode
- * @param labelsOptimized     number of connection labels whose position was changed
+ * @param labelsOptimized     number of connection labels the call writes, a text position or a Label Offset
  * @param crossingsBefore     crossing count among targeted connections before routing; omitted when 0
- * @param crossingsAfter      crossing count among targeted connections after routing; omitted when 0
+ * @param crossingsAfter      crossing count among targeted connections after routing, counted on the routes as
+ *                            the view stores them (the next call's crossingsBefore on an untouched view); omitted
+ *                            when 0
  * @param straightLineCrossings straight-line crossing estimate before routing; omitted when 0
  * @param connectionsSkipped  connections not modified (already-orthogonal + obstacle-veto + crossing-veto + interior-veto + zigzag-veto); omitted when 0
  * @param vetoedByObstacle    connections where terminals-only refused a rectification because the new L-bend would cross an unrelated element; omitted when 0

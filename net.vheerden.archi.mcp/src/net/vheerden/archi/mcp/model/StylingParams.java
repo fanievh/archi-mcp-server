@@ -24,7 +24,7 @@ package net.vheerden.archi.mcp.model;
  *                              or "right", null = unchanged. Maps to {@code ITextAlignment.setTextAlignment(int)}
  * @param verticalTextAlignment vertical label position within the figure — "top", "centre" / "center",
  *                              or "bottom", null = unchanged. Maps to {@code ITextPosition.setTextPosition(int)}
- * @param fontName              font family name (e.g. "Segoe UI"), empty string to clear to system default,
+ * @param fontName              font family name (e.g. "Segoe UI"), empty string for the family of Archi's default view font,
  *                              null = unchanged. Merged into the composite font string via
  *                              {@code IFontAttribute.setFont(String)}
  * @param fontSize              font point size (positive int), null = unchanged. Merged into the composite font string

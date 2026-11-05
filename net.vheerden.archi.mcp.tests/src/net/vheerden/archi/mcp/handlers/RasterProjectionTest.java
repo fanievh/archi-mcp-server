@@ -266,4 +266,56 @@ public class RasterProjectionTest {
 
         assertEquals(4.0, largest, 0.0001);
     }
+
+    // ---- The display's zoom ----
+
+    @Test
+    public void shouldCountFourTimesTheBytes_atTwoHundredPercentZoom() {
+        ContentBounds bounds = new ContentBounds(12, 12, 6777, 6538);
+        RasterProjection plain = RasterProjection.project(bounds, 2.0);
+        RasterProjection retina = RasterProjection.project(bounds, 2.0, 200);
+
+        assertEquals("the exported image keeps its size", plain.width(), retina.width());
+        assertEquals(plain.height(), retina.height());
+        assertEquals(4L * plain.bytes(), retina.bytes());
+        assertTrue("the bitmap SWT allocates is past what an int can count", retina.bytes() > Integer.MAX_VALUE);
+        assertTrue("its 100% count is not, which is how it was admitted", plain.bytes() < Integer.MAX_VALUE);
+    }
+
+    @Test
+    public void shouldProjectAtOneHundredPercent_exactlyAsBefore() {
+        ContentBounds bounds = new ContentBounds(0, 0, 1568, 2212);
+        for (double scale : new double[] {0.1, 0.6, 1.0, 2.5, 4.0}) {
+            assertEquals(RasterProjection.project(bounds, scale), RasterProjection.project(bounds, scale, 100));
+        }
+    }
+
+    @Test
+    public void shouldSizeAZoomedEdgeAsSwtDoes() {
+        assertEquals(126, RasterProjection.zoomedEdge(101, 125));
+        assertEquals(252, RasterProjection.zoomedEdge(101, 250));
+        assertEquals(202, RasterProjection.zoomedEdge(101, 200));
+        assertEquals(101, RasterProjection.zoomedEdge(101, 100));
+        assertEquals(Integer.MAX_VALUE, RasterProjection.zoomedEdge(Integer.MAX_VALUE, 200));
+    }
+
+    @Test
+    public void shouldCountAZoomThatIsNotPositiveAsTheUnknownZoom_neverAsAnEmptyBitmap() {
+        for (int zoom : new int[] {0, -100, Integer.MIN_VALUE}) {
+            assertEquals("zoom " + zoom, 202, RasterProjection.zoomedEdge(101, zoom));
+        }
+    }
+
+    @Test
+    public void shouldSuggestAScaleThatFitsAtTheZoomItWasComputedFor() {
+        ContentBounds bounds = new ContentBounds(12, 12, 6777, 6538);
+        long budget = Integer.MAX_VALUE;
+
+        double largest = RasterProjection.largestScaleWithin(bounds, budget, 0.1, 4.0, 200);
+
+        assertTrue(RasterProjection.project(bounds, largest, 200).bytes() <= budget);
+        assertTrue(RasterProjection.project(bounds, largest + 0.01, 200).bytes() > budget);
+        assertTrue("at 100% the same budget admits a larger scale",
+                RasterProjection.largestScaleWithin(bounds, budget, 0.1, 4.0) > largest);
+    }
 }

@@ -7,6 +7,8 @@ import java.util.Map;
 import org.eclipse.emf.ecore.EObject;
 
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IArchimateRelationship;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.util.ArchimateModelUtils;
 
@@ -136,6 +138,42 @@ final class LabelVisibilityReadback {
             }
         }
         return owned;
+    }
+
+    /**
+     * The label text the router should see for a connection: its relationship name when Archi will
+     * draw it, else empty, which every routing stage reads as "no label".
+     *
+     * <p>A hidden label renders nothing, so it has nothing to clear, no position to choose and no
+     * box to score, and it cannot be in another label's way. Feeding its text to the router would
+     * shift a path around a label nobody sees, write and count a position for it, and push a visible
+     * label aside for it.</p>
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside
+     *                         batch mode; see {@link #isShown}
+     */
+    static String drawnLabelText(IDiagramModelArchimateConnection conn, Map<String, Boolean> queuedVisibility) {
+        IArchimateRelationship relationship = conn.getArchimateRelationship();
+        if (relationship == null || relationship.getName() == null || !isShown(conn, queuedVisibility)) {
+            return "";
+        }
+        return relationship.getName();
+    }
+
+    /**
+     * Whether the connection's label will be drawn: the last visibility a still-queued command sets
+     * for it, else the model's.
+     *
+     * <p>Inside an open batch the routing pass reads a model none of the batch's own commands have
+     * run on, so a label the batch is about to show still reads as hidden, and one it is about to
+     * hide still reads as shown. The queued value is what will be true at commit.</p>
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside
+     *                         batch mode, in which case the model's value is the answer
+     */
+    static boolean isShown(IDiagramModelConnection conn, Map<String, Boolean> queuedVisibility) {
+        Boolean queued = (queuedVisibility != null) ? queuedVisibility.get(conn.getId()) : null;
+        return (queued != null) ? queued : conn.isNameVisible();
     }
 
     /** True when the connection exists and its label is currently not visible. */

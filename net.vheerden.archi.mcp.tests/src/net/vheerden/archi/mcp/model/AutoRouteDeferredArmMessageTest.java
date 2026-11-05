@@ -17,6 +17,7 @@ import java.util.regex.Pattern;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.AutoRouteArmFixture.Arm;
+import net.vheerden.archi.mcp.model.routing.EgressOutcome;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
@@ -59,11 +60,14 @@ public class AutoRouteDeferredArmMessageTest {
     private static final List<String> APPLIED_STATE_CLAIMS = List.of(
             "were routed normally",
             "kept the hug(s) in place",
+            "left the hug(s) in place",
+            "still hug the face they leave",
             "ended at their starting position",
             "did not take effect",
             "were still applied",
             "were applied through it",
-            "crossings THIS CALL applied");
+            "crossings THIS CALL applied",
+            "were given Archi's default loop");
 
     // ==================== the five arm-dependent codes ====================
 
@@ -90,6 +94,26 @@ public class AutoRouteDeferredArmMessageTest {
             assertDeferredTense(arm, structured.get(0).message());
             assertEveryFigureSurvives(arm, applied, structured.get(0).message());
             assertMirrored(arm, structured.get(0).message(), free);
+        }
+    }
+
+    @Test
+    public void egressLiftPreGated_onEveryDeferredArm_dropsTheAppliedClaimAndKeepsGapFloorAndIds() {
+        EgressOutcome outcome = new EgressOutcome(0, 5.6, List.of("conn-1", "conn-2"));
+        List<StructuredWarningDto> appliedOut = new ArrayList<>();
+        AutoRouteWarnings.emitEgressLiftPreGated(outcome, DispatchArm.APPLIED, new ArrayList<>(), appliedOut);
+        String applied = appliedOut.get(0).message();
+        for (DispatchArm arm : DEFERRED) {
+            List<String> free = new ArrayList<>();
+            List<StructuredWarningDto> structured = new ArrayList<>();
+            AutoRouteWarnings.emitEgressLiftPreGated(outcome, arm, free, structured);
+
+            assertDeferredTense(arm, structured.get(0).message());
+            assertEveryFigureSurvives(arm, applied, structured.get(0).message());
+            assertTrue(arm + " keeps the measured gap", structured.get(0).message().contains("5.6px"));
+            assertMirrored(arm, structured.get(0).message(), free);
+            assertEquals(arm + " keeps every hugging id machine-readable", List.of("conn-1", "conn-2"),
+                    structured.get(0).remediationViolatorIds());
         }
     }
 
@@ -183,6 +207,44 @@ public class AutoRouteDeferredArmMessageTest {
                 !applied.contains("worse than the geometry it replaced"));
     }
 
+    @Test
+    public void selfConnectionsNotRouted_onEveryDeferredArm_dropsTheAppliedClaimAndKeepsBothLists() {
+        // On a deferred arm the loop is decided when the compound runs, from what each connection
+        // holds then, so neither half of the prepare-time split may be stated as an outcome: an
+        // earlier queued edit, or the human's, can give a bare one bendpoints or clear a kept one.
+        String applied = selfConnections(DispatchArm.APPLIED, new ArrayList<>()).message();
+        assertTrue("the applied arm keeps the kept clause",
+                applied.contains("Those not given a loop by this call are left exactly as stored: sc-kept."));
+        for (DispatchArm arm : DEFERRED) {
+            List<String> free = new ArrayList<>();
+            StructuredWarningDto warning = selfConnections(arm, free);
+            assertDeferredTense(arm, warning.message());
+            assertEveryFigureSurvives(arm, applied, warning.message());
+            assertEquals(arm + ", byte for byte", SELF_CONNECTIONS_DEFERRED.get(arm), warning.message());
+            assertTrue(arm + " may not promise a kept one stays as stored: an earlier edit can clear it",
+                    !warning.message().contains("left exactly as stored"));
+            assertEquals(arm + " lists the kept ids first, then the looped ones",
+                    List.of("sc-kept", "sc-bare"), warning.remediationViolatorIds());
+            assertEquals(arm + ": editing the bendpoints is the lever on every arm",
+                    "update-view-connection", warning.remediationTool());
+            assertMirrored(arm, warning.message(), free);
+        }
+    }
+
+    private static final String SELF_CONNECTIONS_PREFIX = "2 self-connection(s) were not routed: Archi draws a "
+            + "connection from an object to itself as a loop, which this router does not produce. "
+            + "Nothing has been applied. Which of them get Archi's default loop is decided ";
+
+    private static final String SELF_CONNECTIONS_SUFFIX = ", from the bendpoints each holds then: an ArchiMate "
+            + "connection holding none gets it, and every other is left as it is then. As read when this "
+            + "call was made, those not due a loop: sc-kept. As read when this call was made, those due "
+            + "one, stored with no bendpoints and so drawing no line: sc-bare.";
+
+    private static final java.util.Map<DispatchArm, String> SELF_CONNECTIONS_DEFERRED = java.util.Map.of(
+            DispatchArm.QUEUED, SELF_CONNECTIONS_PREFIX + "when the open batch is committed" + SELF_CONNECTIONS_SUFFIX,
+            DispatchArm.AWAITING_APPROVAL, SELF_CONNECTIONS_PREFIX + "only once the human approves it"
+                    + SELF_CONNECTIONS_SUFFIX);
+
     // ==================== the remediation tools ====================
 
     @Test
@@ -261,7 +323,7 @@ public class AutoRouteDeferredArmMessageTest {
         AutoRouteWarnings.emitConnectionsNotFound(List.of("bogus-1"), DispatchArm.APPLIED,
                 free, structured);
 
-        AutoRouteWarnings.emitRoutingFailedDegenerateGeometry(free, structured);
+        AutoRouteWarnings.emitRoutingFailedDegenerateGeometry(List.of(), free, structured);
 
         String message = structured.get(0).message();
         assertTrue("the miss itself survives -- it was measured against the view",
@@ -274,6 +336,33 @@ public class AutoRouteDeferredArmMessageTest {
         }
         assertEquals("the per-ID free-text line is still true and is left exactly as it was",
                 "Connection not found on view: bogus-1", free.get(0));
+    }
+
+    @Test
+    public void selfConnectionsNotRouted_whenRoutingThenFailed_saysTheLoopWasNotWritten() {
+        // The loop commands ride the compound the degenerate-geometry early return never builds,
+        // so on THAT path a bare self-connection still draws no line even on the applied arm.
+        List<String> free = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitSelfConnectionsNotRouted(List.of("sc-kept"), List.of("sc-bare"),
+                DispatchArm.APPLIED, free, structured);
+
+        AutoRouteWarnings.emitRoutingFailedDegenerateGeometry(List.of("sc-bare"), free, structured);
+
+        String message = structured.get(0).message();
+        for (String claim : APPLIED_STATE_CLAIMS) {
+            assertTrue("a failed routing may not claim: " + claim, !message.contains(claim));
+        }
+        assertTrue("and says what became of the bare one instead:\n" + message,
+                message.endsWith("so the default loop was not written either, and these, stored "
+                        + "with no bendpoints, still draw no line: sc-bare."));
+        assertTrue("the kept clause is still true and survives:\n" + message,
+                message.contains("Those not given a loop by this call are left exactly as stored: sc-kept."));
+        assertEquals("the ids are carried unchanged", List.of("sc-kept", "sc-bare"),
+                structured.get(0).remediationViolatorIds());
+        assertTrue("the free text is the structured message, so it is repaired too: " + free,
+                free.contains(message));
+        assertEquals("one line replaced, one failure notice added, nothing else", 2, free.size());
     }
 
     // ==================== assertions ====================
@@ -345,6 +434,13 @@ public class AutoRouteDeferredArmMessageTest {
     private static StructuredWarningDto crossings(DispatchArm arm) {
         List<StructuredWarningDto> structured = new ArrayList<>();
         RoutingPipeline.appendCrossingWarnings(6, 17, 0, true, arm, new ArrayList<>(), structured);
+        return structured.get(0);
+    }
+
+    private static StructuredWarningDto selfConnections(DispatchArm arm, List<String> free) {
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitSelfConnectionsNotRouted(List.of("sc-kept"), List.of("sc-bare"), arm,
+                free, structured);
         return structured.get(0);
     }
 

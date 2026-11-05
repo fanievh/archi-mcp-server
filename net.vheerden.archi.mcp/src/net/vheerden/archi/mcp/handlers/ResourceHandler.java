@@ -20,11 +20,13 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncResourceSpecificatio
 import io.modelcontextprotocol.server.McpServerFeatures.SyncResourceTemplateSpecification;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.registry.ResourceRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
+import net.vheerden.archi.mcp.model.ToolArguments;
 
 /**
  * Loads ArchiMate reference materials and workflow templates from the
@@ -395,7 +397,7 @@ public class ResourceHandler {
 	private McpSchema.CallToolResult buildBadUriTypeError(ResponseFormatter formatter, Object supplied) {
 		ErrorResponse error = new ErrorResponse(
 				ErrorCode.INVALID_PARAMETER,
-				"'uri' must be a string, but a " + supplied.getClass().getSimpleName() + " was supplied",
+				"uri must be a string, got " + ToolArguments.describe(supplied) + ". Nothing was changed.",
 				null,
 				"Pass uri as a plain string, e.g. 'archimate://recipes/index', or omit it entirely to "
 						+ "list every available uri.",
@@ -412,7 +414,7 @@ public class ResourceHandler {
 			}
 		}
 
-		logger.warn("Guidance not found for URI: {}", uri);
+		logger.warn("Guidance not found for URI: {}", CallerText.logged(uri));
 
 		ErrorResponse error = new ErrorResponse(
 				ErrorCode.INVALID_PARAMETER,
@@ -461,11 +463,11 @@ public class ResourceHandler {
 	 */
 	McpSchema.ReadResourceResult handleReadResource(
 			McpSyncServerExchange exchange, McpSchema.ReadResourceRequest request) {
-		logger.debug("Serving resource content for URI: {}", request.uri());
+		logger.debug("Serving resource content for URI: {}", CallerText.logged(request.uri()));
 
 		String content = cachedContent.get(request.uri());
 		if (content == null) {
-			logger.warn("Resource not found for URI: {}", request.uri());
+			logger.warn("Resource not found for URI: {}", CallerText.logged(request.uri()));
 			return new McpSchema.ReadResourceResult(List.of());
 		}
 
@@ -489,7 +491,7 @@ public class ResourceHandler {
 			}
 			return new String(is.readAllBytes(), StandardCharsets.UTF_8);
 		} catch (IOException e) {
-			logger.error("Failed to load resource file: {}", fullPath, e);
+			logger.error("Failed to load resource file: {}", CallerText.logged(fullPath), e);
 			return null;
 		}
 	}

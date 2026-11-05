@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import com.archimatetool.model.IArchimateFactory;
@@ -57,21 +59,24 @@ final class StylingHelper {
         validateVerticalTextAlignment(styling.verticalTextAlignment());
         validateFontSize(styling.fontSize());
         validateFontStyle(styling.fontStyle());
+        validateFontName(styling.fontName());
         validateLineStyle(styling.lineStyle());
         validateGradient(styling.gradient());
         validateBorderType(styling.borderType());
         validateOutlineOpacity(styling.outlineOpacity());
-        // fontName: any non-empty string accepted verbatim (Archi falls back at render time
-        // when name is unknown); empty string clears to the system default. No validator.
+        // fontName: any other non-empty string accepted verbatim (Archi falls back at render time
+        // when name is unknown); empty string sets the family of Archi's default view font.
         // deriveLineColor: Boolean; nothing to validate beyond null/true/false.
     }
 
+    // Every keyword below folds in Locale.ROOT: under a Turkish default locale "Italic" lower-cases
+    // to a dotless i and would no longer match its own spelling.
     static void validateFigureType(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("rectangular") && !normalized.equals("tabbed")) {
             throw new ModelAccessException(
-                    "Invalid figureType value: '" + value + "'",
+                    "Invalid figureType value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'rectangular' or 'tabbed'.",
@@ -81,11 +86,11 @@ final class StylingHelper {
 
     static void validateTextAlignment(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("left") && !normalized.equals("centre")
                 && !normalized.equals("center") && !normalized.equals("right")) {
             throw new ModelAccessException(
-                    "Invalid textAlignment value: '" + value + "'",
+                    "Invalid textAlignment value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'left', 'centre' (or 'center'), or 'right'.",
@@ -95,11 +100,11 @@ final class StylingHelper {
 
     static void validateVerticalTextAlignment(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("top") && !normalized.equals("centre")
                 && !normalized.equals("center") && !normalized.equals("bottom")) {
             throw new ModelAccessException(
-                    "Invalid verticalTextAlignment value: '" + value + "'",
+                    "Invalid verticalTextAlignment value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'top', 'centre' (or 'center'), or 'bottom'.",
@@ -108,7 +113,7 @@ final class StylingHelper {
     }
 
     static int mapFigureTypeToInt(String value) {
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         return switch (normalized) {
             case "rectangular" -> 1;
             case "tabbed" -> 0;
@@ -117,7 +122,7 @@ final class StylingHelper {
     }
 
     static int mapTextAlignmentToInt(String value) {
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         return switch (normalized) {
             case "left" -> ITextAlignment.TEXT_ALIGNMENT_LEFT;
             case "centre", "center" -> ITextAlignment.TEXT_ALIGNMENT_CENTER;
@@ -127,7 +132,7 @@ final class StylingHelper {
     }
 
     static int mapVerticalTextAlignmentToInt(String value) {
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         return switch (normalized) {
             case "top" -> ITextPosition.TEXT_POSITION_TOP;
             case "centre", "center" -> ITextPosition.TEXT_POSITION_CENTRE;
@@ -138,7 +143,7 @@ final class StylingHelper {
 
     /** SWT FontData style bitmask: NORMAL=0, BOLD=1, ITALIC=2, BOLD|ITALIC=3. */
     static int mapFontStyleToInt(String value) {
-        return switch (value.toLowerCase()) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
             case "normal" -> 0;
             case "bold" -> 1;
             case "italic" -> 2;
@@ -165,7 +170,7 @@ final class StylingHelper {
      * connection figure rendering).
      */
     static int mapLineStyleToInt(String value) {
-        return switch (value.toLowerCase()) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
             case "solid" -> IDiagramModelObject.LINE_STYLE_SOLID;   // 0
             case "dashed" -> IDiagramModelObject.LINE_STYLE_DASHED; // 1
             case "dotted" -> IDiagramModelObject.LINE_STYLE_DOTTED; // 2
@@ -199,7 +204,7 @@ final class StylingHelper {
      * combo items [None, Top, Left, Right, Bottom]).
      */
     static int mapGradientToInt(String value) {
-        return switch (value.toLowerCase()) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
             case "none" -> IDiagramModelObject.GRADIENT_NONE; // -1
             case "top-bottom" -> 0; // gradient origin at Top
             case "left-right" -> 1; // gradient origin at Left
@@ -226,7 +231,7 @@ final class StylingHelper {
      * Constants: BORDER_DOGEAR=0 (default), BORDER_RECTANGLE=1, BORDER_NONE=2.
      */
     static int mapBorderTypeToInt(String value) {
-        return switch (value.toLowerCase()) {
+        return switch (value.toLowerCase(Locale.ROOT)) {
             case "dogear" -> IDiagramModelNote.BORDER_DOGEAR;
             case "rectangle" -> IDiagramModelNote.BORDER_RECTANGLE;
             case "none" -> IDiagramModelNote.BORDER_NONE;
@@ -277,6 +282,22 @@ final class StylingHelper {
         }
         validateFontSize(styling.fontSize());
         validateFontStyle(styling.fontStyle());
+        validateFontName(styling.fontName());
+    }
+
+    /**
+     * A family name is stored in one cell of a {@code |}-separated font string, so a name holding
+     * {@code |} would split into two cells, shift the height and style, and leave a font that is
+     * stored but never drawn.
+     */
+    static void validateFontName(String value) {
+        if (value == null || value.indexOf('|') < 0) return;
+        throw new ModelAccessException(
+                "fontName must not contain '|', got: " + CallerText.quoted(value) + ". Nothing was changed.",
+                ErrorCode.INVALID_PARAMETER,
+                null,
+                "Provide the family name alone (e.g., 'Arial'), or an empty string for the default view font.",
+                null);
     }
 
     static void validateFontSize(Integer value) {
@@ -293,11 +314,11 @@ final class StylingHelper {
 
     static void validateFontStyle(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("normal") && !normalized.equals("bold")
                 && !normalized.equals("italic") && !normalized.equals("bold-italic")) {
             throw new ModelAccessException(
-                    "Invalid fontStyle value: '" + value + "'",
+                    "Invalid fontStyle value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'normal', 'bold', 'italic', or 'bold-italic'.",
@@ -307,11 +328,11 @@ final class StylingHelper {
 
     static void validateLineStyle(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("solid") && !normalized.equals("dashed")
                 && !normalized.equals("dotted") && !normalized.equals("none")) {
             throw new ModelAccessException(
-                    "Invalid lineStyle value: '" + value + "'",
+                    "Invalid lineStyle value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'solid', 'dashed', 'dotted', or 'none'.",
@@ -321,12 +342,12 @@ final class StylingHelper {
 
     static void validateGradient(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("none") && !normalized.equals("top-bottom")
                 && !normalized.equals("bottom-top") && !normalized.equals("left-right")
                 && !normalized.equals("right-left")) {
             throw new ModelAccessException(
-                    "Invalid gradient value: '" + value + "'",
+                    "Invalid gradient value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'none', 'top-bottom', 'bottom-top', 'left-right', or 'right-left'.",
@@ -336,11 +357,11 @@ final class StylingHelper {
 
     static void validateBorderType(String value) {
         if (value == null || value.isEmpty()) return;
-        String normalized = value.toLowerCase();
+        String normalized = value.toLowerCase(Locale.ROOT);
         if (!normalized.equals("dogear") && !normalized.equals("rectangle")
                 && !normalized.equals("none")) {
             throw new ModelAccessException(
-                    "Invalid borderType value: '" + value + "'",
+                    "Invalid borderType value: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide 'dogear', 'rectangle', or 'none'.",
@@ -443,59 +464,89 @@ final class StylingHelper {
 
     /**
      * Assembles a composite font string from the existing string + any non-null override
-     * components. Implements the "merge then write" semantic.
-     *
-     * <ul>
-     *   <li>{@code existing == null/empty}: build a minimal version-0 string with the supplied
-     *       components (defaults: name="", height=9, style=0).
-     *   <li>{@code existing} has a recognised version: replace only the supplied components in
-     *       place, preserving trailing platform/extra cells verbatim.
-     *   <li>{@code newName != null && newName.isEmpty()}: clears name cell to empty (= "use
-     *       system default font" — Archi's render falls back).
-     * </ul>
+     * components, against Archi's default view font read now ({@link DefaultViewFont#read()}).
      */
     static String assembleFontString(String existing, String newName, Integer newSize, String newStyle) {
+        return assembleFontString(existing, newName, newSize, newStyle, DefaultViewFont.read());
+    }
+
+    /**
+     * Assembles a composite font string from the existing string + any non-null override
+     * components. Implements the "merge then write" semantic, and always writes version 1 — the
+     * form SWT's {@code FontData(String)} reads. A version-0 string is refused by it, and Archi then
+     * draws the default font, so a version-0 font is stored and read back but never drawn.
+     *
+     * <ul>
+     *   <li>{@code existing == null/empty}: build {@code 1|<name>|<height>.0|<style>|} from the
+     *       supplied components, taking any the caller did not supply from {@code defaults} (style
+     *       normal), so a call that sets only the style keeps the default family and size.
+     *   <li>{@code existing} is version 0: re-emitted as version 1 with its own name, height and
+     *       style, then merged as below.
+     *   <li>{@code existing} is version 1: replace only the supplied components in place. The
+     *       platform cells after the style are dropped: on macOS they name the exact face
+     *       ({@code COCOA|1|Arial-BoldMT}), and SWT draws that face over the name and style cells,
+     *       so a changed name or style would be stored and read back but not drawn. Without them
+     *       SWT builds the face from the name, height and style, as for any written font.
+     *   <li>An empty name cell (none stored, or {@code newName} is {@code ""}) is filled with the
+     *       default family: an empty family draws the platform's face, not Archi's default view font.
+     *       It stays empty only when the default could not be read.
+     *   <li>A height or style cell SWT cannot read (empty, or not a number) takes the default height
+     *       or the normal style, so a malformed stored string is repaired rather than rewritten as is.
+     * </ul>
+     */
+    static String assembleFontString(String existing, String newName, Integer newSize, String newStyle,
+            DefaultViewFont.Spec defaults) {
+        String[] parts;
         if (existing == null || existing.isEmpty()) {
-            // No existing font — emit minimal version-0 string.
-            String name = (newName == null) ? "" : newName;
-            int height = (newSize != null) ? newSize : 9;
-            int style = (newStyle != null) ? mapFontStyleToInt(newStyle) : 0;
-            return name + "|" + height + "|" + style;
+            parts = new String[] {"1", "", defaults.height() + ".0", "0", ""};
+        } else {
+            parts = existing.split("\\|", -1);
+            if (!isVersion1(parts)) {
+                parts = upgradeVersion0(parts, defaults);
+            }
         }
-
-        String[] parts = existing.split("\\|", -1);
-        boolean v1 = isVersion1(parts);
-        int nameIdx = v1 ? V1_NAME_IDX : V0_NAME_IDX;
-        int heightIdx = v1 ? V1_HEIGHT_IDX : V0_HEIGHT_IDX;
-        int styleIdx = v1 ? V1_STYLE_IDX : V0_STYLE_IDX;
-
-        // Defensive: ensure parts is wide enough for the cells we may edit.
-        int needed = styleIdx + 1;
-        if (parts.length < needed) {
-            String[] widened = new String[needed];
+        if (parts.length <= V1_STYLE_IDX) {
+            String[] widened = new String[V1_STYLE_IDX + 1];
             System.arraycopy(parts, 0, widened, 0, parts.length);
-            for (int i = parts.length; i < needed; i++) widened[i] = "";
+            for (int i = parts.length; i < widened.length; i++) widened[i] = "";
             parts = widened;
         }
-
         if (newName != null) {
-            parts[nameIdx] = newName; // empty string clears
+            parts[V1_NAME_IDX] = newName;
+        }
+        if (parts[V1_NAME_IDX].isEmpty()) {
+            parts[V1_NAME_IDX] = defaults.name();
         }
         if (newSize != null) {
-            // Preserve existing version's height format (v1 = "9.0" float, v0 = "9" int).
-            parts[heightIdx] = v1 ? (newSize + ".0") : String.valueOf(newSize.intValue());
+            parts[V1_HEIGHT_IDX] = newSize + ".0";
         }
         if (newStyle != null) {
-            parts[styleIdx] = String.valueOf(mapFontStyleToInt(newStyle));
+            parts[V1_STYLE_IDX] = String.valueOf(mapFontStyleToInt(newStyle));
         }
-        return String.join("|", parts);
+        // A stored height or style cell SWT cannot read (empty, or not a number) would leave the
+        // whole string unread and the default font drawn, so it takes the default instead.
+        if (!parts[V1_HEIGHT_IDX].matches("\\d+(\\.\\d+)?") || Float.parseFloat(parts[V1_HEIGHT_IDX]) <= 0) {
+            parts[V1_HEIGHT_IDX] = defaults.height() + ".0";
+        }
+        if (!parts[V1_STYLE_IDX].matches("\\d+")) {
+            parts[V1_STYLE_IDX] = "0";
+        }
+        return String.join("|", parts[0], parts[V1_NAME_IDX], parts[V1_HEIGHT_IDX], parts[V1_STYLE_IDX], "");
+    }
+
+    /** A version-0 string's name, height and style in version-1 cells; a malformed cell takes the default. */
+    private static String[] upgradeVersion0(String[] v0, DefaultViewFont.Spec defaults) {
+        String name = v0.length > V0_NAME_IDX ? v0[V0_NAME_IDX] : "";
+        Integer height = parseFontSize(String.join("|", v0));
+        String style = v0.length > V0_STYLE_IDX && v0[V0_STYLE_IDX].matches("\\d+") ? v0[V0_STYLE_IDX] : "0";
+        return new String[] {"1", name, (height != null && height > 0 ? height : defaults.height()) + ".0", style, ""};
     }
 
     static void validateHexColor(String value, String fieldName) {
         if (value == null || value.isEmpty()) return;
         if (!HEX_COLOR_PATTERN.matcher(value).matches()) {
             throw new ModelAccessException(
-                    "Invalid " + fieldName + " format: '" + value + "'",
+                    "Invalid " + fieldName + " format: " + CallerText.quoted(value),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Provide a hex colour in #RRGGBB format (e.g., '#FF6600') or empty string to clear.",
@@ -774,6 +825,18 @@ final class StylingHelper {
     }
 
     /**
+     * Reads a connection's textAlignment with the literals {@link #readTextAlignment} uses: "left" or
+     * "right", and null at the centred default, which is therefore omitted from the row. The object
+     * reader is typed to a view object, which a connection is not, though both carry the attribute.
+     */
+    static String readConnectionTextAlignment(IDiagramModelConnection conn) {
+        int v = conn.getTextAlignment();
+        if (v == ITextAlignment.TEXT_ALIGNMENT_LEFT) return "left";
+        if (v == ITextAlignment.TEXT_ALIGNMENT_RIGHT) return "right";
+        return null;
+    }
+
+    /**
      * Reads verticalTextAlignment as a user-facing string. Returns null when at Archi default
      * ({@link ITextPosition#TEXT_POSITION_TOP} — confirmed empirically: a freshly-created
      * IDiagramModelGroup / IDiagramModelArchimateObject / IDiagramModelNote all return
@@ -885,40 +948,61 @@ final class StylingHelper {
     // ---- Post-styling computation ----
 
     /**
-     * The thirteen post-execution styling values both {@code update-view-object} prepares reconcile
+     * The sixteen post-execution styling values both {@code update-view-object} prepares reconcile
      * before building their DTO, computed once.
      *
      * <p>Each is the same reconciliation: read what the object holds now, take what the request
-     * asked for, and let the request win only where it said something. Both prepares had their own
-     * copy of all thirteen lines, which is thirteen chances for the two update paths to disagree
-     * about what the same request means. The three alignment fields are deliberately NOT here — the
-     * two prepares genuinely differ on those, and folding them would have changed one path's
-     * behaviour under cover of a refactor.</p>
+     * asked for, and let the request win only where it said something <em>and</em> the object's kind
+     * holds the field. A kind that does not hold it (a note's figure type, a group's border type)
+     * reports what it holds, which is nothing, through the same {@link ViewObjectFieldsByKind} test the
+     * update command writes with. Both prepares used to keep their own copy of these lines, and the
+     * direct one reported the three alignment fields as they stood before the update; one record
+     * means one answer for the same request on both paths.</p>
      */
     record PostStyling(
             String fillColor, String lineColor, String fontColor,
             Integer opacity, Integer lineWidth,
             String fontName, Integer fontSize, String fontStyle,
             String gradient, String borderType, Boolean deriveLineColor,
-            Integer outlineOpacity, String lineStyle) {
+            Integer outlineOpacity, String lineStyle,
+            String figureType, String textAlignment, String verticalTextAlignment) {
     }
 
     /** Reconciles every field of {@link PostStyling} for {@code diagramObj} against {@code styling}. */
     static PostStyling computePostStyling(IDiagramModelObject diagramObj, StylingParams styling) {
+        StylingParams s = (styling != null) ? styling : StylingParams.NONE;
+        // A font write stores whole cells, the ones not asked for taken from Archi's default view
+        // font, so the answer is read from the string the write will store, not from the request.
+        String storedFont = (s.fontName() != null || s.fontSize() != null || s.fontStyle() != null)
+                && diagramObj instanceof IFontAttribute fa
+                ? assembleFontString(fa.getFont(), s.fontName(), s.fontSize(), s.fontStyle()) : null;
         return new PostStyling(
-                computePostStylingColor(readFillColor(diagramObj), styling != null ? styling.fillColor() : null),
-                computePostStylingColor(readLineColor(diagramObj), styling != null ? styling.lineColor() : null),
-                computePostStylingColor(readFontColor(diagramObj), styling != null ? styling.fontColor() : null),
-                computePostStylingOpacity(readOpacity(diagramObj), styling != null ? styling.opacity() : null),
-                computePostStylingLineWidth(readLineWidth(diagramObj), styling != null ? styling.lineWidth() : null),
-                computePostStylingFontName(readFontName(diagramObj), styling != null ? styling.fontName() : null),
-                computePostStylingFontSize(readFontSize(diagramObj), styling != null ? styling.fontSize() : null),
-                computePostStylingFontStyle(readFontStyle(diagramObj), styling != null ? styling.fontStyle() : null),
-                computePostStylingGradient(readGradient(diagramObj), styling != null ? styling.gradient() : null),
-                computePostStylingBorderType(readBorderType(diagramObj), styling != null ? styling.borderType() : null),
-                computePostStylingDeriveLineColor(readDeriveLineColor(diagramObj), styling != null ? styling.deriveLineColor() : null),
-                computePostStylingOutlineOpacity(readOutlineOpacity(diagramObj), styling != null ? styling.outlineOpacity() : null),
-                computePostStylingLineStyle(readLineStyle(diagramObj), styling != null ? styling.lineStyle() : null));
+                computePostStylingColor(readFillColor(diagramObj), s.fillColor()),
+                computePostStylingColor(readLineColor(diagramObj), s.lineColor()),
+                computePostStylingColor(readFontColor(diagramObj), s.fontColor()),
+                computePostStylingOpacity(readOpacity(diagramObj), s.opacity()),
+                computePostStylingLineWidth(readLineWidth(diagramObj), s.lineWidth()),
+                storedFont == null ? computePostStylingFontName(readFontName(diagramObj), s.fontName())
+                        : parseFontName(storedFont),
+                storedFont == null ? computePostStylingFontSize(readFontSize(diagramObj), s.fontSize())
+                        : parseFontSize(storedFont),
+                storedFont == null ? computePostStylingFontStyle(readFontStyle(diagramObj), s.fontStyle())
+                        : parseFontStyle(storedFont),
+                computePostStylingGradient(readGradient(diagramObj), s.gradient()),
+                ViewObjectFieldsByKind.holdsBorderType(diagramObj)
+                        ? computePostStylingBorderType(readBorderType(diagramObj), s.borderType())
+                        : readBorderType(diagramObj),
+                computePostStylingDeriveLineColor(readDeriveLineColor(diagramObj), s.deriveLineColor()),
+                computePostStylingOutlineOpacity(readOutlineOpacity(diagramObj), s.outlineOpacity()),
+                computePostStylingLineStyle(readLineStyle(diagramObj), s.lineStyle()),
+                ViewObjectFieldsByKind.holdsFigureType(diagramObj)
+                        ? computePostStylingFigureType(readFigureType(diagramObj), s.figureType())
+                        : readFigureType(diagramObj),
+                computePostStylingTextAlignment(readTextAlignment(diagramObj), s.textAlignment()),
+                ViewObjectFieldsByKind.holdsVerticalTextAlignment(diagramObj)
+                        ? computePostStylingVerticalTextAlignment(readVerticalTextAlignment(diagramObj),
+                                s.verticalTextAlignment())
+                        : readVerticalTextAlignment(diagramObj));
     }
 
     static String computePostStylingColor(String currentValue, String stylingValue) {
@@ -943,7 +1027,7 @@ final class StylingHelper {
      */
     static String computePostStylingFigureType(String currentValue, String stylingValue) {
         if (stylingValue == null || stylingValue.isEmpty()) return currentValue;
-        return stylingValue.toLowerCase().equals("rectangular") ? "rectangular" : null;
+        return stylingValue.toLowerCase(Locale.ROOT).equals("rectangular") ? "rectangular" : null;
     }
 
     /**
@@ -952,7 +1036,7 @@ final class StylingHelper {
      */
     static String computePostStylingTextAlignment(String currentValue, String stylingValue) {
         if (stylingValue == null || stylingValue.isEmpty()) return currentValue;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         if (n.equals("left")) return "left";
         if (n.equals("right")) return "right";
         return null;
@@ -964,7 +1048,7 @@ final class StylingHelper {
      */
     static String computePostStylingVerticalTextAlignment(String currentValue, String stylingValue) {
         if (stylingValue == null || stylingValue.isEmpty()) return currentValue;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         if (n.equals("centre") || n.equals("center")) return "centre";
         if (n.equals("bottom")) return "bottom";
         return null;
@@ -985,7 +1069,7 @@ final class StylingHelper {
     /** Post-styling fontStyle DTO value. Returns null for "normal" (default). */
     static String computePostStylingFontStyle(String currentValue, String stylingValue) {
         if (stylingValue == null || stylingValue.isEmpty()) return currentValue;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         return n.equals("normal") ? null : n;
     }
 
@@ -996,7 +1080,7 @@ final class StylingHelper {
     static String computePostStylingLineStyle(String currentValue, String stylingValue) {
         if (stylingValue == null) return currentValue;
         if (stylingValue.isEmpty()) return null;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         return n.equals("solid") ? null : n;
     }
 
@@ -1004,7 +1088,7 @@ final class StylingHelper {
     static String computePostStylingGradient(String currentValue, String stylingValue) {
         if (stylingValue == null) return currentValue;
         if (stylingValue.isEmpty()) return null;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         return n.equals("none") ? null : n;
     }
 
@@ -1012,7 +1096,7 @@ final class StylingHelper {
     static String computePostStylingBorderType(String currentValue, String stylingValue) {
         if (stylingValue == null) return currentValue;
         if (stylingValue.isEmpty()) return null;
-        String n = stylingValue.toLowerCase();
+        String n = stylingValue.toLowerCase(Locale.ROOT);
         return n.equals("dogear") ? null : n;
     }
 
@@ -1101,9 +1185,9 @@ final class StylingHelper {
      * reservation during layout, mirroring the read path used elsewhere.
      *
      * <ul>
-     *   <li>A manually suppressed label (name not visible) resolves to empty so
-     *       it reserves no layout space — keeping manual suppression an effective
-     *       escape hatch.</li>
+     *   <li>A manually suppressed label (name not visible, or hidden by the
+     *       batch) resolves to empty so it reserves no layout space — keeping
+     *       manual suppression an effective escape hatch.</li>
      *   <li>When set, a {@code labelExpression} overrides the relationship name
      *       (consistent with {@link #readConnectionLabelExpression}). The raw
      *       expression string is used as the width basis since the layout path
@@ -1115,10 +1199,12 @@ final class StylingHelper {
      *       the connection's own name.</li>
      * </ul>
      *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside
+     *                         batch mode; see {@link LabelVisibilityReadback#isShown}
      * @return the label text (never null); empty string when nothing is displayed
      */
-    static String resolveConnectionLabelText(IDiagramModelConnection conn) {
-        if (!conn.isNameVisible()) {
+    static String resolveConnectionLabelText(IDiagramModelConnection conn, Map<String, Boolean> queuedVisibility) {
+        if (!LabelVisibilityReadback.isShown(conn, queuedVisibility)) {
             return "";
         }
         if (conn instanceof IDiagramModelArchimateConnection archConn) {

@@ -42,7 +42,18 @@ public record ResizeElementsResultDto(
         List<ResizedElement> resizedElements,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ResizedGroupDto> resizedGroups,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> movedObjects,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<SkippedContainerDto> skippedContainers) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<SkippedContainerDto> skippedContainers,
+        // A container this call grew now overlaps a sibling it did not overlap before (appended);
+        // see StructuredWarningCodes.CASCADE_GROWN_INTO_SIBLING. Omitted when empty.
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<StructuredWarningDto> structuredWarnings) {
+
+    /** The shape before the cascade overlap warning: delegates with none. */
+    public ResizeElementsResultDto(String viewId, int resizedCount, int unchangedCount,
+            List<ResizedElement> resizedElements, List<ResizedGroupDto> resizedGroups,
+            List<MovedViewObjectDto> movedObjects, List<SkippedContainerDto> skippedContainers) {
+        this(viewId, resizedCount, unchangedCount, resizedElements, resizedGroups, movedObjects,
+                skippedContainers, List.of());
+    }
 
     /**
      * Back-compatible constructor for callers that report no group resizes.

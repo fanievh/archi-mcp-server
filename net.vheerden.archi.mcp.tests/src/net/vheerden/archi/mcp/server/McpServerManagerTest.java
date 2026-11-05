@@ -2,7 +2,10 @@ package net.vheerden.archi.mcp.server;
 
 import static org.junit.Assert.*;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -13,15 +16,19 @@ import org.junit.Test;
 /**
  * Tests for {@link McpServerManager}.
  *
- * <p>Uses real {@link TransportConfig} with high ports (19100+) to avoid conflicts.
- * Tests exercise actual Jetty start/stop for integration verification.
+ * <p>Uses a real {@link TransportConfig} and exercises actual Jetty start/stop for integration
+ * verification. Every server starts on port 0 and the test reads back the port it bound, so nothing
+ * else on the machine can hold the port first. A test that needs a port already in use holds a socket
+ * on one for the whole start, so the port is never free in between.
  * Uses package-visible {@code start(int, String)} to bypass McpPlugin preferences.</p>
  */
 public class McpServerManagerTest {
 
-    private static final int TEST_PORT = 19100;
+    /** Asks the server for any free port; the bound one is read back with {@code getPort()}. */
+    private static final int ANY_PORT = 0;
     private static final String TEST_BIND_ADDRESS = "127.0.0.1";
 
+    private TransportConfig transport;
     private McpServerManager manager;
 
     @Before
@@ -32,7 +39,8 @@ public class McpServerManagerTest {
         org.junit.Assume.assumeTrue(
                 "Requires OSGi runtime (run as JUnit Plug-in Test)",
                 isEclipseRuntimeRunning());
-        manager = new McpServerManager(new TransportConfig());
+        transport = new TransportConfig();
+        manager = new McpServerManager(transport);
     }
 
     @After
@@ -59,7 +67,7 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldTransitionToRunning_whenStartCalled() {
-        manager.start(TEST_PORT, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         assertEquals(ServerState.RUNNING, manager.getState());
         assertTrue(manager.isRunning());
@@ -67,7 +75,7 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldTransitionToStopped_whenStopCalled() {
-        manager.start(TEST_PORT + 1, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
         assertTrue(manager.isRunning());
 
         manager.stop();
@@ -78,10 +86,10 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldReturnError_whenStartFailsDueToPortConflict() throws Exception {
-        try (ServerSocket blocker = new ServerSocket(TEST_PORT + 2, 1,
-                java.net.InetAddress.getByName(TEST_BIND_ADDRESS))) {
+        try (ServerSocket blocker = new ServerSocket(0, 1,
+                InetAddress.getByName(TEST_BIND_ADDRESS))) {
 
-            manager.start(TEST_PORT + 2, TEST_BIND_ADDRESS);
+            manager.start(blocker.getLocalPort(), TEST_BIND_ADDRESS);
 
             assertEquals(ServerState.ERROR, manager.getState());
             assertFalse(manager.isRunning());
@@ -100,7 +108,7 @@ public class McpServerManagerTest {
             newStates.add(newState);
         });
 
-        manager.start(TEST_PORT + 3, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         // Should have STOPPED->STARTING, STARTING->RUNNING
         assertEquals(2, oldStates.size());
@@ -112,7 +120,7 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldNotifyListeners_whenStopCalled() {
-        manager.start(TEST_PORT + 4, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         List<ServerState> oldStates = new ArrayList<>();
         List<ServerState> newStates = new ArrayList<>();
@@ -133,20 +141,24 @@ public class McpServerManagerTest {
     }
 
     @Test
-    public void shouldBeIdempotent_whenStartCalledTwice() {
-        manager.start(TEST_PORT + 5, TEST_BIND_ADDRESS);
+    public void shouldBeIdempotent_whenStartCalledTwice() throws Exception {
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
         assertTrue(manager.isRunning());
         int port = manager.getPort();
 
-        // Second start should be a no-op
-        manager.start(TEST_PORT + 6, TEST_BIND_ADDRESS);
-        assertTrue(manager.isRunning());
-        assertEquals(port, manager.getPort());
+        // Second start should be a no-op. It asks for a different port, held here so that a real
+        // bind would fail: the server must neither move nor go into an error state.
+        try (ServerSocket other = new ServerSocket(0, 1,
+                InetAddress.getByName(TEST_BIND_ADDRESS))) {
+            manager.start(other.getLocalPort(), TEST_BIND_ADDRESS);
+            assertTrue(manager.isRunning());
+            assertEquals(port, manager.getPort());
+        }
     }
 
     @Test
     public void shouldBeIdempotent_whenStopCalledTwice() {
-        manager.start(TEST_PORT + 7, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
         manager.stop();
         assertFalse(manager.isRunning());
 
@@ -157,10 +169,15 @@ public class McpServerManagerTest {
     }
 
     @Test
-    public void shouldReturnActivePort_whenRunning() {
-        manager.start(TEST_PORT + 8, TEST_BIND_ADDRESS);
+    public void shouldReturnActivePort_whenRunning() throws Exception {
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
-        assertEquals(TEST_PORT + 8, manager.getPort());
+        int port = manager.getPort();
+        assertTrue("the bound port, not the requested 0: " + port, port > 0);
+        assertEquals(transport.getPort(), port);
+        try (Socket client = new Socket()) {
+            client.connect(new InetSocketAddress(TEST_BIND_ADDRESS, port), 5_000);
+        }
     }
 
     @Test
@@ -176,7 +193,7 @@ public class McpServerManagerTest {
         assertNull(manager.getLastErrorMessage());
 
         // When running
-        manager.start(TEST_PORT + 9, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
         assertEquals(ServerState.RUNNING, manager.getState());
         assertTrue(manager.getPort() > 0);
         assertNull(manager.getLastErrorMessage());
@@ -185,10 +202,10 @@ public class McpServerManagerTest {
     @Test
     public void shouldClearErrorOnStop() throws Exception {
         // Force an error
-        try (ServerSocket blocker = new ServerSocket(TEST_PORT + 10, 1,
-                java.net.InetAddress.getByName(TEST_BIND_ADDRESS))) {
+        try (ServerSocket blocker = new ServerSocket(0, 1,
+                InetAddress.getByName(TEST_BIND_ADDRESS))) {
 
-            manager.start(TEST_PORT + 10, TEST_BIND_ADDRESS);
+            manager.start(blocker.getLocalPort(), TEST_BIND_ADDRESS);
             assertEquals(ServerState.ERROR, manager.getState());
             assertNotNull(manager.getLastErrorMessage());
         }
@@ -207,7 +224,7 @@ public class McpServerManagerTest {
         manager.addStateListener(listener);
         manager.removeStateListener(listener);
 
-        manager.start(TEST_PORT + 11, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         // Listener should not have been called
         assertTrue(states.isEmpty());
@@ -225,7 +242,7 @@ public class McpServerManagerTest {
         // Second listener should still be called
         manager.addStateListener((oldState, newState) -> states.add(newState));
 
-        manager.start(TEST_PORT + 12, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         // Second listener should have been notified despite first one throwing
         assertFalse(states.isEmpty());
@@ -236,7 +253,7 @@ public class McpServerManagerTest {
         assertNull(manager.getStreamableMcpServer());
         assertNull(manager.getSseMcpServer());
 
-        manager.start(TEST_PORT + 13, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         assertNotNull(manager.getStreamableMcpServer());
         assertNotNull(manager.getSseMcpServer());
@@ -244,16 +261,16 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldNotAccumulateResources_afterMultipleFailedStarts() throws Exception {
-        try (ServerSocket blocker = new ServerSocket(TEST_PORT + 15, 1,
-                java.net.InetAddress.getByName(TEST_BIND_ADDRESS))) {
+        try (ServerSocket blocker = new ServerSocket(0, 1,
+                InetAddress.getByName(TEST_BIND_ADDRESS))) {
 
             // First failed start — resources registered then startup fails
-            manager.start(TEST_PORT + 15, TEST_BIND_ADDRESS);
+            manager.start(blocker.getLocalPort(), TEST_BIND_ADDRESS);
             assertEquals(ServerState.ERROR, manager.getState());
             int countAfterFirst = manager.getResourceRegistry().getResourceCount();
 
             // Second failed start — resources should NOT accumulate
-            manager.start(TEST_PORT + 15, TEST_BIND_ADDRESS);
+            manager.start(blocker.getLocalPort(), TEST_BIND_ADDRESS);
             assertEquals(ServerState.ERROR, manager.getState());
             int countAfterSecond = manager.getResourceRegistry().getResourceCount();
 
@@ -273,13 +290,13 @@ public class McpServerManagerTest {
         McpServerManager tlsManager = new McpServerManager(tlsTransport);
         try {
             // Start with TLS via transport config directly
-            tlsTransport.startServer(TEST_PORT + 20, TEST_BIND_ADDRESS,
+            tlsTransport.startServer(ANY_PORT, TEST_BIND_ADDRESS,
                     true, certResult.keystorePath(), certResult.password());
 
             String url = tlsManager.buildServerUrl();
             assertNotNull(url);
             assertTrue("URL should start with https://", url.startsWith("https://"));
-            assertTrue("URL should contain the port", url.contains(":" + (TEST_PORT + 20)));
+            assertTrue("URL should contain the port", url.contains(":" + tlsTransport.getPort() + "/"));
         } finally {
             tlsTransport.stopServer();
             java.nio.file.Files.deleteIfExists(java.nio.file.Path.of(keystorePath));
@@ -288,7 +305,7 @@ public class McpServerManagerTest {
 
     @Test
     public void shouldBuildHttpUrl_whenTlsNotEnabled() {
-        manager.start(TEST_PORT + 21, TEST_BIND_ADDRESS);
+        manager.start(ANY_PORT, TEST_BIND_ADDRESS);
 
         String url = manager.buildServerUrl();
         assertNotNull(url);
@@ -302,7 +319,7 @@ public class McpServerManagerTest {
         McpServerManager tlsManager = new McpServerManager(tlsTransport);
 
         try {
-            tlsTransport.startServer(TEST_PORT + 22, TEST_BIND_ADDRESS,
+            tlsTransport.startServer(ANY_PORT, TEST_BIND_ADDRESS,
                     true, "/nonexistent/keystore.p12", "password");
             fail("Expected ServerStartException");
         } catch (ServerStartException e) {
@@ -315,14 +332,56 @@ public class McpServerManagerTest {
         List<ServerState> newStates = new ArrayList<>();
         manager.addStateListener((oldState, newState) -> newStates.add(newState));
 
-        try (ServerSocket blocker = new ServerSocket(TEST_PORT + 14, 1,
-                java.net.InetAddress.getByName(TEST_BIND_ADDRESS))) {
+        try (ServerSocket blocker = new ServerSocket(0, 1,
+                InetAddress.getByName(TEST_BIND_ADDRESS))) {
 
-            manager.start(TEST_PORT + 14, TEST_BIND_ADDRESS);
+            manager.start(blocker.getLocalPort(), TEST_BIND_ADDRESS);
 
             // Should have STARTING and then ERROR
             assertTrue(newStates.contains(ServerState.STARTING));
             assertTrue(newStates.contains(ServerState.ERROR));
         }
+    }
+
+    @Test
+    public void shouldReportErrorAndAllowARetry_whenThePreferenceStartThrowsAnAssertionError() {
+        assertNotNull("precondition: start() reads the plugin's preferences",
+                net.vheerden.archi.mcp.McpPlugin.getDefault());
+        AssertionError error = new AssertionError("thrown by the test's transport");
+        int[] startCalls = {0};
+        // Throws on the first start; the retry starts on any free port rather than the preference's.
+        TransportConfig throwingOnce = new TransportConfig() {
+            @Override
+            public void startServer() throws ServerStartException {
+                if (++startCalls[0] == 1) {
+                    throw error;
+                }
+                startServer(ANY_PORT, TEST_BIND_ADDRESS);
+            }
+        };
+        manager = new McpServerManager(throwingOnce);
+        List<String> transitions = new ArrayList<>();
+        manager.addStateListener((oldState, newState) -> transitions.add(oldState + "->" + newState));
+
+        Error thrown = null;
+        try {
+            manager.start();
+        } catch (Error e) {
+            thrown = e;
+        }
+
+        assertSame(error, thrown);
+
+        assertEquals(ServerState.ERROR, manager.getState());
+        assertEquals("Server initialization failed: AssertionError: thrown by the test's transport",
+                manager.getLastErrorMessage());
+        assertEquals(List.of("STOPPED->STARTING", "STARTING->ERROR"), transitions);
+
+        manager.start();
+
+        assertEquals(2, startCalls[0]);
+        assertEquals("ERROR->STARTING", transitions.get(2));
+        assertEquals(ServerState.RUNNING, manager.getState());
+        assertTrue(manager.isRunning());
     }
 }

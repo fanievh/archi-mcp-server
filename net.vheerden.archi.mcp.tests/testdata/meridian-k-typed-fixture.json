@@ -1,0 +1,634 @@
+{
+ "viewId": "id-66cc7b2b88954d5a8c0f08f081d1f5a7",
+ "viewName": "K · Transformation Roadmap",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-585ea7d3251d42029f5c6093ad4f299c",
+   "name": "Current State (As-Is)",
+   "x": 30,
+   "y": 54,
+   "w": 180,
+   "h": 84,
+   "isChild": true,
+   "type": "Plateau",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-6f429aad4c6845369f58524ac87af3ec",
+   "name": "Gap: No Open Banking APIs",
+   "x": 255,
+   "y": 54,
+   "w": 124,
+   "h": 55,
+   "isChild": true,
+   "type": "Gap",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-a17f5227cf9d4d97859ded01597275ba",
+   "name": "Gap: Monolithic Core & No Event Streaming",
+   "x": 424,
+   "y": 54,
+   "w": 129,
+   "h": 84,
+   "isChild": true,
+   "type": "Gap",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-bcd695ebee17432089f279051f002c14",
+   "name": "Transition State (Hybrid Cloud)",
+   "x": 598,
+   "y": 54,
+   "w": 180,
+   "h": 84,
+   "isChild": true,
+   "type": "Plateau",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-96d4c5da9c484a9e8921bc4880609421",
+   "name": "Gap: Fragmented Customer Data",
+   "x": 823,
+   "y": 54,
+   "w": 120,
+   "h": 84,
+   "isChild": true,
+   "type": "Gap",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-1aab731ad97f47a18b3a413d59929a01",
+   "name": "Gap: Manual Fraud & AML",
+   "x": 988,
+   "y": 54,
+   "w": 123,
+   "h": 55,
+   "isChild": true,
+   "type": "Gap",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "name": "Target State (Cloud-Native Open Bank)",
+   "x": 1156,
+   "y": 54,
+   "w": 180,
+   "h": 84,
+   "isChild": true,
+   "type": "Plateau",
+   "figureType": 0,
+   "parentId": "id-b497b32a6b8a4937b1e04f3094990087"
+  },
+  {
+   "id": "id-a32b71a103b0469ca88c00de082337cf",
+   "name": "Cloud Migration Foundation",
+   "x": 30,
+   "y": 342,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-f3704003991c49fd914b525ba04ecdc8",
+   "name": "Event Streaming Platform Rollout",
+   "x": 193,
+   "y": 342,
+   "w": 310,
+   "h": 104,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-3a584c47ff7d4199bf4d7df6d34bd0da",
+   "name": "Event Streaming Platform (Deliverable)",
+   "x": 203,
+   "y": 388,
+   "w": 290,
+   "h": 30,
+   "isChild": true,
+   "type": "Deliverable",
+   "figureType": 0,
+   "parentId": "id-f3704003991c49fd914b525ba04ecdc8"
+  },
+  {
+   "id": "id-7291a2652598448cb33eddf158a3c101",
+   "name": "Open Banking API Programme",
+   "x": 543,
+   "y": 342,
+   "w": 310,
+   "h": 150,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-9f757268e7204d74a523084ac7046e60",
+   "name": "Open Banking API Gateway (Deliverable)",
+   "x": 553,
+   "y": 388,
+   "w": 290,
+   "h": 30,
+   "isChild": true,
+   "type": "Deliverable",
+   "figureType": 0,
+   "parentId": "id-7291a2652598448cb33eddf158a3c101"
+  },
+  {
+   "id": "id-306ea09aa6d141c298990a97085c3e2a",
+   "name": "Open Banking Go-Live",
+   "x": 553,
+   "y": 426,
+   "w": 290,
+   "h": 30,
+   "isChild": true,
+   "type": "ImplementationEvent",
+   "figureType": 0,
+   "parentId": "id-7291a2652598448cb33eddf158a3c101"
+  },
+  {
+   "id": "id-11a7397c8a2c4b508f3a4c5ff6a7e21f",
+   "name": "Core Banking Modernisation",
+   "x": 893,
+   "y": 342,
+   "w": 122,
+   "h": 55,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-3ea7693be40a4d75b7b509ea61b642b8",
+   "name": "Customer Data Platform Build",
+   "x": 1055,
+   "y": 342,
+   "w": 310,
+   "h": 104,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-2b9466ffb721499d8da1a4d6905cb906",
+   "name": "Unified Customer 360 (Deliverable)",
+   "x": 1065,
+   "y": 388,
+   "w": 290,
+   "h": 30,
+   "isChild": true,
+   "type": "Deliverable",
+   "figureType": 0,
+   "parentId": "id-3ea7693be40a4d75b7b509ea61b642b8"
+  },
+  {
+   "id": "id-47a842db734347ad943000c563ad5ac6",
+   "name": "Fraud & AML Uplift",
+   "x": 1405,
+   "y": 342,
+   "w": 120,
+   "h": 55,
+   "isChild": true,
+   "type": "WorkPackage",
+   "figureType": 0,
+   "parentId": "id-94e27ccbce314f1f9d2b0248d1b3bb64"
+  },
+  {
+   "id": "id-b497b32a6b8a4937b1e04f3094990087",
+   "name": "Plateaus & Gaps  (time →)",
+   "x": 20,
+   "y": 20,
+   "w": 1326,
+   "h": 128,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-94e27ccbce314f1f9d2b0248d1b3bb64",
+   "name": "Work Packages & Deliverables",
+   "x": 20,
+   "y": 308,
+   "w": 1515,
+   "h": 194,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-5d3c8bd69b344430bc6c24bc41787f57",
+   "name": "K · Transformation Roadmap — time axis l",
+   "x": 20,
+   "y": -77,
+   "w": 1200,
+   "h": 66,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-50b907399fff4ecb9b291cfaf724773f",
+   "sourceId": "id-6f429aad4c6845369f58524ac87af3ec",
+   "targetId": "id-585ea7d3251d42029f5c6093ad4f299c",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -63,
+     "startY": 0,
+     "endX": 134,
+     "endY": -15
+    },
+    {
+     "startX": -99,
+     "startY": 0,
+     "endX": 98,
+     "endY": -15
+    },
+    {
+     "startX": -99,
+     "startY": 15,
+     "endX": 98,
+     "endY": 0
+    },
+    {
+     "startX": -106,
+     "startY": 15,
+     "endX": 91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-c4d568baa2c542fa8a374423f122ff9a",
+   "sourceId": "id-6f429aad4c6845369f58524ac87af3ec",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -78,
+     "endX": -371,
+     "endY": -93
+    },
+    {
+     "startX": 273,
+     "startY": -78,
+     "endX": -98,
+     "endY": -93
+    },
+    {
+     "startX": 273,
+     "startY": 15,
+     "endX": -98,
+     "endY": 0
+    },
+    {
+     "startX": 280,
+     "startY": 15,
+     "endX": -91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-e433a6af74de416084e3cb5118433cbf",
+   "sourceId": "id-a17f5227cf9d4d97859ded01597275ba",
+   "targetId": "id-585ea7d3251d42029f5c6093ad4f299c",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 52,
+     "endX": 368,
+     "endY": 52
+    },
+    {
+     "startX": -368,
+     "startY": 52,
+     "endX": 0,
+     "endY": 52
+    }
+   ]
+  },
+  {
+   "id": "id-7e3e0aa9c75349a2a4ce927d999bf632",
+   "sourceId": "id-a17f5227cf9d4d97859ded01597275ba",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 66,
+     "startY": 0,
+     "endX": -134,
+     "endY": 0
+    },
+    {
+     "startX": 109,
+     "startY": 0,
+     "endX": -91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-4dc237738ce64fbaa3b2868d954aaa8d",
+   "sourceId": "id-96d4c5da9c484a9e8921bc4880609421",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -61,
+     "startY": 0,
+     "endX": 134,
+     "endY": 0
+    },
+    {
+     "startX": -104,
+     "startY": 0,
+     "endX": 91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-461297d5615842fd83c2e7f28a13611b",
+   "sourceId": "id-96d4c5da9c484a9e8921bc4880609421",
+   "targetId": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -97,
+     "endX": -363,
+     "endY": -97
+    },
+    {
+     "startX": 263,
+     "startY": -97,
+     "endX": -100,
+     "endY": -97
+    },
+    {
+     "startX": 263,
+     "startY": 0,
+     "endX": -100,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-176e0727a45f472f873c4ac498e8b96b",
+   "sourceId": "id-1aab731ad97f47a18b3a413d59929a01",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -78,
+     "endX": 361,
+     "endY": -93
+    },
+    {
+     "startX": -263,
+     "startY": -78,
+     "endX": 98,
+     "endY": -93
+    },
+    {
+     "startX": -263,
+     "startY": 15,
+     "endX": 98,
+     "endY": 0
+    },
+    {
+     "startX": -270,
+     "startY": 15,
+     "endX": 91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-b4d5355539b04f8989dcc43399272429",
+   "sourceId": "id-1aab731ad97f47a18b3a413d59929a01",
+   "targetId": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 63,
+     "startY": 0,
+     "endX": -134,
+     "endY": -15
+    },
+    {
+     "startX": 82,
+     "startY": 0,
+     "endX": -115,
+     "endY": -15
+    },
+    {
+     "startX": 82,
+     "startY": 15,
+     "endX": -115,
+     "endY": 0
+    },
+    {
+     "startX": 106,
+     "startY": 15,
+     "endX": -91,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-6348dfc4ba3342d1a3be6f15857d3195",
+   "sourceId": "id-a32b71a103b0469ca88c00de082337cf",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -121,
+     "endX": -597,
+     "endY": 159
+    },
+    {
+     "startX": 472,
+     "startY": -121,
+     "endX": -125,
+     "endY": 159
+    },
+    {
+     "startX": 472,
+     "startY": -280,
+     "endX": -125,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-1aab98b22e2e4e5282558f26604992a3",
+   "sourceId": "id-f3704003991c49fd914b525ba04ecdc8",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -53,
+     "endX": -340,
+     "endY": 245
+    },
+    {
+     "startX": 0,
+     "startY": -154,
+     "endX": -340,
+     "endY": 144
+    },
+    {
+     "startX": 312,
+     "startY": -154,
+     "endX": -28,
+     "endY": 144
+    },
+    {
+     "startX": 312,
+     "startY": -255,
+     "endX": -28,
+     "endY": 43
+    }
+   ]
+  },
+  {
+   "id": "id-fe01fd92e4234df4a1829afad55e8fc7",
+   "sourceId": "id-7291a2652598448cb33eddf158a3c101",
+   "targetId": "id-bcd695ebee17432089f279051f002c14",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -76,
+     "endX": 10,
+     "endY": 245
+    },
+    {
+     "startX": 0,
+     "startY": -271,
+     "endX": 10,
+     "endY": 50
+    },
+    {
+     "startX": 18,
+     "startY": -271,
+     "endX": 28,
+     "endY": 50
+    },
+    {
+     "startX": 18,
+     "startY": -278,
+     "endX": 28,
+     "endY": 43
+    }
+   ]
+  },
+  {
+   "id": "id-7fc9aff714d84501befd9e0fc46aeccf",
+   "sourceId": "id-11a7397c8a2c4b508f3a4c5ff6a7e21f",
+   "targetId": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": -292,
+     "endY": 245
+    },
+    {
+     "startX": 0,
+     "startY": -254,
+     "endX": -292,
+     "endY": 19
+    },
+    {
+     "startX": 201,
+     "startY": -254,
+     "endX": -91,
+     "endY": 19
+    }
+   ]
+  },
+  {
+   "id": "id-e8954f71b4dd4b7eba767a5c8d16a4cb",
+   "sourceId": "id-3ea7693be40a4d75b7b509ea61b642b8",
+   "targetId": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -53,
+     "endX": -36,
+     "endY": 245
+    },
+    {
+     "startX": 0,
+     "startY": -154,
+     "endX": -36,
+     "endY": 144
+    },
+    {
+     "startX": 36,
+     "startY": -154,
+     "endX": 0,
+     "endY": 144
+    },
+    {
+     "startX": 36,
+     "startY": -255,
+     "endX": 0,
+     "endY": 43
+    }
+   ]
+  },
+  {
+   "id": "id-23a83712dab348fda5ac4a72f5c95c16",
+   "sourceId": "id-47a842db734347ad943000c563ad5ac6",
+   "targetId": "id-84514cf6b2164d9a9426c67f0dd2d9a9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -28,
+     "endX": 219,
+     "endY": 245
+    },
+    {
+     "startX": 0,
+     "startY": -273,
+     "endX": 219,
+     "endY": 0
+    },
+    {
+     "startX": -128,
+     "startY": -273,
+     "endX": 91,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

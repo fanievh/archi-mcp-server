@@ -159,22 +159,47 @@ public class SessionManagerTest {
         assertNull(effective);
     }
 
-    // ---- Task 10.11 ----
     @Test
-    public void shouldClearAllSessions_whenModelChanges() {
+    public void shouldKeepEverySessionsFilters_whenAModelOpensSwitchesOrCloses() {
         sessionManager.setSessionFilter("session-A", "ApplicationComponent", null);
         sessionManager.setSessionFilter("session-B", "BusinessProcess", "Business");
+        int tracked = sessionManager.trackedSessionCount();
 
-        sessionManager.onModelChanged("New Model", "model-id-123");
+        sessionManager.onModelChanged("Model 2", "model-2");   // session B's model opened
+        sessionManager.onModelClosed("7");                     // some model instance closed
+        sessionManager.onModelChanged(null, null);             // the last model closed
 
-        assertFalse(sessionManager.getSessionFilter("session-A").isPresent());
-        assertFalse(sessionManager.getSessionFilter("session-B").isPresent());
+        assertEquals("ApplicationComponent",
+                sessionManager.getSessionFilter("session-A").orElseThrow().typeFilter());
+        assertEquals("Business", sessionManager.getSessionFilter("session-B").orElseThrow().layerFilter());
+        assertEquals("no session's last-access record is cleared", tracked, sessionManager.trackedSessionCount());
     }
 
     // ---- Task 10.12 ----
     @Test(expected = IllegalArgumentException.class)
     public void shouldRejectInvalidType_whenSettingFilter() {
         sessionManager.setSessionFilter("session-1", "FakeType", null);
+    }
+
+    @Test
+    public void shouldNameTheRefusedParameter_atEachOfTheFourRefusals() {
+        assertEquals(SessionFilterRefusal.Parameter.TYPE,
+                refusal(() -> sessionManager.setSessionFilter("s", "Invalid layer", null, null, null)));
+        assertEquals(SessionFilterRefusal.Parameter.LAYER,
+                refusal(() -> sessionManager.setSessionFilter("s", null, "element type", null, null)));
+        assertEquals(SessionFilterRefusal.Parameter.FIELDS,
+                refusal(() -> sessionManager.setSessionFilter("s", null, null, "exclude field", null)));
+        assertEquals(SessionFilterRefusal.Parameter.EXCLUDE,
+                refusal(() -> sessionManager.setSessionFilter("s", null, null, null, Set.of("fields preset"))));
+    }
+
+    private static SessionFilterRefusal.Parameter refusal(Runnable call) {
+        try {
+            call.run();
+        } catch (SessionFilterRefusal e) {
+            return e.parameter();
+        }
+        throw new AssertionError("expected a refusal");
     }
 
     // ---- Task 10.13 ----
@@ -332,13 +357,49 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void shouldClearVersionTracking_whenModelChanges() {
-        sessionManager.checkModelVersionChanged("session-1", "1");
-        sessionManager.onModelChanged("New Model", "model-id-123");
+    public void shouldAbstainAndRecordNothing_whenNoModelResolvesForTheCall() {
+        assertFalse("nothing to compare", sessionManager.checkModelVersionChanged("session-1", null));
 
-        // After model change clearAll, first call returns false (no prior version)
-        boolean changed = sessionManager.checkModelVersionChanged("session-1", "99");
-        assertFalse("First check after model change should return false", changed);
+        assertFalse("the first real version is still a first observation",
+                sessionManager.checkModelVersionChanged("session-1", "1"));
+        assertTrue(sessionManager.checkModelVersionChanged("session-1", "2"));
+    }
+
+    @Test(expected = NullPointerException.class)
+    public void shouldStillRejectANullSessionId_whenCheckingTheModelVersion() {
+        sessionManager.checkModelVersionChanged(null, "1");
+    }
+
+    @Test
+    public void shouldTrackVersionsPerModel_andKeepThemWhenAnotherSessionsModelChanges() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        sessionManager.checkModelVersionChanged("session-A", "5");
+        sessionManager.checkModelVersionChanged("session-B", "5");
+
+        sessionManager.onModelChanged("Model 2", "model-2");
+        model[0] = "2";
+        assertFalse("the first read of another model compares with nothing",
+                sessionManager.checkModelVersionChanged("session-B", "99"));
+        model[0] = "1";
+
+        assertFalse("session A's tracking of model 1 survived", sessionManager.checkModelVersionChanged("session-A", "5"));
+        assertTrue(sessionManager.checkModelVersionChanged("session-A", "6"));
+    }
+
+    @Test
+    public void shouldDropOnlyTheClosedModelsVersionTracking() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        sessionManager.checkModelVersionChanged("session-A", "5");
+        model[0] = "2";
+        sessionManager.checkModelVersionChanged("session-A", "8");
+
+        sessionManager.onModelClosed("2");
+
+        assertFalse("model 2 starts afresh", sessionManager.checkModelVersionChanged("session-A", "1"));
+        model[0] = "1";
+        assertTrue("model 1's tracking was kept", sessionManager.checkModelVersionChanged("session-A", "6"));
     }
 
     @Test
@@ -397,14 +458,91 @@ public class SessionManagerTest {
     }
 
     @Test
-    public void shouldClearAllCaches_whenModelChanges() {
+    public void shouldKeepSessionAsCache_whenSessionBsModelChanges() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
         sessionManager.putCacheEntry("session-A", "key-1", "data-A");
+        model[0] = "2";
         sessionManager.putCacheEntry("session-B", "key-1", "data-B");
 
-        sessionManager.onModelChanged("New Model", "model-id-123");
+        sessionManager.onModelChanged("Model 2", "model-2");
+
+        assertEquals("data-B", sessionManager.getCacheEntry("session-B", "key-1"));
+        model[0] = "1";
+        assertEquals("session A's cache survived session B's switch", "data-A",
+                sessionManager.getCacheEntry("session-A", "key-1"));
+    }
+
+    @Test
+    public void shouldKeyTheCacheByModel_soOneSessionReadingTwoModelsGetsTwoAnswers() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        sessionManager.putCacheEntry("session-A", "views", "views of model 1");
+
+        model[0] = "2";
+        assertNull("model 2's read is not served model 1's answer",
+                sessionManager.getCacheEntry("session-A", "views"));
+        sessionManager.putCacheEntry("session-A", "views", "views of model 2");
+
+        assertEquals("views of model 2", sessionManager.getCacheEntry("session-A", "views"));
+        model[0] = "1";
+        assertEquals("views of model 1", sessionManager.getCacheEntry("session-A", "views"));
+    }
+
+    @Test
+    public void shouldDropOnlyTheClosedModelsCacheEntries_inEverySession() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        sessionManager.putCacheEntry("session-A", "key-1", "A on 1");
+        model[0] = "2";
+        sessionManager.putCacheEntry("session-A", "key-1", "A on 2");
+        sessionManager.putCacheEntry("session-B", "key-1", "B on 2");
+
+        sessionManager.onModelClosed("2");
 
         assertNull(sessionManager.getCacheEntry("session-A", "key-1"));
         assertNull(sessionManager.getCacheEntry("session-B", "key-1"));
+        model[0] = "1";
+        assertEquals("A on 1", sessionManager.getCacheEntry("session-A", "key-1"));
+    }
+
+    @Test
+    public void shouldInvalidateOnlyTheCurrentModelsEntries_insideACall() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        sessionManager.putCacheEntry("session-A", "key-1", "A on 1");
+        model[0] = "2";
+        sessionManager.putCacheEntry("session-A", "key-1", "A on 2");
+
+        sessionManager.invalidateSessionCache("session-A");
+
+        assertNull(sessionManager.getCacheEntry("session-A", "key-1"));
+        model[0] = "1";
+        assertEquals("A on 1", sessionManager.getCacheEntry("session-A", "key-1"));
+    }
+
+    @Test
+    public void shouldEvictASessionsVersionTrackingAndAnnounceIt_whenTheSessionIsSwept() {
+        String[] model = {"1"};
+        sessionManager.setModelKeySupplier(() -> model[0]);
+        List<String> evicted = new java.util.ArrayList<>();
+        sessionManager.setSessionEvictionListener(evicted::add);
+        sessionManager.putCacheEntry("session-A", "key-1", "data");
+        sessionManager.checkModelVersionChanged("session-A", "5");
+
+        sessionManager.sweepExpired(java.time.Instant.now().plus(java.time.Duration.ofHours(25)));
+
+        assertEquals(List.of("session-A"), evicted);
+        assertFalse("the session's version tracking went with it",
+                sessionManager.checkModelVersionChanged("session-A", "6"));
+    }
+
+    @Test
+    public void shouldCacheNothing_whenTheCallsModelCannotBeResolved() {
+        sessionManager.setModelKeySupplier(() -> null);
+        sessionManager.putCacheEntry("session-A", "key-1", "data");
+        assertNull(sessionManager.getCacheEntry("session-A", "key-1"));
+        assertEquals(0, sessionManager.cachedSessionCount());
     }
 
     @Test

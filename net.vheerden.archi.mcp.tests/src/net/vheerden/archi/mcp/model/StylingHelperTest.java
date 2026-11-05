@@ -352,14 +352,14 @@ public class StylingHelperTest {
     public void resolveConnectionLabelText_returnsRelationshipName_whenVisible() {
         IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
         conn.setNameVisible(true);
-        assertEquals("serves", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("serves", StylingHelper.resolveConnectionLabelText(conn, null));
     }
 
     @Test
     public void resolveConnectionLabelText_returnsEmpty_whenSuppressed() {
         IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
         conn.setNameVisible(false);
-        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn, null));
     }
 
     @Test
@@ -367,14 +367,14 @@ public class StylingHelperTest {
         IDiagramModelArchimateConnection conn = freshArchimateConnection("serves");
         conn.setNameVisible(true);
         conn.getFeatures().putString("labelExpression", "${name} (flow)");
-        assertEquals("${name} (flow)", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("${name} (flow)", StylingHelper.resolveConnectionLabelText(conn, null));
     }
 
     @Test
     public void resolveConnectionLabelText_returnsEmpty_whenRelationshipNameNull() {
         IDiagramModelArchimateConnection conn = freshArchimateConnection(null);
         conn.setNameVisible(true);
-        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn, null));
     }
 
     @Test
@@ -382,7 +382,7 @@ public class StylingHelperTest {
         IDiagramModelConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
         conn.setName("manual-label");
         conn.setNameVisible(true);
-        assertEquals("manual-label", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("manual-label", StylingHelper.resolveConnectionLabelText(conn, null));
     }
 
     @Test
@@ -390,7 +390,29 @@ public class StylingHelperTest {
         IDiagramModelConnection conn = IArchimateFactory.eINSTANCE.createDiagramModelConnection();
         conn.setName("manual-label");
         conn.setNameVisible(false);
-        assertEquals("", StylingHelper.resolveConnectionLabelText(conn));
+        assertEquals("", StylingHelper.resolveConnectionLabelText(conn, null));
+    }
+
+    @Test
+    public void resolveConnectionLabelText_readsTheVisibilityTheBatchWillCommit() {
+        IDiagramModelArchimateConnection shownByBatch = freshArchimateConnection("serves");
+        shownByBatch.setId("shown-by-batch");
+        shownByBatch.setNameVisible(false);
+        IDiagramModelArchimateConnection hiddenByBatch = freshArchimateConnection("serves");
+        hiddenByBatch.setId("hidden-by-batch");
+        hiddenByBatch.setNameVisible(true);
+        java.util.Map<String, Boolean> queued = java.util.Map.of("shown-by-batch", true, "hidden-by-batch", false);
+
+        assertEquals("a label the batch will show reserves its text", "serves",
+                StylingHelper.resolveConnectionLabelText(shownByBatch, queued));
+        assertEquals("a label the batch will hide reserves none", "",
+                StylingHelper.resolveConnectionLabelText(hiddenByBatch, queued));
+        assertEquals("control: the model hides the first", "",
+                StylingHelper.resolveConnectionLabelText(shownByBatch, null));
+        assertEquals("control: the model shows the second", "serves",
+                StylingHelper.resolveConnectionLabelText(hiddenByBatch, null));
+        assertEquals("a map that does not name the connection reads the model", "serves",
+                StylingHelper.resolveConnectionLabelText(hiddenByBatch, java.util.Map.of("other", false)));
     }
 
     // ------------------------------------------------------------------

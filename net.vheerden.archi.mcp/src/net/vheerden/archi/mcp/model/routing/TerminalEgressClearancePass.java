@@ -13,7 +13,8 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * Corridor-aware terminal-egress clearance.
  *
  * <p><b>The defect (live-geometry pinpoint 2026-05-21).</b> The terminal anchor sits
- * exactly 1px outside the face ({@link TerminalAnchoring#lineCoordinate} = edge&plusmn;1).
+ * exactly on the face line ({@link TerminalAnchoring#lineCoordinate} = edge &plusmn;
+ * {@link EdgeAttachmentCalculator#TERMINAL_FACE_MARGIN}).
  * When the orthogonal router emits a path whose <em>first segment off the terminal runs
  * parallel to that same face</em> (constant on the orthogonal axis, at the face&plusmn;1
  * line), the connection "hugs" its own element edge for a stretch before bending away — the
@@ -117,8 +118,9 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  * {@link HubPerimeterRoutingStage#computeVAxisParallelGapP10},
  * {@link HubPerimeterRoutingStage#computeHAxisParallelGapP10},
  * {@link HubPerimeterRoutingStage#computeHpq}); the off-face stub count is computed in-pass
- * ({@link #computeOffFaceStubCount}, mirroring {@code LayoutQualityAssessor.OFF_FACE_MIN_STUB_PX})
- * so this pass adds NO new HubPerimeterRoutingStage drift surface.
+ * ({@link #computeOffFaceStubCount}, by the {@link OffFaceHug} predicate the assessor's
+ * {@code offFaceParallelTerminalCount} also uses) so this pass adds NO new HubPerimeterRoutingStage
+ * drift surface.
  *
  * <p><b>MVP scope.</b> One proposal per path (source side preferred, else target side); the
  * hug segment must be the terminal-incident segment and the corner {@code B} must be an
@@ -160,13 +162,13 @@ public class TerminalEgressClearancePass {
     /** Mirror of {@code LayoutQualityAssessor.EDGE_COINCIDENCE_MIN_OVERLAP_PX} (10.0). */
     static final double EDGE_COINCIDENCE_MIN_OVERLAP_PX = 10.0;
     /**
-     * Mirror of {@code LayoutQualityAssessor.OFF_FACE_MIN_STUB_PX} (8.0) — the perpendicular
+     * {@link OffFaceHug#MIN_STUB_PX} (8.0), the same constant the assessor reads — the perpendicular
      * clearance below which a face-parallel terminal stub counts as an off-face hug. Used by the
      * sub-M4 keep-signal ({@link #computeOffFaceStubCount}): a SHORT (&lt;10px) own-face micro-hug
      * is invisible to M4 (which, like the assessor, requires &ge;10px parallel overlap), so the
      * stub-count drop is what lets {@link #netImproves} keep the fix instead of rolling it back.
      */
-    static final double OFF_FACE_MIN_STUB_PX = 8.0;
+    static final double OFF_FACE_MIN_STUB_PX = OffFaceHug.MIN_STUB_PX;
     /** Mirror of {@code LayoutQualityAssessor.ZIGZAG_AXIS_TOLERANCE_PX} (1.0). */
     static final double ZIGZAG_AXIS_TOLERANCE_PX = 1.0;
     /** Safety margin beyond the M4 tolerance the cleared run must hold (parity with migrator). */
@@ -231,8 +233,35 @@ public class TerminalEgressClearancePass {
      * @param skippedByPreGate    true when the pre-gate skipped the whole pass
      * @param proposalsEvaluated  hugs for which a Tier-1-clean, connection-gap-aware
      *                            proposal was emitted and validated
+     * @param prePassVp10         the view's pre-pass vertical parallel-gap p10 the pre-gate compared;
+     *                            {@code null} when no vertical pair overlaps (the gate cannot fire)
+     * @param huggingConnectionIds on a pre-gate skip, the connections with a terminal hugging its
+     *                            departed face ({@link #terminalHugs}) in the paths THIS
+     *                            pass saw, in routing order; empty when the pass ran. Later stages
+     *                            can move terminals, so {@code RoutingPipeline} recounts on the
+     *                            routes it returns before reporting.
      */
-    public record Result(int applied, int rolled, boolean skippedByPreGate, int proposalsEvaluated) {}
+    public record Result(int applied, int rolled, boolean skippedByPreGate, int proposalsEvaluated,
+                         Double prePassVp10, List<String> huggingConnectionIds) {
+
+        /** Normalises a null id list to empty; a skip must carry the gap it compared. */
+        public Result {
+            huggingConnectionIds = huggingConnectionIds != null ? List.copyOf(huggingConnectionIds) : List.of();
+            if (skippedByPreGate && prePassVp10 == null) {
+                throw new IllegalArgumentException("a pre-gate skip must carry the gap the gate compared");
+            }
+        }
+
+        /** Backward-compatible constructor for a pass that RAN (a skip must carry its gap). */
+        public Result(int applied, int rolled, boolean skippedByPreGate, int proposalsEvaluated) {
+            this(applied, rolled, skippedByPreGate, proposalsEvaluated, null, List.of());
+        }
+
+        /** The caller-facing outcome: the rollback count, or the skip with its gap and hugs. */
+        public EgressOutcome outcome() {
+            return new EgressOutcome(rolled, skippedByPreGate ? prePassVp10 : null, huggingConnectionIds);
+        }
+    }
 
     // =====================================================================
     // Final-state-validated, sequential, slot-aware orchestration.
@@ -269,7 +298,7 @@ public class TerminalEgressClearancePass {
         // shipped HubPerimeterRoutingStage mirror — the exact quantity the HH oracle pins).
         Double prePassVp10 = HubPerimeterRoutingStage.computeVAxisParallelGapP10(paths);
         if (prePassVp10 != null && prePassVp10 < PRE_GATE_VP10_PX) {
-            return new Result(0, 0, true, 0);
+            return new Result(0, 0, true, 0, prePassVp10, huggingConnectionIds(connections, paths));
         }
         // Proposal-time connection-gap floor (Option B): keep the cleared run a HEALTHY gap from
         // co-axial neighbours (axis-correct: collectNeighbouringConnectionSegments already selects
@@ -308,14 +337,38 @@ public class TerminalEgressClearancePass {
                 rolled++;
             }
         }
-        return new Result(applied, rolled, false, evaluated);
+        return new Result(applied, rolled, false, evaluated, prePassVp10, List.of());
+    }
+
+    /**
+     * The connections with at least one terminal hugging its departed face, by the same
+     * per-terminal predicate {@link #computeOffFaceStubCount} counts ({@link #terminalHugs}, the
+     * shared {@link OffFaceHug} rule the assessor also applies, so this list and the assessor's
+     * {@code offFaceParallelTerminals} violator ids name the same connections on the same routes),
+     * collapsed to connection ids in routing order (a connection hugging at both ends is named once).
+     * A {@code null} path (a connection with no route to write) is passed over. The pipeline applies it to the routes it
+     * finally writes, since a stage after this pass can still move a terminal along its face.
+     */
+    static List<String> huggingConnectionIds(
+            List<RoutingPipeline.ConnectionEndpoints> connections,
+            List<List<AbsoluteBendpointDto>> paths) {
+        List<String> ids = new ArrayList<>();
+        for (int i = 0; i < connections.size(); i++) {
+            RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
+            List<AbsoluteBendpointDto> path = paths.get(i);
+            if (conn == null || path == null) continue;
+            if (terminalHugs(conn, path, true) || terminalHugs(conn, path, false)) {
+                ids.add(conn.connectionId());
+            }
+        }
+        return ids;
     }
 
     /**
      * Final-state metrics for the per-proposal net-improve check (carries BOTH axis p10s). The
      * {@code offFaceStubCount} is the sub-M4 keep-signal: a count of face-parallel terminal stubs
-     * within {@link #OFF_FACE_MIN_STUB_PX} of their departed face (the assessor's
-     * {@code offFaceParallelTerminalCount} oracle, reconstructed against routing geometry). A short
+     * within {@link #OFF_FACE_MIN_STUB_PX} of their departed face, judged by the {@link OffFaceHug}
+     * rule the assessor's {@code offFaceParallelTerminalCount} uses, over the routing geometry. A short
      * own-face micro-hug never registers in {@code m4Count} (the 10px-overlap floor), so this count
      * is what lets {@link #netImproves} keep the lift.
      */
@@ -384,9 +437,9 @@ public class TerminalEgressClearancePass {
 
     /**
      * The sub-M4 keep-signal: count terminals whose first exterior segment runs PARALLEL to, and
-     * within {@link #OFF_FACE_MIN_STUB_PX} of, their departed source/target face — the same
-     * per-terminal hug predicate the assessor's {@code describeOffFaceParallelTerminal} uses,
-     * applied across the whole view against the routing geometry. (NOTE: this counts PER TERMINAL —
+     * within {@link #OFF_FACE_MIN_STUB_PX} of, their departed source/target face — the shared
+     * {@link OffFaceHug} predicate the assessor's {@code describeOffFaceParallelTerminal} decides by,
+     * applied across the whole view against the routing geometry ({@link #terminalHugs}). (NOTE: this counts PER TERMINAL —
      * both terminals of every connection contribute independently — whereas the assessor's
      * {@code countOffFaceParallelTerminals} is per connection; per-terminal is the right granularity
      * for the keep-signal, since clearing ONE terminal's stub must strictly drop the count even when
@@ -402,46 +455,49 @@ public class TerminalEgressClearancePass {
         for (int i = 0; i < connections.size() && i < paths.size(); i++) {
             RoutingPipeline.ConnectionEndpoints conn = connections.get(i);
             List<AbsoluteBendpointDto> path = paths.get(i);
-            if (conn == null || path == null || path.size() < 2) continue;
-            if (isOffFaceParallelStub(path.get(0), path.get(1), conn.source())) count++;
-            int n = path.size();
-            if (isOffFaceParallelStub(path.get(n - 1), path.get(n - 2), conn.target())) count++;
+            if (conn == null || path == null) continue;
+            if (terminalHugs(conn, path, true)) count++;
+            if (terminalHugs(conn, path, false)) count++;
         }
         return count;
     }
 
     /**
-     * True when the segment {@code term -> next} departs {@code elem}'s face and immediately runs
-     * PARALLEL to it within {@link #OFF_FACE_MIN_STUB_PX} perpendicular clearance — i.e. the
-     * hugging-exit the assessor's {@code describeOffFaceParallelTerminal} flags. {@code term} is the
-     * terminal bendpoint (on the face line); {@code next} is the next path point. Returns false when
-     * {@code elem} is null, the terminal is not on a resolvable face, the segment is zero-length, or
-     * the first exterior segment is perpendicular (a clean egress).
+     * True when one terminal of {@code conn}'s route hugs the face it departs, decided by the shared
+     * {@link OffFaceHug} predicate the layout assessor's {@code offFaceParallelTerminalCount} also
+     * uses — one rule on both sides, so the two tools name the same hugging connections. The
+     * terminal is the route's first (source) or last (target) bendpoint; the next point is its
+     * neighbour, or, on a single-bendpoint route, the other element's centre, which is where the
+     * segment Archi draws after that bendpoint heads. A route with no bendpoints has no terminal to
+     * judge.
      */
-    private static boolean isOffFaceParallelStub(AbsoluteBendpointDto term,
-                                                 AbsoluteBendpointDto next, RoutingRect elem) {
+    static boolean terminalHugs(RoutingPipeline.ConnectionEndpoints conn,
+                                List<AbsoluteBendpointDto> path, boolean sourceEnd) {
+        if (path.isEmpty()) return false;
+        int n = path.size();
+        RoutingRect elem = sourceEnd ? conn.source() : conn.target();
+        RoutingRect other = sourceEnd ? conn.target() : conn.source();
+        AbsoluteBendpointDto term = sourceEnd ? path.get(0) : path.get(n - 1);
+        double nextX;
+        double nextY;
+        if (n >= 2) {
+            AbsoluteBendpointDto next = sourceEnd ? path.get(1) : path.get(n - 2);
+            nextX = next.x();
+            nextY = next.y();
+        } else {
+            if (other == null) return false;
+            nextX = other.x() + other.width() / 2.0;
+            nextY = other.y() + other.height() / 2.0;
+        }
+        return isOffFaceParallelStub(term.x(), term.y(), nextX, nextY, elem);
+    }
+
+    /** {@link OffFaceHug#evaluate} over a routing rectangle; false when {@code elem} is null. */
+    private static boolean isOffFaceParallelStub(double termX, double termY, double nextX,
+                                                 double nextY, RoutingRect elem) {
         if (elem == null) return false;
-        Face face = TerminalSegmentCorridorMigrator.inferAttachedFace(term, elem);
-        if (face == null) return false;
-        double dx = Math.abs((double) next.x() - term.x());
-        double dy = Math.abs((double) next.y() - term.y());
-        if (dx < 1e-9 && dy < 1e-9) return false;           // zero-length — no direction
-        boolean horizontalFace = (face == Face.TOP || face == Face.BOTTOM);
-        // Parallel to the departed face: near-cardinal along the face's PARALLEL axis (horizontal
-        // for TOP/BOTTOM, vertical for LEFT/RIGHT). A perpendicular first segment (a clean egress)
-        // fails this and is not counted. Mirrors LayoutQualityAssessor.describeOffFaceParallelTerminal.
-        boolean parallel = horizontalFace
-                ? (dx > ZIGZAG_AXIS_TOLERANCE_PX && dy <= ZIGZAG_AXIS_TOLERANCE_PX)
-                : (dy > ZIGZAG_AXIS_TOLERANCE_PX && dx <= ZIGZAG_AXIS_TOLERANCE_PX);
-        if (!parallel) return false;
-        double faceLine = switch (face) {
-            case TOP -> elem.y();
-            case BOTTOM -> elem.y() + elem.height();
-            case LEFT -> elem.x();
-            case RIGHT -> elem.x() + elem.width();
-        };
-        double stub = horizontalFace ? Math.abs(term.y() - faceLine) : Math.abs(term.x() - faceLine);
-        return stub < OFF_FACE_MIN_STUB_PX;
+        return OffFaceHug.evaluate(termX, termY, nextX, nextY,
+                elem.x(), elem.y(), elem.width(), elem.height()) != null;
     }
 
     // =====================================================================
@@ -508,6 +564,13 @@ public class TerminalEgressClearancePass {
     // internals — one (connection, terminal-side) evaluation
     // =====================================================================
 
+    /**
+     * Proposes a lift for one terminal. Its shape check (terminal exactly on the margin line, an
+     * axis-aligned first segment, an interior corner) decides only where the lift can ACT: the move it
+     * makes needs that shape. It is not the hug decision — whether a terminal hugs is
+     * {@link OffFaceHug}, which the keep-signal and the reported ids read, so a hug this check passes
+     * over (a slanted trunk, a terminal a pixel off the line) still counts and is still named.
+     */
     private EgressProposal tryEgress(int pathIndex,
                                      RoutingPipeline.ConnectionEndpoints conn,
                                      List<List<AbsoluteBendpointDto>> allPaths,
@@ -546,13 +609,16 @@ public class TerminalEgressClearancePass {
         // Parallel-to-face means the segment's constant axis IS the orthogonal axis.
         if (segConstantIsY != orthIsY) return null;      // already a perpendicular egress → fine
 
-        int lineCoord = anchoring.lineCoordinate(elem);          // = geometric edge ± 1
+        int lineCoord = anchoring.lineCoordinate(elem);          // = geometric edge ± the margin
         int curOrth = orthIsY ? term.y() : term.x();
         if (curOrth != lineCoord) return null;                   // belt-and-braces: term on face line
-        // The face line sits 1px OUTSIDE the element: lineCoordinate == geomEdge + awaySign
-        // (RIGHT/BOTTOM away=+1, LEFT/TOP away=-1). Therefore geomEdge = lineCoord - awaySign.
-        // (LEFT: x-1-(-1)=x; RIGHT: x+w+1-(+1)=x+w; TOP: y-1-(-1)=y; BOTTOM: y+h+1-(+1)=y+h.)
-        int geomEdge = lineCoord - awaySign(face);               // the real element edge
+        // The face line sits EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN px OUTSIDE the element:
+        // lineCoordinate == geomEdge + awaySign * margin (RIGHT/BOTTOM away=+1, LEFT/TOP away=-1).
+        // Therefore geomEdge = lineCoord - awaySign * margin. Subtracting a bare awaySign, as this
+        // did while the margin happened to be 1, puts the "real element edge" (margin - 1) px
+        // outside the element and inflates every clearance measured from it.
+        int geomEdge = lineCoord
+                - awaySign(face) * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN;
         int away = awaySign(face);
 
         // Along-face span of the hug (parallel axis) — for the overlap tests.
@@ -571,8 +637,8 @@ public class TerminalEgressClearancePass {
         List<Integer> overlappingEdges = collectOverlappingEdges(orthIsY, spanLo, spanHi, obstacles);
         // Confirm the current run actually hugs its OWN face. The terminal sits exactly on its own
         // element's face line (curOrth == lineCoord, asserted above) with the run parallel to that
-        // face, and geomEdge = lineCoord - awaySign (|awaySign| == 1), so |curOrth - geomEdge| == 1
-        // <= EDGE_COINCIDENCE_TOLERANCE_PX — i.e. this is ALWAYS an own-face parallel hug here, at
+        // face, and geomEdge = lineCoord - awaySign * margin, so |curOrth - geomEdge| is EXACTLY
+        // the margin — i.e. this is ALWAYS an own-face parallel hug here, at
         // ANY positive run length. This INCLUDES a SHORT (<10px) run that collectOverlappingEdges'
         // 10px-overlap floor never surfaces (the assessor flags those via its perpendicular
         // OFF_FACE_MIN_STUB_PX signal; we act on them). The relaxation is strictly own-face:
@@ -580,7 +646,13 @@ public class TerminalEgressClearancePass {
         // is UNCHANGED, so a foreign edge still needs >=10px overlap to enter the picture, and corpus
         // byte-identity holds — a sub-10px own-face hug the keep-signal does not act on is rolled
         // back byte-identical. The explicit guard is retained defensively (never taken in practice).
-        boolean hugs = Math.abs((double) curOrth - geomEdge) <= EDGE_COINCIDENCE_TOLERANCE_PX;
+        // The bound is the larger of the shared coincidence tolerance and the margin itself. A
+        // terminal on its own face line is a hug BY CONSTRUCTION at any margin, so a bound that did
+        // not admit the margin would silently switch this whole pass off the moment the margin grew
+        // past EDGE_COINCIDENCE_TOLERANCE_PX rather than reporting anything.
+        boolean hugs = Math.abs((double) curOrth - geomEdge)
+                <= Math.max(EDGE_COINCIDENCE_TOLERANCE_PX,
+                            EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN);
         if (!hugs) return null;
 
         // Neighbouring co-axial connection segments the cleared run must stay clear of.

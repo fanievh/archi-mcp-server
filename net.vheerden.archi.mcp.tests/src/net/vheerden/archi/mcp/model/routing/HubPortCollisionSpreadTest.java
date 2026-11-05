@@ -25,6 +25,18 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  */
 public class HubPortCollisionSpreadTest {
 
+
+    /**
+     * The face-line coordinate, read from production rather than restated as an offset.
+     *
+     * <p>These tests need hub terminals to be <em>on</em> the hub's face line; where that line
+     * sits is pinned by {@code EdgeAttachmentCalculatorTest}, so restating the offset here would
+     * only create a second copy to keep in step.
+     */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
     private static final int FLOOR = EdgeAttachmentCalculator.VISUAL_DISTINGUISHABILITY_THRESHOLD; // 12
 
     // Hub with a tall LEFT face: x=400, y 100..300, LEFT face line x=399, midpoint y=200, span [105,295].
@@ -49,13 +61,13 @@ public class HubPortCollisionSpreadTest {
 
     /** A clean, movable target-entry stub peer -> HUB LEFT at slot y (horizontal stub → perpendicular). */
     private static List<AbsoluteBendpointDto> movableToHubLeft(RoutingRect peer, int slotY) {
-        return new ArrayList<>(List.of(bp(peer.x() + peer.width() + 1, slotY), bp(HUB.x() - 1, slotY)));
+        return new ArrayList<>(List.of(bp(faceLine(peer, EdgeAttachmentCalculator.Face.RIGHT), slotY), bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), slotY)));
     }
 
     /** An immovable target-entry stub peer -> HUB LEFT at slot y: the last segment hugs the face line
      *  (same x as the terminal), so any relocation would leave a face-parallel stub (reverts). */
     private static List<AbsoluteBendpointDto> hugToHubLeft(int slotY) {
-        return new ArrayList<>(List.of(bp(HUB.x() - 1, slotY + 100), bp(HUB.x() - 1, slotY)));
+        return new ArrayList<>(List.of(bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), slotY + 100), bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), slotY)));
     }
 
     private static int hubLeftTerminalY(Map<String, List<AbsoluteBendpointDto>> routed, String id) {
@@ -76,8 +88,8 @@ public class HubPortCollisionSpreadTest {
 
         pipeline.spreadCoincidentFacePorts(routed, List.of(conn("a", P1, HUB), conn("b", P2, HUB)));
 
-        assertEquals("a stays on the LEFT face line", HUB.x() - 1, hubLeftTerminalX(routed, "a"));
-        assertEquals("b stays on the LEFT face line", HUB.x() - 1, hubLeftTerminalX(routed, "b"));
+        assertEquals("a stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), hubLeftTerminalX(routed, "a"));
+        assertEquals("b stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), hubLeftTerminalX(routed, "b"));
         assertTrue("the two LEFT terminals are now distinct >= the floor apart",
                 Math.abs(hubLeftTerminalY(routed, "a") - hubLeftTerminalY(routed, "b")) >= FLOOR);
     }
@@ -94,7 +106,7 @@ public class HubPortCollisionSpreadTest {
         pipeline.spreadCoincidentFacePorts(routed, List.of(conn("h", P1, HUB), conn("a", P2, HUB)));
 
         assertEquals("the hug is left byte-identical", hugBefore, routed.get("h"));
-        assertEquals("the movable terminal stays on the LEFT face line", HUB.x() - 1, hubLeftTerminalX(routed, "a"));
+        assertEquals("the movable terminal stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), hubLeftTerminalX(routed, "a"));
         assertTrue("the movable terminal is spread off the hug",
                 Math.abs(hubLeftTerminalY(routed, "a") - 200) >= FLOOR);
     }
@@ -152,8 +164,8 @@ public class HubPortCollisionSpreadTest {
         RoutingRect pa = new RoutingRect(100, 100, 60, 20, "pa");
         RoutingRect pb = new RoutingRect(100, 100, 60, 20, "pb");
         Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
-        routed.put("a", new ArrayList<>(List.of(bp(161, 110), bp(shortHub.x() - 1, 110))));
-        routed.put("b", new ArrayList<>(List.of(bp(161, 110), bp(shortHub.x() - 1, 110))));
+        routed.put("a", new ArrayList<>(List.of(bp(161, 110), bp(faceLine(shortHub, EdgeAttachmentCalculator.Face.LEFT), 110))));
+        routed.put("b", new ArrayList<>(List.of(bp(161, 110), bp(faceLine(shortHub, EdgeAttachmentCalculator.Face.LEFT), 110))));
         Map<String, List<AbsoluteBendpointDto>> before = deepCopy(routed);
 
         pipeline.spreadCoincidentFacePorts(routed, List.of(conn("a", pa, shortHub), conn("b", pb, shortHub)));
@@ -171,8 +183,8 @@ public class HubPortCollisionSpreadTest {
         RoutingRect wsrc = new RoutingRect(360, 120, 40, 10, "wsrc");
         RoutingRect wtgt = new RoutingRect(360, 190, 40, 10, "wtgt");
         Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
-        routed.put("a", new ArrayList<>(List.of(bp(161, 200), bp(HUB.x() - 1, 200))));
-        routed.put("b", new ArrayList<>(List.of(bp(161, 200), bp(HUB.x() - 1, 200))));
+        routed.put("a", new ArrayList<>(List.of(bp(161, 200), bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), 200))));
+        routed.put("b", new ArrayList<>(List.of(bp(161, 200), bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), 200))));
         routed.put("w", new ArrayList<>(List.of(bp(380, 130), bp(380, 190)))); // vertical wall
         Map<String, List<AbsoluteBendpointDto>> before = deepCopy(routed);
 
@@ -226,15 +238,15 @@ public class HubPortCollisionSpreadTest {
         // LEFT centre. Grouping keys source and target terminals together, so the pass separates them.
         RoutingRect impl = new RoutingRect(100, 190, 60, 20, "impl");
         Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
-        routed.put("a", new ArrayList<>(List.of(bp(HUB.x() - 1, 200), bp(impl.x() + impl.width() + 1, 200))));
+        routed.put("a", new ArrayList<>(List.of(bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), 200), bp(faceLine(impl, EdgeAttachmentCalculator.Face.RIGHT), 200))));
         routed.put("b", movableToHubLeft(P2, 200));
 
         pipeline.spreadCoincidentFacePorts(routed, List.of(conn("a", HUB, impl), conn("b", P2, HUB)));
 
         int aY = routed.get("a").get(0).y();      // a: HUB is source → terminal is path[0]
         int bY = hubLeftTerminalY(routed, "b");   // b: HUB is target → terminal is path[last]
-        assertEquals("a stays on the LEFT face line", HUB.x() - 1, routed.get("a").get(0).x());
-        assertEquals("b stays on the LEFT face line", HUB.x() - 1, hubLeftTerminalX(routed, "b"));
+        assertEquals("a stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), routed.get("a").get(0).x());
+        assertEquals("b stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), hubLeftTerminalX(routed, "b"));
         assertTrue("mixed source/target pair separated", Math.abs(aY - bY) >= FLOOR);
     }
 
@@ -248,8 +260,8 @@ public class HubPortCollisionSpreadTest {
         Map<String, List<AbsoluteBendpointDto>> routed = new LinkedHashMap<>();
         // HUB source exit (movable, horizontal stub): terminal is path[0].
         routed.put("src", new ArrayList<>(List.of(
-                bp(HUB.x() - 1, 200), bp(HUB.x() - 62, 200), bp(HUB.x() - 62, 180),
-                bp(impl.x() + impl.width() + 1, 180))));
+                bp(faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), 200), bp(HUB.x() - 62, 200), bp(HUB.x() - 62, 180),
+                bp(faceLine(impl, EdgeAttachmentCalculator.Face.RIGHT), 180))));
         // HUB target entry (hug, vertical stub on the face line): terminal is path[last].
         routed.put("tgt", hugToHubLeft(200));
         List<AbsoluteBendpointDto> hugBefore = new ArrayList<>(routed.get("tgt"));
@@ -259,7 +271,7 @@ public class HubPortCollisionSpreadTest {
         int srcY = routed.get("src").get(0).y();                 // HUB source → path[0]
         int tgtY = hubLeftTerminalY(routed, "tgt");              // HUB target → path[last]
         assertEquals("the hug is left byte-identical", hugBefore, routed.get("tgt"));
-        assertEquals("source terminal stays on the LEFT face line", HUB.x() - 1, routed.get("src").get(0).x());
+        assertEquals("source terminal stays on the LEFT face line", faceLine(HUB, EdgeAttachmentCalculator.Face.LEFT), routed.get("src").get(0).x());
         assertTrue("the LEFT-face pair is now distinct >= the floor apart", Math.abs(srcY - tgtY) >= FLOOR);
         assertNoCollinearTriple("the relocation leaves no redundant (collinear) bendpoint", routed.get("src"));
     }

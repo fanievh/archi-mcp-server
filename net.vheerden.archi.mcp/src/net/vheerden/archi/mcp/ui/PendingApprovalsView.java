@@ -114,6 +114,9 @@ public class PendingApprovalsView extends ViewPart
      */
     private final java.util.Set<String> expandedProposalIds = new java.util.HashSet<>();
 
+    /** Why a card was refused on approve, re-shown on every rebuild until it leaves the queue or Refresh. */
+    private final CardRefusals refusals = new CardRefusals();
+
     private List<ApprovalCardModel> currentCards = List.of();
 
     @Override
@@ -189,8 +192,11 @@ public class PendingApprovalsView extends ViewPart
 
         Button refreshButton = new Button(headerBar, SWT.PUSH);
         refreshButton.setText("⟳ Refresh");
-        refreshButton.setToolTipText("Re-read the pending queue.");
-        refreshButton.addListener(SWT.Selection, e -> rebuild());
+        refreshButton.setToolTipText("Re-read the pending queue, and let a refused card be approved again.");
+        refreshButton.addListener(SWT.Selection, e -> {
+            refusals.clear();
+            rebuild();
+        });
     }
 
     private void confirmAndApproveAll() {
@@ -290,6 +296,8 @@ public class PendingApprovalsView extends ViewPart
         // so the set cannot grow unbounded while surviving rebuilds for still-pending cards.
         expandedProposalIds.retainAll(
                 currentCards.stream().map(ApprovalCardModel::proposalId).toList());
+        refusals.keepOnly(currentCards.stream()
+                .map(card -> CardRefusals.key(card.sessionId(), card.proposalId())).toList());
 
         for (Control child : cardContainer.getChildren()) {
             child.dispose();
@@ -352,6 +360,14 @@ public class PendingApprovalsView extends ViewPart
         Label metaLabel = new Label(header, SWT.NONE);
         metaLabel.setText(card.proposalId() + " · " + relativeTime(card.createdAt()));
         metaLabel.setLayoutData(new GridData(SWT.RIGHT, SWT.CENTER, false, false));
+
+        // Which model approving writes to. Several models can be open, and nothing else on the card
+        // says which one these changes belong to.
+        if (card.targetModelText() != null) {
+            Label modelLabel = new Label(cardComp, SWT.WRAP);
+            modelLabel.setText(card.targetModelText());
+            modelLabel.setLayoutData(new GridData(SWT.FILL, SWT.TOP, true, false));
+        }
 
         // Effect rollup — destructive tokens in amber.
         Composite rollupRow = new Composite(cardComp, SWT.NONE);
@@ -482,6 +498,10 @@ public class PendingApprovalsView extends ViewPart
         // it survives a rebuild triggered by a *different* proposal arriving (no re-expand needed).
         boolean expandedOnce = singleOp || expandedProposalIds.contains(card.proposalId());
         applyApproveEnablement(approve, card, expandedOnce);
+        String refused = refusals.reasonFor(card.sessionId(), card.proposalId());
+        if (refused != null) {
+            showRefusal(approve, staleStrip, staleData, refused);
+        }
 
         if (toggle != null) {
             final Link toggleLink = toggle;
@@ -581,17 +601,31 @@ public class PendingApprovalsView extends ViewPart
             // ProposalStalenessGuard / ProposalBuilder produce a plain-language, target-named message;
             // fall back to the generic line only if a message is somehow absent.
             logger.info("Proposal {} went stale on approve: {}", card.proposalId(), stale.getMessage());
-            staleData.exclude = false;
-            String reason = (stale.getMessage() != null && !stale.getMessage().isBlank())
-                    ? stale.getMessage()
-                    : "This proposal can no longer be applied because the model changed since the "
-                            + "agent proposed it. Reject it and ask the agent to retry.";
-            staleStrip.setText(reason);
-            staleStrip.setVisible(true);
-            approve.setEnabled(false);
-            approve.setToolTipText("Proposal is stale — Reject and ask the agent to retry.");
+            // Remembered on the view: a refusal that put the card back fires a queue change, and the
+            // rebuild it triggers redraws this card from the queue.
+            String reason = refusalReason(stale);
+            refusals.record(card.sessionId(), card.proposalId(), reason);
+            showRefusal(approve, staleStrip, staleData, reason);
             relayoutCards();
+            // A refusal whose card was not put back loses the strip with the card; the status line keeps it.
+            setStatus("Could not approve " + card.proposalId() + ": " + reason);
         }
+    }
+
+    private static String refusalReason(MutationException stale) {
+        return (stale.getMessage() != null && !stale.getMessage().isBlank())
+                ? stale.getMessage()
+                : "This proposal can no longer be applied because the model changed since the "
+                        + "agent proposed it. Reject it and ask the agent to retry.";
+    }
+
+    private static void showRefusal(org.eclipse.swt.widgets.Button approve, Label staleStrip, GridData staleData,
+            String reason) {
+        staleData.exclude = false;
+        staleStrip.setText(reason);
+        staleStrip.setVisible(true);
+        approve.setEnabled(false);
+        approve.setToolTipText("This proposal cannot be applied as it stands — Reject and ask the agent to retry.");
     }
 
     private void doReject(ApprovalCardModel card) {
@@ -634,6 +668,7 @@ public class PendingApprovalsView extends ViewPart
                         : "the model changed since the agent proposed it.";
                 logger.info("Bulk approve halted at stale proposal {}: {}",
                         card.proposalId(), stale.getMessage());
+                refusals.record(card.sessionId(), card.proposalId(), refusalReason(stale));
                 break;
             }
         }

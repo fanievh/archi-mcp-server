@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -17,8 +18,13 @@ import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.AnchorResolver;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
+import net.vheerden.archi.mcp.model.ToolArguments;
+import net.vheerden.archi.mcp.model.ConnectionUpdateArguments;
 import net.vheerden.archi.mcp.model.DispatchArm;
 import net.vheerden.archi.mcp.model.ElementSizer;
+import net.vheerden.archi.mcp.model.PaletteDefaultSize;
+import net.vheerden.archi.mcp.model.LayoutSpacing;
 import net.vheerden.archi.mcp.model.LayoutValidationException;
 import net.vheerden.archi.mcp.model.LayoutValidationFailures;
 import net.vheerden.archi.mcp.model.ModelAccessException;
@@ -27,6 +33,7 @@ import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.model.QualityTargetTermination;
 import net.vheerden.archi.mcp.model.ImageParams;
 import net.vheerden.archi.mcp.model.StylingParams;
+import net.vheerden.archi.mcp.model.ViewGeometry;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
@@ -125,7 +132,7 @@ public class ViewPlacementHandler {
         registry.registerTool(buildUpdateViewConnectionSpec());
         registry.registerTool(buildRemoveFromViewSpec());
         registry.registerTool(buildClearViewSpec());
-        registry.registerTool(buildApplyViewLayoutSpec());
+        registry.registerTool(buildApplyPositionsSpec());
         registry.registerTool(buildAssessLayoutSpec());
         registry.registerTool(buildAutoRouteConnectionsSpec());
         registry.registerTool(buildAutoConnectViewSpec());
@@ -171,17 +178,21 @@ public class ViewPlacementHandler {
 
         Map<String, Object> widthProp = new LinkedHashMap<>();
         widthProp.put("type", "integer");
-        widthProp.put("description", "Optional width (default: 120)");
+        widthProp.put("description", "Optional width (default: 120; a Junction 15, Archi's palette size)");
 
         Map<String, Object> heightProp = new LinkedHashMap<>();
         heightProp.put("type", "integer");
-        heightProp.put("description", "Optional height (default: 55)");
+        heightProp.put("description", "Optional height (default: 55; a Junction 15, Archi's palette size)");
 
         Map<String, Object> autoConnectProp = new LinkedHashMap<>();
         autoConnectProp.put("type", "boolean");
         autoConnectProp.put("description",
                 "Auto-create visual connections for existing relationships to elements "
-                + "already on the view (default: false)");
+                + "already on the view (default: false). Draws what Archi's drop draws: a connection to every "
+                + "occurrence of a related element, outgoing relationships first; a relationship from the "
+                + "element to itself is drawn once each way to each occurrence. Inside begin-batch (and in "
+                + "bulk-mutate), 'already on the view' includes objects placed earlier in the batch, and "
+                + "relationships created earlier in it count; ones removed or deleted earlier do not");
 
         Map<String, Object> parentVoProp = new LinkedHashMap<>();
         parentVoProp.put("type", "string");
@@ -200,6 +211,7 @@ public class ViewPlacementHandler {
                 "Auto-size the element to fit its label text using font metrics and "
                 + "aspect-ratio-aware sizing (target 1.5:1, range [1.2:1, 2.5:1]). "
                 + "Short names (<=15 chars) keep default 120x55. "
+                + "A Junction draws no label and keeps Archi's 15x15 palette size. "
                 + "Ignored if explicit width/height are provided. "
                 + "Recommended for flat views and individual element placement "
                 + "to prevent label truncation (default: false).");
@@ -210,16 +222,17 @@ public class ViewPlacementHandler {
                 "Optional. When this placement nests the element inside a parent group or element "
                 + "(via parentViewObjectId) whose fill colour is unauthored (never set by a caller), "
                 + "the parent's fill automatically recedes to a subtle backdrop so the nested view does "
-                + "not read as a flat single-colour blob. A parent with an authored fill is never "
-                + "touched. Set recede=false to suppress this for the call (default: true).");
+                + "not read as a flat single-colour blob; the shade differs from the fills of the parent's "
+                + "own parent and children, and the response reports it as recededParent. A parent with an "
+                + "authored fill is never touched. Set recede=false to suppress this for the call (default: true).");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("elementId", elementIdProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("autoSize", autoSizeProp);
         properties.put("autoConnect", autoConnectProp);
         properties.put("parentViewObjectId", parentVoProp);
@@ -239,9 +252,12 @@ public class ViewPlacementHandler {
                         + "This is useful for deployment views where the same infrastructure element "
                         + "appears in multiple locations (e.g., across availability zones). "
                         + "Requires viewId and elementId. Optional: x, y (both or neither for "
-                        + "auto-placement), width, height (default 120x55), "
+                        + "auto-placement), width, height (default 120x55; a Junction 15x15, as Archi's palette "
+                        + "places one; a side given alone keeps the other side's default), "
                         + "autoSize (auto-size to fit label — recommended for flat views), "
-                        + "autoConnect (auto-create connections to elements already on the view), "
+                        + "autoConnect (auto-create connections to elements already on the view, to every "
+                        + "occurrence of each, as Archi's drop does; in a batch, including what it placed "
+                        + "and related earlier), "
                         + "fillColor, lineColor, fontColor (#RRGGBB hex), opacity (0-255), lineWidth "
                         + "(1-3), figureType ('rectangular' or 'tabbed' — applies to ArchiMate Grouping "
                         + "element only; silently ignored on other element classes), textAlignment ('left' / 'centre' / "
@@ -275,6 +291,10 @@ public class ViewPlacementHandler {
                         + "'skippedByCap' names the connections the 50-connection cap dropped, which "
                         + "skippedAutoConnections counts; that count appears only when over 50 were "
                         + "eligible, and both lists are omitted when empty. "
+                        + "A container it grew that now overlaps a sibling it did not overlap "
+                        + "before is named in structuredWarnings (code CASCADE_GROWN_INTO_SIBLING, the "
+                        + "siblings in remediationViolatorIds); nothing is moved to make room. In a batch "
+                        + "or pending approval it is measured against the view as it stands and says so. "
                         + "'resizedAncestors' names any container this placement GREW that you did not "
                         + "ask it to touch — reserving a corner icon band widens the icon-bearing parent, "
                         + "and the parent-fit cascade can carry that up to a group above it — each entry "
@@ -306,10 +326,10 @@ public class ViewPlacementHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String elementId = HandlerUtils.requireStringParam(args, "elementId");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             boolean autoConnect = HandlerUtils.optionalBooleanParam(args, "autoConnect");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
             boolean autoSize = HandlerUtils.optionalBooleanParam(args, "autoSize");
@@ -317,11 +337,15 @@ public class ViewPlacementHandler {
             ImageParams imageParams = extractImageParams(args);
 
             if (autoSize && width == null && height == null) {
-                Optional<ElementDto> elementOpt = accessor.getElementById(elementId);
-                String elementName = elementOpt.map(ElementDto::name).orElse("");
-                int[] computed = ElementSizer.computeAutoSize(elementName);
-                width = computed[0];
-                height = computed[1];
+                // A junction draws no label, so it keeps the palette size the placement gives it. An
+                // element not found here (one a batch has queued) takes its palette default as well.
+                Optional<ElementDto> labelled = accessor.getElementById(elementId)
+                        .filter(element -> PaletteDefaultSize.sizesToLabel(element.type()));
+                if (labelled.isPresent()) {
+                    int[] computed = ElementSizer.computeAutoSize(labelled.get().name());
+                    width = computed[0];
+                    height = computed[1];
+                }
             }
 
             MutationResult<AddToViewResultDto> result = accessor.addToView(
@@ -523,16 +547,17 @@ public class ViewPlacementHandler {
                 "Optional. When this group is nested inside a parent group or element (via "
                 + "parentViewObjectId) whose fill colour is unauthored (never set by a caller), the "
                 + "parent's fill automatically recedes to a subtle backdrop so the nested view does not "
-                + "read as a flat single-colour blob. A parent with an authored fill is never touched. "
-                + "Set recede=false to suppress this for the call (default: true).");
+                + "read as a flat single-colour blob; the shade differs from the fills of the parent's own "
+                + "parent and children, and the response reports it as recededParent. A parent with an "
+                + "authored fill is never touched. Set recede=false to suppress this for the call (default: true).");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("label", labelProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("parentViewObjectId", parentVoProp);
         properties.put("recede", recedeProp);
         addStylingProperties(properties);
@@ -596,10 +621,10 @@ public class ViewPlacementHandler {
             // allow-empty variant — "" creates an untitled group, which Archi holds and renders;
             // the key itself is still required, so an omitted label stays an error.
             String label = HandlerUtils.requireStringParamAllowEmpty(args, "label");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
             StylingParams styling = extractStylingParams(args);
             ImageParams imageParams = extractImageParams(args);
@@ -691,14 +716,19 @@ public class ViewPlacementHandler {
                 "Position the note relative to the view's content bounding box. "
                 + "'above-content' places the note above all diagram content — recommended "
                 + "for title notes after layout is complete. 'below-content' places below. "
+                + "The box counts the view's notes too, so a placed note clears the notes already "
+                + "there, and a view holding only notes places the new note below or above them. "
                 + "When set, x/y are computed automatically and should be omitted. "
-                + "Cannot be used with parentViewObjectId.");
+                + "Cannot be used with parentViewObjectId. Refused inside begin-batch or bulk-mutate when "
+                + "an earlier operation there has added, moved, resized or removed content on this view "
+                + "(or added or rerouted a connection), because that has not run yet: pass x/y instead, or "
+                + "place the note after end-batch.");
 
         Map<String, Object> gapProp = new LinkedHashMap<>();
         gapProp.put("type", "integer");
         gapProp.put("description",
-                "Gap in pixels between note edge and content bounds (default: 10). "
-                + "Only used when 'position' is set.");
+                "Gap in pixels between note edge and content bounds, a whole number from 0 to "
+                + AnchorResolver.MAX_NOTE_GAP + " (default: 10). Only used when 'position' is set.");
 
         Map<String, Object> parentVoProp = new LinkedHashMap<>();
         parentVoProp.put("type", "string");
@@ -716,10 +746,10 @@ public class ViewPlacementHandler {
         properties.put("content", contentProp);
         properties.put("position", positionProp);
         properties.put("gap", gapProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("parentViewObjectId", parentVoProp);
         addStylingProperties(properties);
         addImageProperties(properties);
@@ -735,7 +765,9 @@ public class ViewPlacementHandler {
                         + "on a diagram. "
                         + "Requires viewId and content; content may be an empty string, which creates "
                         + "an empty placeholder note. Use position='above-content' for title notes "
-                        + "(recommended — automatically places above diagram content after layout). "
+                        + "(recommended — automatically places above diagram content after layout; inside "
+                        + "begin-batch or bulk-mutate, add it after the operations that change the content have "
+                        + "run, or pass x/y). "
                         + "Optional: x, y (both or neither for auto-placement), width "
                         + "(default 185), height (omit it and the height auto-fits to the wrapped "
                         + "text, floor 80, cap 600; supply one only to pin a fixed size), "
@@ -788,24 +820,15 @@ public class ViewPlacementHandler {
             // allow-empty variant — "" creates an empty placeholder note, which this tool's own
             // content-parameter description has always promised; the key is still required.
             String content = HandlerUtils.requireStringParamAllowEmpty(args, "content");
-            String position = HandlerUtils.optionalStringParam(args, "position");
-            Integer gap = HandlerUtils.optionalIntegerParam(args, "gap");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            String position = ToolArguments.text(args, "position", false);
+            Integer gap = ToolArguments.wholeNumberWithin(args, "gap", 0, AnchorResolver.MAX_NOTE_GAP);
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
             StylingParams styling = extractStylingParams(args);
             ImageParams imageParams = extractImageParams(args);
-
-            // Validate: position and parentViewObjectId are mutually exclusive
-            if (position != null && parentViewObjectId != null) {
-                return HandlerUtils.buildModelAccessError(formatter,
-                        new ModelAccessException(
-                                "Cannot use 'position' with 'parentViewObjectId'. "
-                                + "Position-based placement only works for top-level notes.",
-                                ErrorCode.INVALID_PARAMETER));
-            }
 
             MutationResult<ViewNoteDto> result = accessor.addNoteToView(
                     sessionId, viewId, content, position, gap, x, y,
@@ -894,12 +917,13 @@ public class ViewPlacementHandler {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("referencedViewId", refViewIdProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("parentViewObjectId", parentVoProp);
         addStylingProperties(properties);
+        addImageProperties(properties);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
                 "object", properties, List.of("viewId", "referencedViewId"),
@@ -923,14 +947,18 @@ public class ViewPlacementHandler {
                         + "fontName, fontSize, fontStyle ('normal'/'bold'/'italic'/'bold-italic'), "
                         + "gradient, deriveLineColor (boolean), outlineOpacity (0-255), lineStyle "
                         + "('solid'/'dashed'/'dotted'/'none'), textAlignment ('left'/'centre'/"
-                        + "'right'), verticalTextAlignment ('top'/'centre'/'bottom'). "
+                        + "'right'), verticalTextAlignment ('top'/'centre'/'bottom'). figureType and "
+                        + "borderType are refused: a view reference has neither. "
+                        + "Optional icon, as on add-note-to-view: imagePath (from add-image-to-model or "
+                        + "list-model-images; refused unless it is in the model archive), imagePosition "
+                        + "(e.g. 'top-left'), showIcon ('if-no-image'/'always'/'never'). "
                         + "The referenced view's name is NOT stored on the visual (Archi reads it "
                         + "dynamically at render time — renaming the referenced view auto-updates "
                         + "every embedding visual). "
                         + "Complement to add-note-to-view: notes are pure annotation, view-references "
                         + "are navigational links to other views. "
                         + "Returns viewObjectId, referencedViewId, the resolved x, y, width, "
-                        + "height, and parentViewObjectId only when nested. "
+                        + "height, the icon fields when set, and parentViewObjectId only when nested. "
                         + "ORDERING: place a view-reference after auto-route-connections, not before. A "
                         + "view-reference left in a corridor is worse than a note in the same place: a route "
                         + "crossing a note is disclosed as an accepted pass-through, while a route crossing a "
@@ -965,16 +993,17 @@ public class ViewPlacementHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String referencedViewId = HandlerUtils.requireStringParam(args, "referencedViewId");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
             StylingParams styling = extractStylingParams(args);
+            ImageParams imageParams = extractImageParams(args);
 
             MutationResult<EmbeddedViewDto> result = accessor.addViewReferenceToView(
                     sessionId, viewId, referencedViewId, x, y, width, height,
-                    parentViewObjectId, styling);
+                    parentViewObjectId, styling, imageParams);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildAddViewReferenceNextSteps(result), accessor, formatter);
@@ -1083,10 +1112,10 @@ public class ViewPlacementHandler {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
         properties.put("imagePath", imagePathProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("parentViewObjectId", parentVoProp);
         properties.put("borderColor", borderColorProp);
         properties.put("documentation", documentationProp);
@@ -1108,11 +1137,11 @@ public class ViewPlacementHandler {
                         + "(default: natural image dimensions read from archive bytes; falls back "
                         + "to 200x200), parentViewObjectId (nest inside a group or element; "
                         + "x/y become parent-relative). "
-                        + "Same visual styling surface as add-note-to-view (fillColor, lineColor, "
-                        + "fontColor, opacity, lineWidth, font fields, gradient, deriveLineColor, "
-                        + "outlineOpacity, lineStyle, textAlignment, verticalTextAlignment) — "
-                        + "some font/gradient fields are silently ignored by Archi's image "
-                        + "renderer at paint time, though the EMF state is preserved. "
+                        + "Styling: an image takes opacity, outlineOpacity, lineWidth and lineStyle, the "
+                        + "fields Archi draws on one. Every other styling field (fillColor, lineColor, "
+                        + "fontColor, the font fields, textAlignment, verticalTextAlignment, gradient, "
+                        + "figureType, borderType, deriveLineColor) is refused by name, as update-view-object "
+                        + "refuses it on an image. "
                         + "Different from update-view-object setting an imagePath on an element: "
                         + "this tool creates a standalone image visual (IDiagramModelImage), "
                         + "not an icon overlay on an existing element (IIconic.imagePath). "
@@ -1153,10 +1182,10 @@ public class ViewPlacementHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String imagePath = HandlerUtils.requireStringParam(args, "imagePath");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             String parentViewObjectId = HandlerUtils.optionalStringParam(args, "parentViewObjectId");
             StylingParams styling = extractStylingParams(args);
             String borderColor = HandlerUtils.optionalStringParam(args, "borderColor");
@@ -1222,10 +1251,10 @@ public class ViewPlacementHandler {
                 "View object ID of the target element (from get-view-contents visualMetadata viewObjectId)");
 
         Map<String, Object> bpItemProps = new LinkedHashMap<>();
-        bpItemProps.put("startX", Map.of("type", "integer"));
-        bpItemProps.put("startY", Map.of("type", "integer"));
-        bpItemProps.put("endX", Map.of("type", "integer"));
-        bpItemProps.put("endY", Map.of("type", "integer"));
+        bpItemProps.put("startX", bendpointFieldSchema("startX"));
+        bpItemProps.put("startY", bendpointFieldSchema("startY"));
+        bpItemProps.put("endX", bendpointFieldSchema("endX"));
+        bpItemProps.put("endY", bendpointFieldSchema("endY"));
 
         Map<String, Object> bpItems = new LinkedHashMap<>();
         bpItems.put("type", "object");
@@ -1242,8 +1271,8 @@ public class ViewPlacementHandler {
         bendpointsProp.put("items", bpItems);
 
         Map<String, Object> absBpItemProps = new LinkedHashMap<>();
-        absBpItemProps.put("x", Map.of("type", "integer"));
-        absBpItemProps.put("y", Map.of("type", "integer"));
+        absBpItemProps.put("x", bendpointFieldSchema("x"));
+        absBpItemProps.put("y", bendpointFieldSchema("y"));
 
         Map<String, Object> absBpItems = new LinkedHashMap<>();
         absBpItems.put("type", "object");
@@ -1255,7 +1284,8 @@ public class ViewPlacementHandler {
         absoluteBpProp.put("description",
                 "Optional routing bendpoints in absolute canvas coordinates. "
                 + "Each bendpoint has x/y (absolute position). The server converts to "
-                + "Archi's relative format automatically. Preferred over relative "
+                + "Archi's relative format automatically, against where the two view objects are when "
+                + "the connection is created. Preferred over relative "
                 + "bendpoints for ease of use. Mutually exclusive with bendpoints. "
                 + "Omit for straight line.");
         absoluteBpProp.put("items", absBpItems);
@@ -1272,15 +1302,17 @@ public class ViewPlacementHandler {
         labelPositionProp.put("enum", List.of("source", "middle", "target"));
         labelPositionProp.put("description",
                 "Position the relationship name label along the connection path. "
-                + "'source' = near source (15%), 'middle' = center (50%), 'target' = near target (85%). "
+                + "'source' = just past the source end of the line, outside the source element, "
+                + "'middle' = the middle of the line, 'target' = just before the target end, outside "
+                + "the target element (where Archi draws each). "
                 + "Default is middle. Use to reduce label overlaps on dense diagrams.");
 
         properties.put("viewId", viewIdProp);
         properties.put("relationshipId", relIdProp);
         properties.put("sourceViewObjectId", sourceVoProp);
         properties.put("targetViewObjectId", targetVoProp);
-        properties.put("bendpoints", bendpointsProp);
-        properties.put("absoluteBendpoints", absoluteBpProp);
+        properties.put("bendpoints", boundedOffsets(bendpointsProp));
+        properties.put("absoluteBendpoints", boundedPoints(absoluteBpProp));
         addConnectionStylingProperties(properties);
         properties.put("showLabel", showLabelProp);
         properties.put("labelPosition", labelPositionProp);
@@ -1297,7 +1329,14 @@ public class ViewPlacementHandler {
                         + "Requires viewId, relationshipId, sourceViewObjectId, targetViewObjectId. "
                         + "Optional: bendpoints (relative offsets from source/target element centers) "
                         + "OR absoluteBendpoints (absolute canvas coordinates, server converts automatically). "
-                        + "Omit both for a straight line. Archi renders connection endpoints at element "
+                        + "Absolute bendpoints are converted when the connection is created, against where the "
+                        + "two view objects are then, so a move, resize or placement an earlier operation of the "
+                        + "same batch or bulk-mutate gives an end is taken into account. "
+                        + "Omit both for a straight line. A connection from a view object to itself given "
+                        + "neither, or only empty lists, is stored with Archi's default loop, the three bendpoints Archi's palette "
+                        + "adds, because with none it draws no line; the loop is sized from the object when the "
+                        + "connection is created, and bendpoints you supply are kept. "
+                        + "Archi renders connection endpoints at element "
                         + "perimeter intersections automatically (ChopboxAnchor) — you do not need to "
                         + "specify where lines attach to element edges. "
                         + "Optional styling: lineColor, fontColor (#RRGGBB hex or empty to clear), "
@@ -1311,7 +1350,13 @@ public class ViewPlacementHandler {
                         + "rather than ignored. To distinguish connections visually — synchronous "
                         + "versus asynchronous flows, for example — use lineColor and lineWidth. "
                         + "The relationship's elements must match the view objects' elements "
-                        + "(either orientation). "
+                        + "(either orientation; asked for from the relationship's target, the connection is "
+                        + "drawn the relationship's way, its ends, route and label position exchanged, and "
+                        + "the response's sourceViewObjectId and targetViewObjectId say so: connected the "
+                        + "other way, Archi would turn the relationship itself round in the model). "
+                        + "Refused (CONNECTION_ALREADY_ON_VIEW) only when a connection for the same "
+                        + "relationship already runs from this source to this target, the test Archi applies: "
+                        + "the same relationship between other occurrences of the elements is still drawn. "
                         + "Returns viewConnectionId, relationshipId, relationshipType and "
                         + "both endpoint view-object IDs. "
                         + "Related: add-to-view (place elements first), "
@@ -1343,15 +1388,21 @@ public class ViewPlacementHandler {
             List<AbsoluteBendpointDto> absoluteBendpoints = extractAbsoluteBendpoints(args);
             validateBendpointFormats(bendpoints, absoluteBendpoints);
             StylingParams styling = extractStylingParams(args);
-            Boolean showLabel = (args.get("showLabel") instanceof Boolean b) ? b : null;
-            Integer textPosition = parseLabelPosition(args);
+            Boolean showLabel = ConnectionUpdateArguments.showLabel(args);
+            Integer textPosition = ConnectionUpdateArguments.labelPosition(args);
 
             MutationResult<ViewConnectionDto> result = accessor.addConnectionToView(
                     sessionId, viewId, relationshipId, sourceVoId, targetVoId,
                     bendpoints, absoluteBendpoints, styling, showLabel, textPosition);
 
+            List<String> nextSteps = new ArrayList<>(buildAddConnectionNextSteps(result));
+            if (result.entity() != null && targetVoId.equals(result.entity().sourceViewObjectId())
+                    && !sourceVoId.equals(targetVoId)) {
+                nextSteps.add(0, "Drawn from '" + targetVoId + "' to '" + sourceVoId + "', the way the relationship "
+                        + "runs: drawn the other way, Archi would turn the relationship itself round");
+            }
             return HandlerUtils.formatMutationResponse(result.entity(), result,
-                    buildAddConnectionNextSteps(result), accessor, formatter);
+                    nextSteps, accessor, formatter);
 
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
@@ -1376,6 +1427,35 @@ public class ViewPlacementHandler {
         return List.of(
                 "Use get-view-contents to verify the connection placement",
                 "Use add-connection-to-view to add more connections");
+    }
+
+    /** The keys an {@code apply-positions} connections entry reads. */
+    private static final List<String> CONNECTION_ENTRY_KEYS =
+            List.of("viewConnectionId", "bendpoints", "absoluteBendpoints");
+
+    /** The keys an {@code apply-positions} positions entry reads. */
+    private static final List<String> POSITION_ENTRY_KEYS =
+            List.of("viewObjectId", "x", "y", "width", "height");
+
+    /**
+     * Refuses a bendpoint key that is present yet read as nothing and is not an explicit empty array (which
+     * clears), when the other key reads neither a route nor a clear: left alone it would read as absent
+     * and straighten the connection behind a success. As on update-view-connection, what the other key reads
+     * is applied, so a serializer's null for the unused format is no refusal.
+     */
+    private static void refuseUnreadBendpoints(Map<String, Object> entry, String key, List<?> parsed,
+            boolean otherReads, String expected) {
+        Object value = entry.get(key);
+        if (!entry.containsKey(key) || parsed != null || otherReads
+                || (value instanceof List<?> l && l.isEmpty())) {
+            return;
+        }
+        throw new ModelAccessException(
+                key + " must be " + expected + ", got " + ToolArguments.describe(value)
+                        + ". Nothing was changed, and the route was kept.",
+                ErrorCode.INVALID_PARAMETER, null,
+                "Pass " + key + " as " + expected + ". To straighten the connection, pass " + key + ": [].",
+                null);
     }
 
     /**
@@ -1468,7 +1548,7 @@ public class ViewPlacementHandler {
     private int requireBendpointInt(Map<?, ?> map, String field, int index, String fieldsHint) {
         Object value = map.get(field);
         if (value instanceof Number n) {
-            return n.intValue();
+            return ViewGeometry.bendpointField(n, field, index);
         }
         throw new ModelAccessException(
                 "Bendpoint[" + index + "] is missing required integer field '" + field + "'",
@@ -1484,7 +1564,9 @@ public class ViewPlacementHandler {
         Map<String, Object> viewObjectIdProp = new LinkedHashMap<>();
         viewObjectIdProp.put("type", "string");
         viewObjectIdProp.put("description",
-                "ID of the view object to update (from get-view-contents visualMetadata viewObjectId)");
+                "ID of the view object to update: an element, group, note, image or view reference "
+                        + "(the viewObjectId of a get-view-contents visualMetadata, groups, notes, images or "
+                        + "viewReferences row)");
 
         Map<String, Object> xProp = new LinkedHashMap<>();
         xProp.put("type", "integer");
@@ -1536,8 +1618,13 @@ public class ViewPlacementHandler {
                 + "object. Archi evaluates the expression at render time. "
                 + "Set to a non-empty string to apply; set to empty string (\"\") to clear and "
                 + "fall back to the element's static name; omit to leave unchanged. "
-                + "Archi owns the grammar (unknown tokens render as the literal '${...}'); the only "
-                + "server-side check rejects a literal HTML/XML entity (e.g. \"&amp;\", \"&lt;\", "
+                + "Archi owns the grammar: a token it does not recognise is drawn literally, and a "
+                + "'${property:KEY}' whose object has no property KEY (an exact, case-sensitive "
+                + "match) is drawn as nothing. The call succeeds either way, and returns a "
+                + "LABEL_EXPRESSION_PROPERTY_MISSING structured warning naming each such key; only "
+                + "the unprefixed '${property:KEY}' is checked, not the prefixed forms "
+                + "('$model{...}', '$parent{...}' and the rest) or '${properties:SEP:KEY}'. The one "
+                + "refusal is a literal HTML/XML entity (e.g. \"&amp;\", \"&lt;\", "
                 + "\"&#160;\") in the template — use the actual character instead. "
                 + "See the archimate-view-patterns reference for details.");
 
@@ -1570,16 +1657,16 @@ public class ViewPlacementHandler {
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewObjectId", viewObjectIdProp);
-        properties.put("x", xProp);
-        properties.put("y", yProp);
-        properties.put("width", widthProp);
-        properties.put("height", heightProp);
+        properties.put("x", boundedCoordinate(xProp));
+        properties.put("y", boundedCoordinate(yProp));
+        properties.put("width", boundedSize(widthProp));
+        properties.put("height", boundedSize(heightProp));
         properties.put("text", textProp);
         properties.put("labelExpression", labelExpressionProp);
         properties.put("anchorTarget", anchorTargetProp);
         properties.put("anchorEdge", anchorEdgeProp);
-        properties.put("anchorDx", dxProp);
-        properties.put("anchorDy", dyProp);
+        properties.put("anchorDx", boundedCoordinate(dxProp));
+        properties.put("anchorDy", boundedCoordinate(dyProp));
         addStylingProperties(properties);
         addImageProperties(properties);
 
@@ -1589,26 +1676,33 @@ public class ViewPlacementHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("update-view-object")
                 .description("[Mutation] Update the visual position, size, styling, image, and/or label "
-                        + "expression of an element on a view. Only provided fields are modified; "
+                        + "expression of a view object on a view: an element, group, note, image or view "
+                        + "reference. Only provided fields are modified; "
                         + "unspecified fields remain unchanged. The underlying model element is not "
                         + "affected — only the visual representation on the diagram changes. At "
                         + "least one of x, y, width, height, text, styling, image, or labelExpression "
                         + "parameter must be provided. Required: viewObjectId (string) — "
-                        + "the view object ID (from get-view-contents visualMetadata or groups/notes). "
+                        + "the view object ID (from get-view-contents: visualMetadata for an element, or the "
+                        + "groups, notes, images or viewReferences array). "
                         + "Optional: x (integer), y (integer) — new position; width (integer), height (integer) "
                         + "— new size; text (string) — new label for groups or content for notes "
-                        + "(rejected for elements); labelExpression (string) — per-view-object dynamic "
+                        + "(rejected for elements, images and view references); labelExpression (string) — per-view-object dynamic "
                         + "label template, e.g. '${name}' or '${property:Owner}' (empty string clears, "
                         + "distinct from text which is the literal stored label); fillColor, lineColor, "
                         + "fontColor (#RRGGBB hex or empty to clear), opacity (0-255), lineWidth (1-3) "
                         + "— visual styling; figureType ('rectangular' or 'tabbed' — applies to native "
                         + "groups and the ArchiMate Grouping element only; silently ignored on notes "
-                        + "and other ArchiMate element classes), textAlignment ('left' / "
+                        + "and other ArchiMate element classes, refused on images and view references), "
+                        + "textAlignment ('left' / "
                         + "'centre' / 'right' — horizontal label alignment), verticalTextAlignment "
                         + "('top' / 'centre' / 'bottom' — vertical label position within the figure); "
                         + "imagePath (string — from add-image-to-model, empty to remove), "
                         + "imagePosition (string — e.g. bottom-left), showIcon (string — if-no-image/always/never) "
-                        + "— custom image on element/group/note. When an image is set AND its stored "
+                        + "— custom image on element/group/note/view reference; on a standalone image, imagePath "
+                        + "replaces the picture it shows (empty is refused there). An image takes only opacity, "
+                        + "outlineOpacity, lineWidth, lineStyle and imagePath, and a view reference every field "
+                        + "but figureType and borderType: any other field sent to either is refused by name, the "
+                        + "empty clear value included. When an image is set AND its stored "
                         + "bytes can be decoded, the response reports imageCoveragePercent — the "
                         + "percentage of the element's area the image actually PAINTS (0-100); both "
                         + "image fields are omitted if the image cannot be read, so treat their absence "
@@ -1626,7 +1720,7 @@ public class ViewPlacementHandler {
                         + "('normal'/'bold'/'italic'/'bold-italic'). Optional gradient "
                         + "('none'/'top-bottom'/'bottom-top'/'left-right'/'right-left'). Optional "
                         + "borderType ('dogear'/'rectangle'/'none' — note-specific, silently ignored "
-                        + "on groups and elements). Optional deriveLineColor (boolean — when false, "
+                        + "on groups and elements, refused on images and view references). Optional deriveLineColor (boolean — when false, "
                         + "lineColor is used verbatim instead of derived from fill). Optional "
                         + "outlineOpacity (0-255). Optional lineStyle ('solid'/'dashed'/'dotted'/'none' "
                         + "— view-object outline border style). "
@@ -1652,6 +1746,10 @@ public class ViewPlacementHandler {
                         + "to an unchanged rectangle appears in neither. In a batch or pending approval "
                         + "nothing has executed, so no effective geometry or collateral is reported and "
                         + "the entity is nested under 'preview'. "
+                        + "A container it grew that now overlaps a sibling it did not overlap "
+                        + "before is named in structuredWarnings (code CASCADE_GROWN_INTO_SIBLING, the "
+                        + "siblings in remediationViolatorIds); nothing is moved to make room. In a batch "
+                        + "or pending approval it is measured against the view as it stands and says so. "
                         + "ORDERING: size a hub element — one carrying five or more connections — before "
                         + "auto-route-connections, so the router sees the larger perimeter and can spread its ports "
                         + "across the extra faces; a hub enlarged afterwards leaves every route computed against "
@@ -1680,10 +1778,10 @@ public class ViewPlacementHandler {
 
             Map<String, Object> args = request.arguments();
             String viewObjectId = HandlerUtils.requireStringParam(args, "viewObjectId");
-            Integer x = HandlerUtils.optionalIntegerParam(args, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(args, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(args, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(args, "height");
+            Integer x = ViewGeometry.coordinate(args, "x");
+            Integer y = ViewGeometry.coordinate(args, "y");
+            Integer width = ViewGeometry.size(args, "width");
+            Integer height = ViewGeometry.size(args, "height");
             // allow-empty variant — empty string "" clears a group's label or a note's content;
             // absent key leaves it unchanged.
             String text = HandlerUtils.optionalStringParamAllowEmpty(args, "text");
@@ -1695,12 +1793,12 @@ public class ViewPlacementHandler {
             // Anchor params — empty string anchorTarget clears; absent leaves unchanged.
             String anchorTarget = HandlerUtils.optionalStringParamAllowEmpty(args, "anchorTarget");
             String anchorEdge = HandlerUtils.optionalStringParam(args, "anchorEdge");
-            Integer anchorDx = HandlerUtils.optionalIntegerParam(args, "anchorDx");
-            Integer anchorDy = HandlerUtils.optionalIntegerParam(args, "anchorDy");
+            Integer anchorDx = ViewGeometry.coordinate(args, "anchorDx");
+            Integer anchorDy = ViewGeometry.coordinate(args, "anchorDy");
             boolean anchoring = anchorTarget != null && !anchorTarget.isEmpty();
             if (anchoring && !AnchorResolver.isValidEdge(anchorEdge)) {
                 throw new ModelAccessException(
-                        "Invalid anchorEdge value: '" + anchorEdge + "'",
+                        "Invalid anchorEdge value: " + CallerText.quoted(anchorEdge),
                         ErrorCode.INVALID_PARAMETER,
                         null,
                         "anchorEdge must be one of: below, above, right, left (omit for the default 'below').",
@@ -1749,10 +1847,10 @@ public class ViewPlacementHandler {
                 "ID of the connection to update (from get-view-contents connections)");
 
         Map<String, Object> bpItemProps = new LinkedHashMap<>();
-        bpItemProps.put("startX", Map.of("type", "integer"));
-        bpItemProps.put("startY", Map.of("type", "integer"));
-        bpItemProps.put("endX", Map.of("type", "integer"));
-        bpItemProps.put("endY", Map.of("type", "integer"));
+        bpItemProps.put("startX", bendpointFieldSchema("startX"));
+        bpItemProps.put("startY", bendpointFieldSchema("startY"));
+        bpItemProps.put("endX", bendpointFieldSchema("endX"));
+        bpItemProps.put("endY", bendpointFieldSchema("endY"));
 
         Map<String, Object> bpItems = new LinkedHashMap<>();
         bpItems.put("type", "object");
@@ -1765,12 +1863,13 @@ public class ViewPlacementHandler {
                 "Bendpoints in relative format. Each bendpoint has "
                 + "startX/startY (offset from source element center) and endX/endY "
                 + "(offset from target element center). Mutually exclusive with absoluteBendpoints. "
-                + "Omit both formats to clear all bendpoints (straight line).");
+                + "An empty array clears all bendpoints (straight line). Omitting both formats "
+                + "leaves them unchanged, except in a call that sets nothing else, which clears them.");
         bendpointsProp.put("items", bpItems);
 
         Map<String, Object> absBpItemProps = new LinkedHashMap<>();
-        absBpItemProps.put("x", Map.of("type", "integer"));
-        absBpItemProps.put("y", Map.of("type", "integer"));
+        absBpItemProps.put("x", bendpointFieldSchema("x"));
+        absBpItemProps.put("y", bendpointFieldSchema("y"));
 
         Map<String, Object> absBpItems = new LinkedHashMap<>();
         absBpItems.put("type", "object");
@@ -1782,9 +1881,11 @@ public class ViewPlacementHandler {
         absoluteBpProp.put("description",
                 "Bendpoints in absolute canvas coordinates. Each bendpoint has "
                 + "x/y (absolute position). The server converts to Archi's relative "
-                + "format automatically. Preferred over relative bendpoints for ease of use. "
+                + "format when the change is applied, against where the two ends are at that moment. "
+                + "Preferred over relative bendpoints for ease of use. "
                 + "Mutually exclusive with bendpoints. "
-                + "Omit both formats to clear all bendpoints (straight line).");
+                + "An empty array clears all bendpoints (straight line). Omitting both formats "
+                + "leaves them unchanged, except in a call that sets nothing else, which clears them.");
         absoluteBpProp.put("items", absBpItems);
 
         Map<String, Object> showLabelProp = new LinkedHashMap<>();
@@ -1798,13 +1899,15 @@ public class ViewPlacementHandler {
         labelPositionProp.put("enum", List.of("source", "middle", "target"));
         labelPositionProp.put("description",
                 "Position the relationship name label along the connection path. "
-                + "'source' = near source (15%), 'middle' = center (50%), 'target' = near target (85%). "
+                + "'source' = just past the source end of the line, outside the source element, "
+                + "'middle' = the middle of the line, 'target' = just before the target end, outside "
+                + "the target element (where Archi draws each). "
                 + "Omit to leave unchanged. Use to reduce label overlaps on dense diagrams.");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewConnectionId", viewConnectionIdProp);
-        properties.put("bendpoints", bendpointsProp);
-        properties.put("absoluteBendpoints", absoluteBpProp);
+        properties.put("bendpoints", boundedOffsets(bendpointsProp));
+        properties.put("absoluteBendpoints", boundedPoints(absoluteBpProp));
         addConnectionStylingProperties(properties);
         properties.put("showLabel", showLabelProp);
         properties.put("labelPosition", labelPositionProp);
@@ -1818,11 +1921,18 @@ public class ViewPlacementHandler {
                 .description("[Mutation] Replace the bendpoints and/or update styling of a "
                         + "connection on a view. "
                         + "Bendpoints define routing waypoints for the visual connection line. "
-                        + "Providing an empty array removes all bendpoints (straight line). "
+                        + "Providing an empty array removes all bendpoints (straight line; on a "
+                        + "connection from an object to itself, no line at all, since both ends are "
+                        + "then on the element's centre). "
                         + "Supports two formats: bendpoints (relative offsets: "
                         + "{startX, startY, endX, endY} from source/target element centers) "
                         + "or absoluteBendpoints (absolute canvas coordinates: {x, y}, "
-                        + "server converts automatically). The underlying model relationship "
+                        + "server converts automatically). Absolute bendpoints are converted when "
+                        + "the change is applied, so they hold for an end that an earlier operation "
+                        + "of the same batch or bulk-mutate moved. A connection added earlier in the "
+                        + "same batch or bulk-mutate has no ends until it is committed, so it cannot "
+                        + "take absoluteBendpoints until then; give its route on add-connection-to-view "
+                        + "instead. The underlying model relationship "
                         + "is not affected. Archi renders connection endpoints at element "
                         + "perimeter intersections automatically (ChopboxAnchor) — bendpoints "
                         + "only control intermediate routing waypoints, not where lines attach "
@@ -1836,7 +1946,11 @@ public class ViewPlacementHandler {
                         + "('normal'/'bold'/'italic'/'bold-italic'). "
                         + "NOTE: lineStyle is a view-object property; connection line style is determined "
                         + "by the ArchiMate relationship type and cannot be overridden on the view. "
-                        + "Passing lineStyle here is REJECTED (INVALID_PARAMETER) rather than ignored. "
+                        + "Passing lineStyle here is REJECTED (INVALID_PARAMETER) rather than ignored, "
+                        + "and so is any other argument this tool does not list. Every argument you send "
+                        + "must read, or the call is refused: a listed argument holding a value it cannot "
+                        + "read (a wrong type, a blank fontStyle, null) is refused even beside one it can, "
+                        + "and nothing is changed. "
                         + "To distinguish connections visually — synchronous versus asynchronous flows, "
                         + "for example — use lineColor and lineWidth. "
                         + "Respects approval mode (human-gated in Archi). All changes execute as a single undo unit. "
@@ -1865,23 +1979,20 @@ public class ViewPlacementHandler {
 
             Map<String, Object> args = request.arguments();
             String viewConnectionId = HandlerUtils.requireStringParam(args, "viewConnectionId");
+            ConnectionUpdateArguments.refuseUnknownKeys(args);
             List<BendpointDto> bendpoints = extractBendpoints(args);
             List<AbsoluteBendpointDto> absoluteBendpoints = extractAbsoluteBendpoints(args);
             validateBendpointFormats(bendpoints, absoluteBendpoints);
-            StylingParams styling = extractStylingParams(args);
-            Boolean showLabel = (args.get("showLabel") instanceof Boolean b) ? b : null;
-            Integer textPosition = parseLabelPosition(args);
+            StylingParams styling = extractStylingParams(ConnectionUpdateArguments.forStyling(args));
+            Boolean showLabel = ConnectionUpdateArguments.showLabel(args);
+            Integer textPosition = ConnectionUpdateArguments.labelPosition(args);
 
-            // At least one field must be provided. If all five (bendpoints, absoluteBendpoints,
-            // styling, showLabel, textPosition) are null, fall back to clearing bendpoints (the
-            // legacy default — preserved for compat with callers who deliberately call with no
-            // arguments to straighten the line).
-            boolean autoClearedBendpoints = false;
-            if (bendpoints == null && absoluteBendpoints == null && styling == null
-                    && showLabel == null && textPosition == null) {
-                bendpoints = List.of(); // clear bendpoints
-                autoClearedBendpoints = true;
-            }
+            // Decided from the keys given, not from what the parsers read: an empty array, or a
+            // call that sets nothing at all, straightens the line; accepted keys that read as
+            // nothing are refused rather than taken for that bare call. Bulk applies the same rule.
+            bendpoints = ConnectionUpdateArguments.bendpointsToApply(args, bendpoints,
+                    bendpoints != null || absoluteBendpoints != null || styling != null
+                            || showLabel != null || textPosition != null);
 
             MutationResult<ViewConnectionDto> result = accessor.updateViewConnection(
                     sessionId, viewConnectionId, bendpoints, absoluteBendpoints, styling,
@@ -1894,10 +2005,10 @@ public class ViewPlacementHandler {
             return HandlerUtils.formatMutationResponse(result.entity(), result,
                     buildUpdateViewConnectionNextSteps(
                             result, bendpoints, absoluteBendpoints,
-                            styling, showLabel, textPosition, autoClearedBendpoints),
+                            styling, showLabel, textPosition),
                     buildUpdateViewConnectionApprovalDisclosures(
                             bendpoints, absoluteBendpoints,
-                            styling, showLabel, textPosition, autoClearedBendpoints),
+                            styling, showLabel, textPosition),
                     accessor, formatter);
 
         } catch (NoModelLoadedException e) {
@@ -1913,7 +2024,7 @@ public class ViewPlacementHandler {
     }
 
     /**
-     * Which of the four things the caller asked for, decided from the request alone.
+     * Which of the three things the caller asked for, decided from the request alone.
      *
      * <p>Every selector this builder reads is a request value evaluated before the accessor is
      * called, and that is correct rather than a lapse: these branches describe the <em>shape of
@@ -1923,7 +2034,7 @@ public class ViewPlacementHandler {
      * published under an outcome's name is the defect the effective-state rule exists to catch.</p>
      */
     private enum ConnectionUpdateShape {
-        BENDPOINTS_CLEARED, BENDPOINTS_SET, STYLING_ONLY, UNSPECIFIED
+        BENDPOINTS_CLEARED, BENDPOINTS_SET, STYLING_ONLY
     }
 
     private static ConnectionUpdateShape connectionUpdateShape(
@@ -1931,10 +2042,9 @@ public class ViewPlacementHandler {
             List<AbsoluteBendpointDto> absoluteBendpoints,
             StylingParams styling,
             Boolean showLabel,
-            Integer textPosition,
-            boolean autoClearedBendpoints) {
-        boolean bendpointsCleared = autoClearedBendpoints
-                || (bendpoints != null && bendpoints.isEmpty())
+            Integer textPosition) {
+        // Every clear, explicit or by a call that sets nothing, reaches here as an empty list.
+        boolean bendpointsCleared = (bendpoints != null && bendpoints.isEmpty())
                 || (absoluteBendpoints != null && absoluteBendpoints.isEmpty());
         if (bendpointsCleared) {
             return ConnectionUpdateShape.BENDPOINTS_CLEARED;
@@ -1944,18 +2054,16 @@ public class ViewPlacementHandler {
         if (bendpointsSet) {
             return ConnectionUpdateShape.BENDPOINTS_SET;
         }
-        // Styling / showLabel / textPosition only (no bendpoint change).
-        boolean anyStyling = styling != null && styling.hasAnyValue();
-        if (anyStyling || showLabel != null || textPosition != null) {
-            return ConnectionUpdateShape.STYLING_ONLY;
-        }
-        return ConnectionUpdateShape.UNSPECIFIED;
+        // Styling / showLabel / textPosition only (no bendpoint change). Nothing else is left: a
+        // call that reads none of them either clears the route or is refused before the write, and
+        // every styling key the tool accepts is one hasAnyValue() counts.
+        return ConnectionUpdateShape.STYLING_ONLY;
     }
 
     /**
      * What has happened, or has not, to the connection — one clause per shape per arm.
      *
-     * <p>Written out rather than assembled from a shared stem with a tense swapped in: the four
+     * <p>Written out rather than assembled from a shared stem with a tense swapped in: the three
      * applied clauses are the shipped text and a substitution over a finished sentence is how a
      * constant quietly acquires a second, wrong meaning.</p>
      */
@@ -1980,11 +2088,6 @@ public class ViewPlacementHandler {
                         + "unchanged).";
                 case AWAITING_APPROVAL -> "Connection will be updated if this change is approved "
                         + "(bendpoints unchanged).";
-            };
-            case UNSPECIFIED -> switch (arm) {
-                case APPLIED -> "Connection updated.";
-                case QUEUED -> "Connection will be updated when this batch commits.";
-                case AWAITING_APPROVAL -> "Connection will be updated if this change is approved.";
             };
         };
     }
@@ -2013,8 +2116,6 @@ public class ViewPlacementHandler {
             case BENDPOINTS_SET -> "Use update-view-connection with empty bendpoints array to "
                     + "straighten the connection.";
             case STYLING_ONLY -> "Provide bendpoints or absoluteBendpoints to change routing.";
-            case UNSPECIFIED -> "Use update-view-connection to change bendpoints, styling, or "
-                    + "label visibility.";
         };
     }
 
@@ -2031,11 +2132,10 @@ public class ViewPlacementHandler {
             List<AbsoluteBendpointDto> absoluteBendpoints,
             StylingParams styling,
             Boolean showLabel,
-            Integer textPosition,
-            boolean autoClearedBendpoints) {
+            Integer textPosition) {
         return updateViewConnectionDisclosures(
                 connectionUpdateShape(bendpoints, absoluteBendpoints, styling, showLabel,
-                        textPosition, autoClearedBendpoints),
+                        textPosition),
                 DispatchArm.AWAITING_APPROVAL);
     }
 
@@ -2045,10 +2145,9 @@ public class ViewPlacementHandler {
             List<AbsoluteBendpointDto> absoluteBendpoints,
             StylingParams styling,
             Boolean showLabel,
-            Integer textPosition,
-            boolean autoClearedBendpoints) {
+            Integer textPosition) {
         ConnectionUpdateShape shape = connectionUpdateShape(bendpoints, absoluteBendpoints,
-                styling, showLabel, textPosition, autoClearedBendpoints);
+                styling, showLabel, textPosition);
         if (result.isBatched()) {
             List<String> batchSteps = new ArrayList<>(
                     updateViewConnectionDisclosures(shape, DispatchArm.QUEUED));
@@ -2069,7 +2168,10 @@ public class ViewPlacementHandler {
         viewObjectIdProp.put("type", "string");
         viewObjectIdProp.put("description",
                 "ID of the view object or connection to remove "
-                + "(from get-view-contents visualMetadata viewObjectId or connection IDs)");
+                + "(a viewObjectId from get-view-contents visualMetadata, groups, notes, images or "
+                + "viewReferences, a viewConnectionId from connections or nonArchimateConnections, or "
+                + "the viewObjectId an add tool "
+                + "returned)");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("viewId", viewIdProp);
@@ -2080,15 +2182,18 @@ public class ViewPlacementHandler {
 
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("remove-from-view")
-                .description("[Mutation] Remove a visual element or connection from a view "
-                        + "without deleting the underlying model object. When removing an element, "
-                        + "any connections attached to that view object are also cascade-removed. "
-                        + "The viewObjectId can reference either a view object (element) or a view "
-                        + "connection. Required: viewId (string), viewObjectId (string) — the ID "
-                        + "of the view object or connection to remove. "
+                .description("[Mutation] Remove a visual element, group, note, view reference, "
+                        + "image or connection from a view without deleting any model object. As "
+                        + "Archi's own Delete does, the removal also takes every connection attached "
+                        + "to the object or to anything inside it, and every connection attached to "
+                        + "those connections. The viewObjectId can reference any view object, or any "
+                        + "view connection, ArchiMate or not. Required: viewId (string), viewObjectId "
+                        + "(string) — the ID of the view object or connection to remove. "
                         + "Respects approval mode (human-gated in Archi). "
                         + "Returns removedObjectId and removedObjectType (viewObject/group/"
-                        + "note/viewConnection). The cascadeRemovedConnectionIds list is omitted, "
+                        + "note/viewReference/image/viewConnection; connection for a connection that "
+                        + "is not an ArchiMate one; the Archi type name for any other view object). "
+                        + "The cascadeRemovedConnectionIds list is omitted, "
                         + "not "
                         + "empty, when nothing cascaded; for a group it also lists descendant "
                         + "view-object IDs. "
@@ -2151,10 +2256,11 @@ public class ViewPlacementHandler {
     /**
      * How many attached connections go with the object, and how firmly that is known.
      *
-     * <p>The list is collected at prepare time and handed to the command at construction, which
-     * disconnects exactly that list — so on a queued call the count describes the command rather
-     * than predicting the model. A stored proposal re-prepares on approval, so the same walk runs
-     * again against a possibly different view and the count is re-derived.</p>
+     * <p>The list is collected when the call is made. An applied removal runs at once, against the
+     * same view, so its count is a fact; a stored proposal re-prepares on approval, so the walk runs
+     * again and the count is re-derived. A queued removal re-walks when the batch commits, taking
+     * any connection an earlier operation of the batch drew to the object, so a count stated now
+     * could be short: the queued arm states none.</p>
      */
     private static String removedCascadeNote(int cascadeCount, DispatchArm arm) {
         if (cascadeCount == 0) {
@@ -2163,24 +2269,63 @@ public class ViewPlacementHandler {
         String plural = " (" + cascadeCount + " connection" + (cascadeCount > 1 ? "s" : "");
         return switch (arm) {
             case APPLIED -> plural + " also removed)";
-            case QUEUED -> plural + " will also be removed)";
+            case QUEUED -> "";
             case AWAITING_APPROVAL -> plural + " will also be removed, re-counted on approval)";
         };
     }
 
-    private static String removedObjectStep(
-            boolean isElement, int cascadeCount, DispatchArm arm) {
-        String note = isElement ? removedCascadeNote(cascadeCount, arm) : "";
-        String survives = isElement ? REMOVED_ELEMENT_SURVIVES : REMOVED_RELATIONSHIP_SURVIVES;
-        String subject = isElement ? "Element" : "Connection";
+    /**
+     * What a removal of one kind says about itself: what was removed, which model concept (if any)
+     * stands behind it, and which tool places one back.
+     *
+     * <p>Only an element and an ArchiMate connection have a concept behind them, so only they say
+     * it is unchanged. {@code tool} is null for a kind no tool here can place, and the reversal then
+     * says so instead of naming one.</p>
+     */
+    private record RemovedKind(String subject, String survives, String tool, String duplicate,
+            String appliedReversal) {
+    }
+
+    /** Resolves a {@code removedObjectType}; any other value is a view object's Archi type name. */
+    private static RemovedKind removedKind(String removedObjectType) {
+        if (removedObjectType == null || removedObjectType.isBlank()) {
+            return unplaceable("View object", "this view object");
+        }
+        return switch (removedObjectType) {
+            case "viewObject" -> new RemovedKind("Element", REMOVED_ELEMENT_SURVIVES, "add-to-view",
+                    "placement", "Use add-to-view to place the element back on the view.");
+            case "viewConnection" -> new RemovedKind("Connection", REMOVED_RELATIONSHIP_SURVIVES,
+                    "add-connection-to-view", "connection",
+                    "Use add-connection-to-view to add a connection back.");
+            case "group" -> placeable("Group", "add-group-to-view", "group", "a group");
+            case "note" -> placeable("Note", "add-note-to-view", "note", "a note");
+            case "viewReference" -> placeable("View reference", "add-view-reference-to-view",
+                    "view reference", "a view reference");
+            case "image" -> placeable("Image", "add-image-to-view", "image", "an image");
+            case "connection" -> unplaceable("Connection", "this connection");
+            default -> unplaceable(removedObjectType,
+                    ("AEIOU".indexOf(removedObjectType.charAt(0)) >= 0 ? "an " : "a ") + removedObjectType);
+        };
+    }
+
+    private static RemovedKind placeable(String subject, String tool, String duplicate, String one) {
+        return new RemovedKind(subject, "", tool, duplicate, "Use " + tool + " to add " + one + " back.");
+    }
+
+    private static RemovedKind unplaceable(String subject, String it) {
+        return new RemovedKind(subject, "", null, null, "No tool here can add " + it
+                + " back; undo restores it while this removal is still the latest change.");
+    }
+
+    private static String removedObjectStep(RemovedKind kind, String note, DispatchArm arm) {
         String outcome = switch (arm) {
-            case APPLIED -> subject + " removed from view" + note + ".";
-            case QUEUED -> subject + " will be removed from view when this batch commits"
+            case APPLIED -> kind.subject() + " removed from view" + note + ".";
+            case QUEUED -> kind.subject() + " will be removed from view when this batch commits"
                     + note + ".";
-            case AWAITING_APPROVAL -> subject + " will be removed from view if this change is "
+            case AWAITING_APPROVAL -> kind.subject() + " will be removed from view if this change is "
                     + "approved" + note + ".";
         };
-        return outcome + survives;
+        return outcome + kind.survives();
     }
 
     /**
@@ -2209,30 +2354,30 @@ public class ViewPlacementHandler {
      * discarding it — {@code end-batch rollback:true} while queued, and the human's rejection
      * while awaiting approval, which no tool the agent can call performs.</p>
      */
-    private static String removedReversalStep(boolean isElement, DispatchArm arm) {
-        String placement = isElement ? "add-to-view" : "add-connection-to-view";
-        String duplicate = isElement ? "placement" : "connection";
+    private static String removedReversalStep(RemovedKind kind, DispatchArm arm) {
+        String instead = kind.tool() == null ? "" : switch (arm) {
+            case APPLIED -> "";
+            case QUEUED -> " Calling " + kind.tool() + " instead would queue a second "
+                    + kind.duplicate() + " rather than restore anything.";
+            case AWAITING_APPROVAL -> " Calling " + kind.tool() + " instead would propose a second "
+                    + kind.duplicate() + " rather than restore anything.";
+        };
         return switch (arm) {
-            case APPLIED -> isElement
-                    ? "Use add-to-view to place the element back on the view."
-                    : "Use add-connection-to-view to add a connection back.";
+            case APPLIED -> kind.appliedReversal();
             case QUEUED -> "Nothing has been removed yet: end-batch rollback:true discards this "
-                    + "removal. Calling " + placement + " instead would queue a second "
-                    + duplicate + " rather than restore anything.";
+                    + "removal." + instead;
             case AWAITING_APPROVAL -> "Nothing has been removed yet: rejecting the change in Archi "
-                    + "leaves the object where it is. Calling " + placement + " instead would "
-                    + "propose a second " + duplicate + " rather than restore anything.";
+                    + "leaves the object where it is." + instead;
         };
     }
 
     /**
      * What a removal reports, composed once and phrased for the arm.
      *
-     * <p>The command is frozen at prepare: it is handed the cascade list at construction and
-     * disconnects exactly that list, so the identifiers reported are the ones the queued command
-     * will act on and a future-tense sentence about them is true of the command. That a connection
-     * queued <em>later</em> in the same batch could attach to this object and be left dangling is
-     * a real hazard, and it is a hazard about the cascade rather than about this report.</p>
+     * <p>Every removal re-walks its connections when it runs, as Archi's own delete does, so a
+     * connection an earlier operation of the same batch drew to the object goes with it. A count
+     * is therefore stated only where it is still the number that will be removed: an element's,
+     * on the applied arm and, re-counted, on the approval arm.</p>
      *
      * <p>This is the contrast with {@code clear-view}, whose builder sits a few hundred lines
      * below and looks alike. That command re-walks the view inside {@code execute()}, so its
@@ -2244,13 +2389,15 @@ public class ViewPlacementHandler {
         if (dto == null) {
             return List.of();
         }
-        boolean isElement = "viewObject".equals(dto.removedObjectType());
+        RemovedKind kind = removedKind(dto.removedObjectType());
         int cascadeCount = dto.cascadeRemovedConnectionIds() != null
                 ? dto.cascadeRemovedConnectionIds().size() : 0;
+        String note = "viewObject".equals(dto.removedObjectType())
+                ? removedCascadeNote(cascadeCount, arm) : "";
         return List.of(
-                removedObjectStep(isElement, cascadeCount, arm),
+                removedObjectStep(kind, note, arm),
                 removedInspectStep(arm),
-                removedReversalStep(isElement, arm));
+                removedReversalStep(kind, arm));
     }
 
     /** What a remove-from-view response carries when the removal is waiting on a human. */
@@ -2439,7 +2586,7 @@ public class ViewPlacementHandler {
 
     // ---- apply-positions ----
 
-    private McpServerFeatures.SyncToolSpecification buildApplyViewLayoutSpec() {
+    private McpServerFeatures.SyncToolSpecification buildApplyPositionsSpec() {
         Map<String, Object> viewIdProp = new LinkedHashMap<>();
         viewIdProp.put("type", "string");
         viewIdProp.put("description", "ID of the view to apply layout to");
@@ -2476,10 +2623,10 @@ public class ViewPlacementHandler {
 
         Map<String, Object> posItemProps = new LinkedHashMap<>();
         posItemProps.put("viewObjectId", posViewObjectIdProp);
-        posItemProps.put("x", posXProp);
-        posItemProps.put("y", posYProp);
-        posItemProps.put("width", posWidthProp);
-        posItemProps.put("height", posHeightProp);
+        posItemProps.put("x", boundedCoordinate(posXProp));
+        posItemProps.put("y", boundedCoordinate(posYProp));
+        posItemProps.put("width", boundedSize(posWidthProp));
+        posItemProps.put("height", boundedSize(posHeightProp));
 
         Map<String, Object> posItemSchema = new LinkedHashMap<>();
         posItemSchema.put("type", "object");
@@ -2497,20 +2644,11 @@ public class ViewPlacementHandler {
         connIdProp.put("type", "string");
         connIdProp.put("description", "Connection ID from get-view-contents");
 
-        Map<String, Object> bpStartX = new LinkedHashMap<>();
-        bpStartX.put("type", "integer");
-        Map<String, Object> bpStartY = new LinkedHashMap<>();
-        bpStartY.put("type", "integer");
-        Map<String, Object> bpEndX = new LinkedHashMap<>();
-        bpEndX.put("type", "integer");
-        Map<String, Object> bpEndY = new LinkedHashMap<>();
-        bpEndY.put("type", "integer");
-
         Map<String, Object> bpItemProps = new LinkedHashMap<>();
-        bpItemProps.put("startX", bpStartX);
-        bpItemProps.put("startY", bpStartY);
-        bpItemProps.put("endX", bpEndX);
-        bpItemProps.put("endY", bpEndY);
+        bpItemProps.put("startX", bendpointFieldSchema("startX"));
+        bpItemProps.put("startY", bendpointFieldSchema("startY"));
+        bpItemProps.put("endX", bendpointFieldSchema("endX"));
+        bpItemProps.put("endY", bendpointFieldSchema("endY"));
 
         Map<String, Object> bpItemSchema = new LinkedHashMap<>();
         bpItemSchema.put("type", "object");
@@ -2521,18 +2659,14 @@ public class ViewPlacementHandler {
         bendpointsProp.put("type", "array");
         bendpointsProp.put("description",
                 "Relative bendpoints (mutually exclusive with absoluteBendpoints). "
-                        + "Omit both to clear (straight line).");
+                        + "An empty array clears the route (straight line), as does an entry naming "
+                        + "neither key; a value that is not an array of bendpoints is refused.");
         bendpointsProp.put("items", bpItemSchema);
 
         // absoluteBendpoints sub-schema
-        Map<String, Object> abpX = new LinkedHashMap<>();
-        abpX.put("type", "integer");
-        Map<String, Object> abpY = new LinkedHashMap<>();
-        abpY.put("type", "integer");
-
         Map<String, Object> abpItemProps = new LinkedHashMap<>();
-        abpItemProps.put("x", abpX);
-        abpItemProps.put("y", abpY);
+        abpItemProps.put("x", bendpointFieldSchema("x"));
+        abpItemProps.put("y", bendpointFieldSchema("y"));
 
         Map<String, Object> abpItemSchema = new LinkedHashMap<>();
         abpItemSchema.put("type", "object");
@@ -2543,13 +2677,16 @@ public class ViewPlacementHandler {
         absoluteBpProp.put("type", "array");
         absoluteBpProp.put("description",
                 "Absolute canvas coordinate bendpoints (mutually exclusive with bendpoints). "
-                        + "Omit both to clear (straight line).");
+                        + "They are converted once this call's positions have landed, so they hold for an "
+                        + "end the same call moves. "
+                        + "An empty array clears the route (straight line), as does an entry naming "
+                        + "neither key; a value that is not an array of bendpoints is refused.");
         absoluteBpProp.put("items", abpItemSchema);
 
         Map<String, Object> connItemProps = new LinkedHashMap<>();
         connItemProps.put("viewConnectionId", connIdProp);
-        connItemProps.put("bendpoints", bendpointsProp);
-        connItemProps.put("absoluteBendpoints", absoluteBpProp);
+        connItemProps.put("bendpoints", boundedOffsets(bendpointsProp));
+        connItemProps.put("absoluteBendpoints", boundedPoints(absoluteBpProp));
 
         Map<String, Object> connItemSchema = new LinkedHashMap<>();
         connItemSchema.put("type", "object");
@@ -2559,7 +2696,9 @@ public class ViewPlacementHandler {
         Map<String, Object> connectionsProp = new LinkedHashMap<>();
         connectionsProp.put("type", "array");
         connectionsProp.put("description",
-                "Array of connection bendpoint updates. Each entry updates one connection's routing.");
+                "Array of connection bendpoint updates. Each entry updates one connection's routing. "
+                        + "An entry key other than viewConnectionId, bendpoints and absoluteBendpoints "
+                        + "is refused, naming the entry.");
         connectionsProp.put("items", connItemSchema);
 
         Map<String, Object> descriptionProp = new LinkedHashMap<>();
@@ -2583,7 +2722,13 @@ public class ViewPlacementHandler {
                         + "150-operation limit). All changes form a single undo unit in Archi. "
                         + "Requires viewId. Optional: positions (array of viewObjectId with "
                         + "x/y/width/height), connections (array of viewConnectionId with "
-                        + "bendpoints or absoluteBendpoints). At least one of positions or "
+                        + "bendpoints or absoluteBendpoints). Absolute bendpoints are converted "
+                        + "against where each connection's ends are after this call's positions, "
+                        + "and in a batch any earlier queued change, have been applied. A connection "
+                        + "added earlier in the same batch has no ends until it is committed, so it "
+                        + "cannot take absoluteBendpoints until then; give its route on "
+                        + "add-connection-to-view instead. "
+                        + "At least one of positions or "
                         + "connections must be provided. All-or-nothing: if any entry fails "
                         + "validation, no changes are applied. Validation does not stop at the "
                         + "first bad entry: every entry failing the same check is listed in a "
@@ -2607,11 +2752,11 @@ public class ViewPlacementHandler {
                         + "Each container is measured ONCE per call against what the same call has already "
                         + "decided about it, so two entries needing different axes of the same group both "
                         + "survive and the order they arrive in does not change the result. Those re-fits are "
-                        + "committed AFTER every position lands, so naming a container in 'positions' and asking "
-                        + "for it SMALLER than its children need loses to the fit — the canvas cannot show a "
-                        + "container clipping its own contents. Asking for it BIGGER wins: a rectangle that "
-                        + "already contains what the fit demanded retires the fit rather than being overwritten "
-                        + "by it. The response "
+                        + "committed AFTER every position lands. A container that also has its own entry in "
+                        + "'positions' takes its re-fit into that entry: asking for it SMALLER than its children "
+                        + "need loses to the fit — the canvas cannot show a container clipping its own contents — "
+                        + "but it still lands where the entry puts it, and a side asked BIGGER keeps that size. "
+                        + "The response "
                         + "reports counts only — it does NOT return the geometry those containers ended at, "
                         + "so re-read with get-view-contents before computing anything from a container's size. "
                         + "SPECULATIVE EXECUTION: "
@@ -2689,7 +2834,12 @@ public class ViewPlacementHandler {
      * real number instead of a number that happens to be the cap.</p>
      */
     private McpSchema.CallToolResult buildLayoutValidationError(LayoutValidationException e) {
-        logger.debug("Tool error (expected): {} [{}]", e.getMessage(), e.getErrorCode());
+        return buildLayoutValidationError(e, logger);
+    }
+
+    /** As above, logging through {@code log}, so the wiring to the shared rule can be observed. */
+    McpSchema.CallToolResult buildLayoutValidationError(LayoutValidationException e, Logger log) {
+        HandlerUtils.logModelAccessError(log, e);
         ErrorResponse error = new ErrorResponse(
                 e.getErrorCode(),
                 e.getMessage(),
@@ -2767,6 +2917,47 @@ public class ViewPlacementHandler {
                 + " counted but not shown; fix what is listed, resend, and the rest will be named";
     }
 
+    /** {@code property}, a coordinate's schema, with the bounds its value is read against published. */
+    private static Map<String, Object> boundedCoordinate(Map<String, Object> property) {
+        property.put("minimum", -ViewGeometry.MAX_COORDINATE);
+        property.put("maximum", ViewGeometry.MAX_COORDINATE);
+        return withSentence(property, "From " + -ViewGeometry.MAX_COORDINATE + " to "
+                + ViewGeometry.MAX_COORDINATE + ".");
+    }
+
+    /** {@code property}, a width's or height's schema, with the maximum its value is read against published. */
+    private static Map<String, Object> boundedSize(Map<String, Object> property) {
+        property.put("maximum", ViewGeometry.MAX_SIZE);
+        return withSentence(property, "At most " + ViewGeometry.MAX_SIZE + ".");
+    }
+
+    /** {@code property}, a relative bendpoints array's schema, with its offsets' bound published. */
+    private static Map<String, Object> boundedOffsets(Map<String, Object> property) {
+        return withSentence(property, "Each offset from " + -ViewGeometry.MAX_BENDPOINT_OFFSET + " to "
+                + ViewGeometry.MAX_BENDPOINT_OFFSET + ".");
+    }
+
+    /** {@code property}, an absolute bendpoints array's schema, with its coordinates' bounds published. */
+    private static Map<String, Object> boundedPoints(Map<String, Object> property) {
+        return withSentence(property, "Each coordinate from " + -ViewGeometry.MAX_BENDPOINT_POINT + " to "
+                + ViewGeometry.MAX_BENDPOINT_POINT + ".");
+    }
+
+    /** A bendpoint field's schema: an integer within the bound its value is read against. */
+    private static Map<String, Object> bendpointFieldSchema(String key) {
+        Map<String, Object> property = new LinkedHashMap<>();
+        property.put("type", "integer");
+        property.put("minimum", -ViewGeometry.bendpointBound(key));
+        property.put("maximum", ViewGeometry.bendpointBound(key));
+        return property;
+    }
+
+    private static Map<String, Object> withSentence(Map<String, Object> property, String sentence) {
+        String description = String.valueOf(property.get("description"));
+        property.put("description", description + (description.endsWith(".") ? " " : ". ") + sentence);
+        return property;
+    }
+
     /**
      * Reads the {@code positions} array, collecting every entry it cannot read rather than
      * unwinding at the first.
@@ -2807,13 +2998,22 @@ public class ViewPlacementHandler {
                 failures.recordMalformedEntry("positions", i, e);
                 continue;
             }
-            // The remaining reads cannot throw: an absent or non-numeric coordinate is simply
-            // absent. A field check added here that CAN throw belongs in recordEntryField, with
-            // viewObjectId, so the entry it came from survives.
-            Integer x = HandlerUtils.optionalIntegerParam(entry, "x");
-            Integer y = HandlerUtils.optionalIntegerParam(entry, "y");
-            Integer width = HandlerUtils.optionalIntegerParam(entry, "width");
-            Integer height = HandlerUtils.optionalIntegerParam(entry, "height");
+            // A key the entry does not read, or a coordinate that is not a whole number, is refused
+            // with the entry it came from, beside every other entry's failure.
+            Integer x;
+            Integer y;
+            Integer width;
+            Integer height;
+            try {
+                ToolArguments.refuseUnknownEntryKeys("positions", POSITION_ENTRY_KEYS, entry);
+                x = ViewGeometry.coordinate(entry, "x");
+                y = ViewGeometry.coordinate(entry, "y");
+                width = ViewGeometry.size(entry, "width");
+                height = ViewGeometry.size(entry, "height");
+            } catch (ModelAccessException e) {
+                failures.recordEntryField("positions", i, viewObjectId, e);
+                continue;
+            }
             result.add(new ViewPositionSpec(viewObjectId, x, y, width, height));
         }
         return result;
@@ -2859,11 +3059,29 @@ public class ViewPlacementHandler {
                 continue;
             }
             try {
+                ToolArguments.refuseUnknownEntryKeys("connections", CONNECTION_ENTRY_KEYS, entry);
                 List<BendpointDto> bendpoints = extractBendpoints(entry);
                 List<AbsoluteBendpointDto> absoluteBendpoints = extractAbsoluteBendpoints(entry);
                 validateBendpointFormats(bendpoints, absoluteBendpoints);
-
-                // If neither provided, default to empty list (clear = straight line)
+                // Decided by the keys present, not by what the parsers returned: they return nothing
+                // for an empty array, a value of the wrong type and a null alike, and only the first
+                // asks for a straight line. An entry naming neither key clears, as published.
+                boolean clearsRelative = entry.get("bendpoints") instanceof List<?> l && l.isEmpty();
+                boolean clearsAbsolute = entry.get("absoluteBendpoints") instanceof List<?> l && l.isEmpty();
+                if ((clearsRelative && entry.get("absoluteBendpoints") != null && !clearsAbsolute)
+                        || (clearsAbsolute && entry.get("bendpoints") != null && !clearsRelative)) {
+                    // An explicit clear beside a value of the other format: two instructions for one route.
+                    throw new ModelAccessException(
+                            "Cannot provide both 'bendpoints' and 'absoluteBendpoints'",
+                            ErrorCode.INVALID_PARAMETER, null,
+                            "Use either relative bendpoints (startX/startY/endX/endY) or absolute "
+                                    + "bendpoints ({x, y}), not both",
+                            null);
+                }
+                refuseUnreadBendpoints(entry, "bendpoints", bendpoints, absoluteBendpoints != null || clearsAbsolute,
+                        "an array of {startX, startY, endX, endY}");
+                refuseUnreadBendpoints(entry, "absoluteBendpoints", absoluteBendpoints, bendpoints != null || clearsRelative,
+                        "an array of {x, y}");
                 if (bendpoints == null && absoluteBendpoints == null) {
                     bendpoints = List.of();
                 }
@@ -2906,7 +3124,7 @@ public class ViewPlacementHandler {
                 "If true, includes a violatorIds map with per-metric visual object IDs "
                 + "of elements/connections that violate each metric. Enables targeted "
                 + "surgical fixes instead of global re-layout. Covers: overlaps (both "
-                + "element IDs), passThroughs (connection IDs, cross-element only), "
+                + "element IDs), passThroughs (connection IDs, cross-element and own-end), "
                 + "coincidentSegments (connection IDs), nonOrthogonalTerminals (connection "
                 + "IDs, the whole flagged population) plus its two disjoint halves "
                 + "nonOrthogonalTerminalsZeroBendpoint (straight lines between two element "
@@ -2929,6 +3147,7 @@ public class ViewPlacementHandler {
                 + "ownIconOverLabelCount, boundaryViolationCount, "
                 + "parentLabelObscuredCount, "
                 + "nonOrthogonalTerminalCount, crossElementPassThroughCount, "
+                + "ownEndpointPassThroughCount, "
                 + "contextualPartialDimensions} — one cheap overview call instead of one full "
                 + "payload per view. The contextualPartialDimensions list names the dimensions "
                 + "that view's "
@@ -3015,7 +3234,10 @@ public class ViewPlacementHandler {
                         + "Tier-3R (cap 'good': edgeCrossings, connectionThroughNote). Layout: Tier-1L "
                         + "(critical: overlaps, boundaryViolations, parentLabelObscured) can produce 'poor'; "
                         + "Tier-2L (cap 'fair': spacing, offCanvas, hubNeighbourCrowding); Tier-3L (cap "
-                        + "'good': alignment). The `ratingBreakdown` map shows per-metric ratings.\n\n"
+                        + "'good': alignment). The `ratingBreakdown` map shows per-metric ratings. When "
+                        + "edgeCrossings measures 'fair' or 'poor' and is the only metric holding the "
+                        + "view at 'good', a suggestion says so, with the crossing count and the "
+                        + "crossings per connection, because the 'good' headline cannot show it.\n\n"
                         + "SUGGESTION ORDER: on a RATED view, `suggestions` is ordered by measured "
                         + "severity, not by the order the checks run in. Any large-view "
                         + "performance warning comes first because it qualifies the whole "
@@ -3114,8 +3336,18 @@ public class ViewPlacementHandler {
                         + "1.0 (edge-hugging surfaces via the edge-coincidence metric, not here). A "
                         + "perfect 1.0 therefore does NOT certify route centring — see the "
                         + "`corridorCentering` coverage dimension (not-checked) and render-verify. "
-                        + "M1 (`nonOrthogonalTerminalCount`) uses a visible-segment-length guard "
-                        + "so clipped diagonals invisible to the human eye no longer over-report. "
+                        + "M1 (`nonOrthogonalTerminalCount`) tests the end segment Archi draws: an end "
+                        + "bendpoint level with an element face gets a stub at right angles to that "
+                        + "face, which is never counted, so only a bendpoint off a corner can give a "
+                        + "diagonal end (measured from the corner, where Archi anchors a plain "
+                        + "rectangle), and one under 3px is ignored as invisible; a connection with "
+                        + "no bendpoints is tested on the line Archi draws, straight when the two "
+                        + "elements overlap on one axis and corner to corner when they overlap on "
+                        + "neither. Not modelled: a rounded shape (most Services, Processes, "
+                        + "Functions, Interactions and Events, a service pill, a Value ellipse) "
+                        + "attaches an end off a corner, or one level with a face near its edge, on "
+                        + "its curved corner, 3px to 10px in on the common rounded box and more on "
+                        + "a pill or an ellipse. "
                         + "M6 reports a two-dimensional `(layoutTier, routingTier)` rating that "
                         + "decouples layout quality from routing quality so a poor-routing fix "
                         + "doesn't drag a strong-layout view's tier. "
@@ -3245,6 +3477,12 @@ public class ViewPlacementHandler {
                         + "clear with update-view-object, or nest it inside the container it belongs "
                         + "to. This dimension publishes no violator-id key, so past the 10-entry "
                         + "description cap the remaining pairs have to be found in the render. "
+                        + "`noteOnNoteOverlapCount` / `noteOnNoteOverlapDescriptions` — notes lying on "
+                        + "another note, which hides the lower note's text (noteOverlapCount tests a note "
+                        + "only against objects that are not notes). Counted once per unordered note pair, "
+                        + "at any depth; the notes are under violatorIds key noteOnNoteOverlap with "
+                        + "includeViolatorIds. Informational: no rating reads it. Move one note clear with "
+                        + "update-view-object, or re-add it with position below-content. "
                         + "`noteClipCount` / `noteClipDescriptions` — notes whose text content needs "
                         + "more height than their box provides (clipped). Re-send the note's `text` "
                         + "(or its `width`) through update-view-object with `height` omitted and the "
@@ -3262,8 +3500,14 @@ public class ViewPlacementHandler {
                         + "them for terminal anchoring / port distribution, so they are intentional "
                         + "and re-running auto-route will not remove them. Counted per redundant "
                         + "bendpoint and distinct from the reversal-based `zigzagCount`. The reported "
-                        + "(interior) points are genuinely removable — straighten the route or re-run "
-                        + "auto-route-connections.\n\n"
+                        + "points are genuinely removable: remove each with update-view-connection by "
+                        + "writing the connection's bendpoints without it (the drawn route does not "
+                        + "change); that works for every reported point. Re-running "
+                        + "auto-route-connections removes an interior one, but not a first or last "
+                        + "bendpoint off its element's face and in line with that element's centre: "
+                        + "the router's collinear sweep compares bendpoints with their neighbouring "
+                        + "bendpoints only, never with the element centres, so that point survives "
+                        + "every routing mode, full or terminals-only.\n\n"
                         + "FURTHER RATING-AFFECTING DETECTIONS (these two DO affect routingRating, "
                         + "despite following the informational block above): "
                         + "`nonOrthogonalInteriorSegmentCount` / `nonOrthogonalInteriorSegmentDescriptions` "
@@ -3280,10 +3524,13 @@ public class ViewPlacementHandler {
                         + "— connections whose terminal route departs an element face then immediately runs "
                         + "PARALLEL to and hugs that same face (the first exterior segment travels along the "
                         + "departed face with a perpendicular clearance below ~8px). This catches the visible "
-                        + "\"hugging exit\" that `nonOrthogonalTerminalCount` misses: when a route exits a "
-                        + "fraction of a pixel off the perimeter and turns to run just beside the face, the "
-                        + "exit stub is a sub-perceptible diagonal that the terminal-angle check suppresses. "
-                        + "Measured against the face the route departs, not the raw segment angle. Counted per "
+                        + "\"hugging exit\" that `nonOrthogonalTerminalCount` cannot see: when a route exits "
+                        + "a face and turns to run just beside it, the exit stub is drawn at right angles to "
+                        + "the face, so the terminal-angle check rightly reports nothing. "
+                        + "Measured against the face the route departs, not the raw segment angle; a "
+                        + "one-pixel jog at the terminal is not a run. auto-route-connections judges hugs by "
+                        + "the same rule, so on the same routes its EGRESS_LIFT_PRE_GATED ids name the same "
+                        + "connections. Counted per "
                         + "connection (a route hugging at either terminal counts once). It contributes to "
                         + "`routingRating` (cap-fair, tier 2) on BINARY PRESENCE, not on a ratio: any nonzero "
                         + "count caps the routing tier at fair, because a low hug-per-connection ratio is still "
@@ -3291,8 +3538,10 @@ public class ViewPlacementHandler {
                         + "so it caps `overallExcludingAcceptedCosmetics` too — a layout-bound hug is real and "
                         + "actionable, not an ELK cosmetic. "
                         + "Push the first segment perpendicular off the face before turning; if "
-                        + "auto-route-connections reports EGRESS_LIFT_LAYOUT_BOUND the hug cannot be routed "
-                        + "away and the remedy is to spread the elements.\n\n"
+                        + "auto-route-connections reports EGRESS_LIFT_LAYOUT_BOUND or EGRESS_LIFT_PRE_GATED "
+                        + "the hug cannot be routed away and the remedy is to spread the elements. A "
+                        + "re-route can itself crowd the parallel runs below the router's 8px lift floor "
+                        + "(EGRESS_LIFT_PRE_GATED), even where the routes as currently drawn clear it.\n\n"
                         + "COORDINATE FRAME: every metric here is computed over a path this tool "
                         + "DERIVES, not over stored geometry. Each bendpoint is resolved by "
                         + "interpolating its two stored reconstructions (source-relative and "
@@ -3304,11 +3553,14 @@ public class ViewPlacementHandler {
                         + "reconstructions is what anchorDriftCount measures, and rounding the centres "
                         + "would quantise it away. A coordinate reported here can therefore carry a "
                         + "half-pixel and can differ from the same bendpoint as get-view-contents "
-                        + "reports it, which uses the same weight but whole-pixel centres and returns "
-                        + "whole pixels. That difference is bounded by 0.5 + n/(n+1) px on a "
-                        + "connection carrying n bendpoints — half a pixel from the truncated centres, "
-                        + "plus whatever the single integer division discards. It is exactly 1 px for "
-                        + "a lone bendpoint and rises towards (never reaching) 1.5 px as n grows. "
+                        + "reports it, which uses whole-pixel centres and returns the pixel Archi draws: "
+                        + "the same weight held as Archi holds it, in single precision, and the blend "
+                        + "rounded down. That difference is bounded by 1.5 px — half a pixel from the "
+                        + "truncated centres, plus what the rounding down discards, which is up to "
+                        + "n/(n+1) on a connection carrying n bendpoints and a whole pixel where the "
+                        + "single-precision weight is inexact. It is exactly 1 px for a lone bendpoint "
+                        + "and 0.5 + n/(n+1) px whenever n+1 is a power of two (1.25 at three, 1.375 at "
+                        + "seven), and reaches 1.5 px at every other count. "
                         + "Neither frame is the router's: it works in whole pixels throughout. Treat a "
                         + "coordinate in this response as a measurement, not as a value to write "
                         + "back.\n\n"
@@ -3364,6 +3616,12 @@ public class ViewPlacementHandler {
                         + "DISJOINT from `connectionThroughNoteCount` (interior penetration): a single "
                         + "crossing is classified as exactly one of through or graze. Informational "
                         + "(no rating impact). Reroute the connection or move the note/image clear. "
+                        + "A connection that draws no line, its two ends landing on one point (in "
+                        + "practice a self-connection stored with no bendpoints), is counted in neither "
+                        + "this nor `connectionThroughNoteCount`; when one is present on a view holding "
+                        + "a note or image, both report coverage 'partial', because the arrowhead a "
+                        + "decorated one still paints is not measured. Give a self-connection a loop "
+                        + "with update-view-connection or auto-route-connections. "
                         + "`labelOnNoteCount` / `labelOnNoteDescriptions` — connection LABELS rendered "
                         + "on a Note's rectangle (the caption/legend collision the route detectors "
                         + "cannot see, since a label is positioned independently of the line). Counted "
@@ -3377,7 +3635,16 @@ public class ViewPlacementHandler {
                         + "the container's top title strip is tested, so a label sitting inside the "
                         + "body is normal and NOT flagged. Counted per label×container. Informational (no "
                         + "rating impact). Reposition the label or reroute the connection clear of the "
-                        + "container title.\n\n"
+                        + "container title. "
+                        + "`labelOnForeignLineCount` / `labelOnForeignLineDescriptions` — connection LABELS "
+                        + "drawn on ANOTHER connection's line (a reader takes the label for that line's "
+                        + "label; neither the label-overlap detector nor the route detectors test a label "
+                        + "against a line). Every other line between two diagram objects counts, labelled "
+                        + "or not, its label shown or hidden; the label's own line never does. Counted per "
+                        + "label×line. Informational (no rating impact). Reposition the label (set its "
+                        + "text position, or run a full auto-route-connections, without connectionIds, "
+                        + "whose label placement weighs other connections' lines) or reroute the other "
+                        + "connection clear of it.\n\n"
                         + "CONNECTION-LABEL OVERLAP: `labelOverlapCount` is render-calibrated "
                         + "(the estimated glyph box is widened to match how Archi actually renders, "
                         + "so short, tight segments are no longer under-flagged) and now also flags "
@@ -3387,21 +3654,26 @@ public class ViewPlacementHandler {
                         + "tolerated. Three companion rules cover what the area fraction misses: a "
                         + "box-coverage rule flags a label blanketing a TINY endpoint box (e.g. a "
                         + "junction) when the overlap covers ~60%+ of that box; a short-segment "
-                        + "rule lowers the bar to ~15% when the label is wider than the first/last "
-                        + "segment it anchors to (a long source/target label on a short terminal "
-                        + "segment); and a junction rule drops the bar to ~5% when the endpoint is "
+                        + "rule lowers the bar to ~15% when the label is wider than the segment it "
+                        + "hangs from (for a source/target label the first/last segment of the drawn "
+                        + "line; a long label on a short terminal segment); and a junction rule drops the bar to ~5% when the endpoint is "
                         + "a Junction (a solid dark shape with no readable interior), catching an "
-                        + "oversized junction grazed by a label. The check is offset-aware: a Middle label already lifted clear "
-                        + "by an applied Label Offset is not re-reported. On Archi 5.10, clear an "
-                        + "own-endpoint bleed with auto-route-connections, which applies the "
-                        + "connection Label Offset. Labels suppressed with `showLabel: false` "
+                        + "oversized junction grazed by a label. Every label check (element, label, "
+                        + "own endpoint, note, group title) scores a Middle label where Archi draws "
+                        + "it with an applied Label Offset: moved by half its own size plus 5 px on "
+                        + "each axis the offset names, so one lifted clear is not reported and one "
+                        + "lifted onto something is. Source and Target labels are scored where Archi "
+                        + "draws them, just past that end of the line and outside the element, and "
+                        + "ignore an offset, as Archi does. On Archi 5.10, clear an own-endpoint bleed with "
+                        + "auto-route-connections, which applies a Label Offset where the drawn "
+                        + "lift clears the box. Labels suppressed with `showLabel: false` "
                         + "reserve and flag nothing.\n\n"
                         + "VIOLATOR IDS (opt-in via includeViolatorIds=true): "
                         + "Returns a `violatorIds` map keyed by metric name, each value a list "
                         + "of visual object IDs. Use these IDs with update-view-object or "
                         + "remove-from-view for targeted per-element/per-connection fixes. "
                         + "Metrics: overlaps (both element IDs from each pair), passThroughs "
-                        + "(connection IDs, cross-element only), coincidentSegments (connection "
+                        + "(connection IDs, cross-element and own-end), coincidentSegments (connection "
                         + "IDs), nonOrthogonalTerminals (connection IDs — the whole flagged "
                         + "population, unchanged), nonOrthogonalTerminalsZeroBendpoint and "
                         + "nonOrthogonalTerminalsRouted (the two disjoint halves of that "
@@ -3419,7 +3691,10 @@ public class ViewPlacementHandler {
                         + "containerFillRecession (container element/group IDs), "
                         + "labelOnNote (note IDs carrying a connection label), "
                         + "labelOnGroup (container IDs whose title band carries a connection label), "
+                        + "labelOnForeignLine (connection IDs whose label lies on another connection's line), "
                         + "coincidentFacePorts (connection IDs colliding onto a shared face port), "
+                        + "viewpointNonConforming (view-object and connection IDs the viewpoint does "
+                        + "not allow), "
                         + "hubPortLowQuality (element IDs), parallelConnectionGapV "
                         + "(connection IDs with V-axis gap < 25 px), parallelConnectionGapH "
                         + "(connection IDs with H-axis gap < 25 px). Crossings excluded — "
@@ -3462,7 +3737,14 @@ public class ViewPlacementHandler {
                         // Kept on one line: this phrase is asserted verbatim against this source
                         // text, and a concatenation boundary inside it reads as absent.
                         + "`ownIconOverLabel` when the run carries a named icon-bearing object whose title width could not be measured"
-                        + ", so that object was never examined; and "
+                        + ", so that object was never examined; "
+                        + "`connectionThroughNote` and `connectionGrazesVisual` when the run carries a "
+                        + "connection that draws no line, its two ends on one point (in practice a "
+                        + "self-connection stored with no bendpoints) and a note or image on the view, "
+                        + "since the arrowhead a decorated one still paints there is not compared "
+                        + "against notes or images; `connectionPassThroughs` when the run carries "
+                        + "such a connection, whatever else the view holds, since it is not tested for passing through "
+                        + "an element rather than read as a route through a box over its centre; and "
                         // Kept on one line each: these phrases are asserted verbatim against this
                         // source text, and a concatenation boundary inside one reads as absent.
                         + "`parentLabelObscured` when the run carries a parent whose title band width was never measured"
@@ -3480,7 +3762,17 @@ public class ViewPlacementHandler {
                         + "segment is never compared against any element edge; its zero certifies "
                         + "only that no axis-aligned segment hugs within the tolerance band, and a "
                         + "done-gate must render-verify diagonal routes before certifying this "
-                        + "dimension clean. `labelTruncations` is always `partial`, because its "
+                        + "dimension clean. A route hugging the face it just departed is also "
+                        + "measured by `offFaceParallelTerminalCount`, which uses a wider band and "
+                        + "applies no overlap floor. Which of the two reports such a route depends "
+                        + "on how far off the face it runs: within `edgeCoincidence`'s own "
+                        + "tolerance both count it; beyond that tolerance but still inside the "
+                        + "wider band, only `offFaceParallelTerminalCount` does. The two are "
+                        + "therefore not independent evidence about that class, and a drop in this "
+                        + "count is not on its own evidence that such a route was fixed — it can "
+                        + "equally mean the route moved from one detector's range into the "
+                        + "other's. "
+                        + "`labelTruncations` is always `partial`, because its "
                         + "detector compares a label against its box only for measured, non-group "
                         + "objects: a visual GROUP's title is never measured and the node is skipped "
                         + "before its box is consulted, and "
@@ -3493,8 +3785,27 @@ public class ViewPlacementHandler {
                         + "measures whether a single route sits centred in its corridor versus hugs "
                         + "an edge (the `corridorUtilisationScore` metric only measures multi-occupant "
                         + "spread), so render-verify centring regardless of that score. "
-                        + "`not-applicable` appears only on the degenerate views described "
-                        + "above.\n\n"
+                        + "`not-applicable` appears on the degenerate views described above, and "
+                        + "on a view with NO connection: there every dimension that needs a "
+                        + "connection (edgeCrossings, the label-vs-connection dimensions, the route, "
+                        + "terminal, port and corridor dimensions, anchorDrift and the rest) reads "
+                        + "`not-applicable`, and `routingRating` reads `not-applicable` rather than "
+                        + "`excellent`, because there is no routing to rate. The ratingBreakdown "
+                        + "entries still read `pass` and `overallRating` is the layout's. A "
+                        + "routing-tier entry that does not need a connection (`labelTruncations`, "
+                        + "on an element's own label) still rates such a view's routing tier when "
+                        + "it fires.\n\n"
+                        + "VIEWPOINT: viewpointNonConformingCount counts the view objects and "
+                        + "connections the view's viewpoint does not allow, which Archi draws "
+                        + "ghosted (add-to-view places an element whatever the viewpoint). Detection "
+                        + "only, no rating impact. Archi's rule: an element is allowed when the "
+                        + "viewpoint lists its type, a Junction and a Grouping always; a connection "
+                        + "when its relationship's type is and both its ends are; notes, groups, "
+                        + "images and view references always. "
+                        + "The `viewpointConformance` coverage entry reads `checked` when the "
+                        + "viewpoint's definitions were read, `not-applicable` on a view with no "
+                        + "viewpoint, and `not-checked` (count omitted) when they could not be read. "
+                        + "Remedy: remove the object, or change the viewpoint with update-view.\n\n"
                         + "SCOPE: the `scope` parameter selects single-view (default) or whole-model "
                         + "assessment. With scope='all-views', viewId is ignored and the result is a "
                         + "compact map keyed by view id — each value {name, overallRating, "
@@ -3502,6 +3813,7 @@ public class ViewPlacementHandler {
                         + "overlapCount, cousinOverlapCount, ownIconOverLabelCount, "
                         + "boundaryViolationCount, parentLabelObscuredCount, "
                         + "nonOrthogonalTerminalCount, crossElementPassThroughCount, "
+                        + "ownEndpointPassThroughCount, "
                         + "contextualPartialDimensions} — for a "
                         + "one-call overview of every diagram (e.g. a final close-out sweep). It omits "
                         + "violatorIds, descriptions, and the per-metric breakdown; drill into any view "
@@ -3544,7 +3856,7 @@ public class ViewPlacementHandler {
             }
 
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
-            boolean includeViolatorIds = Boolean.TRUE.equals(args.get("includeViolatorIds"));
+            boolean includeViolatorIds = ToolArguments.flag(args, "includeViolatorIds", false);
 
             AssessLayoutResultDto dto = accessor.assessLayout(viewId, includeViolatorIds);
 
@@ -3610,13 +3922,14 @@ public class ViewPlacementHandler {
             // nextStep of its own: the rating it moved is already the sweep's drill-in trigger.
             summary.put("parentLabelObscuredCount", dto.parentLabelObscuredCount());
             summary.put("nonOrthogonalTerminalCount", dto.nonOrthogonalTerminalCount());
-            // The CHARGED count, and named for it. The size of dto.connectionPassThroughs() is a
-            // capped list of descriptions mixing the charged crossings with the unrated
-            // self-element ones, so publishing it under a "...Count" key beside a field of almost
-            // that name told a sweep it was reading that field's size when it was reading neither
-            // quantity reliably. This key is now the same number the drill-in call reports, so a
-            // caller comparing the two cannot see them disagree.
+            // The two CHARGED counts, each named for itself. The size of
+            // dto.connectionPassThroughs() is a capped list of descriptions mixing the two kinds,
+            // so publishing it under a "...Count" key beside a field of almost that name told a
+            // sweep it was reading that field's size when it was reading neither quantity
+            // reliably. These keys are the same numbers the drill-in call reports, and their sum
+            // is what the passThroughs band charges.
             summary.put("crossElementPassThroughCount", dto.crossElementPassThroughCount());
+            summary.put("ownEndpointPassThroughCount", dto.ownEndpointPassThroughCount());
             // Which of this view's dimensions could not be certified on the run that produced the
             // counts above. Placed LAST on purpose: it qualifies the whole entry, not the key it
             // sits beside, and a qualifier in the middle of the list it qualifies reads as
@@ -3625,7 +3938,7 @@ public class ViewPlacementHandler {
             // full-payload call to learn what — which is the drill-in this sweep exists to avoid.
             //
             // The names are the CONTEXTUAL downgrades only, never the whole coverage map: that map
-            // holds 38 entries per view, of which at least three are non-checked on every run by
+            // holds 39 entries per view, of which at least three are non-checked on every run by
             // construction, so splicing it in would multiply the payload and destroy the one cheap
             // overview call this tool exists to be.
             //
@@ -3723,12 +4036,11 @@ public class ViewPlacementHandler {
         String rating = dto.overallRating();
         boolean hasGroups = dto.hasGroups();
         boolean hasConnections = dto.connectionCount() > 0;
-        // TWO quantities, never one. connectionPassThroughs is a capped description list carrying
-        // the unrated self-element pass-throughs alongside the charged ones, so its size is not the
-        // number the rating was computed on: it overstates when self-element entries are present
-        // and understates once the cap truncates it. Both are needed here and they are read by
-        // different consumers below, so neither keeps the old shared name.
-        int chargedPassThroughs = dto.crossElementPassThroughCount();
+        // TWO quantities, never one. connectionPassThroughs is a capped description list, so its
+        // size understates the number the rating was computed on once the cap truncates it. Both
+        // are needed here and they are read by different consumers below, so neither keeps the
+        // old shared name.
+        int chargedPassThroughs = QualityTargetTermination.chargedPassThroughCount(dto);
         int describedPassThroughs = dto.connectionPassThroughs() != null
                 ? dto.connectionPassThroughs().size() : 0;
         // M6: M2-M5 metrics (interior, zigzag, edge-coincidence, hub-port
@@ -3741,16 +4053,16 @@ public class ViewPlacementHandler {
                 || dto.hubPortQualityScore() < HUB_PORT_QUALITY_NEXTSTEPS_THRESHOLD
                 || dto.coincidentSegmentCount() > 0
                 || dto.nonOrthogonalTerminalCount() > 0;
-        // Deliberately the WIDER quantity. This gates generic "re-route this view" advice, and a
-        // self-element pass-through is a real routing defect worth routing even though the rating
-        // does not charge it. Narrowing this to the charged count would delete guidance that was
-        // legitimately flowing.
+        // Either quantity. This gates generic "re-route this view" advice, and every pass-through,
+        // across another element or through the route's own end, is a routing defect worth
+        // routing; the charged count also sees the ones past the description cap.
         boolean hasRoutingIssues = hasConnections
                 && (dto.edgeCrossingCount() > 0 || describedPassThroughs > 0
+                        || chargedPassThroughs > 0
                         || hasPerceptionRoutingDefect);
         // The CHARGED quantity: this predicate borrows its threshold from the pass-through rating
-        // band, which is computed over cross-element crossings only, so anything else compared
-        // against it is comparing two different measurements.
+        // band, which is computed over the cross-element and own-end crossings together, so
+        // anything else compared against it is comparing two different measurements.
         boolean passThroughDominated = chargedPassThroughs >= 3;
 
         // Orphaned connection guidance — always first when present (unchanged)
@@ -3810,7 +4122,7 @@ public class ViewPlacementHandler {
                 violatorClause = " (re-run assess-layout with includeViolatorIds=true to list "
                         + "violator hubs)";
             }
-            steps.add(String.format(
+            steps.add(String.format(Locale.ROOT,
                     "Hub-port quality %.2f (below the good band at 0.75) — hubs may be undersized for "
                     + "connection fan-out. Run detect-hub-elements%s, then update-view-object "
                     + "to size each hub for its connection count "
@@ -3833,7 +4145,7 @@ public class ViewPlacementHandler {
                 && hpq >= HUB_PORT_QUALITY_REMEDY_THRESHOLD;
         if (saturatedNestedHub) {
             String header = "Saturated layout (corridorUtilisation "
-                    + String.format("%.2f", dto.corridorUtilisationScore())
+                    + String.format(Locale.ROOT, "%.2f", dto.corridorUtilisationScore())
                     + ", connectionEdgeCoincidence=" + dto.connectionEdgeCoincidenceCount()
                     + ", coincidentSegments=" + dto.coincidentSegmentCount()
                     + "): corridors are full. ";
@@ -3842,8 +4154,8 @@ public class ViewPlacementHandler {
                 // SPARSE — the hub edge keeps a readable corridor, so a resize has room. Emit the
                 // resize lever only (the present-both MVP is replaced once geometry can decide).
                 steps.add(header + "Hub-to-neighbour clearance is "
-                        + String.format("%.0f", clearance) + "px (>= "
-                        + String.format("%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
+                        + String.format(Locale.ROOT, "%.0f", clearance) + "px (>= "
+                        + String.format(Locale.ROOT, "%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
                         + "px), so there is room to grow. Run detect-hub-elements. If a hub is present, "
                         + "enlarge it in BOTH dimensions with update-view-object "
                         + "(formula: dimension = 55 + 15 × (count − 6)), then auto-route-connections. "
@@ -3855,8 +4167,8 @@ public class ViewPlacementHandler {
                 // DENSE — the hub edge is within the crowding floor of a spoke row, so a resize would
                 // crowd. Emit the reposition (ELK) lever only.
                 steps.add(header + "Hub-to-neighbour clearance is only "
-                        + String.format("%.0f", clearance) + "px (< "
-                        + String.format("%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
+                        + String.format(Locale.ROOT, "%.0f", clearance) + "px (< "
+                        + String.format(Locale.ROOT, "%.0f", NESTED_HUB_CROWDING_CLEARANCE_FLOOR_PX)
                         + "px), so enlarging the hub would crowd its neighbours. Run detect-hub-elements. "
                         + "If a hub is present, revert it to its normal size first (an oversized hub "
                         + "before ELK causes interior terminations), run auto-layout-and-route (ELK) to "
@@ -3909,7 +4221,7 @@ public class ViewPlacementHandler {
         // #3: High inter-group crossing density on a grouped view → name arrange-groups
         // (topology) and optimize-group-order.
         if (hasGroups && hasConnections && dto.crossingsPerConnection() > 4.0) {
-            steps.add(String.format(
+            steps.add(String.format(Locale.ROOT,
                     "High inter-group crossing density (%.1f crossings per connection on a "
                     + "grouped view) — consider arrange-groups with arrangement='topology' and "
                     + "spacing>=80 (creates routing corridors that auto-route-connections uses "
@@ -3938,7 +4250,7 @@ public class ViewPlacementHandler {
                 violatorClause = " (re-run assess-layout with includeViolatorIds=true to list "
                         + "violator elements)";
             }
-            steps.add(String.format(
+            steps.add(String.format(Locale.ROOT,
                     "Found %d boundary violation(s) — child element(s) positioned outside their "
                     + "parent container's bounds%s. Composite recovery: "
                     + "(1) use update-view-object to resize the affected parent container(s) to enclose "
@@ -4189,14 +4501,17 @@ public class ViewPlacementHandler {
         connectionIdsProp.put("description",
                 "Specific connection IDs to re-route. Only these connections will be "
                 + "routed; all other connections on the view retain their existing "
-                + "bendpoints unchanged. Omit to route all connections. Invalid IDs "
+                + "bendpoints unchanged. Omit to route all connections; an empty array is refused. Invalid IDs "
                 + "are reported as warnings; valid connections are still routed.");
 
         Map<String, Object> strategyProp = new LinkedHashMap<>();
         strategyProp.put("type", "string");
         strategyProp.put("description",
                 "Routing strategy. 'orthogonal' (default) computes right-angle "
-                + "bendpoints. 'clear' removes all bendpoints (straight lines).");
+                + "bendpoints. 'clear' removes all bendpoints (straight lines). Under either "
+                + "strategy a connection from an object to itself is not routed: it keeps a stored "
+                + "loop, or is given Archi's default loop if it has none, judged in a batch or "
+                + "awaiting approval by the bendpoints it holds when the change is applied.");
 
         Map<String, Object> forceProp = new LinkedHashMap<>();
         forceProp.put("type", "boolean");
@@ -4260,7 +4575,11 @@ public class ViewPlacementHandler {
                 + "views without the crossing inflation that a full re-route causes "
                 + "(assess-layout reports zero-bendpoint connections as the signature). "
                 + "The terminals-only mode is mutually exclusive with strategy='clear' and "
-                + "autoNudge=true.");
+                + "autoNudge=true. 'labels-only' re-routes nothing and moves nothing: it "
+                + "places every connection label on the view (text position and Label "
+                + "Offset) over the routes as they are stored. It also refuses strategy='clear', "
+                + "autoNudge=true, connectionIds and labelPolicy='auto-hide-on-collision', "
+                + "and a view in Archi's manhattan router.");
 
         Map<String, Object> enableChannelNudgingProp = new LinkedHashMap<>();
         enableChannelNudgingProp.put("type", "boolean");
@@ -4279,7 +4598,7 @@ public class ViewPlacementHandler {
                 "What to do with a connection label that has NO collision-free position. The router "
                 + "already evaluates all three label positions (source, middle, target) for every "
                 + "labelled connection; on a dense view a few labels collide at all three and no "
-                + "perpendicular offset clears them either. \"keep\" (DEFAULT) never changes label "
+                + "Label Offset anchor clears them either (Archi 5.10). \"keep\" (DEFAULT) never changes label "
                 + "visibility. \"auto-hide-on-collision\" hides exactly those unplaceable labels and "
                 + "leaves every placeable one visible. Hidden labels are listed individually in "
                 + "hiddenLabels (connectionId + reason) — never just a count — and each one is "
@@ -4347,6 +4666,11 @@ public class ViewPlacementHandler {
                         + "automatically straightened to eliminate Z-bends. "
                         + "Response includes straightLineCrossings (straight-line "
                         + "crossing estimate) alongside crossingsBefore/crossingsAfter. "
+                        + "crossingsAfter counts the routes as the view stores them, so the "
+                        + "next call on an untouched view reads the same figure as its "
+                        + "crossingsBefore. labelsOptimized counts the labels the call writes "
+                        + "(a text position or a Label Offset); a label moves only with a route "
+                        + "the call writes, and never while the label policy hides it. "
                         + "A warning is emitted if routed crossings exceed 1.5x the "
                         + "straight-line estimate — indicates layout is too dense for "
                         + "clean orthogonal routing (increase element spacing and re-route). "
@@ -4361,13 +4685,25 @@ public class ViewPlacementHandler {
                         + "LABEL OFFSET (Archi 5.10): when a Middle-positioned connection "
                         + "label still renders on its own source/target box after position "
                         + "selection, the router applies the connection \"Label Offset\" "
-                        + "(relativePosition) to lift it clear — on a position-preserving "
+                        + "(relativePosition) whose drawn lift clears it (Archi moves the "
+                        + "label by half its size plus 5 px; if no direction clears, none "
+                        + "is written) — on a position-preserving "
                         + "route this is the only channel that can clear own-endpoint label "
                         + "bleed. Read the applied anchor back via get-view-contents "
-                        + "(relativePosition); export-view does not render it. Runtime-guarded: "
-                        + "a silent no-op on Archi 5.7, which lacks the feature. "
+                        + "(relativePosition); export-view draws the offset label. Runtime-guarded: "
+                        + "a silent no-op on Archi releases before 5.10, which lack the feature. "
                         + "Connections are updated atomically as a single undo unit. "
-                        + "Supports batch and approval modes. SPECULATIVE EXECUTION: "
+                        + "Supports batch and approval modes, but inside a batch that has already "
+                        + "moved, resized, added or removed something on the view, or added a connection "
+                        + "to it, the call is refused: commit with end-batch first, then route. "
+                        + "A call in mode='terminals-only' is also refused after a bendpoint edit to a "
+                        + "connection it rectifies; one with strategy='clear', or whose every target is a "
+                        + "self-connection, is refused only for an added connection. "
+                        + "A call in mode='labels-only' is also refused after a bendpoint edit to any "
+                        + "connection on the view (a queued route included), a label position or Label "
+                        + "Offset edit, a rename of a relationship drawn on it, or a router-type change; "
+                        + "styling and showLabel edits do not refuse it. "
+                        + "SPECULATIVE EXECUTION: "
                         + "To preview routing quality, apply routing → assess-layout → "
                         + "undo if unsatisfied. No dry-run needed — undo is cheap and instant. "
                         + "TERMINALS-ONLY MODE: pass mode='terminals-only' to fix "
@@ -4393,9 +4729,27 @@ public class ViewPlacementHandler {
                         + "The terminals-only mode is mutually exclusive with strategy='clear' "
                         + "and autoNudge=true. It also sweeps redundant INTERIOR collinear "
                         + "bendpoints (an inserted terminal L-bend that lands collinear with "
-                        + "the existing trunk) so a terminals-only re-route drives "
-                        + "connectionRedundantBendpointCount toward zero without touching the "
-                        + "pinned terminal egress anchors. "
+                        + "the existing trunk), without touching the pinned terminal egress "
+                        + "anchors. It does not remove a first or last bendpoint that sits off its "
+                        + "element's face in line with that element's centre, which "
+                        + "connectionRedundantBendpointCount can still report: remove that one with "
+                        + "update-view-connection. "
+                        + "LABELS-ONLY MODE: pass mode='labels-only' to place connection labels "
+                        + "without re-routing. It re-routes nothing and moves nothing: no "
+                        + "bendpoint, element, router type or label visibility is written, only "
+                        + "each label's text position and Label Offset. It runs only when asked "
+                        + "(no other call triggers it), and the whole view is in scope. It runs "
+                        + "the same label search a routing pass runs, and moves the labels only "
+                        + "when the best placement it finds scores strictly lower than the "
+                        + "current one by that search's own measure; otherwise every label keeps "
+                        + "its position and a warning says so, while Label Offsets (Archi 5.10 "
+                        + "and later) are still kept, reset or searched for. labelsOptimized counts the connections "
+                        + "whose label changed. Refused on a view drawn by Archi's manhattan "
+                        + "router, which ignores the stored bendpoints the labels are placed "
+                        + "against: run a full auto-route first. Refused with connectionIds, "
+                        + "strategy='clear', autoNudge=true or labelPolicy='auto-hide-on-collision'; "
+                        + "force, snapThreshold, perimeterMargin and enableChannelNudging are "
+                        + "accepted and ignored. "
                         + "Related: auto-layout-and-route (position elements first), assess-layout "
                         + "(evaluate quality after routing), adjust-view-spacing (inflate "
                         + "spacing and re-route in one call), apply-element-spacing-recommendations "
@@ -4423,6 +4777,14 @@ public class ViewPlacementHandler {
                         + "healthy floor — i.e. the residual off-face hug is layout-bound, not a "
                         + "routing bug, so it names spreading the elements (a matching layout-bound "
                         + "nextSteps entry accompanies it) rather than declining silently. "
+                        + "EGRESS_LIFT_PRE_GATED is emitted when the router skipped its off-face "
+                        + "lift pass for the whole view because the vertical connection runs it "
+                        + "had just routed sit closer together than 8px at the 10th percentile, and "
+                        + "at least one connection still hugs the face it leaves: the message gives "
+                        + "the measured gap and the floor, remediationViolatorIds names the hugging "
+                        + "connections, and the remedy is to spread the parallel runs (element "
+                        + "spacing) and re-route — this routing can itself crowd the runs below "
+                        + "the floor, so re-routing alone will not lift them. "
                         + "AUTO_NUDGE_NET_ZERO is emitted when autoNudge moved "
                         + "one or more elements and their iterations summed to a zero "
                         + "displacement, so each ended where it started: those elements are "
@@ -4433,6 +4795,22 @@ public class ViewPlacementHandler {
                         + "outcome and does not claim which of the two producers caused it - a "
                         + "move a later iteration reversed, or one the parent-containment clamp "
                         + "absorbed - because the summed deltas cannot tell them apart. "
+                        + "MOVE_RECOMMENDATION_WITHHELD_BY_PARENT is emitted when a recommended "
+                        + "move was withheld because the element already sits at (or, on x, left "
+                        + "of) its parent's left "
+                        + "padding or title band on the side the move points, so the clamp that "
+                        + "keeps a nested child inside its parent would absorb it: every pass's "
+                        + "recommendations are checked against that same clamp first, a move it "
+                        + "would shorten is offered shortened, and a move it would zero or reverse "
+                        + "is in neither recommendations nor blockedRecommendations and is not "
+                        + "attempted. It names each element, its parent and the side, carries the "
+                        + "element ids then the parent ids in remediationViolatorIds, names "
+                        + "update-view-object (moving the parent carries every child with it, so "
+                        + "it helps only when the blocked connection's other end lies outside the "
+                        + "parent; otherwise move the element or its neighbours, re-arrange the "
+                        + "parent with layout-within-group, or move the element out of it), fires "
+                        + "whether or not autoNudge is on, and reads the "
+                        + "same applied, queued or awaiting approval. "
                         + "AUTO_ROUTE_CROSSINGS_REGRESSED is emitted when a full re-route left the "
                         + "view with more edge crossings than the geometry it replaced, naming both "
                         + "the before and after figures; the route is still applied, its "
@@ -4443,6 +4821,22 @@ public class ViewPlacementHandler {
                         + "connectionIds did not resolve on the view: the connections that were "
                         + "found are routed normally, the unknown ids are skipped, and "
                         + "remediationViolatorIds lists every id that missed. "
+                        + "SELF_CONNECTION_NOT_ROUTED is emitted when a target is a connection from "
+                        + "an object to itself, which this router would turn into a stub: none is "
+                        + "routed or counted in connectionsRouted. One with stored bendpoints keeps "
+                        + "them unchanged; one stored with none draws no line and is given Archi's "
+                        + "default loop (the three bendpoints Archi's palette adds) under every "
+                        + "strategy, clear included. In a batch or awaiting approval that is "
+                        + "decided from the bendpoints each holds when the change is applied, so an "
+                        + "earlier edit in the same batch is kept and a cleared loop is restored. "
+                        + "remediationViolatorIds lists the kept ids "
+                        + "first, then the looped ones, and remediationTool is "
+                        + "update-view-connection, which reshapes a loop by hand. "
+                        + "CASCADE_GROWN_INTO_SIBLING is emitted when a group autoNudge's "
+                        + "parent-fit grew (listed in resizedGroups) now overlaps a sibling it did "
+                        + "not overlap before. Nothing is moved to make room; remediationViolatorIds "
+                        + "lists the siblings, and remediationTool is arrange-groups for a top-level "
+                        + "group or layout-within-group for a nested one. "
                         + "RECOMMENDED ITERATION: when "
                         + "structuredWarnings[].code == AUTO_NUDGE_SKIPPED_SIBLING_OVERLAP, "
                         + "invoke layout-within-group on the parent of remediationViolatorIds "
@@ -4483,34 +4877,28 @@ public class ViewPlacementHandler {
             String strategy = HandlerUtils.optionalStringParam(args, "strategy");
 
             // Extract optional connectionIds array
-            List<String> connectionIds = extractStringList(args, "connectionIds");
+            List<String> connectionIds = ToolArguments.idFilter(args, "connectionIds");
 
-            // Extract optional force parameter
-            Boolean forceObj = args != null ? (Boolean) args.get("force") : null;
-            boolean force = forceObj != null && forceObj;
+            boolean force = ToolArguments.flag(args, "force", false);
+            boolean autoNudge = ToolArguments.flag(args, "autoNudge", false);
 
-            // Extract optional autoNudge parameter
-            Boolean autoNudgeObj = args != null ? (Boolean) args.get("autoNudge") : null;
-            boolean autoNudge = autoNudgeObj != null && autoNudgeObj;
-
-            // Extract optional snapThreshold parameter
-            Integer snapThresholdObj = args != null ? (Integer) args.get("snapThreshold") : null;
+            // Whole numbers only (20.0 and values beyond int read; 20.5 or "20" refused), then the
+            // published clamp.
+            Long snapThresholdObj = ToolArguments.wholeNumber(args, "snapThreshold");
             int snapThreshold = snapThresholdObj != null
-                    ? Math.max(0, Math.min(50, snapThresholdObj)) : 20;
-
-            // Extract optional perimeterMargin parameter
-            Integer perimeterMarginObj = args != null ? (Integer) args.get("perimeterMargin") : null;
+                    ? (int) Math.max(0, Math.min(50, snapThresholdObj)) : 20;
+            Long perimeterMarginObj = ToolArguments.wholeNumber(args, "perimeterMargin");
             int perimeterMargin = perimeterMarginObj != null
-                    ? Math.max(10, Math.min(200, perimeterMarginObj)) : 50;
+                    ? (int) Math.max(10, Math.min(200, perimeterMarginObj)) : 50;
 
-            // Extract optional mode parameter (terminals-only routing)
+            // Extract optional mode parameter (terminals-only or labels-only)
             String mode = HandlerUtils.optionalStringParam(args, "mode");
 
             // Extract optional enableChannelNudging parameter.
             // Default true — channel-global ordered nudging post-pass runs unless
             // explicitly disabled.
             boolean enableChannelNudging =
-                    HandlerUtils.optionalBooleanParam(args, "enableChannelNudging", true);
+                    ToolArguments.flag(args, "enableChannelNudging", true);
 
             // Optional labelPolicy — omitted means "keep", so label visibility is untouched.
             String labelPolicy = HandlerUtils.optionalStringParam(args, "labelPolicy");
@@ -4521,7 +4909,7 @@ public class ViewPlacementHandler {
                             enableChannelNudging, labelPolicy);
 
             return HandlerUtils.formatMutationResponse(result.entity(), result,
-                    buildAutoRouteNextSteps(result), buildAutoRouteApprovalDisclosures(result),
+                    buildAutoRouteNextSteps(result, mode), buildAutoRouteApprovalDisclosures(result),
                     accessor, formatter);
 
         } catch (NoModelLoadedException e) {
@@ -4534,29 +4922,6 @@ public class ViewPlacementHandler {
             logger.error("Unexpected error handling auto-route-connections", e);
             return HandlerUtils.buildInternalError(formatter, e.getMessage());
         }
-    }
-
-    /**
-     * Extracts an optional list of strings from arguments.
-     */
-    private List<String> extractStringList(Map<String, Object> args, String paramName) {
-        if (args == null) return null;
-        Object value = args.get(paramName);
-        if (!(value instanceof List<?> list) || list.isEmpty()) {
-            return null;
-        }
-        List<String> result = new ArrayList<>();
-        for (int i = 0; i < list.size(); i++) {
-            Object item = list.get(i);
-            if (item instanceof String str && !str.isBlank()) {
-                result.add(str);
-            } else {
-                throw new ModelAccessException(
-                        paramName + "[" + i + "] must be a non-empty string",
-                        ErrorCode.INVALID_PARAMETER);
-            }
-        }
-        return result;
     }
 
     /**
@@ -4635,6 +5000,57 @@ public class ViewPlacementHandler {
                     + EGRESS_LIFT_LAYOUT_BOUND_REMEDY
                     + " Do that once the change has been approved or rejected."
                     + EGRESS_LIFT_LAYOUT_BOUND_POINTER;
+
+    /**
+     * nextSteps guidance for a pre-gated egress lift: the router did not attempt the off-face lift
+     * pass at all, because the parallel runs it had just routed sit too close together. As with the
+     * layout-bound decline the remedy is the layout and holds on every arm; only the tense and the
+     * sentence about the model's state are selected.
+     */
+    private static final String EGRESS_LIFT_PRE_GATED_FINDING =
+            " because the vertical connection runs this routing produced sit too close together for the "
+                    + "router to lift them — it skipped its off-face lift pass for the view.";
+
+    /** The spacing remedy, a layout fact that holds on every arm. */
+    private static final String EGRESS_LIFT_PRE_GATED_REMEDY =
+            " Spread the parallel runs apart (e.g. run apply-spacing-recommendations), then re-route; "
+                    + "re-routing alone will not lift them.";
+
+    /** Where to read the gap, the floor and the ids. Always last. */
+    private static final String EGRESS_LIFT_PRE_GATED_POINTER =
+            " See the structuredWarnings entry (EGRESS_LIFT_PRE_GATED) for the measured gap and the "
+                    + "connections still hugging.";
+
+    private static final String EGRESS_LIFT_PRE_GATED_STEP =
+            "One or more off-face terminal hugs were left in place"
+                    + EGRESS_LIFT_PRE_GATED_FINDING
+                    + EGRESS_LIFT_PRE_GATED_REMEDY
+                    + EGRESS_LIFT_PRE_GATED_POINTER;
+
+    static final String EGRESS_LIFT_PRE_GATED_QUEUED_STEP =
+            "One or more off-face terminal hugs will be left in place"
+                    + EGRESS_LIFT_PRE_GATED_FINDING
+                    + " Nothing has been applied: this routing is queued in the open batch."
+                    + EGRESS_LIFT_PRE_GATED_REMEDY
+                    + " Do that after end-batch, or discard the queued routing with end-batch "
+                    + "rollback:true and spread the runs first."
+                    + EGRESS_LIFT_PRE_GATED_POINTER;
+
+    static final String EGRESS_LIFT_PRE_GATED_PROPOSED_STEP =
+            "One or more off-face terminal hugs will be left in place"
+                    + EGRESS_LIFT_PRE_GATED_FINDING
+                    + " Nothing has been applied: this routing is waiting on the human's decision, "
+                    + "so the hugs will only exist once it is approved."
+                    + EGRESS_LIFT_PRE_GATED_REMEDY
+                    + " Do that once the change has been approved or rejected."
+                    + EGRESS_LIFT_PRE_GATED_POINTER;
+
+    /** True when the auto-route result carries the pre-gated egress-lift structured warning. */
+    private boolean hasEgressLiftPreGatedWarning(AutoRouteResultDto entity) {
+        return entity != null && entity.structuredWarnings() != null
+                && entity.structuredWarnings().stream().anyMatch(
+                        w -> StructuredWarningCodes.EGRESS_LIFT_PRE_GATED.equals(w.code()));
+    }
 
     /** True when the auto-route result carries the layout-bound egress-lift structured warning. */
     private boolean hasEgressLiftLayoutBoundWarning(AutoRouteResultDto entity) {
@@ -5022,6 +5438,13 @@ public class ViewPlacementHandler {
                 case AWAITING_APPROVAL -> EGRESS_LIFT_LAYOUT_BOUND_PROPOSED_STEP;
             });
         }
+        if (hasEgressLiftPreGatedWarning(entity)) {
+            disclosures.add(switch (arm) {
+                case APPLIED -> EGRESS_LIFT_PRE_GATED_STEP;
+                case QUEUED -> EGRESS_LIFT_PRE_GATED_QUEUED_STEP;
+                case AWAITING_APPROVAL -> EGRESS_LIFT_PRE_GATED_PROPOSED_STEP;
+            });
+        }
         if (hasCrossingsRegressedWarning(entity)) {
             disclosures.add(switch (arm) {
                 case APPLIED -> AUTO_ROUTE_CROSSINGS_REGRESSED_STEP;
@@ -5049,7 +5472,7 @@ public class ViewPlacementHandler {
     }
 
     private List<String> buildAutoRouteNextSteps(
-            MutationResult<AutoRouteResultDto> result) {
+            MutationResult<AutoRouteResultDto> result, String mode) {
         if (result.isBatched()) {
             List<String> batchSteps = new ArrayList<>();
             if (result.entity() != null && result.entity().routerTypeSwitched()) {
@@ -5143,6 +5566,12 @@ public class ViewPlacementHandler {
                         + "then re-route, or use autoNudge=true to automate this.");
             }
         }
+        if ("labels-only".equals(mode)) {
+            // Nothing was routed, so the routing follow-ups below (re-route a subset, edit bendpoints) do not apply.
+            steps.add("Use export-view (PNG) to see where the labels now sit.");
+            steps.add("Use assess-layout to re-measure labelOverlapCount and labelOnForeignLineCount.");
+            return steps;
+        }
         steps.add("Use export-view to visually verify the connection routing.");
         steps.add("Use assess-layout to evaluate overall layout quality.");
         steps.add("To fix specific connections without re-routing the whole view, "
@@ -5166,7 +5595,7 @@ public class ViewPlacementHandler {
         elementIdsProp.put("items", elemIdItems);
         elementIdsProp.put("description",
                 "Only consider relationships involving these elements. "
-                + "Omit for all elements on the view.");
+                + "Omit for all elements on the view; an empty array is refused.");
 
         Map<String, Object> relTypesProp = new LinkedHashMap<>();
         relTypesProp.put("type", "array");
@@ -5176,7 +5605,7 @@ public class ViewPlacementHandler {
         relTypesProp.put("description",
                 "Only connect relationships of these types "
                 + "(e.g., [\"ServingRelationship\", \"FlowRelationship\"]). "
-                + "Omit for all types.");
+                + "Omit for all types; an empty array is refused.");
 
         Map<String, Object> relIdsProp = new LinkedHashMap<>();
         relIdsProp.put("type", "array");
@@ -5188,7 +5617,7 @@ public class ViewPlacementHandler {
                 + "(AND-composed with relationshipTypes/elementIds). Use to curate a "
                 + "directional slice (e.g. producer→hub→consumer) or to exclude "
                 + "same-type reverse flows in a single call. Each ID must be a real "
-                + "relationship. Omit for all relationships.");
+                + "relationship. Omit for all relationships; an empty array is refused.");
 
         Map<String, Object> showLabelProp = new LinkedHashMap<>();
         showLabelProp.put("type", "boolean");
@@ -5212,8 +5641,12 @@ public class ViewPlacementHandler {
                 .name("auto-connect-view")
                 .description("[Mutation] Retroactively create visual connections on a view "
                         + "for all existing model relationships between elements already "
-                        + "placed on that view. Only creates missing connections \u2014 existing "
-                        + "visual connections are not duplicated. Use after placing elements "
+                        + "placed on that view. Draws what Archi draws when a relationship is dragged onto "
+                        + "a view: for each relationship, a connection from every occurrence of its source to "
+                        + "every occurrence of its target, skipping a pair the relationship already runs "
+                        + "between in that direction (counted in connectionsSkipped), so an element placed "
+                        + "twice is connected twice; relationshipIdsConnected names a relationship once per "
+                        + "connection drawn. Use after placing elements "
                         + "via add-to-view to batch-create all connections at once. "
                         + "RECOMMENDED: Use the relationshipTypes filter to connect only "
                         + "the relationship types relevant to the view's perspective — "
@@ -5239,6 +5672,13 @@ public class ViewPlacementHandler {
                         + "are skipped (a connection between ancestor and descendant on the view "
                         + "renders as a self-pass-through). Skipped pairs are reported in the response "
                         + "under skippedDueToNesting; the model relationship is preserved. "
+                        + "A relationship from an element to itself departs from Archi's drag, which draws no "
+                        + "connection from an object to itself: each occurrence that has no loop for it gets "
+                        + "one, and two occurrences are joined both ways, as Archi joins them. The loop is "
+                        + "Archi's default loop, as Archi's palette draws it, since a self-connection with no "
+                        + "bendpoints draws no line. The loop is sized from the element as it is when the "
+                        + "connection is created, so a resize an earlier operation of the same batch makes "
+                        + "counts. "
                         + "Related: add-connection-to-view (single connection), "
                         + "auto-route-connections (compute bendpoints for existing connections).")
                 .inputSchema(inputSchema)
@@ -5260,10 +5700,10 @@ public class ViewPlacementHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
 
-            List<String> elementIds = extractStringList(args, "elementIds");
-            List<String> relationshipTypes = extractStringList(args, "relationshipTypes");
-            List<String> relationshipIds = extractStringList(args, "relationshipIds");
-            Boolean showLabel = (args.get("showLabel") instanceof Boolean b) ? b : null;
+            List<String> elementIds = ToolArguments.idFilter(args, "elementIds");
+            List<String> relationshipTypes = ToolArguments.idFilter(args, "relationshipTypes");
+            List<String> relationshipIds = ToolArguments.idFilter(args, "relationshipIds");
+            Boolean showLabel = ConnectionUpdateArguments.showLabel(args);
             StylingParams styling = extractStylingParams(args);
 
             MutationResult<AutoConnectResultDto> result =
@@ -5323,12 +5763,14 @@ public class ViewPlacementHandler {
         Map<String, Object> spacingProp = new LinkedHashMap<>();
         spacingProp.put("type", "integer");
         spacingProp.put("description",
-                "Space between elements in pixels (default: 40)");
+                "Space between elements in pixels (default: 40, at most " + LayoutSpacing.MAX_LAYOUT_SPACING + ")");
+        spacingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> paddingProp = new LinkedHashMap<>();
         paddingProp.put("type", "integer");
         paddingProp.put("description",
-                "Space from group edges in pixels (default: 10)");
+                "Space from group edges in pixels (default: 10, at most " + LayoutSpacing.MAX_LAYOUT_SPACING + ")");
+        paddingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> elementWidthProp = new LinkedHashMap<>();
         elementWidthProp.put("type", "integer");
@@ -5352,6 +5794,7 @@ public class ViewPlacementHandler {
         autoWidthProp.put("description",
                 "Compute each element's width from its label text so names are not "
                 + "truncated (default: false). Ignored when elementWidth is set. "
+                + "A Junction draws no label and keeps its width. "
                 + "On a grid this is a common source of over-wide containers, because "
                 + "one long name becomes the whole grid's cell width — see 'columns' "
                 + "for exactly when that happens.");
@@ -5451,8 +5894,8 @@ public class ViewPlacementHandler {
         properties.put("arrangement", arrangementProp);
         properties.put("spacing", spacingProp);
         properties.put("padding", paddingProp);
-        properties.put("elementWidth", elementWidthProp);
-        properties.put("elementHeight", elementHeightProp);
+        properties.put("elementWidth", boundedSize(elementWidthProp));
+        properties.put("elementHeight", boundedSize(elementHeightProp));
         properties.put("autoResize", autoResizeProp);
         properties.put("autoWidth", autoWidthProp);
         properties.put("columns", columnsProp);
@@ -5500,6 +5943,10 @@ public class ViewPlacementHandler {
                         + "above the one you named ended up; both describe the same set, and an "
                         + "ancestor recomputed to an unchanged rectangle appears in neither "
                         + "('resizedAncestors' is omitted entirely when empty). "
+                        + "A container it grew that now overlaps a sibling it did not overlap "
+                        + "before is named in structuredWarnings (code CASCADE_GROWN_INTO_SIBLING, the "
+                        + "siblings in remediationViolatorIds); nothing is moved to make room. In a batch "
+                        + "or pending approval it is measured against the view as it stands and says so. "
                         + "'ancestorPropagation' is on EVERY response and says how the upward "
                         + "pass ended, as a stable code, a colon and a short phrase. Triage on "
                         + "the code: 'not-requested' (you did not set recursive), "
@@ -5568,10 +6015,10 @@ public class ViewPlacementHandler {
             String arrangement = HandlerUtils.requireStringParam(args, "arrangement");
 
             // Optional parameters
-            Integer spacing = HandlerUtils.optionalIntegerParam(args, "spacing");
-            Integer padding = HandlerUtils.optionalIntegerParam(args, "padding");
-            Integer elementWidth = HandlerUtils.optionalIntegerParam(args, "elementWidth");
-            Integer elementHeight = HandlerUtils.optionalIntegerParam(args, "elementHeight");
+            Integer spacing = LayoutSpacing.atMost(args, "spacing");
+            Integer padding = LayoutSpacing.atMost(args, "padding");
+            Integer elementWidth = ViewGeometry.size(args, "elementWidth");
+            Integer elementHeight = ViewGeometry.size(args, "elementHeight");
             boolean autoResize = HandlerUtils.optionalBooleanParam(args, "autoResize", false);
             boolean autoWidth = HandlerUtils.optionalBooleanParam(args, "autoWidth", false);
             Integer columns = HandlerUtils.optionalIntegerParam(args, "columns");
@@ -5811,10 +6258,11 @@ public class ViewPlacementHandler {
         Map<String, Object> spacingProp = new LinkedHashMap<>();
         spacingProp.put("type", "integer");
         spacingProp.put("description",
-                "Spacing between elements in pixels. Default 50. "
-                + "Larger values produce more spread-out layouts. "
+                "Spacing between elements in pixels. Default 50, at most " + LayoutSpacing.MAX_LAYOUT_SPACING
+                + ". Larger values produce more spread-out layouts. "
                 + "In grouped mode, controls both intra-group element spacing "
                 + "and inter-group gap.");
+        spacingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> targetRatingProp = new LinkedHashMap<>();
         targetRatingProp.put("type", "string");
@@ -5836,6 +6284,12 @@ public class ViewPlacementHandler {
                 + "result is worse than the input; once the run has been applied undo "
                 + "restores it in one call, while a queued or awaiting-approval run has "
                 + "nothing to undo yet and the entry names that arm's own remedy. "
+                + "Notes are not laid out: on every path, a layout that leaves a note under an "
+                + "element or group raises LAYOUT_OVERLAPS_NOTE, with the note ids in "
+                + "remediationViolatorIds and update-view-object as the remedy. "
+                + "This tool routes every connection itself: run assess-layout before any "
+                + "auto-route-connections, and if a terminal or label metric is what remains use its "
+                + "terminals-only or labels-only mode rather than a full re-route. "
                 + "Eliminates the need for manual assess → adjust → re-layout loops. Works in both "
                 + "auto and grouped modes. 'poor' and 'not-applicable' are not valid targets.");
 
@@ -5968,6 +6422,11 @@ public class ViewPlacementHandler {
                         + "single compound operation; a queued or awaiting-approval "
                         + "run has nothing to undo yet, and the warning names the "
                         + "remedy that arm does have. "
+                        + "Whatever the target, notes are not laid out, and a "
+                        + "LAYOUT_OVERLAPS_NOTE entry names each note the layout "
+                        + "leaves under an element or group. "
+                        + "The assessmentSummary carries crossingsPerConnection "
+                        + "beside edgeCrossingCount, as assess-layout does. "
                         + "PRECONDITION CHECKLIST: fetch "
                         + "archimate://prompts/routing-preconditions-checklist "
                         + "before invoking this tool on any non-trivial view "
@@ -5997,13 +6456,14 @@ public class ViewPlacementHandler {
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String mode = HandlerUtils.optionalStringParam(args, "mode");
             String direction = HandlerUtils.optionalStringParam(args, "direction");
-            Integer spacingParam = HandlerUtils.optionalIntegerParam(args, "spacing");
+            Integer spacingParam = ToolArguments.wholeNumberWithin(args, "spacing", 1,
+                    LayoutSpacing.MAX_LAYOUT_SPACING);
             int spacing = spacingParam != null ? spacingParam : 50;
 
             // Validate mode parameter
             if (mode != null && !"auto".equals(mode) && !"grouped".equals(mode)) {
                 throw new ModelAccessException(
-                        "Invalid mode: '" + mode + "'",
+                        "Invalid mode: " + CallerText.quoted(mode),
                         ErrorCode.INVALID_PARAMETER,
                         "mode must be one of: auto, grouped.",
                         "Use mode: \"grouped\" for views with groups, or omit for ELK layout.",
@@ -6017,7 +6477,7 @@ public class ViewPlacementHandler {
                     && !"good".equals(targetRating)
                     && !"fair".equals(targetRating)) {
                 throw new ModelAccessException(
-                        "Invalid targetRating: '" + targetRating + "'",
+                        "Invalid targetRating: " + CallerText.quoted(targetRating),
                         ErrorCode.INVALID_PARAMETER,
                         "targetRating must be one of: excellent, good, fair. "
                         + "'poor' and 'not-applicable' are not valid targets.",
@@ -6191,7 +6651,8 @@ public class ViewPlacementHandler {
         Map<String, Object> spacingProp = new LinkedHashMap<>();
         spacingProp.put("type", "integer");
         spacingProp.put("description",
-                "Gap in pixels between groups (static default: 40). Groups are larger than "
+                "Gap in pixels between groups (static default: 40, at most " + LayoutSpacing.MAX_LAYOUT_SPACING
+                + "). Groups are larger than "
                 + "elements, so 40px is recommended minimum. "
                 + "When `spacing` is OMITTED (parameter not provided) AND the view has "
                 + "inter-group connections, the tool derives a heuristic-driven default "
@@ -6205,6 +6666,7 @@ public class ViewPlacementHandler {
                 + "default-resolution fired and which heuristic tier produced the value. "
                 + "(Applies to direct `arrange-groups` invocations only — internal compound "
                 + "flows that use the static 40 default are unaffected.)");
+        spacingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> directionProp = new LinkedHashMap<>();
         directionProp.put("type", "string");
@@ -6221,7 +6683,7 @@ public class ViewPlacementHandler {
         groupIdItems.put("type", "string");
         groupIdsProp.put("items", groupIdItems);
         groupIdsProp.put("description",
-                "Optional list of container view-object IDs to arrange. Any DIRECT child of this "
+                "Optional list of container view-object IDs to arrange (an empty array is refused). Any DIRECT child of this "
                 + "view that CAN hold children is accepted: a native group, an ArchiMate Grouping "
                 + "element, and also a plain ArchiMate element acting as a container — a Node "
                 + "typing a cloud region, for example — which is NOT arranged by default. Naming "
@@ -6393,22 +6855,10 @@ public class ViewPlacementHandler {
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String arrangement = HandlerUtils.requireStringParam(args, "arrangement");
             Integer columns = HandlerUtils.optionalIntegerParam(args, "columns");
-            Integer spacing = HandlerUtils.optionalIntegerParam(args, "spacing");
+            Integer spacing = LayoutSpacing.atMost(args, "spacing");
             String direction = HandlerUtils.optionalStringParam(args, "direction");
 
-            // Parse optional groupIds array
-            List<String> groupIds = null;
-            Object groupIdsObj = args.get("groupIds");
-            if (groupIdsObj instanceof List<?> rawList && !rawList.isEmpty()) {
-                groupIds = new ArrayList<>();
-                for (Object item : rawList) {
-                    if (item instanceof String s) {
-                        groupIds.add(s);
-                    } else {
-                        groupIds.add(String.valueOf(item));
-                    }
-                }
-            }
+            List<String> groupIds = ToolArguments.idFilter(args, "groupIds");
 
             MutationResult<ArrangeGroupsResultDto> result =
                     accessor.arrangeGroups(sessionId, viewId, arrangement,
@@ -6463,12 +6913,14 @@ public class ViewPlacementHandler {
         Map<String, Object> spacingProp = new LinkedHashMap<>();
         spacingProp.put("type", "integer");
         spacingProp.put("description",
-                "Space between elements in pixels (default: 40)");
+                "Space between elements in pixels (default: 40, at most " + LayoutSpacing.MAX_LAYOUT_SPACING + ")");
+        spacingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> paddingProp = new LinkedHashMap<>();
         paddingProp.put("type", "integer");
         paddingProp.put("description",
-                "Space from group edges in pixels (default: 10)");
+                "Space from group edges in pixels (default: 10, at most " + LayoutSpacing.MAX_LAYOUT_SPACING + ")");
+        paddingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> elementWidthProp = new LinkedHashMap<>();
         elementWidthProp.put("type", "integer");
@@ -6484,7 +6936,7 @@ public class ViewPlacementHandler {
         autoWidthProp.put("type", "boolean");
         autoWidthProp.put("description",
                 "Compute each element's width from its label text (default: false). "
-                + "Ignored when elementWidth is set.");
+                + "Ignored when elementWidth is set. A Junction draws no label and keeps its width.");
 
         Map<String, Object> columnsProp = new LinkedHashMap<>();
         columnsProp.put("type", "integer");
@@ -6508,8 +6960,8 @@ public class ViewPlacementHandler {
         properties.put("arrangement", arrangementProp);
         properties.put("spacing", spacingProp);
         properties.put("padding", paddingProp);
-        properties.put("elementWidth", elementWidthProp);
-        properties.put("elementHeight", elementHeightProp);
+        properties.put("elementWidth", boundedSize(elementWidthProp));
+        properties.put("elementHeight", boundedSize(elementHeightProp));
         properties.put("autoWidth", autoWidthProp);
         properties.put("columns", columnsProp);
         properties.put("groupArrangements", groupArrangementsProp);
@@ -6601,28 +7053,19 @@ public class ViewPlacementHandler {
             String arrangement = HandlerUtils.optionalStringParam(args, "arrangement");
 
             // Optional parameters
-            Integer spacing = HandlerUtils.optionalIntegerParam(args, "spacing");
-            Integer padding = HandlerUtils.optionalIntegerParam(args, "padding");
-            Integer elementWidth = HandlerUtils.optionalIntegerParam(args, "elementWidth");
-            Integer elementHeight = HandlerUtils.optionalIntegerParam(args, "elementHeight");
+            Integer spacing = LayoutSpacing.atMost(args, "spacing");
+            Integer padding = LayoutSpacing.atMost(args, "padding");
+            Integer elementWidth = ViewGeometry.size(args, "elementWidth");
+            Integer elementHeight = ViewGeometry.size(args, "elementHeight");
             boolean autoWidth = HandlerUtils.optionalBooleanParam(args, "autoWidth", false);
             Integer columns = HandlerUtils.optionalIntegerParam(args, "columns");
-
-            // Extract groupArrangements map (optional)
-            Map<String, String> groupArrangements = null;
-            Object gaObj = (args != null) ? args.get("groupArrangements") : null;
-            if (gaObj instanceof Map<?, ?> gaMap) {
-                groupArrangements = new LinkedHashMap<>();
-                for (Map.Entry<?, ?> entry : gaMap.entrySet()) {
-                    if (entry.getKey() instanceof String key
-                            && entry.getValue() instanceof String value) {
-                        groupArrangements.put(key, value);
-                    }
-                }
-                if (groupArrangements.isEmpty()) {
-                    groupArrangements = null;
-                }
+            if ((elementWidth != null && elementWidth <= 0) || (elementHeight != null && elementHeight <= 0)) {
+                // Refused as layout-within-group refuses it: a size of zero or less is not a size.
+                throw new ModelAccessException((elementWidth != null && elementWidth <= 0 ? "elementWidth"
+                        : "elementHeight") + " must be positive", ErrorCode.INVALID_PARAMETER);
             }
+
+            Map<String, String> groupArrangements = ToolArguments.stringValues(args, "groupArrangements");
 
             MutationResult<OptimizeGroupOrderResultDto> result =
                     accessor.optimizeGroupOrder(sessionId, viewId, arrangement,
@@ -6794,6 +7237,7 @@ public class ViewPlacementHandler {
                 + "alternates are element-specific (stick-vs-box, 3D-vs-flat, etc.) and not exposed "
                 + "through this surface; figureType is silently ignored on those targets. Notes "
                 + "use a separate border-type semantics (dogear/rectangle/none) — also out of scope. "
+                + "Refused by name on an image or a view reference, which have no figure type. "
                 + "Omit to leave the per-type default unchanged. Example: 'rectangular' to flatten "
                 + "a Group's folder-tab figure.");
 
@@ -6828,8 +7272,10 @@ public class ViewPlacementHandler {
         Map<String, Object> fontNameProp = new LinkedHashMap<>();
         fontNameProp.put("type", "string");
         fontNameProp.put("description",
-                "Font family name (e.g. 'Segoe UI', 'Arial', 'Courier New'). Empty string clears "
-                + "to the system default view font. Omit to leave unchanged. Archi falls back at "
+                "Font family name (e.g. 'Segoe UI', 'Arial', 'Courier New'). Empty string sets the "
+                + "family of Archi's default view font. Omit to leave unchanged. On an object with no "
+                + "font yet, a family or size the call does not set is taken from Archi's default view "
+                + "font, so setting only the style keeps the label's face and size. Archi falls back at "
                 + "render time when the named font is not installed on the host system — the server "
                 + "does not pre-validate against installed fonts. Example: 'Comic Sans MS'.");
 
@@ -6846,7 +7292,7 @@ public class ViewPlacementHandler {
                 "Font style. Values: 'normal' (default), 'bold', 'italic', or 'bold-italic'. "
                 + "Omit to leave unchanged. Example: 'bold'.");
 
-        // Gradient (view-object only — silently ignored on connections).
+        // Gradient (view-object only; the connection tools refuse it).
         Map<String, Object> gradientProp = new LinkedHashMap<>();
         gradientProp.put("type", "string");
         gradientProp.put("enum", java.util.List.of("none", "top-bottom", "bottom-top", "left-right", "right-left"));
@@ -6854,7 +7300,7 @@ public class ViewPlacementHandler {
                 "Shape fill gradient direction. Values: 'none' (Archi default — flat fill), "
                 + "'top-bottom' (gradient starts at top), 'bottom-top', 'left-right', or "
                 + "'right-left'. Applies to view objects (groups + ArchiMate elements + notes) — "
-                + "silently ignored on connections. Empty string clears to 'none'. Omit to leave "
+                + "not accepted by the connection tools. Empty string clears to 'none'. Omit to leave "
                 + "unchanged. Example: 'top-bottom'.");
 
         // Note borderType (note-only — silently ignored on other view objects).
@@ -6865,7 +7311,8 @@ public class ViewPlacementHandler {
                 "Note border type. Values: 'dogear' (Archi default — folded-corner note), "
                 + "'rectangle' (plain rectangular border), or 'none' (no visible border). "
                 + "Applies ONLY to notes (add-note-to-view + update-view-object on a note) — "
-                + "silently ignored on groups, ArchiMate elements, and connections. Distinct from "
+                + "silently ignored on groups and ArchiMate elements, refused by name on an image or a "
+                + "view reference, and not accepted by the connection tools. Distinct from "
                 + "figureType (which uses tabbed/rectangular vocabulary for groups). Empty string "
                 + "clears to 'dogear'. Omit to leave unchanged. Example: 'rectangle'.");
 
@@ -6875,7 +7322,7 @@ public class ViewPlacementHandler {
         deriveLineColorProp.put("description",
                 "When true (Archi default), the element's outline colour is derived from its fill "
                 + "colour (typically a darker shade). When false, the explicit lineColor is used "
-                + "verbatim. Applies to view objects — silently ignored on connections. Omit to "
+                + "verbatim. Applies to view objects — not accepted by the connection tools. Omit to "
                 + "leave unchanged. Example: false (to honour an explicit lineColor regardless of fill).");
 
         // outlineOpacity (view-object only).
@@ -6884,7 +7331,7 @@ public class ViewPlacementHandler {
         outlineOpacityProp.put("description",
                 "Outline (border line) opacity from 0 (fully transparent) to 255 (fully opaque). "
                 + "Archi default is 255. Distinct from 'opacity' (which controls fill opacity). "
-                + "Applies to view objects — silently ignored on connections. Omit to leave "
+                + "Applies to view objects — not accepted by the connection tools. Omit to leave "
                 + "unchanged. Example: 128 (half-transparent outline).");
 
         // lineStyle on view objects only. On a connection there is nothing to write — the dash
@@ -6951,7 +7398,9 @@ public class ViewPlacementHandler {
         fontNameProp.put("type", "string");
         fontNameProp.put("description",
                 "Font family name for the connection label (e.g. 'Segoe UI', 'Arial'). Empty string "
-                + "clears to system default view font. Omit to leave unchanged. Example: 'Verdana'.");
+                + "sets the family of Archi's default view font. Omit to leave unchanged. On a "
+                + "connection with no font yet, a family or size the call does not set is taken from "
+                + "Archi's default view font. Example: 'Verdana'.");
 
         Map<String, Object> fontSizeProp = new LinkedHashMap<>();
         fontSizeProp.put("type", "integer");
@@ -6973,23 +7422,6 @@ public class ViewPlacementHandler {
         properties.put("fontName", fontNameProp);
         properties.put("fontSize", fontSizeProp);
         properties.put("fontStyle", fontStyleProp);
-    }
-
-    /**
-     * Parses a labelPosition string ("source"/"middle"/"target") to integer (0/1/2).
-     * Returns null if the value is not provided.
-     */
-    private Integer parseLabelPosition(Map<String, Object> args) {
-        Object value = args.get("labelPosition");
-        if (value == null) return null;
-        String pos = value.toString().toLowerCase();
-        return switch (pos) {
-            case "source" -> 0;
-            case "middle" -> 1;
-            case "target" -> 2;
-            default -> throw new IllegalArgumentException(
-                    "Invalid labelPosition: '" + pos + "'. Must be 'source', 'middle', or 'target'.");
-        };
     }
 
     private StylingParams extractStylingParams(Map<String, Object> args) {
@@ -7019,12 +7451,12 @@ public class ViewPlacementHandler {
         String gradient = HandlerUtils.optionalStringParamAllowEmpty(args, "gradient");
         String borderType = HandlerUtils.optionalStringParamAllowEmpty(args, "borderType");
         // deriveLineColor is a Boolean; null = unchanged, true/false = set.
-        Boolean deriveLineColor = (args.get("deriveLineColor") instanceof Boolean b) ? b : null;
+        Boolean deriveLineColor = ToolArguments.flag(args, "deriveLineColor");
         Integer outlineOpacity = HandlerUtils.optionalIntegerParam(args, "outlineOpacity");
         // recede is a tri-state Boolean (add-to-view / add-group-to-view only): null = default
         // (auto-recede a null-fill parent), false = opt out. Must be carried even when no other
         // styling is set, so it is part of the "is there anything to carry?" guard below.
-        Boolean recede = (args.get("recede") instanceof Boolean b) ? b : null;
+        Boolean recede = ToolArguments.flag(args, "recede");
 
         if (fillColor == null && lineColor == null && fontColor == null
                 && opacity == null && lineWidth == null
@@ -7105,7 +7537,8 @@ public class ViewPlacementHandler {
                 .description("Identify hub elements on a view by counting visual connections "
                         + "per element, sorted descending. Returns each element's viewObjectId, "
                         + "name, type, connection count, current dimensions, and maxLabelWidth "
-                        + "(estimated pixel width of the longest connection label).\n\n"
+                        + "(estimated pixel width of the longest connection label Archi shows; "
+                        + "a hidden or blank label counts as none).\n\n"
                         + "Hub thresholds: "
                         + ">=5 connections is a hub candidate; "
                         + ">6 connections receives an explicit sizing suggestion based on the "
@@ -7202,13 +7635,16 @@ public class ViewPlacementHandler {
         Map<String, Object> spacingProp = new LinkedHashMap<>();
         spacingProp.put("type", "integer");
         spacingProp.put("description",
-                "Space between elements in pixels (default: 40). "
+                "Space between elements in pixels (default: 40, at most " + LayoutSpacing.MAX_LAYOUT_SPACING + "). "
                 + "Use 80-120 for interaction/flow views that need routing corridors.");
+        spacingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> paddingProp = new LinkedHashMap<>();
         paddingProp.put("type", "integer");
         paddingProp.put("description",
-                "Margin from view origin (0,0) in pixels (default: 20).");
+                "Margin from view origin (0,0) in pixels (default: 20, at most "
+                + LayoutSpacing.MAX_LAYOUT_SPACING + ").");
+        paddingProp.put("maximum", LayoutSpacing.MAX_LAYOUT_SPACING);
 
         Map<String, Object> sortByProp = new LinkedHashMap<>();
         sortByProp.put("type", "string");
@@ -7321,12 +7757,12 @@ public class ViewPlacementHandler {
             String arrangement = HandlerUtils.requireStringParam(args, "arrangement");
 
             // Optional parameters
-            Integer spacing = HandlerUtils.optionalIntegerParam(args, "spacing");
-            Integer padding = HandlerUtils.optionalIntegerParam(args, "padding");
+            Integer spacing = LayoutSpacing.atMost(args, "spacing");
+            Integer padding = LayoutSpacing.atMost(args, "padding");
             String sortBy = HandlerUtils.optionalStringParam(args, "sortBy");
             String categoryField = HandlerUtils.optionalStringParam(args, "categoryField");
             Integer columns = HandlerUtils.optionalIntegerParam(args, "columns");
-            boolean autoLayoutChildren = HandlerUtils.optionalBooleanParam(args, "autoLayoutChildren", true);
+            boolean autoLayoutChildren = ToolArguments.flag(args, "autoLayoutChildren", true);
 
             MutationResult<LayoutFlatViewResultDto> result =
                     accessor.layoutFlatView(sessionId, viewId, arrangement,
@@ -7379,7 +7815,7 @@ public class ViewPlacementHandler {
         elementIdsProp.put("items", elementIdItems);
         elementIdsProp.put("description",
                 "Optional list of specific element view object IDs to resize. "
-                + "If omitted, resizes all elements on the view. "
+                + "If omitted, resizes all elements on the view; an empty array is refused. "
                 + "Get valid IDs from get-view-contents visualMetadata.");
 
         Map<String, Object> wrapFitProp = new LinkedHashMap<>();
@@ -7413,6 +7849,7 @@ public class ViewPlacementHandler {
                         + "Uses SWT font metrics and aspect-ratio-aware sizing "
                         + "(target 1.5:1 width:height, range [1.2:1, 2.5:1]). "
                         + "Short names (<=15 chars) keep Archi defaults (120x55). "
+                        + "A Junction draws no label and keeps its size. "
                         + "For nested elements, uses two-pass algorithm: children sized first, "
                         + "then parents sized to contain children + own label + padding. "
                         + "Recommended after placing elements on flat views to prevent label truncation. "
@@ -7444,6 +7881,10 @@ public class ViewPlacementHandler {
                         + "In a batch or pending approval nothing has executed, so neither list is "
                         + "reported and the entity is nested under 'preview' — do not read that absence "
                         + "as 'nothing grew or moved'. "
+                        + "A container it grew that now overlaps a sibling it did not overlap "
+                        + "before is named in structuredWarnings (code CASCADE_GROWN_INTO_SIBLING, the "
+                        + "siblings in remediationViolatorIds); nothing is moved to make room. In a batch "
+                        + "or pending approval it is measured against the view as it stands and says so. "
                         + "ORDERING: run this before auto-route-connections. Every route is computed against the "
                         + "bounds that existed when the router ran, so an element resized afterwards leaves its "
                         + "stored routes anchored to a box that is no longer there — re-route after any later "
@@ -7472,19 +7913,9 @@ public class ViewPlacementHandler {
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
 
-            // Extract optional elementIds array
-            List<String> elementIds = null;
-            Object elementIdsRaw = args.get("elementIds");
-            if (elementIdsRaw instanceof List<?> rawList && !rawList.isEmpty()) {
-                elementIds = new ArrayList<>();
-                for (Object item : rawList) {
-                    if (item instanceof String s) {
-                        elementIds.add(s);
-                    }
-                }
-            }
+            List<String> elementIds = ToolArguments.idFilter(args, "elementIds");
 
-            boolean wrapFit = Boolean.TRUE.equals(args.get("wrapFit"));
+            boolean wrapFit = ToolArguments.flag(args, "wrapFit", false);
 
             MutationResult<ResizeElementsResultDto> result =
                     accessor.resizeElementsToFit(sessionId, viewId, elementIds, wrapFit);
@@ -7579,6 +8010,11 @@ public class ViewPlacementHandler {
                         + "recursive=false to inflate only top-level containers (default "
                         + "true inflates nested ones too). A container is either a native "
                         + "view group or an ArchiMate Grouping element; both are inflated. "
+                        + "An ArchiMate element holding children (a role drawn as a swimlane, "
+                        + "a Node holding its components) is not one: on a view whose only "
+                        + "containers are such elements the call refuses with "
+                        + "INVALID_PARAMETER naming them, and layout-within-group spaces the "
+                        + "elements inside one. "
                         + "The entire operation "
                         + "(inflate + re-route) is a single undo step. "
                         + "When `interElementDelta` is OMITTED (parameter not provided) "
@@ -7595,6 +8031,10 @@ public class ViewPlacementHandler {
                         + "The response DTO's `defaultResolutionReason` field reports "
                         + "whether default-resolution fired and which trigger metric "
                         + "and heuristic tier produced the value. "
+                        + "A container it grew that now overlaps a sibling it did not overlap "
+                        + "before is named in structuredWarnings (code CASCADE_GROWN_INTO_SIBLING, the "
+                        + "siblings in remediationViolatorIds); nothing is moved to make room. In a batch "
+                        + "or pending approval it is measured against the view as it stands and says so. "
                         + "`resizedAncestors` names any enclosing group the OVERFLOW CASCADE grew "
                         + "underneath this inflation — spacing a group's contents can push one past "
                         + "an enclosing group's edge, and that group is then widened to keep "
@@ -7665,7 +8105,7 @@ public class ViewPlacementHandler {
                     "paddingDelta");
             Integer interGroupDelta = HandlerUtils.optionalIntegerParam(args,
                     "interGroupDelta");
-            boolean recursive = HandlerUtils.optionalBooleanParam(args,
+            boolean recursive = ToolArguments.flag(args,
                     "recursive", true);
 
             MutationResult<AdjustViewSpacingResultDto> result =
@@ -7906,6 +8346,18 @@ public class ViewPlacementHandler {
                         + "that formula-resized hubs consume — without it, "
                         + "the heuristic UNDERSHOOTS post-hub-resize and "
                         + "coincSeg residuals persist. "
+                        + "Containers are native view groups and ArchiMate "
+                        + "Grouping elements only: an ArchiMate element "
+                        + "holding children (a role drawn as a swimlane, a "
+                        + "Node holding its components) is neither measured "
+                        + "nor spaced inside, and the response lists every "
+                        + "such element drawn directly on the view (one "
+                        + "holding only notes or images does not count) in "
+                        + "skippedContainers (view object "
+                        + "id, name, type and reason) on every call, "
+                        + "dry run and queued call included; absent when "
+                        + "the view has none. To space the elements inside "
+                        + "one, call layout-within-group on it. "
                         + "Termination contract — the loop terminates on "
                         + "exactly ONE of ten branches (seven in-loop "
                         + "branches + THREE pre-loop guards: dryRun + "
@@ -7927,7 +8379,12 @@ public class ViewPlacementHandler {
                         + "(d) structural_no_change_<reason> (no groups / "
                         + "no groups with 2+ children / no connections / "
                         + "every container drawn inside a host, so this tool "
-                        + "positions none of them — call arrange-groups); "
+                        + "positions none of them — call arrange-groups "
+                        + "/ the only containers on the view are ArchiMate "
+                        + "elements holding children, which no spacing tool "
+                        + "measures — code structural_no_change_containers_"
+                        + "not_spaced_by_this_tool, the containers listed in "
+                        + "skippedContainers; call layout-within-group on one); "
                         + "(e) heuristic_already_met_no_change "
                         + "(currentSpacing ≥ targetSpacing at iteration 0); "
                         + "(f) dry_run_recommendation_not_applied (dryRun="
@@ -8080,7 +8537,7 @@ public class ViewPlacementHandler {
 
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
-            boolean dryRun = HandlerUtils.optionalBooleanParam(args,
+            boolean dryRun = ToolArguments.flag(args,
                     "dryRun", false);
             Integer targetSpacing = HandlerUtils.optionalIntegerParam(args,
                     "targetSpacing");
@@ -8316,6 +8773,18 @@ public class ViewPlacementHandler {
                         + "coincSeg residuals persist on inter-group "
                         + "connections. The unconnected column "
                         + "(40/40/60) is hub-agnostic and unchanged. "
+                        + "Containers are native view groups and ArchiMate "
+                        + "Grouping elements only: an ArchiMate element "
+                        + "holding children (a role drawn as a swimlane, a "
+                        + "Node holding its components) is neither measured "
+                        + "nor spaced inside, and the response lists every "
+                        + "such element drawn directly on the view (one "
+                        + "holding only notes or images does not count) in "
+                        + "skippedContainers (view object "
+                        + "id, name, type and reason) on every call, "
+                        + "dry run and queued call included; absent when "
+                        + "the view has none. To space the elements inside "
+                        + "one, call layout-within-group on it. "
                         + "Termination contract — the loop terminates on "
                         + "exactly ONE of ten branches (seven in-loop "
                         + "branches + THREE pre-loop guards: dryRun + "
@@ -8338,7 +8807,12 @@ public class ViewPlacementHandler {
                         + "fewer than 2 top-level groups / no inter-group "
                         + "connections / the corridor lies between containers "
                         + "drawn inside a host, so this tool positions none "
-                        + "of them — call arrange-groups); "
+                        + "of them — call arrange-groups "
+                        + "/ the only containers on the view are ArchiMate "
+                        + "elements holding children, which no spacing tool "
+                        + "measures — code structural_no_change_containers_"
+                        + "not_spaced_by_this_tool, the containers listed in "
+                        + "skippedContainers; call layout-within-group on one); "
                         + "(e) heuristic_already_met_no_change "
                         + "(currentSpacing ≥ targetSpacing at iteration 0); "
                         + "(f) dry_run_recommendation_not_applied (dryRun="
@@ -8489,7 +8963,7 @@ public class ViewPlacementHandler {
 
             Map<String, Object> args = request.arguments();
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
-            boolean dryRun = HandlerUtils.optionalBooleanParam(args,
+            boolean dryRun = ToolArguments.flag(args,
                     "dryRun", false);
             Integer targetSpacing = HandlerUtils.optionalIntegerParam(args,
                     "targetSpacing");
@@ -8756,6 +9230,18 @@ public class ViewPlacementHandler {
                         + "elementKneeClampApplied / groupKneeClampApplied "
                         + "DTO fields continue to surface when a clamp "
                         + "fires inside an arm's loop. "
+                        + "Containers are native view groups and ArchiMate "
+                        + "Grouping elements only: an ArchiMate element "
+                        + "holding children (a role drawn as a swimlane, a "
+                        + "Node holding its components) is neither measured "
+                        + "nor spaced inside, and the response lists every "
+                        + "such element drawn directly on the view (one "
+                        + "holding only notes or images does not count) in "
+                        + "skippedContainers (view object "
+                        + "id, name, type and reason) on every call, "
+                        + "dry run and queued call included; absent when "
+                        + "the view has none. To space the elements inside "
+                        + "one, call layout-within-group on it. "
                         + "Termination contract — each arm terminates on "
                         + "exactly ONE of ten branches (seven in-loop "
                         + "branches + THREE pre-loop guards: dryRun + "
@@ -8775,7 +9261,12 @@ public class ViewPlacementHandler {
                         + "reverted_to_iteration_M; "
                         + "(d) structural_no_change_<reason> (one is "
                         + "containers drawn inside a host, which neither arm "
-                        + "positions — call arrange-groups); "
+                        + "positions — call arrange-groups; another is "
+                        + "a view whose only containers are ArchiMate "
+                        + "elements holding children, which neither arm "
+                        + "measures — code structural_no_change_containers_"
+                        + "not_spaced_by_this_tool, the containers listed in "
+                        + "skippedContainers; call layout-within-group on one); "
                         + "(e) heuristic_already_met_no_change; "
                         + "(f) dry_run_recommendation_not_applied (dryRun="
                         + "true entry-guard short-circuit; no mutation); "
@@ -8913,7 +9404,7 @@ public class ViewPlacementHandler {
             String viewId = HandlerUtils.requireStringParam(args, "viewId");
             String scope = HandlerUtils.optionalStringParam(args, "scope");
             if (scope == null) scope = "both";
-            boolean dryRun = HandlerUtils.optionalBooleanParam(args,
+            boolean dryRun = ToolArguments.flag(args,
                     "dryRun", false);
             Integer elementTargetSpacing = HandlerUtils.optionalIntegerParam(
                     args, "elementTargetSpacing");

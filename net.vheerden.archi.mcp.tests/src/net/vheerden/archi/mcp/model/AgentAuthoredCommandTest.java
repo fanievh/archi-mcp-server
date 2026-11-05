@@ -216,6 +216,26 @@ public class AgentAuthoredCommandTest {
 		assertFalse(state.canRedo());
 	}
 
+	// ---- a step count past the history: bounded by the stack, not by the count ----
+
+	@Test(timeout = 2000)
+	public void shouldUndoAndRedoWhatThereIs_andReturnPromptly_whenStepsIsTheLargestInteger() {
+		CommandStack stack = new CommandStack();
+		stack.execute(human("Human base"));
+		stack.execute(agent("Agent A"));
+		stack.execute(agent("Agent B"));
+
+		MutationDispatcher.UndoRedoState undo = MutationDispatcher.scopedUndo(stack, Integer.MAX_VALUE);
+		assertEquals("both agent entries, then the change made by hand stops it",
+				java.util.List.of("Agent B", "Agent A"), undo.labels());
+		assertNull(undo.blockedReason());
+		assertTrue("the change made by hand is still on the stack", undo.canUndo());
+
+		MutationDispatcher.UndoRedoState redo = MutationDispatcher.scopedRedo(stack, Integer.MAX_VALUE);
+		assertEquals(java.util.List.of("Agent A", "Agent B"), redo.labels());
+		assertFalse(redo.canRedo());
+	}
+
 	// ---- steps=0 boundary (handler clamps to >=1, but the core must be sane directly) ----
 
 	@Test

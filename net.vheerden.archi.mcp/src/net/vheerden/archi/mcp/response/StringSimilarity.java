@@ -1,6 +1,7 @@
 package net.vheerden.archi.mcp.response;
 
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -27,8 +28,9 @@ public final class StringSimilarity {
         if (a == null || b == null) {
             return 0.0;
         }
-        String la = a.toLowerCase().trim();
-        String lb = b.toLowerCase().trim();
+        // Names are the user's own text: folded in the user's locale on purpose, not in Locale.ROOT.
+        String la = a.toLowerCase(Locale.getDefault()).trim();
+        String lb = b.toLowerCase(Locale.getDefault()).trim();
         if (la.equals(lb)) {
             return 1.0;
         }
@@ -49,8 +51,8 @@ public final class StringSimilarity {
         if (a == null || b == null) {
             return 0.0;
         }
-        Set<String> tokensA = tokenize(a.toLowerCase().trim());
-        Set<String> tokensB = tokenize(b.toLowerCase().trim());
+        Set<String> tokensA = tokenize(a.toLowerCase(Locale.getDefault()).trim());
+        Set<String> tokensB = tokenize(b.toLowerCase(Locale.getDefault()).trim());
         if (tokensA.isEmpty() || tokensB.isEmpty()) {
             return 0.0;
         }

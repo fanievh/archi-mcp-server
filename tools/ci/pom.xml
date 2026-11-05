@@ -52,7 +52,7 @@
     <objenesis.version>3.3</objenesis.version>
     <!-- Mirrors the dev-box Eclipse plugin jars (verified org.junit_4.13.2.* + org.hamcrest_3.0.0
          present in the dev-box Eclipse install). hamcrest 3.0 is the unified successor jar, confirmed
-         compatible with the full suite (SPIKE B: 181/4082 PASS against these renamed jars). -->
+         compatible with the full suite (181 classes / 4082 tests passed against these renamed jars). -->
     <junit.version>4.13.2</junit.version>
     <hamcrest.version>3.0</hamcrest.version>
   </properties>

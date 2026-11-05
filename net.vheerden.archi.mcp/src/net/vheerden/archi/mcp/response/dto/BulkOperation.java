@@ -4,6 +4,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import net.vheerden.archi.mcp.model.CallerText;
+import net.vheerden.archi.mcp.model.ToolArguments;
+
 /**
  * Represents a single operation within a bulk-mutate request.
  *
@@ -22,8 +25,21 @@ import java.util.Set;
  *               while a mistyped name matches no declaration and can only be refused. Scoped to the
  *               call it appears in: it does not address an enclosing batch's queue and does not
  *               survive the call.
+ * @param shape  the keys the operation's tool reads, which its params are held to; null for the
+ *               shape {@link ToolArguments#knownShape} gives, which an operation built without the
+ *               served tool set (a test calling the accessor directly) falls back on
  */
-public record BulkOperation(String tool, Map<String, Object> params, String as) {
+public record BulkOperation(String tool, Map<String, Object> params, String as, ToolArguments.Shape shape) {
+
+    /** An operation held to the tool's known shape, if it has one. */
+    public BulkOperation(String tool, Map<String, Object> params, String as) {
+        this(tool, params, as, null);
+    }
+
+    /** The keys this operation's params are held to, or null for none. */
+    public ToolArguments.Shape argumentShape() {
+        return shape != null ? shape : ToolArguments.knownShape(tool);
+    }
 
     /**
      * An operation that declares no name, which is the shape every caller wrote before the name
@@ -106,7 +122,7 @@ public record BulkOperation(String tool, Map<String, Object> params, String as) 
             // Render the ordered list (not the Set) so the error lists tools in the same
             // stable, human-sensible order as the advertised tool descriptions.
             throw new IllegalArgumentException(
-                    "Unsupported tool '" + tool + "'. Supported: " + SUPPORTED_TOOLS_ORDERED);
+                    "Unsupported tool " + CallerText.quoted(tool) + ". Supported: " + SUPPORTED_TOOLS_ORDERED);
         }
         if (params == null) {
             throw new IllegalArgumentException("Operation params must not be null");

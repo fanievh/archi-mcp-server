@@ -1,0 +1,932 @@
+{
+ "viewId": "id-83e2c05805254300874bdec37de0a61e",
+ "viewName": "B · Motivation",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-2d278a2005ed4364b1bc1e727a50e301",
+   "name": "Financial Conduct Regulator",
+   "x": 30,
+   "y": 54,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "Stakeholder",
+   "figureType": 0,
+   "parentId": "id-f566a9ecd90d46e0a2d03981adb5d074"
+  },
+  {
+   "id": "id-10e749c2966a47379f27d3b5195d5295",
+   "name": "Regulatory Compliance Pressure",
+   "x": 30,
+   "y": 256,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "Driver",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-1204f68462cc4d408ad6ab983be644b3",
+   "name": "Open Banking & Fintech Competition",
+   "x": 202,
+   "y": 256,
+   "w": 124,
+   "h": 68,
+   "isChild": true,
+   "type": "Driver",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-40476b8329894dafa15f3811b09eb972",
+   "name": "Rising Customer Experience Expectations",
+   "x": 376,
+   "y": 256,
+   "w": 127,
+   "h": 84,
+   "isChild": true,
+   "type": "Driver",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-64992fc87e8448edbce2310e81ae794d",
+   "name": "Cost-to-Serve & Efficiency Pressure",
+   "x": 553,
+   "y": 256,
+   "w": 124,
+   "h": 68,
+   "isChild": true,
+   "type": "Driver",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-ba1a994387d0468985c9c2c143dfe574",
+   "name": "Legacy Core Banking Constrains Change",
+   "x": 727,
+   "y": 256,
+   "w": 127,
+   "h": 84,
+   "isChild": true,
+   "type": "Assessment",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-a9bb0660c78b4181b0d95ccc07aaa5ae",
+   "name": "Fragmented Customer Data & Manual Compliance",
+   "x": 904,
+   "y": 256,
+   "w": 128,
+   "h": 84,
+   "isChild": true,
+   "type": "Assessment",
+   "figureType": 0,
+   "parentId": "id-e5f5807c803f445d85a5ca89d525464f"
+  },
+  {
+   "id": "id-1d1623748da14a938607e937004d55f3",
+   "name": "Achieve Open Banking & PSD2 Compliance",
+   "x": 30,
+   "y": 474,
+   "w": 126,
+   "h": 84,
+   "isChild": true,
+   "type": "Goal",
+   "figureType": 0,
+   "parentId": "id-37c13bbcdf524f8fbf297af82f7a27dd"
+  },
+  {
+   "id": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "name": "Deliver Seamless Omnichannel Experience",
+   "x": 206,
+   "y": 474,
+   "w": 127,
+   "h": 84,
+   "isChild": true,
+   "type": "Goal",
+   "figureType": 0,
+   "parentId": "id-37c13bbcdf524f8fbf297af82f7a27dd"
+  },
+  {
+   "id": "id-c4b26044734e4ec5a0f39579a71b87d6",
+   "name": "Reduce Operational Cost-to-Serve",
+   "x": 383,
+   "y": 474,
+   "w": 120,
+   "h": 68,
+   "isChild": true,
+   "type": "Goal",
+   "figureType": 0,
+   "parentId": "id-37c13bbcdf524f8fbf297af82f7a27dd"
+  },
+  {
+   "id": "id-d9c645b99c2943d09b009d2014de5d28",
+   "name": "Strengthen Financial-Crime Defence",
+   "x": 553,
+   "y": 474,
+   "w": 121,
+   "h": 68,
+   "isChild": true,
+   "type": "Goal",
+   "figureType": 0,
+   "parentId": "id-37c13bbcdf524f8fbf297af82f7a27dd"
+  },
+  {
+   "id": "id-48ba650295ad481aa222ca42bcf5b401",
+   "name": "Strong Customer Authentication (SCA)",
+   "x": 30,
+   "y": 692,
+   "w": 124,
+   "h": 84,
+   "isChild": true,
+   "type": "Requirement",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-83291f4fbe074661ade9c821d6c84a0a",
+   "name": "Open Banking API Exposure",
+   "x": 204,
+   "y": 692,
+   "w": 124,
+   "h": 55,
+   "isChild": true,
+   "type": "Requirement",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-9701a0d277e4429e9deca05737f50aad",
+   "name": "Real-Time Fraud & AML Screening",
+   "x": 378,
+   "y": 692,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "Requirement",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-081f33d39f2b43f6b9d693015accd05e",
+   "name": "Unified Customer Data Platform",
+   "x": 551,
+   "y": 692,
+   "w": 123,
+   "h": 68,
+   "isChild": true,
+   "type": "Requirement",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-4b985809d2c146419ff8d6aa4e0c422d",
+   "name": "GDPR Consent & Data-Subject Rights",
+   "x": 724,
+   "y": 692,
+   "w": 124,
+   "h": 84,
+   "isChild": true,
+   "type": "Requirement",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-1cf575703d1d46d6ada5af3e0fa9461f",
+   "name": "Zero-Trust Security by Design",
+   "x": 898,
+   "y": 692,
+   "w": 122,
+   "h": 68,
+   "isChild": true,
+   "type": "Principle",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-6f533435d65e4962acb83d5aace0991e",
+   "name": "API-First Integration",
+   "x": 1070,
+   "y": 692,
+   "w": 122,
+   "h": 55,
+   "isChild": true,
+   "type": "Principle",
+   "figureType": 0,
+   "parentId": "id-f5af86c47d3b4f579eaf623953626b78"
+  },
+  {
+   "id": "id-f566a9ecd90d46e0a2d03981adb5d074",
+   "name": "Stakeholders",
+   "x": 20,
+   "y": 20,
+   "w": 141,
+   "h": 112,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-e5f5807c803f445d85a5ca89d525464f",
+   "name": "Drivers & Assessments",
+   "x": 20,
+   "y": 222,
+   "w": 1022,
+   "h": 128,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-37c13bbcdf524f8fbf297af82f7a27dd",
+   "name": "Goals & Outcomes",
+   "x": 20,
+   "y": 440,
+   "w": 664,
+   "h": 128,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-f5af86c47d3b4f579eaf623953626b78",
+   "name": "Requirements & Principles",
+   "x": 20,
+   "y": 658,
+   "w": 1182,
+   "h": 128,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-fb067a53958544bc89ad33a4b72559e5",
+   "name": "B · Motivation — Why the architecture ex",
+   "x": 20,
+   "y": -56,
+   "w": 820,
+   "h": 66,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-50e1f966a6dd452d9335783dca58a921",
+   "sourceId": "id-2d278a2005ed4364b1bc1e727a50e301",
+   "targetId": "id-10e749c2966a47379f27d3b5195d5295",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 35,
+     "endX": -1,
+     "endY": -167
+    },
+    {
+     "startX": 0,
+     "startY": 167,
+     "endX": -1,
+     "endY": -35
+    },
+    {
+     "startX": 1,
+     "startY": 167,
+     "endX": 0,
+     "endY": -35
+    }
+   ]
+  },
+  {
+   "id": "id-26af33566179407e8339aa024d0eb8f2",
+   "sourceId": "id-10e749c2966a47379f27d3b5195d5295",
+   "targetId": "id-1d1623748da14a938607e937004d55f3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -19,
+     "startY": 35,
+     "endX": -21,
+     "endY": -191
+    },
+    {
+     "startX": -19,
+     "startY": 174,
+     "endX": -21,
+     "endY": -52
+    },
+    {
+     "startX": 2,
+     "startY": 174,
+     "endX": 0,
+     "endY": -52
+    }
+   ]
+  },
+  {
+   "id": "id-f51480a4b65142539c21fffae6607b03",
+   "sourceId": "id-10e749c2966a47379f27d3b5195d5295",
+   "targetId": "id-d9c645b99c2943d09b009d2014de5d28",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 35,
+     "endX": -522,
+     "endY": -183
+    },
+    {
+     "startX": 0,
+     "startY": 117,
+     "endX": -522,
+     "endY": -101
+    },
+    {
+     "startX": 522,
+     "startY": 117,
+     "endX": 0,
+     "endY": -101
+    }
+   ]
+  },
+  {
+   "id": "id-e7395d4916fd43fb9236ffa52d924aa5",
+   "sourceId": "id-1204f68462cc4d408ad6ab983be644b3",
+   "targetId": "id-1d1623748da14a938607e937004d55f3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -63,
+     "startY": 0,
+     "endX": 108,
+     "endY": -226
+    },
+    {
+     "startX": -85,
+     "startY": 0,
+     "endX": 86,
+     "endY": -226
+    },
+    {
+     "startX": -85,
+     "startY": 226,
+     "endX": 86,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-771f7c2225ab475a8e8be6c36343968e",
+   "sourceId": "id-1204f68462cc4d408ad6ab983be644b3",
+   "targetId": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 35,
+     "endX": -5,
+     "endY": -191
+    },
+    {
+     "startX": 5,
+     "startY": 35,
+     "endX": 0,
+     "endY": -191
+    },
+    {
+     "startX": 5,
+     "startY": 183,
+     "endX": 0,
+     "endY": -43
+    }
+   ]
+  },
+  {
+   "id": "id-dab939f8c6ad47d4a8eb3fdb6a42addb",
+   "sourceId": "id-40476b8329894dafa15f3811b09eb972",
+   "targetId": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -66,
+     "startY": 0,
+     "endX": 104,
+     "endY": -218
+    },
+    {
+     "startX": -66,
+     "startY": 206,
+     "endX": 104,
+     "endY": -12
+    },
+    {
+     "startX": -105,
+     "startY": 206,
+     "endX": 65,
+     "endY": -12
+    }
+   ]
+  },
+  {
+   "id": "id-794cd94ad53546d89127baa7d4502d4b",
+   "sourceId": "id-64992fc87e8448edbce2310e81ae794d",
+   "targetId": "id-c4b26044734e4ec5a0f39579a71b87d6",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -74,
+     "startY": 0,
+     "endX": 98,
+     "endY": -218
+    },
+    {
+     "startX": -74,
+     "startY": 208,
+     "endX": 98,
+     "endY": -10
+    },
+    {
+     "startX": -111,
+     "startY": 208,
+     "endX": 61,
+     "endY": -10
+    }
+   ]
+  },
+  {
+   "id": "id-10af0aeb18554bc98b26133ba8828953",
+   "sourceId": "id-ba1a994387d0468985c9c2c143dfe574",
+   "targetId": "id-1204f68462cc4d408ad6ab983be644b3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -111,
+     "endX": 526,
+     "endY": -103
+    },
+    {
+     "startX": -526,
+     "startY": -111,
+     "endX": 0,
+     "endY": -103
+    }
+   ]
+  },
+  {
+   "id": "id-44e96d80cf9f4716a4245e676468094a",
+   "sourceId": "id-ba1a994387d0468985c9c2c143dfe574",
+   "targetId": "id-64992fc87e8448edbce2310e81ae794d",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -64,
+     "startY": 0,
+     "endX": 111,
+     "endY": 8
+    },
+    {
+     "startX": -112,
+     "startY": 0,
+     "endX": 63,
+     "endY": 8
+    },
+    {
+     "startX": -112,
+     "startY": -8,
+     "endX": 63,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-9bf0be67f1d040f98f9b6d18ef1596d3",
+   "sourceId": "id-ba1a994387d0468985c9c2c143dfe574",
+   "targetId": "id-c4b26044734e4ec5a0f39579a71b87d6",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 79,
+     "endX": 347,
+     "endY": -131
+    },
+    {
+     "startX": -347,
+     "startY": 79,
+     "endX": 0,
+     "endY": -131
+    },
+    {
+     "startX": -347,
+     "startY": 175,
+     "endX": 0,
+     "endY": -35
+    }
+   ]
+  },
+  {
+   "id": "id-fd9157f69a84471192815139e4e39d01",
+   "sourceId": "id-ba1a994387d0468985c9c2c143dfe574",
+   "targetId": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 20,
+     "startY": 43,
+     "endX": 541,
+     "endY": -175
+    },
+    {
+     "startX": 20,
+     "startY": 166,
+     "endX": 541,
+     "endY": -52
+    },
+    {
+     "startX": -521,
+     "startY": 166,
+     "endX": 0,
+     "endY": -52
+    }
+   ]
+  },
+  {
+   "id": "id-77b7d3d87bc94e04897999e84cc7f41f",
+   "sourceId": "id-a9bb0660c78b4181b0d95ccc07aaa5ae",
+   "targetId": "id-10e749c2966a47379f27d3b5195d5295",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -94,
+     "endX": 877,
+     "endY": -86
+    },
+    {
+     "startX": -877,
+     "startY": -94,
+     "endX": 0,
+     "endY": -86
+    }
+   ]
+  },
+  {
+   "id": "id-96f71ed2297c4ec5857909d7b18856cc",
+   "sourceId": "id-a9bb0660c78b4181b0d95ccc07aaa5ae",
+   "targetId": "id-40476b8329894dafa15f3811b09eb972",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -81,
+     "endX": 529,
+     "endY": -81
+    },
+    {
+     "startX": -529,
+     "startY": -81,
+     "endX": 0,
+     "endY": -81
+    }
+   ]
+  },
+  {
+   "id": "id-e2b6dfdb2d8c4b78a3bc3acb3db86de3",
+   "sourceId": "id-a9bb0660c78b4181b0d95ccc07aaa5ae",
+   "targetId": "id-d9c645b99c2943d09b009d2014de5d28",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 43,
+     "endX": 355,
+     "endY": -167
+    },
+    {
+     "startX": 0,
+     "startY": 210,
+     "endX": 355,
+     "endY": 0
+    },
+    {
+     "startX": -293,
+     "startY": 210,
+     "endX": 62,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-6688c41a6c9744239d8ad6f5208d11d8",
+   "sourceId": "id-a9bb0660c78b4181b0d95ccc07aaa5ae",
+   "targetId": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 20,
+     "startY": 43,
+     "endX": 719,
+     "endY": -175
+    },
+    {
+     "startX": 20,
+     "startY": 270,
+     "endX": 719,
+     "endY": 52
+    },
+    {
+     "startX": -699,
+     "startY": 270,
+     "endX": 0,
+     "endY": 52
+    }
+   ]
+  },
+  {
+   "id": "id-dbbd7554a3a54301b68d4f8f7e5d3028",
+   "sourceId": "id-48ba650295ad481aa222ca42bcf5b401",
+   "targetId": "id-1d1623748da14a938607e937004d55f3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -43,
+     "endX": -1,
+     "endY": 175
+    },
+    {
+     "startX": 0,
+     "startY": -175,
+     "endX": -1,
+     "endY": 43
+    },
+    {
+     "startX": 1,
+     "startY": -175,
+     "endX": 0,
+     "endY": 43
+    }
+   ]
+  },
+  {
+   "id": "id-1935d26e91aa40c39a8d303667a0b9e8",
+   "sourceId": "id-83291f4fbe074661ade9c821d6c84a0a",
+   "targetId": "id-1d1623748da14a938607e937004d55f3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -70,
+     "startY": 0,
+     "endX": 103,
+     "endY": 203
+    },
+    {
+     "startX": -70,
+     "startY": -191,
+     "endX": 103,
+     "endY": 12
+    },
+    {
+     "startX": -109,
+     "startY": -191,
+     "endX": 64,
+     "endY": 12
+    }
+   ]
+  },
+  {
+   "id": "id-ba33623af7ee4f0aba8a67fb0396c70e",
+   "sourceId": "id-9701a0d277e4429e9deca05737f50aad",
+   "targetId": "id-d9c645b99c2943d09b009d2014de5d28",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 63,
+     "startY": 0,
+     "endX": -111,
+     "endY": 218
+    },
+    {
+     "startX": 63,
+     "startY": 8,
+     "endX": -111,
+     "endY": 226
+    },
+    {
+     "startX": 102,
+     "startY": 8,
+     "endX": -72,
+     "endY": 226
+    },
+    {
+     "startX": 102,
+     "startY": -218,
+     "endX": -72,
+     "endY": 0
+    },
+    {
+     "startX": 113,
+     "startY": -218,
+     "endX": -61,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-97bccdfdba664cb580dd2a93fffc97e1",
+   "sourceId": "id-081f33d39f2b43f6b9d693015accd05e",
+   "targetId": "id-09b71cae50fe42cb8835ac4d55ffd730",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -109,
+     "endX": 343,
+     "endY": 101
+    },
+    {
+     "startX": -254,
+     "startY": -109,
+     "endX": 89,
+     "endY": 101
+    },
+    {
+     "startX": -254,
+     "startY": -210,
+     "endX": 89,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-6f9f617ae3b0414fb88d1dbdb0daffb2",
+   "sourceId": "id-081f33d39f2b43f6b9d693015accd05e",
+   "targetId": "id-c4b26044734e4ec5a0f39579a71b87d6",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -62,
+     "startY": 0,
+     "endX": 107,
+     "endY": 218
+    },
+    {
+     "startX": -99,
+     "startY": 0,
+     "endX": 70,
+     "endY": 218
+    },
+    {
+     "startX": -99,
+     "startY": -218,
+     "endX": 70,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-3951c5930e854a428f38f17540f53087",
+   "sourceId": "id-4b985809d2c146419ff8d6aa4e0c422d",
+   "targetId": "id-1d1623748da14a938607e937004d55f3",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -154,
+     "endX": 693,
+     "endY": 64
+    },
+    {
+     "startX": -693,
+     "startY": -154,
+     "endX": 0,
+     "endY": 64
+    },
+    {
+     "startX": -693,
+     "startY": -166,
+     "endX": 0,
+     "endY": 52
+    }
+   ]
+  },
+  {
+   "id": "id-23e456b238ae44f2b0f01370469d6e08",
+   "sourceId": "id-1cf575703d1d46d6ada5af3e0fa9461f",
+   "targetId": "id-48ba650295ad481aa222ca42bcf5b401",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 35,
+     "endX": 867,
+     "endY": 27
+    },
+    {
+     "startX": 0,
+     "startY": 100,
+     "endX": 867,
+     "endY": 92
+    },
+    {
+     "startX": -867,
+     "startY": 100,
+     "endX": 0,
+     "endY": 92
+    }
+   ]
+  },
+  {
+   "id": "id-a43b4fead5d14f23b2219281ce23268d",
+   "sourceId": "id-1cf575703d1d46d6ada5af3e0fa9461f",
+   "targetId": "id-9701a0d277e4429e9deca05737f50aad",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -79,
+     "endX": 520,
+     "endY": -79
+    },
+    {
+     "startX": -520,
+     "startY": -79,
+     "endX": 0,
+     "endY": -79
+    }
+   ]
+  },
+  {
+   "id": "id-31a2f382d6c647d39f256bbb7a68a969",
+   "sourceId": "id-1cf575703d1d46d6ada5af3e0fa9461f",
+   "targetId": "id-4b985809d2c146419ff8d6aa4e0c422d",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -62,
+     "startY": 0,
+     "endX": 111,
+     "endY": -8
+    },
+    {
+     "startX": -110,
+     "startY": 0,
+     "endX": 63,
+     "endY": -8
+    },
+    {
+     "startX": -110,
+     "startY": 8,
+     "endX": 63,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-c92b703688e54229abf550cc91a137ce",
+   "sourceId": "id-6f533435d65e4962acb83d5aace0991e",
+   "targetId": "id-83291f4fbe074661ade9c821d6c84a0a",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -79,
+     "endX": 865,
+     "endY": -79
+    },
+    {
+     "startX": -865,
+     "startY": -79,
+     "endX": 0,
+     "endY": -79
+    }
+   ]
+  },
+  {
+   "id": "id-2ba110f127f3486285dbe6cc67141425",
+   "sourceId": "id-6f533435d65e4962acb83d5aace0991e",
+   "targetId": "id-081f33d39f2b43f6b9d693015accd05e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": -132,
+     "endX": 519,
+     "endY": -139
+    },
+    {
+     "startX": -519,
+     "startY": -132,
+     "endX": 0,
+     "endY": -139
+    }
+   ]
+  }
+ ]
+}

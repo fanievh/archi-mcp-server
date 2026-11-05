@@ -79,11 +79,12 @@ public class GuidancePointerReachabilityTest {
      *
      * <p>Current distribution: 23 in {@code ViewPlacementHandler}, 3 in {@code ResourceHandler}
      * (the guidance tool's own worked example, its follow-up suggestion, and the example it offers
-     * when a caller supplies a uri of the wrong type), 1 each in {@code DiscoveryHandler} and
-     * {@code ElementCreationHandler}. Bare {@code archimate://} occurrences — the scheme constant
+     * when a caller supplies a uri of the wrong type), 1 each in {@code DiscoveryHandler},
+     * {@code ElementCreationHandler} and {@code LayoutQualityAssessor} (the sentence saying the
+     * crossings cap set a 'good' headline). Bare {@code archimate://} occurrences — the scheme constant
      * and prose naming the scheme in general — are not pointers and are excluded by the scanner.</p>
      */
-    private static final int EXPECTED_POINTER_COUNT = 28;
+    private static final int EXPECTED_POINTER_COUNT = 29;
 
     /**
      * Number of {@code archimate://} cross-references inside the shipped guidance bodies.

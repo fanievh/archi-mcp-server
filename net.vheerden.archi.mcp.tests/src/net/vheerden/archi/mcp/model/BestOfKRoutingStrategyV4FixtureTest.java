@@ -19,7 +19,6 @@ import net.vheerden.archi.mcp.model.routing.BestOfKRoutingStrategy;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.model.routing.RoutingResult;
 import net.vheerden.archi.mcp.model.routing.ViewFixture;
-import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
  * Task 3 — never-worse + determinism proofs for
@@ -118,31 +117,15 @@ public class BestOfKRoutingStrategyV4FixtureTest {
                 RoutingPipeline.DEFAULT_ENABLE_CHANNEL_NUDGING, order);
     }
 
-    /** The production ship-gate objective (mirrors ArchiModelAccessorImpl.scoreRoutingCandidate). */
+    /**
+     * The production ship-gate objective (mirrors ArchiModelAccessorImpl.scoreRoutingCandidate). The
+     * candidate is projected by the production {@link RoutedAssessmentPaths#overlay}, not a copy, so this
+     * proof binds the routes and label state the scorer actually judges; every labelled connection may
+     * receive an offset, as on a newer platform under auto-route.
+     */
     private BestOfKRoutingStrategy.CandidateScorer scorer() {
         return candidate -> {
-            Map<String, List<AbsoluteBendpointDto>> bp = new LinkedHashMap<>();
-            bp.putAll(candidate.routed());
-            bp.putAll(candidate.violatedRoutes());
-            List<AssessmentConnection> conns = new ArrayList<>();
-            for (RoutingPipeline.ConnectionEndpoints ep : endpoints) {
-                double sx = ep.source().centerX();
-                double sy = ep.source().centerY();
-                double tx = ep.target().centerX();
-                double ty = ep.target().centerY();
-                List<double[]> pts = new ArrayList<>();
-                pts.add(new double[]{sx, sy});
-                List<AbsoluteBendpointDto> rb = bp.get(ep.connectionId());
-                if (rb != null) {
-                    for (AbsoluteBendpointDto b : rb) {
-                        pts.add(new double[]{b.x(), b.y()});
-                    }
-                }
-                pts.add(new double[]{tx, ty});
-                conns.add(new AssessmentConnection(ep.connectionId(),
-                        ep.source().id(), ep.target().id(), pts,
-                        ep.labelText(), ep.textPosition()));
-            }
+            List<AssessmentConnection> conns = RoutedAssessmentPaths.overlay(endpoints, candidate, labelInputs());
             LayoutAssessmentResult r = assessor.assess(nodes, conns, false);
             double rating = 1000.0 * LayoutQualityAssessor.ratingOrdinal(r.overallRating());
             double hpq = Math.max(0.0, Math.min(1.0, r.hubPortQualityScore()));
@@ -364,25 +347,16 @@ public class BestOfKRoutingStrategyV4FixtureTest {
     }
 
     private LayoutAssessmentResult assessResult(RoutingResult candidate) {
-        Map<String, List<AbsoluteBendpointDto>> bp = new LinkedHashMap<>();
-        bp.putAll(candidate.routed());
-        bp.putAll(candidate.violatedRoutes());
-        List<AssessmentConnection> conns = new ArrayList<>();
+        return assessor.assess(nodes,
+                RoutedAssessmentPaths.overlay(endpoints, candidate, labelInputs()), true);
+    }
+
+    private RoutedAssessmentPaths.LabelInputs labelInputs() {
+        Set<String> labelled = new HashSet<>();
         for (RoutingPipeline.ConnectionEndpoints ep : endpoints) {
-            List<double[]> pts = new ArrayList<>();
-            pts.add(new double[]{ep.source().centerX(), ep.source().centerY()});
-            List<AbsoluteBendpointDto> rb = bp.get(ep.connectionId());
-            if (rb != null) {
-                for (AbsoluteBendpointDto b : rb) {
-                    pts.add(new double[]{b.x(), b.y()});
-                }
-            }
-            pts.add(new double[]{ep.target().centerX(), ep.target().centerY()});
-            conns.add(new AssessmentConnection(ep.connectionId(),
-                    ep.source().id(), ep.target().id(), pts,
-                    ep.labelText(), ep.textPosition()));
+            labelled.add(ep.connectionId());
         }
-        return assessor.assess(nodes, conns, true);
+        return new RoutedAssessmentPaths.LabelInputs(labelled);
     }
 
     // ---- helpers (mirror V4OracleQualityRegressionTest) ----

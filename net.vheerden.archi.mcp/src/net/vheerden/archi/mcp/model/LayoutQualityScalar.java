@@ -180,11 +180,8 @@ public final class LayoutQualityScalar {
      * dimension — these STAY binary-at-0 deliberately). Range [0, 3].
      *
      * @param boundaryViolations sentinel count; 0 → credit
-     * @param passThroughs       the CHARGED cross-element pass-through count; 0 → credit.
-     *                           A self-element pass-through is charged at zero and so keeps the
-     *                           credit — it is unrated because no re-route or spacing change
-     *                           reliably removes one, and a bit the loop cannot win is a bit that
-     *                           only rejects steps
+     * @param passThroughs       the CHARGED pass-through count (cross-element plus own-end, the
+     *                           sum the rating reads); 0 → credit
      * @param overlaps           sibling overlap count; 0 → credit
      */
     public static int correctnessBits(int boundaryViolations,
@@ -203,11 +200,10 @@ public final class LayoutQualityScalar {
      * {@value #MAX_QUALITY_SCALAR}]. Higher is better.
      *
      * @param boundaryViolations sentinel count
-     * @param passThroughs       the CHARGED cross-element pass-through count
-     *                           ({@code crossElementPassThroughCount}), never the size of the
-     *                           {@code connectionPassThroughs} description list — that list is
-     *                           capped at ten entries and also names the self-element
-     *                           pass-throughs the rating does not charge
+     * @param passThroughs       the CHARGED pass-through count
+     *                           ({@link QualityTargetTermination#chargedPassThroughCount}), never
+     *                           the size of the {@code connectionPassThroughs} description list,
+     *                           which is capped at ten entries
      * @param overlaps           sibling overlap count
      * @param m4                 connectionEdgeCoincidenceCount
      * @param coincSeg           coincidentSegmentCount
@@ -246,13 +242,11 @@ public final class LayoutQualityScalar {
         // The two correctness reads below deliberately differ, and the asymmetry is not an
         // oversight. A boundary violation is a homogeneous population, so its capped description
         // list and its uncapped count agree at every value a binary-at-zero read can see — a cap
-        // truncates, it never empties. The pass-through description list does NOT agree: it also
-        // names the self-element pass-throughs the rating charges at zero, so its size is non-zero
-        // on a view with no charged crossing at all, and the bit would be forfeited for geometry
-        // no spacing lever can move.
+        // truncates, it never empties. The pass-through read takes the charged sum the rating
+        // takes, so the step scalar and the band cannot disagree.
         int boundaryViolationsCount = (a.boundaryViolations() == null)
                 ? 0 : a.boundaryViolations().size();
-        int chargedPassThroughCount = a.crossElementPassThroughCount();
+        int chargedPassThroughCount = QualityTargetTermination.chargedPassThroughCount(a);
         int thresholdsMet = LayoutQualityScalar.qualityScalar(
                 boundaryViolationsCount,
                 chargedPassThroughCount,

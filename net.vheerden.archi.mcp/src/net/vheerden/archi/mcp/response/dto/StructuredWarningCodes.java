@@ -31,6 +31,19 @@ public final class StructuredWarningCodes {
             "EGRESS_LIFT_LAYOUT_BOUND";
 
     /**
+     * {@code auto-route-connections} skipped its whole off-face terminal lift pass for the view,
+     * because the vertical connection runs it had just routed sit closer together than the pass's
+     * pre-gate floor (8px at the 10th percentile), and at least one connection still hugs the face
+     * it leaves. The message carries the measured gap and the floor; {@code remediationViolatorIds}
+     * names the connections still hugging. Distinct from {@link #EGRESS_LIFT_LAYOUT_BOUND}, where
+     * the pass ran and declined individual lifts: here no lift was attempted. The two never appear
+     * on one call. The remedy is the same kind — spread the parallel runs apart (element spacing)
+     * and re-route; re-routing alone reproduces the same crowding.
+     */
+    public static final String EGRESS_LIFT_PRE_GATED =
+            "EGRESS_LIFT_PRE_GATED";
+
+    /**
      * {@code auto-route-connections} in {@code full} mode produced more edge
      * crossings than the geometry it replaced — the re-route regressed the view on
      * the crossing metric. On the immediate arm the route is applied anyway and the
@@ -260,6 +273,32 @@ public final class StructuredWarningCodes {
             "AUTO_NUDGE_NET_ZERO";
 
     /**
+     * {@code auto-route-connections} withheld a move recommendation because the element already
+     * sits at its parent's left padding or title band on the side the move points, so the clamp
+     * that keeps a nested child inside its parent would absorb the move entirely.
+     *
+     * <p>Without this the same move was recommended on every call, absorbed every time, and
+     * recommended again: a loop that never converges. The recommendation is now checked against
+     * that same clamp before it is offered, so it appears neither in {@code recommendations} nor in
+     * {@code blockedRecommendations}, and {@code autoNudge} does not attempt it.</p>
+     *
+     * <p><strong>Arm-blind by design.</strong> The check is a decision taken while computing, on
+     * geometry already on the view, so it reads the same whether the call is applied, queued in a
+     * batch or awaiting approval. It fires whether or not {@code autoNudge} is on, because the
+     * advisory list shrinks too, and a silent shrink would hide the move rather than explain
+     * it.</p>
+     *
+     * <p><strong>Cardinality: at most one entry per call</strong>, naming every withheld element,
+     * its parent and the side it is held on. {@code remediationViolatorIds} carries the element ids
+     * first, then their parents' ids; {@code remediationTool} is {@code update-view-object}, which
+     * moves the element, its neighbours or the parent, or the element out of the parent. Moving the
+     * parent carries every child with it, so it helps only when the blocked connection's other end
+     * lies outside the parent.</p>
+     */
+    public static final String MOVE_RECOMMENDATION_WITHHELD_BY_PARENT =
+            "MOVE_RECOMMENDATION_WITHHELD_BY_PARENT";
+
+    /**
      * An annotation was placed onto a rectangle that at least one already-drawn route passes
      * through — emitted by {@code add-note-to-view}, {@code add-view-reference-to-view} and
      * {@code add-image-to-view}.
@@ -290,4 +329,70 @@ public final class StructuredWarningCodes {
      */
     public static final String ANNOTATION_PLACED_IN_ROUTED_CORRIDOR =
             "ANNOTATION_PLACED_IN_ROUTED_CORRIDOR";
+
+    /**
+     * {@code auto-route-connections} left one or more self-connections unrouted. A connection from
+     * an object to itself is drawn by Archi as a loop that the orthogonal router cannot produce, so
+     * one with bendpoints keeps them and one with none is given Archi's default loop instead.
+     *
+     * <p><strong>Cardinality: at most one entry per call</strong>, with
+     * {@link StructuredWarningDto#remediationViolatorIds} carrying every such connection id, kept
+     * loops first. The message says which ids kept their bendpoints and which get the loop, and
+     * says it for the arm the call is on: the loop is in the model only once the call is applied,
+     * and in a batch or awaiting approval which of them gets it is decided then, from the
+     * bendpoints each holds, so on those arms the two lists are labelled as the reading taken when
+     * the call was made.
+     * The remediation names {@code update-view-connection}, the tool that reshapes a loop by hand.
+     */
+    public static final String SELF_CONNECTION_NOT_ROUTED = "SELF_CONNECTION_NOT_ROUTED";
+
+    /**
+     * A label expression written by {@code update-view-object} or the {@code bulk-mutate}
+     * {@code set-view-label-expression} operation reads an unprefixed {@code ${property:KEY}} that
+     * the object it is drawn on does not carry. Archi draws such a token as an empty string, so the
+     * write succeeds and the label silently shows nothing in its place.
+     *
+     * <p><strong>Cardinality:</strong> one entry on {@code update-view-object}, naming every missing
+     * key and carrying the view-object id; on {@code set-view-label-expression}, one entry per
+     * missing key, counting the objects that lack it and listing up to ten of their ids. The
+     * remediation names {@code update-element} for an element, {@code update-view} for a view
+     * reference, and none for a note or a group, which no tool here gives a property. Prefixed
+     * forms and {@code ${properties:SEP:KEY}} are not checked, and the message says so.</p>
+     */
+    public static final String LABEL_EXPRESSION_PROPERTY_MISSING =
+            "LABEL_EXPRESSION_PROPERTY_MISSING";
+
+    /**
+     * A container this call grew to fit what it holds (the parent-fit cascade, a layout's
+     * auto-resize, a spacing inflation) now overlaps a sibling it did not overlap before. Nothing is
+     * moved to make room; the response that names the resize ({@code resizedAncestors} or
+     * {@code resizedGroups}) also names the overlap.
+     *
+     * <p><strong>Cardinality:</strong> one entry per grown container, naming each sibling it newly
+     * overlaps, with their view-object ids in {@code remediationViolatorIds}. A sibling it already
+     * overlapped is not named. The remediation is {@code arrange-groups} for a top-level container
+     * and {@code layout-within-group} (on the containing object) for a nested one. In a batch, a
+     * bulk call or under approval the message says the overlap is projected from the view as it
+     * stands.</p>
+     */
+    public static final String CASCADE_GROWN_INTO_SIBLING = "CASCADE_GROWN_INTO_SIBLING";
+
+    /**
+     * {@code auto-layout-and-route} left a note overlapping an element, a group or another object
+     * that is not a note. Notes are not laid out: the layout moves every other object and leaves each
+     * note where it was, so it can place objects over one, and the note's text is then hidden under
+     * them or hides them.
+     *
+     * <p><strong>Cardinality: at most one entry per call</strong>, naming up to ten (note, object)
+     * pairs and giving the total pair count, counted as {@code assess-layout}'s
+     * {@code noteOverlapCount} counts them: a note nested in a container is not flagged against that
+     * container. Every overlap present after the layout is named, not only those the layout made,
+     * since the layout moved every object. {@code remediationViolatorIds} holds the note ids, each
+     * once; {@code remediationTool} is {@code update-view-object}, which moves a note. A view with no
+     * note, or none overlapped, gains no entry.</p>
+     *
+     * <p>In a batch or awaiting approval the overlaps are read from the layout the call computed, at
+     * the time of the call, and the message says so and names the recovery for that arm.</p>
+     */
+    public static final String LAYOUT_OVERLAPS_NOTE = "LAYOUT_OVERLAPS_NOTE";
 }

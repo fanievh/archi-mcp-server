@@ -1,19 +1,16 @@
 package net.vheerden.archi.mcp.model;
 
+import net.vheerden.archi.mcp.model.routing.LabelBoxEstimate;
+
 /**
- * Estimates the rendered width of a connection/edge label in pixels using the
- * same char-count yardstick the layout-quality crowding detector measures with
- * ({@link LayoutQualityAssessor#LABEL_CHAR_WIDTH} /
- * {@link LayoutQualityAssessor#LABEL_PADDING_X}).
+ * Estimates the width an ELK edge label reserves, in pixels: the shared
+ * {@link LabelBoxEstimate#reservedWidth} (the raw char-count estimate) rounded up.
  *
- * <p>Reusing the detector's base constants — rather than introducing a third,
- * independent width model — keeps the reserver and the crowding detector on one
- * char-count yardstick. Note the two are <b>not</b> identical: the detector
- * additionally applies {@link LayoutQualityAssessor#LABEL_RENDER_WIDTH_FACTOR}
- * (a render-calibration the reserver deliberately omits), so the reserver
- * reserves the raw estimate while the detector measures render-calibrated width.
- * The reserver's resulting mild under-reservation is a known, accepted property
- * (see {@code LABEL_RENDER_WIDTH_FACTOR} Javadoc). This is a headless-safe
+ * <p>This is a <b>reservation</b>, so it omits
+ * {@link LabelBoxEstimate#RENDER_WIDTH_FACTOR}, which only the consumers that
+ * score a label apply (the layout-quality assessor and the routing label
+ * optimizer). Widening it would change node spacing; the resulting mild
+ * under-reservation is a known, accepted property. This is a headless-safe
  * estimate (no SWT glyph measurement), matching the layout path's no-SWT
  * constraint.</p>
  */
@@ -34,7 +31,6 @@ final class LabelWidthEstimator {
 		if (labelText == null || labelText.isBlank()) {
 			return 0;
 		}
-		return (int) Math.ceil(labelText.length() * LayoutQualityAssessor.LABEL_CHAR_WIDTH
-				+ LayoutQualityAssessor.LABEL_PADDING_X);
+		return (int) Math.ceil(LabelBoxEstimate.reservedWidth(labelText));
 	}
 }

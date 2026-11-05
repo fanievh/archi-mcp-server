@@ -47,12 +47,6 @@ public class BearerTokenAuthHandlerTest {
         transportConfig.stopServer();
     }
 
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
-            return probe.getLocalPort();
-        }
-    }
-
     // A guard enforcing TOKEN. The wrapped Handler is null because the pure-unit tests exercise only
     // isAuthorized(...) / isEnforcing() and never call handle() — safe for that purpose only.
     private BearerTokenAuthHandler enforcingGuard() {
@@ -184,36 +178,36 @@ public class BearerTokenAuthHandlerTest {
 
     @Test
     public void shouldReturn401_whenNoTokenOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         assertEquals(401, rawRequest(port, "/mcp", null).status);
     }
 
     @Test
     public void shouldReturn401_whenNoTokenOnSse() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         assertEquals(401, rawRequest(port, "/sse", null).status);
     }
 
     @Test
     public void shouldReturn401_whenWrongTokenOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         assertEquals(401, rawRequest(port, "/mcp", "Bearer wrong-token").status);
     }
 
     @Test
     public void shouldReturn401_whenWrongTokenOnSse() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         assertEquals(401, rawRequest(port, "/sse", "Bearer wrong-token").status);
     }
 
     @Test
     public void shouldReachServlet_whenCorrectTokenOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         // The transport servlet may answer 200/400/405 for a bare GET — the point is it is NOT 401,
         // i.e. the request passed the guard and reached the servlet.
         assertNotEquals(401, rawRequest(port, "/mcp", "Bearer " + TOKEN).status);
@@ -221,24 +215,24 @@ public class BearerTokenAuthHandlerTest {
 
     @Test
     public void shouldReachServlet_whenCorrectTokenOnSse() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         assertNotEquals(401, rawRequest(port, "/sse", "Bearer " + TOKEN).status);
     }
 
     @Test
     public void shouldReachServlet_whenNoTokenAndAuthDisabled() throws Exception {
         // A server started without a token (the 5-arg path / opt-in default) never 401s.
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         assertNotEquals(401, rawRequest(port, "/mcp", null).status);
         assertNotEquals(401, rawRequest(port, "/sse", null).status);
     }
 
     @Test
     public void shouldReturnJsonRpcEnvelopeAndChallenge_whenRejected() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         Response resp = rawRequest(port, "/mcp", null);
 
         assertEquals(401, resp.status);
@@ -259,8 +253,8 @@ public class BearerTokenAuthHandlerTest {
     @Test
     public void shouldNotLeakToken_whenRejected() throws Exception {
         // The secret must never appear in a rejection body.
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK, false, null, null, TOKEN);
+        transportConfig.startServer(0, LOOPBACK, false, null, null, TOKEN);
+        int port = transportConfig.getPort();
         Response resp = rawRequest(port, "/mcp", "Bearer wrong-presented-credential");
         assertEquals(401, resp.status);
         assertFalse("rejection body must not contain the expected token", resp.body.contains(TOKEN));

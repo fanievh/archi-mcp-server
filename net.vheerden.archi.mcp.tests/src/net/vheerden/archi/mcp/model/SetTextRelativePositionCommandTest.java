@@ -29,10 +29,10 @@ public class SetTextRelativePositionCommandTest {
 
         int original = RelativePositionFeature.get(conn);
         SetTextRelativePositionCommand cmd = new SetTextRelativePositionCommand(conn, EAST);
-        assertEquals("Command captures the old anchor", original, cmd.getOldRelativePosition());
         assertEquals("Command carries the new anchor", EAST, cmd.getNewRelativePosition());
 
         cmd.execute();
+        assertEquals("execute() reads the old anchor when it runs", original, cmd.getOldRelativePosition());
         assertEquals("execute() writes the new anchor", EAST, RelativePositionFeature.get(conn));
 
         cmd.undo();

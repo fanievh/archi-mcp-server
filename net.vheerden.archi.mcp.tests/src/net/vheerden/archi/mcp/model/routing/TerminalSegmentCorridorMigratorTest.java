@@ -68,10 +68,25 @@ public class TerminalSegmentCorridorMigratorTest {
         return list;
     }
 
-    // Source hub: RIGHT face line x = 100+80+1 = 181; slot axis Y; face extent y∈[100,300].
+    // Source hub: RIGHT face, slot axis Y, face extent y∈[100,300].
     private static final RoutingRect H = new RoutingRect(100, 100, 80, 200, "H");
     // Target element (own-endpoint — excluded from the Tier-1 passthrough scan).
     private static final RoutingRect T = new RoutingRect(340, 250, 80, 50, "T");
+
+    /**
+     * The face-line coordinate, read from production. Every fixture below needs its terminal to be
+     * <em>on</em> a face line in order to reach {@code inferAttachedFace}, which demands exact
+     * equality; none of them is asserting where that line is. Deriving it keeps the hug distances —
+     * which are what these tests are about — measured against foreign element edges and independent
+     * of {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN}. The margin's own value is pinned in
+     * {@code EdgeAttachmentCalculatorTest} and {@code TerminalAnchoringTest}.
+     */
+    private static int faceLine(RoutingRect r, Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
+    /** H's RIGHT face line — the terminal x for every hub-source fixture here. */
+    private static final int H_RIGHT = faceLine(H, Face.RIGHT);
 
     // =====================================================================
     // PoC — the spike §6 reachability mechanism (Tier-1-clean variant)
@@ -79,10 +94,10 @@ public class TerminalSegmentCorridorMigratorTest {
 
     @Test
     public void poc_sourceIncidentRightFace_m4OneToZero_b71True() {
-        // p0 on H RIGHT face line x=181, slot y=160. seg0 horizontal hugs E.topEdge=161.
+        // p0 on H's RIGHT face line, slot y=160. seg0 horizontal hugs E.topEdge=161.
         // E repositioned to x∈[200,320] so the L's seg1 at x=360 does NOT cross E.
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var paths = paths(p);
         var connections = conns(conn("c-poc", H, T));
         List<RoutingRect> obstacles = List.of(H, e, T);
@@ -106,7 +121,7 @@ public class TerminalSegmentCorridorMigratorTest {
         mig.apply(pr, paths);
 
         // Terminal anchoring: terminal orthogonal coord (x) still exactly on the RIGHT face line.
-        assertEquals("terminal x stays on RIGHT face line 181", 181, paths.get(0).get(0).x());
+        assertEquals("terminal x stays on the RIGHT face line", H_RIGHT, paths.get(0).get(0).x());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
                 new TerminalAnchoring(Face.RIGHT), H, paths.get(0)));
         // Post: M4 == 0 (seg0 no longer hugs E).
@@ -119,14 +134,16 @@ public class TerminalSegmentCorridorMigratorTest {
 
     @Test
     public void safe_topFace_verticalExitSegment_isMigrated() {
-        // Source S: TOP face line y = 100-1 = 99; slot axis X; face extent x∈[100,180].
+        // Source S: TOP face; slot axis X; face extent x∈[100,180].
         RoutingRect s = new RoutingRect(100, 100, 80, 60, "S");
-        // E.leftEdge x=141; E.y∈[60,140] overlaps seg0's y-span [40,99] by 39 (hug)
-        // but does NOT contain the corner's y=40 so the clean L's seg1 (y=40) is clear.
+        // E.leftEdge x=141; E.y∈[60,140] overlaps seg0's y-span [40, S's TOP face line] by well
+        // over the 10px floor at any margin, but does NOT contain the corner's y=40, so the clean
+        // L's seg1 (y=40) is clear.
         RoutingRect e = new RoutingRect(141, 60, 60, 80, "E");
-        // p0 on TOP face (140,99); seg0 vertical (constant x=140 = slot) hugs E.left=141;
+        // p0 on S's TOP face line at x=140; seg0 vertical (constant x=140 = slot) hugs E.left=141;
         // seg1 horizontal (constant y=40). Clean orthogonal L.
-        List<AbsoluteBendpointDto> p = path(bp(140, 99), bp(140, 40), bp(260, 40));
+        List<AbsoluteBendpointDto> p =
+                path(bp(140, faceLine(s, Face.TOP)), bp(140, 40), bp(260, 40));
         var paths = paths(p);
         var connections = conns(conn("c-top", s, T));
         List<RoutingRect> obstacles = List.of(s, e, T);
@@ -138,8 +155,8 @@ public class TerminalSegmentCorridorMigratorTest {
         MigrationProposal pr = proposals.get(0);
         assertTrue("TOP face slot axis is X → shiftX must be true", pr.shiftX());
         mig.apply(pr, paths);
-        // Terminal anchoring: terminal orthogonal coord (y) still on the TOP face line 99.
-        assertEquals(99, paths.get(0).get(0).y());
+        // Terminal anchoring: terminal orthogonal coord (y) still on S's TOP face line.
+        assertEquals(faceLine(s, Face.TOP), paths.get(0).get(0).y());
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
                 new TerminalAnchoring(Face.TOP), s, paths.get(0)));
     }
@@ -148,13 +165,14 @@ public class TerminalSegmentCorridorMigratorTest {
     public void safe_targetIncident_isMigrated_whenSourceSegmentIsClean() {
         // Clean L: source S TOP face (slot axis X) → seg0 vertical (clean, no hug);
         // target U LEFT face (slot axis Y) → seg1 horizontal, hugs E.topEdge=161.
-        RoutingRect s = new RoutingRect(140, 300, 80, 60, "S"); // S TOP line y = 300-1 = 299
-        RoutingRect u = new RoutingRect(500, 100, 80, 200, "U"); // U LEFT line x = 500-1 = 499
+        RoutingRect s = new RoutingRect(140, 300, 80, 60, "S"); // terminal sits on S's TOP line
+        RoutingRect u = new RoutingRect(500, 100, 80, 200, "U"); // terminal sits on U's LEFT line
         RoutingRect e = new RoutingRect(300, 161, 160, 40, "E");  // E.topEdge y=161
-        // t0(180,299) on S TOP; c(180,160); t1(499,160) on U LEFT.
+        // t0 on S TOP at x=180; c(180,160); t1 on U LEFT at y=160.
         // seg0 = t0->c vertical x=180 (clean, hugs nothing); seg1 = c->t1 horizontal
         // y=160 hugs E.top=161. Source-incident yields no proposal → target-incident does.
-        List<AbsoluteBendpointDto> p = path(bp(180, 299), bp(180, 160), bp(499, 160));
+        List<AbsoluteBendpointDto> p = path(bp(180, faceLine(s, Face.TOP)), bp(180, 160),
+                bp(faceLine(u, Face.LEFT), 160));
         var paths = paths(p);
         var connections = conns(conn("c-tgt", s, u));
         List<RoutingRect> obstacles = List.of(s, e, u);
@@ -167,8 +185,9 @@ public class TerminalSegmentCorridorMigratorTest {
         assertEquals("target-incident → terminal bp idx = lastIdx (2)", 2, pr.terminalBpIdx());
         assertEquals(1, pr.cornerBpIdx());
         mig.apply(pr, paths);
-        // Terminal anchoring on the TARGET terminal (idx 2): orthogonal coord (x) stays on U LEFT line 499.
-        assertEquals(499, paths.get(0).get(2).x());
+        // Terminal anchoring on the TARGET terminal (idx 2): orthogonal coord (x) stays on U's
+        // LEFT face line.
+        assertEquals(faceLine(u, Face.LEFT), paths.get(0).get(2).x());
         var reversed = new ArrayList<>(paths.get(0));
         java.util.Collections.reverse(reversed);
         assertTrue(TerminalAnchoring.preservesTerminalAnchoring(
@@ -181,12 +200,12 @@ public class TerminalSegmentCorridorMigratorTest {
 
     @Test
     public void unsafe_constantAxisEqualsOrthogonalAxis_isRejected() {
-        // t0 on H RIGHT face (181,160). seg0 = t0->c is VERTICAL (constant x=181 = the
+        // t0 on H's RIGHT face line at y=160. seg0 = t0->c is VERTICAL (its constant x IS the
         // RIGHT face's ORTHOGONAL axis). Shifting its constant coord would drag the
         // terminal off the face line → UNSAFE → migrator must reject (no proposal).
         // The hug element here is immaterial — UNSAFE is rejected before any hug test.
         RoutingRect e = new RoutingRect(120, 100, 60, 300, "E");
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(181, 300), bp(360, 300));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(H_RIGHT, 300), bp(360, 300));
         var paths = paths(p);
         var connections = conns(conn("c-unsafe", H, T));
         List<RoutingRect> obstacles = List.of(H, e, T);
@@ -204,7 +223,7 @@ public class TerminalSegmentCorridorMigratorTest {
     public void noProposal_whenTerminalSegmentDoesNotHugAnyEdge() {
         // seg0 horizontal at y=160; no element edge within tolerance of y=160.
         RoutingRect e = new RoutingRect(200, 400, 120, 40, "E"); // far from y=160
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var mig = new TerminalSegmentCorridorMigrator();
         assertTrue(mig.evaluate(conns(conn("c", H, T)), paths(p), List.of(H, e, T)).isEmpty());
     }
@@ -216,10 +235,10 @@ public class TerminalSegmentCorridorMigratorTest {
         var mig = new TerminalSegmentCorridorMigrator();
         assertTrue("size-2 out of scope",
                 mig.evaluate(conns(conn("c2", H, T)),
-                        paths(path(bp(181, 160), bp(360, 160))), List.of(H, e, T)).isEmpty());
+                        paths(path(bp(H_RIGHT, 160), bp(360, 160))), List.of(H, e, T)).isEmpty());
         assertTrue("size-4 out of scope",
                 mig.evaluate(conns(conn("c4", H, T)),
-                        paths(path(bp(181, 160), bp(360, 160), bp(360, 250), bp(420, 250))),
+                        paths(path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250), bp(420, 250))),
                         List.of(H, e, T)).isEmpty());
     }
 
@@ -233,7 +252,7 @@ public class TerminalSegmentCorridorMigratorTest {
         for (int y = 100; y <= 300; y += 6) {
             obstacles.add(new RoutingRect(200, y, 160, 1, "blk-" + y));
         }
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var mig = new TerminalSegmentCorridorMigrator();
         assertTrue("no clearing slot within the face extent → no proposal",
                 mig.evaluate(conns(conn("c", H, T)), paths(p), obstacles).isEmpty());
@@ -241,15 +260,16 @@ public class TerminalSegmentCorridorMigratorTest {
 
     @Test
     public void noProposal_whenTerminalNotExactlyOnFaceLine() {
-        // Terminal at x=180 (on the rect edge, NOT the face line 181) → not our
-        // domain (EdgeAttachmentCalculator owns it) → inferAttachedFace null → no proposal.
+        // Terminal ON THE RECT EDGE rather than on the face line → not our domain
+        // (EdgeAttachmentCalculator owns it) → inferAttachedFace null → no proposal.
+        int rectEdge = H.x() + H.width();
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");
-        List<AbsoluteBendpointDto> p = path(bp(180, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(rectEdge, 160), bp(360, 160), bp(360, 250));
         var mig = new TerminalSegmentCorridorMigrator();
         assertTrue(mig.evaluate(conns(conn("c", H, T)), paths(p), List.of(H, e, T)).isEmpty());
-        assertNull(TerminalSegmentCorridorMigrator.inferAttachedFace(bp(180, 160), H));
+        assertNull(TerminalSegmentCorridorMigrator.inferAttachedFace(bp(rectEdge, 160), H));
         assertEquals(Face.RIGHT,
-                TerminalSegmentCorridorMigrator.inferAttachedFace(bp(181, 160), H));
+                TerminalSegmentCorridorMigrator.inferAttachedFace(bp(H_RIGHT, 160), H));
     }
 
     // =====================================================================
@@ -263,7 +283,7 @@ public class TerminalSegmentCorridorMigratorTest {
         // interior → Tier-1 self-check rejects → no proposal.
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");
         RoutingRect b = new RoutingRect(330, 100, 60, 250, "B"); // x∈[330,390] covers seg1 x=360
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var mig = new TerminalSegmentCorridorMigrator();
         assertTrue("Tier-1 passthrough must block the migration",
                 mig.evaluate(conns(conn("c", H, T)), paths(p), List.of(H, e, b, T)).isEmpty());
@@ -276,7 +296,7 @@ public class TerminalSegmentCorridorMigratorTest {
     @Test
     public void apply_shiftsTerminalAndCornerOnSlotAxis_orthogonalUnchanged() {
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var paths = paths(p);
         var mig = new TerminalSegmentCorridorMigrator();
         var proposals = mig.evaluate(conns(conn("c", H, T)), paths, List.of(H, e, T));
@@ -286,7 +306,7 @@ public class TerminalSegmentCorridorMigratorTest {
         Snapshot snap = mig.apply(pr, paths);
 
         assertNotNull(snap);
-        assertEquals("terminal x (orthogonal) unchanged", 181, paths.get(0).get(0).x());
+        assertEquals("terminal x (orthogonal) unchanged", H_RIGHT, paths.get(0).get(0).x());
         assertEquals("corner x (along-axis) unchanged", 360, paths.get(0).get(1).x());
         assertEquals("terminal y (slot) == newSlot", pr.newSlot(), paths.get(0).get(0).y());
         assertEquals("corner y (slot) == newSlot", pr.newSlot(), paths.get(0).get(1).y());
@@ -296,7 +316,7 @@ public class TerminalSegmentCorridorMigratorTest {
     @Test
     public void restore_revertsTerminalAndCorner_fromSnapshot() {
         RoutingRect e = new RoutingRect(200, 161, 120, 40, "E");
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160), bp(360, 250));
         var paths = paths(p);
         List<AbsoluteBendpointDto> original = new ArrayList<>(paths.get(0));
         var mig = new TerminalSegmentCorridorMigrator();
@@ -327,10 +347,11 @@ public class TerminalSegmentCorridorMigratorTest {
         // Clean L (seg0 horizontal, seg1 vertical) where BOTH terminal segments can
         // hug an edge. The migrator emits exactly ONE proposal (source-incident
         // preferred) so the shared interior corner is never double-moved in one pass.
-        RoutingRect u = new RoutingRect(320, 401, 80, 60, "U");   // t1 on U TOP line y=400
+        RoutingRect u = new RoutingRect(320, 401, 80, 60, "U");   // t1 sits on U's TOP line
         RoutingRect e0 = new RoutingRect(200, 161, 120, 40, "E0"); // seg0 hugs E0.top=161
         RoutingRect e1 = new RoutingRect(361, 200, 120, 100, "E1"); // seg1 hugs E1.left=361
-        List<AbsoluteBendpointDto> p = path(bp(181, 160), bp(360, 160), bp(360, 400));
+        List<AbsoluteBendpointDto> p = path(bp(H_RIGHT, 160), bp(360, 160),
+                bp(360, faceLine(u, Face.TOP)));
         var mig = new TerminalSegmentCorridorMigrator();
         var proposals = mig.evaluate(conns(conn("c", H, u)), paths(p), List.of(H, e0, e1, u));
         assertEquals(1, proposals.size());

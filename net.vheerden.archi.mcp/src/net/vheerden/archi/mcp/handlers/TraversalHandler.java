@@ -20,7 +20,10 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
+import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.CostEstimator;
 import net.vheerden.archi.mcp.response.ErrorCode;
@@ -255,11 +258,15 @@ public class TraversalHandler {
             Map<String, Object> args = request.arguments();
             logger.info(
                     "Handling get-relationships request (filters: excludeTypes={}, includeTypes={}, filterLayer={})",
-                    args != null ? args.get("excludeTypes") : null,
-                    args != null ? args.get("includeTypes") : null,
-                    args != null ? args.get("filterLayer") : null);
+                    CallerText.logged(args != null ? args.get("excludeTypes") : null),
+                    CallerText.logged(args != null ? args.get("includeTypes") : null),
+                    CallerText.logged(args != null ? args.get("filterLayer") : null));
 
             // Validate elementId
+            ToolArguments.requireTextType(args, "elementId");
+            // Read by type even where traverse is off and the direction goes unused, so a wrong type is
+            // never answered as though it had been read.
+            ToolArguments.requireTextType(args, "direction");
             Object elementIdObj = (args != null) ? args.get("elementId") : null;
             if (!(elementIdObj instanceof String elementId) || elementId.isBlank()) {
                 ErrorResponse error = new ErrorResponse(
@@ -275,7 +282,7 @@ public class TraversalHandler {
             String fieldsParam = null;
             List<String> excludeParam = null;
             if (args != null) {
-                Object fieldsObj = args.get("fields");
+                Object fieldsObj = ToolArguments.optionalText(args, "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -283,31 +290,25 @@ public class TraversalHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
             }
 
             // Extract dryRun
-            boolean dryRun = false;
-            if (args != null) {
-                Object dryRunObj = args.get("dryRun");
-                if (dryRunObj instanceof Boolean b) {
-                    dryRun = b;
-                }
-            }
+            boolean dryRun = ToolArguments.flag(args, "dryRun", false);
 
             // Extract and validate format parameter
             ResponseFormat format = ResponseFormat.JSON;
             if (args != null) {
-                Object formatObj = args.get("format");
+                Object formatObj = ToolArguments.optionalText(args, "format", false);
                 if (formatObj instanceof String f && !f.isBlank()) {
                     ResponseFormat parsed = ResponseFormat.fromString(f);
                     if (parsed == null) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid format: '" + f + "'",
+                                "Invalid format: " + CallerText.quoted(f),
                                 null,
                                 "Valid formats: json, graph, summary",
                                 null);
@@ -323,7 +324,7 @@ public class TraversalHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -352,14 +353,14 @@ public class TraversalHandler {
             Set<String> effectiveExclude = excludeParam != null ? Set.copyOf(excludeParam) : null;
             if (sessionManager != null && args != null) {
                 // Merge session layer filter (session type NOT applied — see Design Decision #3)
-                Object filterLayerObj = args.get("filterLayer");
+                Object filterLayerObj = ToolArguments.optionalText(args, "filterLayer", false);
                 String perQueryLayer = (filterLayerObj instanceof String s && !s.isBlank()) ? s : null;
                 String effectiveLayer = sessionManager.getEffectiveLayer(sessionId, perQueryLayer);
                 if (effectiveLayer != null && perQueryLayer == null) {
                     // Session layer applies — inject into args for downstream validation
                     args = new HashMap<>(args);
                     args.put("filterLayer", effectiveLayer);
-                    logger.debug("Effective filterLayer: {} (source: session)", effectiveLayer);
+                    logger.debug("Effective filterLayer: {} (source: session)", CallerText.logged(effectiveLayer));
                 }
                 effectiveFieldsPreset = sessionManager.getEffectiveFieldsPreset(sessionId, fieldsParam);
                 effectiveExclude = sessionManager.getEffectiveExcludeFields(sessionId, excludeParam);
@@ -373,11 +374,11 @@ public class TraversalHandler {
                 if (parsed.isPresent()) {
                     fieldPreset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
-            logger.debug("Field selection — preset: {}, exclude: {}", fieldPreset, effectiveExclude);
+            logger.debug("Field selection — preset: {}, exclude: {}", fieldPreset, CallerText.logged(effectiveExclude));
 
             // Validate filters (shared between traverse and non-traverse modes)
             RelationshipFilters filters = validateFilters(args);
@@ -421,7 +422,7 @@ public class TraversalHandler {
                             null);
                     return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
                 }
-                depth = depthNum.intValue();
+                depth = ToolArguments.wholeInt(depthNum, "depth");
                 if (depth < MIN_DEPTH || depth > MAX_DEPTH) {
                     ErrorResponse error = new ErrorResponse(
                             ErrorCode.INVALID_PARAMETER,
@@ -440,13 +441,14 @@ public class TraversalHandler {
                     "excl-types", CacheKeyBuilder.sortedSetKey(filters.excludeTypes),
                     "incl-types", CacheKeyBuilder.sortedSetKey(filters.includeTypes),
                     "filter-layer", filters.filterLayer,
-                    "fields", fieldPreset, "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
+                    "fields", fieldPreset, "warning", warningMessage,
+                    "exclude", CacheKeyBuilder.sortedSetKey(effectiveExclude),
                     "format", format.value());
             if (sessionManager != null && sessionId != null && !modelChanged && !dryRun) {
                 try {
                     String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                     if (cachedJson != null) {
-                        logger.debug("Cache hit for key: {}", cacheKey);
+                        logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                         Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                         ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                         return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -461,7 +463,7 @@ public class TraversalHandler {
             if (queriedElement.isEmpty()) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.ELEMENT_NOT_FOUND,
-                        "No element found with ID '" + elementId + "'",
+                        "No element found with ID " + CallerText.quoted(elementId),
                         null,
                         "Use search-elements to find elements by name or type",
                         null);
@@ -629,7 +631,7 @@ public class TraversalHandler {
             // Store in cache — skip when model changed to avoid stale entries
             if (sessionManager != null && sessionId != null && !modelChanged) {
                 sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-                logger.debug("Cache miss, storing result for key: {}", cacheKey);
+                logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
             }
 
             return buildResult(jsonResult, false);
@@ -642,6 +644,10 @@ public class TraversalHandler {
                     "Open an ArchiMate model in ArchimateTool",
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
+
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
 
         } catch (Exception e) {
             logger.error("Unexpected error handling get-relationships", e);
@@ -692,7 +698,7 @@ public class TraversalHandler {
                 if (!VALID_RELATIONSHIP_TYPES.contains(typeStr)) {
                     ErrorResponse error = new ErrorResponse(
                             ErrorCode.INVALID_PARAMETER,
-                            "Invalid relationship type: '" + typeStr + "'",
+                            "Invalid relationship type: " + CallerText.quoted(typeStr),
                             null,
                             "Valid relationship types: " + String.join(", ",
                                     VALID_RELATIONSHIP_TYPES.stream().sorted().toList()),
@@ -735,7 +741,7 @@ public class TraversalHandler {
                 if (!VALID_RELATIONSHIP_TYPES.contains(typeStr)) {
                     ErrorResponse error = new ErrorResponse(
                             ErrorCode.INVALID_PARAMETER,
-                            "Invalid relationship type: '" + typeStr + "'",
+                            "Invalid relationship type: " + CallerText.quoted(typeStr),
                             null,
                             "Valid relationship types: " + String.join(", ",
                                     VALID_RELATIONSHIP_TYPES.stream().sorted().toList()),
@@ -751,6 +757,7 @@ public class TraversalHandler {
         }
 
         // Validate filterLayer
+        ToolArguments.requireTextType(args, "filterLayer");
         Object filterLayerObj = (args != null) ? args.get("filterLayer") : null;
         if (filterLayerObj != null) {
             if (!(filterLayerObj instanceof String layerStr)) {
@@ -767,7 +774,7 @@ public class TraversalHandler {
             if (!layerStr.isBlank() && !SearchHandler.VALID_LAYERS.contains(layerStr)) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
-                        "Invalid layer: '" + layerStr + "'",
+                        "Invalid layer: " + CallerText.quoted(layerStr),
                         null,
                         "Valid layers: Business, Application, Technology, Physical, "
                                 + "Strategy, Motivation, Implementation & Migration",
@@ -836,7 +843,7 @@ public class TraversalHandler {
             ElementDto connected = elementMap.get(connectedId);
             if (connected == null) {
                 logger.debug("Connected element {} not found during layer filter — skipping relationship {}",
-                        connectedId, rel.id());
+                        CallerText.logged(connectedId), rel.id());
                 continue;
             }
             if (filterLayer.equals(connected.layer())) {
@@ -974,12 +981,12 @@ public class TraversalHandler {
                                                       boolean dryRun,
                                                       ResponseFormat format) {
         logger.info("Handling traversal for element: {} (filters: excludeTypes={}, includeTypes={}, filterLayer={})",
-                elementId, filters.excludeTypes, filters.includeTypes, filters.filterLayer);
+                CallerText.logged(elementId), CallerText.logged(filters.excludeTypes), CallerText.logged(filters.includeTypes), CallerText.logged(filters.filterLayer));
 
         // Extract progress token for progress notifications
         Object progressToken = extractProgressToken(request);
         if (progressToken != null) {
-            logger.debug("Progress token provided for traversal: {}", progressToken);
+            logger.debug("Progress token provided for traversal: {}", CallerText.logged(progressToken));
         }
 
         // Validate maxDepth
@@ -996,7 +1003,7 @@ public class TraversalHandler {
                         null);
                 return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
             }
-            maxDepth = maxDepthNum.intValue();
+            maxDepth = ToolArguments.wholeInt(maxDepthNum, "maxDepth");
             if (maxDepth < TraversalEngine.MIN_MAX_DEPTH || maxDepth > TraversalEngine.MAX_MAX_DEPTH) {
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.INVALID_PARAMETER,
@@ -1042,13 +1049,14 @@ public class TraversalHandler {
                 "excl-types", CacheKeyBuilder.sortedSetKey(filters.excludeTypes),
                 "incl-types", CacheKeyBuilder.sortedSetKey(filters.includeTypes),
                 "filter-layer", filters.filterLayer,
-                "fields", fieldPreset, "exclude", CacheKeyBuilder.sortedSetKey(excludeFields),
+                "fields", fieldPreset, "warning", warningMessage,
+                "exclude", CacheKeyBuilder.sortedSetKey(excludeFields),
                 "format", format.value());
         if (sessionManager != null && sessionId != null && !modelChanged && !dryRun) {
             try {
                 String cachedJson = sessionManager.getCacheEntry(sessionId, cacheKey);
                 if (cachedJson != null) {
-                    logger.debug("Cache hit for key: {}", cacheKey);
+                    logger.debug("Cache hit for key: {}", CallerText.logged(cacheKey));
                     Map<String, Object> cachedEnvelope = objectMapper.readValue(cachedJson, MAP_TYPE_REF);
                     ResponseFormatter.addCacheHitFlag(cachedEnvelope);
                     return buildResult(objectMapper.writeValueAsString(cachedEnvelope), false);
@@ -1063,7 +1071,7 @@ public class TraversalHandler {
         if (queriedElement.isEmpty()) {
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.ELEMENT_NOT_FOUND,
-                    "No element found with ID '" + elementId + "'",
+                    "No element found with ID " + CallerText.quoted(elementId),
                     null,
                     "Use search-elements to find elements by name or type",
                     null);
@@ -1084,7 +1092,7 @@ public class TraversalHandler {
         int totalElements = outcome.totalElementsDiscovered();
 
         logger.info("Traversal complete for {}: {} elements, {} relationships, truncated={}",
-                elementId, totalElements, totalRels, isTruncated);
+                CallerText.logged(elementId), totalElements, totalRels, isTruncated);
 
         // Dry-run early return for traverse mode
         if (dryRun) {
@@ -1206,7 +1214,7 @@ public class TraversalHandler {
         // Store in cache — skip when model changed to avoid stale entries
         if (sessionManager != null && sessionId != null && !modelChanged) {
             sessionManager.putCacheEntry(sessionId, cacheKey, jsonResult);
-            logger.debug("Cache miss, storing result for key: {}", cacheKey);
+            logger.debug("Cache miss, storing result for key: {}", CallerText.logged(cacheKey));
         }
 
         return buildResult(jsonResult, false);

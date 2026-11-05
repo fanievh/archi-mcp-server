@@ -25,6 +25,8 @@ import net.vheerden.archi.mcp.response.dto.AnchorPointDto;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
+import net.vheerden.archi.mcp.response.dto.NonArchimateConnectionDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ViewContentsDto;
@@ -181,8 +183,8 @@ public class CostEstimatorPayloadWidthContractTest {
 			EnvelopeCase.interpolated("get-views", "emptyNameFiltered", VIEW,
 					"No views matching '" + FILTERED_NAME + "'. Try a broader name, "
 							+ "remove the name filter, or use search-elements to find elements by name.",
-					"No views matching '",
-					"'. Try a broader name, ",
+					"No views matching ",
+					". Try a broader name, ",
 					"remove the name filter, or use search-elements to find elements by name."),
 			EnvelopeCase.of("get-view-contents", "complete", VIEW,
 					"Use get-element with an element ID for detailed information",
@@ -736,10 +738,10 @@ public class CostEstimatorPayloadWidthContractTest {
 	 * <p>What this asserts is the decision criterion itself rather than a width: that a constant
 	 * widened to carry the cursor would put the unpaginated branches outside the accuracy contract.
 	 * That is the reason the term is excluded, so it is the thing worth pinning -- the cursor's own
-	 * width varies with the filter parameters it encodes and is not a fixed figure. It is also not,
-	 * as this constant's documentation used to claim, wider than the whole envelope: measured on a
-	 * four-parameter search cursor it is 228 chars against the envelope's 280, which is large
-	 * enough to make the point without the overstatement.</p>
+	 * width varies with the filter parameters it encodes and with the id and name of the model it
+	 * pages, and is not a fixed figure. Measured on a four-parameter search cursor naming a model by
+	 * an Archi-style id it is 340 chars against the envelope's 280: wider than the whole envelope,
+	 * as it was not (228 chars) before cursors named their model.</p>
 	 */
 	@Test
 	public void shouldLeaveThePaginationCursorOutsideTheEnvelopeConstant() throws Exception {
@@ -748,7 +750,9 @@ public class CostEstimatorPayloadWidthContractTest {
 		params.put("type", "ApplicationComponent");
 		params.put("layer", "Application");
 		params.put("specialization", null);
-		String cursor = PaginationCursor.encode(MODEL_VERSION, 100, 50, 320, params);
+		String cursor = PaginationCursor.encode(MODEL_VERSION,
+				new PaginationCursor.CursorModel("id-" + "0".repeat(32), "Meridian Retail Bank", "1"),
+				100, 50, 320, params);
 
 		List<String> nextSteps = nextStepsFor("search-elements/hasMore");
 		Map<String, Object> paged = successEnvelope(List.of(), 0, nextSteps, true);
@@ -1057,7 +1061,13 @@ public class CostEstimatorPayloadWidthContractTest {
 	private static ViewContentsDto viewContentsFixture(int elements, int relationships,
 			int visualNodes, int connections, int groups, int notes, int images) {
 		return viewContentsFixture(elements, relationships, visualNodes, connections, groups, notes,
-				images, -1);
+				images, 0, 0, -1);
+	}
+
+	private static ViewContentsDto viewContentsFixture(int elements, int relationships,
+			int visualNodes, int connections, int groups, int notes, int images, int viewReferences) {
+		return viewContentsFixture(elements, relationships, visualNodes, connections, groups, notes,
+				images, viewReferences, 0, -1);
 	}
 
 	/**
@@ -1065,8 +1075,8 @@ public class CostEstimatorPayloadWidthContractTest {
 	 *                       probe; -1 keeps the census blend the other checks measure against
 	 */
 	private static ViewContentsDto viewContentsFixture(int elements, int relationships,
-			int visualNodes, int connections, int groups, int notes, int images,
-			int bendpointsEach) {
+			int visualNodes, int connections, int groups, int notes, int images, int viewReferences,
+			int nonArchimateConnections, int bendpointsEach) {
 		return new ViewContentsDto("id-view-0123456789abcdef0123456789", chars(37), chars(18),
 				"manual",
 				fill(elements, CostEstimatorPayloadWidthContractTest::elementFixture),
@@ -1076,7 +1086,10 @@ public class CostEstimatorPayloadWidthContractTest {
 						: viewConnectionFixtures(connections, bendpointsEach),
 				groups == 0 ? null : viewGroupFixtures(groups),
 				notes == 0 ? null : fill(notes, CostEstimatorPayloadWidthContractTest::viewNoteFixture),
-				images == 0 ? null : fill(images, CostEstimatorPayloadWidthContractTest::imageFixture));
+				images == 0 ? null : fill(images, CostEstimatorPayloadWidthContractTest::imageFixture),
+				viewReferences == 0 ? null : viewReferenceFixtures(viewReferences),
+				nonArchimateConnections == 0 ? null
+						: fill(nonArchimateConnections, CostEstimatorPayloadWidthContractTest::nonArchimateConnectionFixture));
 	}
 
 	private static <T> List<T> fill(int count, java.util.function.Supplier<T> row) {
@@ -1090,7 +1103,7 @@ public class CostEstimatorPayloadWidthContractTest {
 	private static int viewContentsEstimate(int elements, int relationships, int visualNodes,
 			int connections, int groups, int notes, int images, FieldPreset preset) {
 		return CostEstimator.estimateTokensForViewContents(new CostEstimator.ViewContentsCounts(
-				elements, relationships, visualNodes, connections, groups, notes, images), preset);
+				elements, relationships, visualNodes, connections, groups, notes, images, 0, 0), preset);
 	}
 
 	private static int measuredViewContentsTokens(ViewContentsDto contents, FieldPreset preset,
@@ -1122,10 +1135,10 @@ public class CostEstimatorPayloadWidthContractTest {
 	public void shouldEstimateTheWholeViewContentsPayloadWithinContract_atEveryPreset()
 			throws Exception {
 		int n = SAMPLE_SIZE;
-		ViewContentsDto contents = viewContentsFixture(n, n, n, n, n, n, n);
+		ViewContentsDto contents = viewContentsFixture(n, n, n, n, n, n, n, n, n, -1);
 		for (FieldPreset preset : FieldPreset.values()) {
 			assertViewContentsWithinContract("whole view-contents payload", contents,
-					new CostEstimator.ViewContentsCounts(n, n, n, n, n, n, n), preset, null);
+					new CostEstimator.ViewContentsCounts(n, n, n, n, n, n, n, n, n), preset, null);
 		}
 	}
 
@@ -1142,7 +1155,7 @@ public class CostEstimatorPayloadWidthContractTest {
 		ViewContentsDto contents = viewContentsFixture(n, n, n, n, 0, 0, 0);
 		for (FieldPreset preset : FieldPreset.values()) {
 			assertViewContentsWithinContract("view-contents without groups, notes or images",
-					contents, new CostEstimator.ViewContentsCounts(n, n, n, n, 0, 0, 0), preset, null);
+					contents, new CostEstimator.ViewContentsCounts(n, n, n, n, 0, 0, 0, 0, 0), preset, null);
 		}
 	}
 
@@ -1160,7 +1173,7 @@ public class CostEstimatorPayloadWidthContractTest {
 		ViewContentsDto contents = viewContentsFixture(n, n, n, n, n, 0, 0);
 		for (FieldPreset preset : FieldPreset.values()) {
 			assertViewContentsWithinContract("view-contents with visualMetadata and connections excluded",
-					contents, new CostEstimator.ViewContentsCounts(n, n, 0, 0, n, 0, 0), preset, exclude);
+					contents, new CostEstimator.ViewContentsCounts(n, n, 0, 0, n, 0, 0, 0, 0), preset, exclude);
 		}
 	}
 
@@ -1190,6 +1203,11 @@ public class CostEstimatorPayloadWidthContractTest {
 				viewContentsFixture(n, n, 0, 0, 0, n, 0), viewContentsFixture(n, n, 0, 0, 0, 0, 0));
 		assertVisualArrayWidthWithinContract("images", CostEstimator.DIAGRAM_IMAGE_CHARS,
 				viewContentsFixture(n, n, 0, 0, 0, 0, n), viewContentsFixture(n, n, 0, 0, 0, 0, 0));
+		assertVisualArrayWidthWithinContract("viewReferences", CostEstimator.VIEW_REFERENCE_CHARS,
+				viewContentsFixture(n, n, 0, 0, 0, 0, 0, n), viewContentsFixture(n, n, 0, 0, 0, 0, 0));
+		assertVisualArrayWidthWithinContract("nonArchimateConnections",
+				CostEstimator.NON_ARCHIMATE_CONNECTION_CHARS,
+				viewContentsFixture(n, n, 0, 0, 0, 0, 0, 0, n, -1), viewContentsFixture(n, n, 0, 0, 0, 0, 0));
 	}
 
 	private void assertVisualArrayWidthWithinContract(String array, int shippedWidth,
@@ -1247,7 +1265,7 @@ public class CostEstimatorPayloadWidthContractTest {
 	/** Signed error of the shipped connection width against a payload whose rows carry {@code k}. */
 	private static double connectionWidthErrorAt(int bendpoints) throws Exception {
 		int n = SAMPLE_SIZE;
-		ViewContentsDto with = viewContentsFixture(n, n, 0, n, 0, 0, 0, bendpoints);
+		ViewContentsDto with = viewContentsFixture(n, n, 0, n, 0, 0, 0, 0, 0, bendpoints);
 		ViewContentsDto without = viewContentsFixture(n, n, 0, 0, 0, 0, 0);
 		int measured = measuredViewContentsTokens(with, FieldPreset.STANDARD, null)
 				- measuredViewContentsTokens(without, FieldPreset.STANDARD, null);
@@ -1292,9 +1310,9 @@ public class CostEstimatorPayloadWidthContractTest {
 	public void shouldFallWhenAnArrayIsExcluded_forViewContents() {
 		int n = SAMPLE_SIZE;
 		int full = CostEstimator.estimateTokensForViewContents(
-				new CostEstimator.ViewContentsCounts(n, n, n, n, n, n, n), FieldPreset.STANDARD);
+				new CostEstimator.ViewContentsCounts(n, n, n, n, n, n, n, n, n), FieldPreset.STANDARD);
 		int excluded = CostEstimator.estimateTokensForViewContents(
-				new CostEstimator.ViewContentsCounts(n, n, 0, 0, n, n, n), FieldPreset.STANDARD);
+				new CostEstimator.ViewContentsCounts(n, n, 0, 0, n, n, n, n, n), FieldPreset.STANDARD);
 		assertTrue("excluding two arrays must reduce the estimate, not leave it flat",
 				excluded < full);
 	}
@@ -1439,6 +1457,47 @@ public class CostEstimatorPayloadWidthContractTest {
 		return new ViewNoteDto(ID, chars(303), 1400, 96, 300, 160, null, null, null, null, null,
 				null, null, null, null, null, null, null, null, null, null, null, null, null,
 				null, null, null, null);
+	}
+
+	/**
+	 * View references, census-calibrated as a mix over the 39 rows the ten captured models hold: the
+	 * parent id on 38%, a font size and style on 90%, a fill on 51%, a line style on 41%, and a line
+	 * width, line colour and derived-line-colour switch on 26% each. No other key a reference row can
+	 * carry occurs in the census; that includes the icon fields, re-counted after the row gained them.
+	 */
+	private static List<EmbeddedViewDto> viewReferenceFixtures(int count) {
+		List<EmbeddedViewDto> rows = new ArrayList<>();
+		for (int i = 0; i < count; i++) {
+			int p = percentile(i, count);
+			rows.add(new EmbeddedViewDto(ID, ID, 1080, 690, 220, 70,
+					p < 38 ? ID : null,
+					p < 51 ? "#FDF4DC" : null,
+					p < 26 ? "#5C5C5C" : null,
+					null, null,
+					p < 26 ? Integer.valueOf(2) : null,
+					null,
+					p < 90 ? Integer.valueOf(9) : null,
+					p < 90 ? "bold" : null,
+					null,
+					p < 26 ? Boolean.FALSE : null,
+					null,
+					p < 41 ? "dashed" : null,
+					null, null, null, null, null, null));
+		}
+		return rows;
+	}
+
+	/**
+	 * A connection that is not an ArchiMate one. No captured model holds one, so there is no census to
+	 * calibrate a mix against: this is the representative row the shipped width is derived from, three
+	 * ids, a label, two bendpoints stored and absolute, and a target arrowhead. The check holds that
+	 * derivation to the serializer; it cannot say the row is typical.
+	 */
+	private static NonArchimateConnectionDto nonArchimateConnectionFixture() {
+		return new NonArchimateConnectionDto(ID, ID, ID, chars(10), null,
+				List.of(new BendpointDto(120, 0, -180, -40), new BendpointDto(120, 60, -180, 20)),
+				List.of(new AbsoluteBendpointDto(460, 127), new AbsoluteBendpointDto(460, 187)),
+				1, null, null, null, null, null, null, null, null, null, null, null, "fill", null, null);
 	}
 
 	private static DiagramImageDto imageFixture() {

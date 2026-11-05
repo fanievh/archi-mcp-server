@@ -1333,24 +1333,33 @@ public class TopLevelGroupingArrangementTest {
     }
 
     /**
-     * The other arm of the same refusal: a view holding no container at any depth keeps the
-     * message it always had. A shared refusal that fired on both cases would replace one false
-     * statement with another, telling a genuinely flat view it has containers inside a host.
+     * The other arm of the same refusal: a view holding no zone at any depth is never told it has
+     * containers inside a host. A shared refusal that fired on both cases would replace one false
+     * statement with another.
+     *
+     * <p>This view is a host holding a plain child, so it is not flat either: the element is a
+     * container on the canvas. It used to be answered "View has no groups", which is the false
+     * statement about element containers the shared refusal now also replaces — it names the host
+     * and the tool that spaces inside one, and still refuses.</p>
      */
     @Test
-    public void shouldKeepTheOriginalRefusal_whenTheViewHoldsNoContainerAtAnyDepth() {
+    public void shouldNameTheElementContainer_notANestedZone_whenTheViewHoldsNoZoneAtAnyDepth() {
         // A host with a plain child and nothing else: container-SHAPED, but holding no zone at
-        // any depth, so the outermost walk finds nothing and the original wording is the true one.
+        // any depth, so the outermost walk finds nothing.
         useModel(hostOnlyFixture());
 
         try {
             accessor.optimizeGroupOrder(SESSION, VIEW_ID, null, null, null, null, null,
                     false, null, null);
-            fail("a view with no container anywhere has nothing to reorder");
+            fail("a view with no zone anywhere has nothing to reorder");
         } catch (ModelAccessException e) {
-            assertTrue("Actual: " + e.getMessage(), e.getMessage().contains("View has no groups"));
+            assertTrue("Actual: " + e.getMessage(), e.getMessage().contains(
+                    "has no native group or Grouping element holding children, but 1 ArchiMate "
+                            + "element drawn on it holds children: obj-host."));
             assertFalse("it must not claim containers are nested somewhere. Actual: "
                     + e.getMessage(), e.getMessage().contains("drawn inside a host"));
+            assertFalse("Actual: " + e.getMessage(), e.getMessage().contains("no groups"));
+            assertTrue(e.getSuggestedCorrection().contains("layout-within-group"));
         }
     }
 
@@ -1368,7 +1377,7 @@ public class TopLevelGroupingArrangementTest {
         useModel(emptyTopLevelContainerOnlyFixture());
 
         assertNull("an empty container on the canvas is not nested inside anything",
-                TopLevelGroupTargets.containersAreAllNested(
+                TopLevelGroupTargets.noOwnGroupingContainersRefusal(
                         VIEW_ID, view(), "some tool arranges the view's own containers."));
     }
 
@@ -1377,7 +1386,7 @@ public class TopLevelGroupingArrangementTest {
     public void shouldStillFireTheSharedRefusal_whenTheContainersAreGenuinelyNested() {
         useModel(hostedZonesFixture());
 
-        ModelAccessException refusal = TopLevelGroupTargets.containersAreAllNested(
+        ModelAccessException refusal = TopLevelGroupTargets.noOwnGroupingContainersRefusal(
                 VIEW_ID, view(), "some tool arranges the view's own containers.");
 
         assertNotNull("this view's containers ARE all inside a host", refusal);

@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.response;
 
+import java.util.Locale;
+
 import net.vheerden.archi.mcp.response.FieldSelector.FieldPreset;
 
 /**
@@ -154,16 +156,17 @@ public final class CostEstimator {
 
 	// --- Per-row character estimates for the visual arrays get-view-contents emits ---
 	//
-	// The five widths below were measured on 2026-09-05 over the eight captured reference models
-	// by rebuilding each array's DTO rows from the stored models and serializing them through the
-	// same Jackson configuration the response formatter uses, then dividing by the row count so
-	// each figure includes the comma that joins one row to the next.
+	// The first five widths below were measured on 2026-09-05 over the eight captured reference
+	// models by rebuilding each array's DTO rows from the stored models and serializing them through
+	// the same Jackson configuration the response formatter uses, then dividing by the row count so
+	// each figure includes the comma that joins one row to the next. The view-reference width was
+	// measured the same way on 2026-10-26, over the ten captured models then on hand.
 	//
 	// NONE of them moves with the field preset, and that is a property of the code rather than of
 	// the measurement: the field selector routes the element and relationship arrays through its
-	// preset-aware list filter and puts these five into the response RAW, with no preset argument
-	// at all. A caller narrowing the preset therefore narrows two of the seven arrays and leaves
-	// five untouched, which is why narrowing saves the caller far less than the two preset-aware
+	// preset-aware list filter and puts every visual array into the response RAW, with no preset
+	// argument at all. A caller narrowing the preset therefore narrows two arrays and leaves every
+	// other untouched, which is why narrowing saves the caller far less than the two preset-aware
 	// widths alone would suggest.
 
 	/**
@@ -204,6 +207,11 @@ public final class CostEstimator {
 	 *
 	 * <p>Like the node rows, these are per DRAWN CONNECTION rather than per relationship: the
 	 * relationship array is deduplicated by relationship id and this one is not.</p>
+	 *
+	 * <p>The row has since gained {@code textAlignment} and {@code properties}. The census was re-taken
+	 * over the nine retail-bank models for them: of 1632 ArchiMate connections, none carries a
+	 * non-centred text alignment and none carries a property, and each field is omitted at its
+	 * default, so the measured mean is unchanged by construction.</p>
 	 */
 	static final int VIEW_CONNECTION_CHARS = 640;
 
@@ -223,7 +231,7 @@ public final class CostEstimator {
 	 * about 127 chars of id and bounds around the note's own text, which averages 303 chars over
 	 * the corpus.
 	 *
-	 * <p><strong>This is the least certain of the five and its uncertainty is disclosed rather than
+	 * <p><strong>This is the least certain of the visual widths and its uncertainty is disclosed rather than
 	 * buried.</strong> A note's width is dominated by author-written text, which nothing bounds:
 	 * the corpus's own notes run from 24 to 492 chars of content, so per-model means span 183 to
 	 * 473 -- a 2.6x range no single width holds the accuracy contract across. What makes one figure
@@ -244,8 +252,54 @@ public final class CostEstimator {
 	 * that a later measurement over a corpus that uses images more can replace it knowingly.
 	 * Charging zero would have been the worse error: an image visual is a real row on the wire, and
 	 * an array left out of the estimate is the exact defect the other four terms exist to close.</p>
+	 *
+	 * <p>The row has since gained {@code opacity}, {@code outlineOpacity}, {@code lineWidth} and
+	 * {@code lineStyle}. The census was re-taken over the nine retail-bank models for them: of their
+	 * four image visuals, none holds any of the four away from its default, and each field is omitted at
+	 * its default, so the measured mean is unchanged by construction.</p>
 	 */
 	static final int DIAGRAM_IMAGE_CHARS = 345;
+
+	/**
+	 * One view reference's row: measured 248.7 chars over the 39 references the ten captured models
+	 * hold, rounded to 250. The row is two ids, four integer bounds and whatever styling the
+	 * reference carries; there is no free text in it, because a view reference has no documentation
+	 * and the name it shows is the referenced view's, read when it is drawn.
+	 *
+	 * <p>Per-model means run 174.5 to 363.2, a 2.08x spread, which no single width holds the
+	 * accuracy contract across. The spread is styling: a reference carrying a fill, a font and a
+	 * line style is half again as wide as a bare one. What makes one figure tolerable is the same
+	 * thing that makes the note width tolerable: references are few, 39 rows against thousands of
+	 * node rows, so the term is a small part of any estimate it appears in.</p>
+	 *
+	 * <p>The row has since gained the icon fields ({@code imagePath}, {@code imagePosition},
+	 * {@code showIcon}). The census was re-taken over the same models for them: none of the 39
+	 * references carries an icon, and each field is omitted at its default, so the measured mean is
+	 * unchanged by construction. A reference with an icon is wider by its archive path and the two
+	 * keywords, which a later census over a corpus that uses them can price knowingly.</p>
+	 *
+	 * <p>The row has since gained {@code labelExpression}. Re-counted over the same models: none of
+	 * the 39 references carries one, and the field is omitted when absent, so the measured mean is
+	 * again unchanged by construction.</p>
+	 */
+	static final int VIEW_REFERENCE_CHARS = 250;
+
+	/**
+	 * One row for a connection that is not an ArchiMate one: 410 chars, the width of a row carrying
+	 * three Archi ids, a label, two bendpoints (stored and absolute) and an arrowhead.
+	 *
+	 * <p><strong>Derived, not measured.</strong> None of the captured models holds such a
+	 * connection, so there is no census to take, and the figure is the serialised width of that
+	 * representative row. The row has since gained a label expression, a label offset, a text
+	 * alignment and properties; each is omitted at its default and none is representative, so the
+	 * representative row and its 410 chars are unchanged. A bare row (ids and text position only)
+	 * is 193 chars, and a fully styled one with two bendpoints, a seven-character label expression,
+	 * a label offset, right alignment and one property of ten-character key and value is 718, a
+	 * 3.7x spread. What makes one figure tolerable is that these connections are rarer still than
+	 * notes, so the term is a small part of any estimate it appears in. A later census can replace
+	 * it knowingly.</p>
+	 */
+	static final int NON_ARCHIMATE_CONNECTION_CHARS = 410;
 
 	/**
 	 * The per-response envelope every estimate carries: the {@code result} wrapper, the
@@ -298,10 +352,12 @@ public final class CostEstimator {
 	 *
 	 * <p>The response format is the larger omission of the three and the least visible. The dry-run
 	 * branch returns above the format branches at every one of the six call sites, so one estimate
-	 * is published for {@code json}, {@code graph} and {@code summary} alike -- and for
-	 * {@code tree} as well on {@code get-view-contents}. The estimate is anchored on {@code json},
-	 * so it over-reports the narrower formats rather than under-reporting them, and the error
-	 * changes direction rather than scaling. The envelope is not where that divergence lives: a
+	 * is published for {@code json}, {@code graph} and {@code summary} alike, anchored on
+	 * {@code json}. That over-reports a narrower format rather than under-reporting it, but a
+	 * format is not narrower by construction: on {@code get-view-contents} a graph or tree response
+	 * can be the longer one (its envelope is, and a graph copies some rows whole with a marker
+	 * added), so that tool prices its format's measured excess on top of the json estimate -- see
+	 * {@link #estimateTokensForViewContents(ViewContentsCounts, FieldPreset, ResponseFormat)}. The envelope is not where that divergence lives: a
 	 * graph response differs from a success one by exactly one {@code _meta} key, {@code edgeCount},
 	 * plus the name of the top-level key. What diverges is the payload shape and the per-tool
 	 * suggestions.</p>
@@ -312,6 +368,45 @@ public final class CostEstimator {
 	 * semantics.</p>
 	 */
 	static final int ENVELOPE_OVERHEAD_CHARS = 280;
+
+	/**
+	 * How much longer a {@code get-view-contents} graph envelope is than the json one: 599 against
+	 * 379 chars on an empty view, measured through the served handler. The graph's three
+	 * suggestions, one of them a long note on visual ids, outweigh json's two, and its
+	 * {@code _meta} adds {@code edgeCount}; the {@code graph}, {@code nodes} and {@code edges} keys
+	 * stand in for json's {@code viewId}, {@code viewName} and four empty arrays. Measured at a
+	 * ten-char view id and a one-char name: only json carries those two, so a real view's longer id
+	 * and name narrow the excess, and the figure errs high.
+	 */
+	static final int GRAPH_ENVELOPE_EXCESS_CHARS = 220;
+
+	/**
+	 * How much longer a {@code get-view-contents} tree envelope is than the json one: 748 against 379
+	 * chars on an empty view, rounded up to 370. The tree carries its stats and four suggestions; the
+	 * branch measured is the one with no container, whose suggestions are the longest the tree
+	 * offers, so a view with groups is over-charged slightly rather than under.
+	 */
+	static final int TREE_ENVELOPE_EXCESS_CHARS = 370;
+
+	/**
+	 * {@code ,"type":…,"sourceId":…,"targetId":…}: what a graph edge carries beyond the minimal
+	 * relationship row, since every edge names its type and its ends at every field level. From the
+	 * relationship census (a 21-char type, two 35-char ids): 129 chars, rounded to 130. The standard
+	 * and full rows already carry the three.
+	 */
+	static final int GRAPH_MINIMAL_EDGE_ENDS_CHARS = 130;
+
+	/** {@code ,"_nodeType":"group","isGroup":true}: what a graph group node adds to the group row. */
+	static final int GRAPH_GROUP_MARKER_CHARS = 35;
+
+	/** {@code ,"_nodeType":"note"}: what a graph note node adds to the note row. */
+	static final int GRAPH_NOTE_MARKER_CHARS = 19;
+
+	/** {@code ,"_nodeType":"image"}: what a graph image node adds to the image row. */
+	static final int GRAPH_IMAGE_MARKER_CHARS = 20;
+
+	/** {@code ,"_nodeType":"viewReference"}: what a graph reference node adds to the reference row. */
+	static final int GRAPH_VIEW_REFERENCE_MARKER_CHARS = 28;
 
 	static final int CHARS_PER_TOKEN = 4;
 
@@ -419,9 +514,9 @@ public final class CostEstimator {
 	}
 
 	/**
-	 * How many rows a get-view-contents response carries in each of its seven arrays.
+	 * How many rows a get-view-contents response carries in each of its arrays.
 	 *
-	 * <p>Seven named counts rather than seven positional arguments, and a record rather than the
+	 * <p>Named counts rather than positional arguments, and a record rather than the
 	 * response object itself. The record keeps the architecture boundary above -- this class still
 	 * imports only the field preset, and knows nothing about the response DTO or the handler that
 	 * builds it -- while making a forgotten array a compile error instead of a silent zero. That
@@ -433,8 +528,8 @@ public final class CostEstimator {
 	 * not, so on a view that draws one element three times the node count is three where the
 	 * element count is one.</p>
 	 *
-	 * <p><strong>An array the caller excluded is counted zero.</strong> Five of the seven can be
-	 * dropped by name, and the tool recommends dropping two of them in its own dry-run
+	 * <p><strong>An array the caller excluded is counted zero.</strong> Every array but the element
+	 * and relationship rows can be dropped by name, and the tool recommends dropping two of them in its own dry-run
 	 * suggestions. Passing zero is how the estimate follows that choice without this class having
 	 * to learn what exclusion means.</p>
 	 */
@@ -445,16 +540,18 @@ public final class CostEstimator {
 			int connectionCount,
 			int groupCount,
 			int noteCount,
-			int imageCount) {
+			int imageCount,
+			int viewReferenceCount,
+			int nonArchimateConnectionCount) {
 	}
 
 	/**
 	 * Estimates token count for a get-view-contents dry run.
 	 *
-	 * <p>The response carries seven parallel arrays and this charges for all seven. Only the first
+	 * <p>The response carries parallel arrays and this charges for every one of them. Only the first
 	 * two follow the caller's preset: the field selector runs the element and relationship rows
-	 * through its preset-aware filter and emits the five visual arrays raw. So narrowing the preset
-	 * narrows two terms and leaves five, and on a view whose visual arrays dominate -- which is
+	 * through its preset-aware filter and emits the visual arrays raw. So narrowing the preset
+	 * narrows two terms and leaves the rest, and on a view whose visual arrays dominate -- which is
 	 * most views, since the connection row alone is 2.5x an element row -- the saving a narrower
 	 * preset buys is a small fraction of the whole.</p>
 	 *
@@ -471,15 +568,68 @@ public final class CostEstimator {
 	 * @return estimated token count
 	 */
 	public static int estimateTokensForViewContents(ViewContentsCounts counts, FieldPreset preset) {
+		return charsToTokens(viewContentsChars(counts, preset));
+	}
+
+	/**
+	 * The {@code get-view-contents} estimate for the format the caller asked for: the json estimate
+	 * plus whatever that format carries that the json response does not.
+	 *
+	 * <p>The json response stays the anchor, and the other formats are priced by their measured
+	 * excess over it rather than by widths of their own. A graph response carries a longer envelope
+	 * (three suggestions, one of them long, and an {@code edgeCount} key: {@value
+	 * #GRAPH_ENVELOPE_EXCESS_CHARS} chars more than json's, measured on an empty view) and copies each
+	 * group, note, image and view reference row whole with a {@code _nodeType} marker added, a group's
+	 * with {@code isGroup} as well. Everything else a graph carries is narrower than its json
+	 * counterpart: an element node is the element row plus one id instead of a separate visual row,
+	 * and an edge is the relationship row plus one id instead of a separate connection row, so a view
+	 * of elements and relationships serves a graph well under its json size. A tree response carries
+	 * its stats and four suggestions, {@value #TREE_ENVELOPE_EXCESS_CHARS} chars more than json's on
+	 * the branch with the longest of them, and a node per object narrower than that object's json row.
+	 * A summary is narrower than json on every view measured, the empty one included, and is charged
+	 * nothing extra.</p>
+	 *
+	 * <p>So the estimate is the json one for json and summary, and is never below it for graph or
+	 * tree. One excess is left unmodelled: an element node and a relationship edge keep the visual id
+	 * they join from {@code visualMetadata} and {@code connections} even when the caller excludes
+	 * those arrays, which the json estimate then charges nothing for.</p>
+	 *
+	 * @param counts the rows the response will carry, per array
+	 * @param preset the field preset used for the query
+	 * @param format the response format the caller asked for
+	 * @return estimated token count
+	 */
+	public static int estimateTokensForViewContents(ViewContentsCounts counts, FieldPreset preset,
+			ResponseFormat format) {
+		return charsToTokens(viewContentsChars(counts, preset) + formatExcessChars(counts, format)
+				+ (format == ResponseFormat.GRAPH && preset == FieldPreset.MINIMAL
+						? counts.relationshipCount() * GRAPH_MINIMAL_EDGE_ENDS_CHARS : 0));
+	}
+
+	/** The chars a format's response carries beyond the json one; zero for json and summary. */
+	static int formatExcessChars(ViewContentsCounts counts, ResponseFormat format) {
+		return switch (format) {
+			case GRAPH -> GRAPH_ENVELOPE_EXCESS_CHARS
+					+ (counts.groupCount() * GRAPH_GROUP_MARKER_CHARS)
+					+ (counts.noteCount() * GRAPH_NOTE_MARKER_CHARS)
+					+ (counts.imageCount() * GRAPH_IMAGE_MARKER_CHARS)
+					+ (counts.viewReferenceCount() * GRAPH_VIEW_REFERENCE_MARKER_CHARS);
+			case TREE -> TREE_ENVELOPE_EXCESS_CHARS;
+			case JSON, SUMMARY -> 0;
+		};
+	}
+
+	private static int viewContentsChars(ViewContentsCounts counts, FieldPreset preset) {
 		int elementChars = counts.elementCount() * getCharsPerItem(preset, ItemType.ELEMENT);
 		int relationshipChars = counts.relationshipCount() * getCharsPerItem(preset, ItemType.RELATIONSHIP);
 		int visualChars = (counts.visualNodeCount() * VISUAL_NODE_CHARS)
 				+ (counts.connectionCount() * VIEW_CONNECTION_CHARS)
 				+ (counts.groupCount() * VIEW_GROUP_CHARS)
 				+ (counts.noteCount() * VIEW_NOTE_CHARS)
-				+ (counts.imageCount() * DIAGRAM_IMAGE_CHARS);
-		int totalChars = elementChars + relationshipChars + visualChars + ENVELOPE_OVERHEAD_CHARS;
-		return charsToTokens(totalChars);
+				+ (counts.imageCount() * DIAGRAM_IMAGE_CHARS)
+				+ (counts.viewReferenceCount() * VIEW_REFERENCE_CHARS)
+				+ (counts.nonArchimateConnectionCount() * NON_ARCHIMATE_CONNECTION_CHARS);
+		return elementChars + relationshipChars + visualChars + ENVELOPE_OVERHEAD_CHARS;
 	}
 
 	/**
@@ -619,21 +769,21 @@ public final class CostEstimator {
 	public static String buildRecommendation(int estimatedCount, int estimatedTokens, FieldPreset currentPreset,
 			int minimalTokens) {
 		if (estimatedTokens < THRESHOLD_COMFORTABLE) {
-			return String.format("Small result set (%d items, ~%d tokens at %s). Safe to execute as-is.", estimatedCount,
+			return String.format(Locale.ROOT, "Small result set (%d items, ~%d tokens at %s). Safe to execute as-is.", estimatedCount,
 					estimatedTokens, currentPreset.value());
 		} else if (estimatedTokens <= THRESHOLD_LARGE) {
-			return String.format(
+			return String.format(Locale.ROOT,
 					"Medium result set (%d items, ~%d tokens at %s). Consider using limit parameter for paginated retrieval.",
 					estimatedCount, estimatedTokens, currentPreset.value());
 		} else {
 			int savingsPercent = estimatedTokens > 0 ? (int) ((1.0 - (double) minimalTokens / estimatedTokens) * 100)
 					: 0;
 			if (savingsPercent <= 0) {
-				return String.format(
+				return String.format(Locale.ROOT,
 						"Large result set (%d items, ~%d tokens at %s). Narrowing the field preset would not reduce this; consider adding type/layer filters to narrow results.",
 						estimatedCount, estimatedTokens, currentPreset.value());
 			}
-			return String.format(
+			return String.format(Locale.ROOT,
 					"Large result set (%d items, ~%d tokens at %s). Consider using fields=minimal (~%d tokens, ~%d%% reduction) or adding type/layer filters to narrow results.",
 					estimatedCount, estimatedTokens, currentPreset.value(), minimalTokens, savingsPercent);
 		}

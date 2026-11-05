@@ -49,6 +49,18 @@ import org.eclipse.gef.commands.Command;
  * @param createdAt         timestamp when the proposal was created
  * @param effectDescription server-owned rich human-readable effect text; null when not enriched
  * @param intent            the agent's optional stated intent; null when absent
+ * @param modelId           id of the model active when the proposal was stored — the only model it
+ *                          may be approved into; stamped by {@link MutationDispatcher#storeProposal}.
+ *                          An id, never the {@code IArchimateModel}: a closed-and-reopened model is a
+ *                          new instance carrying the same id, and a request (unlike a frozen command)
+ *                          rebuilds correctly against it
+ * @param modelName         that model's name at stamp time, so a refusal can still name a closed model
+ * @param modelEpoch        the dispatcher's epoch for the model <em>instance</em> it was prepared against,
+ *                          or 0 when none was recorded. Two open copies of one file share an id, so the
+ *                          id alone cannot say which of them the proposal belongs to
+ * @param modelAddressed    whether the call that proposed it named its model (or resolved it as a
+ *                          tool call), rather than following the model active in Archi: an addressed
+ *                          proposal is approved into its own instance whichever model is active
  */
 record PendingProposal(
     String proposalId,
@@ -62,8 +74,80 @@ record PendingProposal(
     String validationSummary,
     Instant createdAt,
     String effectDescription,
-    String intent
+    String intent,
+    String modelId,
+    String modelName,
+    long modelEpoch,
+    boolean modelAddressed
 ) {
+    /** Constructor at the prior canonical arity: following the model active in Archi. */
+    PendingProposal(
+        String proposalId,
+        String tool,
+        String description,
+        Supplier<PreparedMutation<?>> rebuild,
+        StalenessCapture capture,
+        Object entity,
+        Map<String, Object> currentState,
+        Map<String, Object> proposedChanges,
+        String validationSummary,
+        Instant createdAt,
+        String effectDescription,
+        String intent,
+        String modelId,
+        String modelName,
+        long modelEpoch
+    ) {
+        this(proposalId, tool, description, rebuild, capture, entity, currentState,
+                proposedChanges, validationSummary, createdAt, effectDescription, intent,
+                modelId, modelName, modelEpoch, false);
+    }
+
+    /** Constructor at the prior canonical arity: bound to a model id with no recorded instance. */
+    PendingProposal(
+        String proposalId,
+        String tool,
+        String description,
+        Supplier<PreparedMutation<?>> rebuild,
+        StalenessCapture capture,
+        Object entity,
+        Map<String, Object> currentState,
+        Map<String, Object> proposedChanges,
+        String validationSummary,
+        Instant createdAt,
+        String effectDescription,
+        String intent,
+        String modelId,
+        String modelName
+    ) {
+        this(proposalId, tool, description, rebuild, capture, entity, currentState,
+                proposedChanges, validationSummary, createdAt, effectDescription, intent,
+                modelId, modelName, 0L);
+    }
+
+    /**
+     * Back-compat constructor at the prior canonical arity: not yet bound to a model. The
+     * production propose sites build proposals this way; {@link MutationDispatcher#storeProposal}
+     * stamps the model via {@link #withModel}.
+     */
+    PendingProposal(
+        String proposalId,
+        String tool,
+        String description,
+        Supplier<PreparedMutation<?>> rebuild,
+        StalenessCapture capture,
+        Object entity,
+        Map<String, Object> currentState,
+        Map<String, Object> proposedChanges,
+        String validationSummary,
+        Instant createdAt,
+        String effectDescription,
+        String intent
+    ) {
+        this(proposalId, tool, description, rebuild, capture, entity, currentState,
+                proposedChanges, validationSummary, createdAt, effectDescription, intent, null, null);
+    }
+
     /**
      * Returns a copy of this proposal with the given {@code proposalId} (assigned by
      * {@link MutationContext#storeProposal}). Arity-proof — adding a field never breaks the id-stamping
@@ -71,7 +155,29 @@ record PendingProposal(
      */
     PendingProposal withProposalId(String id) {
         return new PendingProposal(id, tool, description, rebuild, capture, entity,
-                currentState, proposedChanges, validationSummary, createdAt, effectDescription, intent);
+                currentState, proposedChanges, validationSummary, createdAt, effectDescription, intent,
+                modelId, modelName, modelEpoch, modelAddressed);
+    }
+
+    /**
+     * Returns a copy of this proposal bound to the given model. Arity-proof for the same reason as
+     * {@link #withProposalId}.
+     */
+    PendingProposal withModel(String boundModelId, String boundModelName) {
+        return withModel(boundModelId, boundModelName, 0L);
+    }
+
+    /** As {@link #withModel(String, String)}, also recording which instance with that id. */
+    PendingProposal withModel(String boundModelId, String boundModelName, long boundModelEpoch) {
+        return withModel(boundModelId, boundModelName, boundModelEpoch, false);
+    }
+
+    /** As {@link #withModel(String, String, long)}, also recording whether the model was addressed. */
+    PendingProposal withModel(String boundModelId, String boundModelName, long boundModelEpoch,
+            boolean addressed) {
+        return new PendingProposal(proposalId, tool, description, rebuild, capture, entity,
+                currentState, proposedChanges, validationSummary, createdAt, effectDescription, intent,
+                boundModelId, boundModelName, boundModelEpoch, addressed);
     }
 
     /**

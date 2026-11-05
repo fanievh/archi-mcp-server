@@ -27,8 +27,10 @@ import net.vheerden.archi.mcp.session.SessionManager;
  *
  * <p>Each tool cascade-removes dependent model objects as appropriate:
  * <ul>
- *   <li>delete-element: cascades relationships + view references</li>
- *   <li>delete-relationship: cascades view connections</li>
+ *   <li>delete-element: cascades its relationships, every relationship attached to one of those,
+ *       and the view references and connections that draw any of them, as Archi's own delete does</li>
+ *   <li>delete-relationship: cascades every relationship attached to it, transitively, and the
+ *       view connections that draw any of them</li>
  *   <li>delete-view: removes visual contents only, NOT model objects</li>
  *   <li>delete-folder: requires force for non-empty, rejects default folders</li>
  * </ul>
@@ -92,8 +94,10 @@ public class DeletionHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("delete-element")
                 .description("[Mutation] Delete an ArchiMate element from the model. "
-                        + "Cascades: removes all relationships involving this element and all "
-                        + "view references (diagram objects) across all views. Returns deletion "
+                        + "Cascades, as Archi's own delete does: removes all relationships involving this "
+                        + "element, any relationship attached to one of those (an association to a "
+                        + "relationship, say), and all view references (diagram objects) and view "
+                        + "connections that draw any of them across all views. Returns deletion "
                         + "confirmation with cascade counts. Warning: highly-connected elements "
                         + "(many relationships or view references) may produce large cascades. "
                         + "Use get-relationships to check dependencies before deleting. "
@@ -167,8 +171,9 @@ public class DeletionHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("delete-relationship")
                 .description("[Mutation] Delete an ArchiMate relationship from the model. "
-                        + "Cascades: removes all view connections representing this relationship "
-                        + "across all views. The connected elements are NOT deleted. Returns "
+                        + "Cascades, as Archi's own delete does: removes any relationship attached to "
+                        + "this one (an association to it, say), and all view connections that draw "
+                        + "any of them across all views. The connected elements are NOT deleted. Returns "
                         + "deletion confirmation with cascade counts. Fully undoable via Ctrl+Z "
                         + "in Archi. Respects approval mode (human-gated in Archi). "
                         + "Related: get-relationships (inspect before deleting), get-element "

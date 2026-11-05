@@ -1,3 +1,10 @@
+---
+relationships:
+  - permitted Composition ApplicationComponent ApplicationComponent
+  - permitted Aggregation ApplicationCollaboration ApplicationComponent
+  - forbidden Assignment * ApplicationComponent
+---
+
 # Recipe Family — Application Integration
 
 Topology archetype: **hub-and-spoke** around an integration component. Apply the invariant build sequence from the index; only the deltas below change.

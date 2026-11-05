@@ -3,6 +3,7 @@ package net.vheerden.archi.mcp.model;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -14,6 +15,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.After;
 import org.junit.Before;
@@ -221,7 +224,8 @@ public class BoundedImageDownloadTest {
             download(url, CAP, DEADLINE);
             fail("expected ModelAccessException for a non-200 status");
         } catch (ModelAccessException e) {
-            assertEquals(ErrorCode.INTERNAL_ERROR, e.getErrorCode());
+            assertEquals("the remote's status is the URL's problem, not the server's",
+                    ErrorCode.INVALID_PARAMETER, e.getErrorCode());
             assertTrue("message must report the HTTP status", e.getMessage().contains("404"));
         }
     }
@@ -237,8 +241,68 @@ public class BoundedImageDownloadTest {
             download(url, CAP, DEADLINE);
             fail("expected ModelAccessException for an empty body");
         } catch (ModelAccessException e) {
-            assertEquals(ErrorCode.INTERNAL_ERROR, e.getErrorCode());
+            assertEquals("an empty body is the URL's problem, not the server's",
+                    ErrorCode.INVALID_PARAMETER, e.getErrorCode());
             assertTrue("message must flag the empty body", e.getMessage().contains("Empty response body"));
+        }
+    }
+
+    // ---- a remote that never answers is the URL's problem, answered through the fetch phase ----
+
+    /**
+     * A server that accepts the request and never answers. The per-request timeout fires on the
+     * client, and the fetch phase answers it as a fault of the URL: the remedy (another URL, or a
+     * local file) is in the caller's input. The cause travels so the stack is still at DEBUG.
+     */
+    @Test
+    public void shouldAnswerInvalidParameter_whenTheRemoteNeverAnswers() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        String url = register(exchange -> {
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            exchange.close();
+        });
+
+        try (HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build()) {
+            try {
+                ImageDownloadFailure.fetch(url, () -> ArchiModelAccessorImpl.downloadBoundedBytes(
+                        client, get(url, Duration.ofMillis(300)), CAP, DEADLINE, url));
+            } finally {
+                // Released before the client closes, which may wait on the held exchange.
+                release.countDown();
+            }
+            fail("expected the request timeout to fire");
+        } catch (ModelAccessException e) {
+            assertEquals("a remote that never answers is the URL's problem, not the server's",
+                    ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+            assertTrue("the message is the timeout one it always was: " + e.getMessage(),
+                    e.getMessage().startsWith("Timeout downloading image from URL: " + url));
+            assertTrue("the timeout is kept as the cause",
+                    e.getCause() instanceof HttpTimeoutException);
+            assertNotNull(e.getSuggestedCorrection());
+        } finally {
+            release.countDown();
+        }
+    }
+
+    /** A structured refusal raised inside the fetch (here, the oversize cap) is not re-mapped. */
+    @Test
+    public void shouldPassARefusalThrough_whenTheFetchRaisesOne() {
+        ModelAccessException oversize = new ModelAccessException(
+                "Downloaded image exceeds 1MB limit", ErrorCode.INVALID_PARAMETER);
+
+        try {
+            ImageDownloadFailure.fetch("http://127.0.0.1/x.png", () -> {
+                throw oversize;
+            });
+            fail("expected the refusal to propagate");
+        } catch (ModelAccessException e) {
+            assertSame(oversize, e);
         }
     }
 }

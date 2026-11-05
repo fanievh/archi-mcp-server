@@ -5,7 +5,7 @@
 # Pre-existing defects surfaced by the harness's first fresh-compile headless run — NOT new
 # regressions. A NEW failure in any class NOT listed here still turns the build red.
 #
-# This list must shrink to empty: each entry needs a backlog row to fix-and-readmit. When a class
+# This list must shrink to empty: each entry needs a tracked fix to readmit it. When a class
 # is fixed, delete its line here and it rejoins the gating set automatically.
 #
 # Discovered 2026-06-13. All three are routing-quality "pin" tests OUTSIDE the legacy

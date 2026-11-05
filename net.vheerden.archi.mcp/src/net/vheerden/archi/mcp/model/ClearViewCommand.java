@@ -3,14 +3,21 @@ package net.vheerden.archi.mcp.model;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
 import org.eclipse.gef.commands.Command;
 
+import com.archimatetool.model.IArchimateDiagramModel;
+import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IDiagramModelContainer;
+
+import net.vheerden.archi.mcp.response.ErrorCode;
+import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
 
 /**
  * GEF Command that removes all children and connections from a view.
@@ -42,6 +49,50 @@ public class ClearViewCommand extends Command {
     public ClearViewCommand(IDiagramModelContainer view) {
         this.view = Objects.requireNonNull(view, "view must not be null");
         setLabel("Clear view");
+    }
+
+    /**
+     * Prepares a clear-view mutation without dispatching: finds the view, counts what the clear will
+     * remove for the response, and builds the command. Shared by the single tool and the
+     * {@code bulk-mutate} operation.
+     *
+     * <p>Both read the view as the work staged ahead of this call will leave it: a view an earlier
+     * operation in the call created, or the open batch queued, resolves, and the counts are of what will
+     * be on the view when the clear runs. The command itself still removes whatever is there when it
+     * runs, so it needs no staged answer.</p>
+     *
+     * @param staged       the work staged ahead of this call
+     * @param createdViews the views created earlier in this bulk call, or null outside one
+     * @throws ModelAccessException {@code VIEW_NOT_FOUND} when no view has {@code viewId}
+     */
+    static PreparedMutation<ClearViewResultDto> prepare(StagedViewState staged, IArchimateModel model,
+            String viewId, Map<Integer, IArchimateDiagramModel> createdViews) {
+        IArchimateDiagramModel view = staged.viewOrNull(model, viewId, createdViews);
+        if (view == null) {
+            throw new ModelAccessException(
+                    "View not found: " + CallerText.bare(viewId),
+                    ErrorCode.VIEW_NOT_FOUND,
+                    null,
+                    "Use get-views to find valid view IDs",
+                    null);
+        }
+
+        // Count top-level objects (groups are removed as single units; nested
+        // elements cascade with their parent). Connection count below is recursive
+        // because ClearViewCommand explicitly disconnects nested connections.
+        List<IDiagramModelObject> topLevel = staged.topLevelOn(view);
+        int archimateCount = 0;
+        for (IDiagramModelObject child : topLevel) {
+            if (child instanceof IDiagramModelArchimateObject) {
+                archimateCount++;
+            }
+        }
+        int nonArchimateCount = topLevel.size() - archimateCount;
+
+        ClearViewResultDto dto = new ClearViewResultDto(
+                viewId, view.getName(), topLevel.size(), staged.connectionsOn(view).size(),
+                nonArchimateCount);
+        return new PreparedMutation<>(new ClearViewCommand(view), dto, viewId);
     }
 
     @Override

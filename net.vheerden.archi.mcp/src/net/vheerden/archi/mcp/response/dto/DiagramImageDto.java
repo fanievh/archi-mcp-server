@@ -26,7 +26,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record DiagramImageDto(
     String viewObjectId,        // EMF object ID of the image visual
-    String imagePath,            // opaque archive path minted by Archi — pass back verbatim, never construct or parse; non-null in a populated DTO
+    String imagePath,            // opaque archive path minted by Archi — pass back verbatim, never construct or parse; null when the image shows no picture (a stored empty path included)
     int x,
     int y,
     int width,
@@ -43,8 +43,21 @@ public record DiagramImageDto(
      * standalone image is a RATED {@code connectionPassThroughs}, not the informational note
      * metric: an image visual is an ordinary layout node to the assessor.</p>
      */
-    java.util.List<StructuredWarningDto> structuredWarnings
+    java.util.List<StructuredWarningDto> structuredWarnings,
+    Integer opacity,             // 0-255; null at Archi's default (255)
+    Integer outlineOpacity,      // 0-255; null at Archi's default (255)
+    Integer lineWidth,           // null at Archi's default (1)
+    String lineStyle             // dashed / dotted / none; null when solid
 ) {
+
+    /** The shape before the four styling fields an image takes: each reads as at its default. */
+    public DiagramImageDto(String viewObjectId, String imagePath, int x, int y,
+            int width, int height, String parentViewObjectId,
+            String borderColor, String documentation,
+            java.util.List<StructuredWarningDto> structuredWarnings) {
+        this(viewObjectId, imagePath, x, y, width, height, parentViewObjectId,
+                borderColor, documentation, structuredWarnings, null, null, null, null);
+    }
 
     /** The read-path shape: a view's stored image visual carries no placement-time disclosure. */
     public DiagramImageDto(String viewObjectId, String imagePath, int x, int y,

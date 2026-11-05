@@ -45,12 +45,6 @@ public class RequestCharsetValidationHandlerTest {
         transportConfig.stopServer();
     }
 
-    private static int freePort() throws IOException {
-        try (java.net.ServerSocket probe = new java.net.ServerSocket(0)) {
-            return probe.getLocalPort();
-        }
-    }
-
     // An enforcing guard. The wrapped Handler is null because the pure-unit tests exercise only
     // isAcceptableCharset(...) / isEnforcing() and never call handle() — safe for that purpose only.
     private RequestCharsetValidationHandler enforcingGuard() {
@@ -142,15 +136,15 @@ public class RequestCharsetValidationHandlerTest {
 
     @Test
     public void shouldReturn415_whenNonUtf8CharsetOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         assertEquals(415, rawPost(port, "/mcp", "application/json; charset=iso-8859-1").status);
     }
 
     @Test
     public void shouldReachServlet_whenUtf8CharsetOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         // The transport servlet may answer 200/400/405 for this POST — the point is it is NOT 415,
         // i.e. the request passed the charset guard and reached the servlet. Asserting NOT 500 too
         // distinguishes a genuine servlet response from a server crash that would also be "not 415".
@@ -161,8 +155,8 @@ public class RequestCharsetValidationHandlerTest {
 
     @Test
     public void shouldReachServlet_whenNoCharsetOnMcp() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         int status = rawPost(port, "/mcp", "application/json").status;
         assertNotEquals("must not be rejected by the charset guard", 415, status);
         assertNotEquals("must reach the servlet, not crash the server", 500, status);
@@ -170,8 +164,8 @@ public class RequestCharsetValidationHandlerTest {
 
     @Test
     public void shouldReturnJsonRpcEnvelope_whenRejected() throws Exception {
-        int port = freePort();
-        transportConfig.startServer(port, LOOPBACK);
+        transportConfig.startServer(0, LOOPBACK);
+        int port = transportConfig.getPort();
         Response resp = rawPost(port, "/mcp", "application/json; charset=iso-8859-1");
 
         assertEquals(415, resp.status);

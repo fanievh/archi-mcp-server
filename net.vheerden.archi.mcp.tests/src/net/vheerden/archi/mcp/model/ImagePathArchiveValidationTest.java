@@ -42,7 +42,7 @@ import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
 import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
 
 /**
- * Pin tests — wires {@link ArchiModelAccessorImpl#validateImagePathExists}
+ * Pin tests — wires {@link ImageHelper#requireInArchive}
  * (added for {@code add-image-to-view} / {@code create-specialization} /
  * {@code update-specialization}) into the four pre-existing prepare paths
  * ({@code prepareAddToView}, {@code prepareAddToViewDirect},
@@ -121,6 +121,7 @@ public class ImagePathArchiveValidationTest {
                 10, 10, 120, 60, false, null, null, imageParams);
 
         assertNotNull("Result should be non-null", result);
+        assertExecutedNotProposed(result);
         assertEquals("Element placed on view",
                 1, targetView.getChildren().size());
         IDiagramModelArchimateObject placed =
@@ -135,12 +136,13 @@ public class ImagePathArchiveValidationTest {
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null, null);
+        assertExecutedNotProposed(addResult);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
 
         ImageParams imageParams = new ImageParams(knownImagePath, null, null);
-        accessor.updateViewObject(
+        assertExecutedNotProposed(accessor.updateViewObject(
                 "test-session", viewObjectId,
-                null, null, null, null, null, null, imageParams, null);
+                null, null, null, null, null, null, imageParams, null));
 
         IDiagramModelArchimateObject placed =
                 (IDiagramModelArchimateObject) targetView.getChildren().get(0);
@@ -162,16 +164,17 @@ public class ImagePathArchiveValidationTest {
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null,
                 new ImageParams(knownImagePath, null, null));
+        assertExecutedNotProposed(addResult);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
         IDiagramModelArchimateObject placed =
                 (IDiagramModelArchimateObject) targetView.getChildren().get(0);
         assertEquals("pre-condition: imagePath set",
                 knownImagePath, placed.getImagePath());
 
-        accessor.updateViewObject(
+        assertExecutedNotProposed(accessor.updateViewObject(
                 "test-session", viewObjectId,
                 null, null, null, null, null, null,
-                new ImageParams("", null, null), null);
+                new ImageParams("", null, null), null));
 
         assertNull("Empty-string clears imagePath via setImagePath(null)",
                 placed.getImagePath());
@@ -202,6 +205,7 @@ public class ImagePathArchiveValidationTest {
         MutationResult<AddToViewResultDto> addResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 10, 10, 120, 60, false, null, null, null);
+        assertExecutedNotProposed(addResult);
         String viewObjectId = addResult.entity().viewObject().viewObjectId();
         IDiagramModelArchimateObject placed =
                 (IDiagramModelArchimateObject) targetView.getChildren().get(0);
@@ -241,6 +245,7 @@ public class ImagePathArchiveValidationTest {
         MutationResult<AddToViewResultDto> seedResult = accessor.addToView(
                 "test-session", targetView.getId(), actor.getId(),
                 200, 200, 120, 60, false, null, null, null);
+        assertExecutedNotProposed(seedResult);
         String viewObjectId = seedResult.entity().viewObject().viewObjectId();
         ModelAccessException fromUpdateViewObject = captureReject(
                 () -> accessor.updateViewObject(
@@ -289,6 +294,17 @@ public class ImagePathArchiveValidationTest {
         assertEquals("add-image-to-view", pending.tool());
         assertEquals("Add image visual to view 'Target': " + knownImagePath,
                 pending.description());
+    }
+
+    /**
+     * Fails with the cause when a write the test needs on the model came back as an approval
+     * proposal or a batch entry instead, rather than on a later empty-view lookup.
+     */
+    private static void assertExecutedNotProposed(MutationResult<?> result) {
+        assertNull("write was proposed instead of executed (approval mode on): "
+                + result.proposalContext(), result.proposalContext());
+        assertNull("write was queued in a batch instead of executed: entry "
+                + result.batchSequenceNumber(), result.batchSequenceNumber());
     }
 
     private ModelAccessException captureReject(Runnable action) {
@@ -344,6 +360,10 @@ public class ImagePathArchiveValidationTest {
                 }
             }
         };
+        // MutationDispatcher's default approvalModeProvider is fail-safe () -> true (approval ON),
+        // which turns every write into a proposal. Mirror the GUI-attached default (approval OFF)
+        // so writes execute; the approval-mode test overrides this with () -> true explicitly.
+        testDispatcher.setApprovalModeProvider(() -> false);
         return new ArchiModelAccessorImpl(stubModelManager, testDispatcher);
     }
 

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.PriorityQueue;
 
@@ -383,7 +384,7 @@ public class VisibilityGraphRouter {
             CorridorOccupancyTracker tracker,
             VisNode source, VisNode target) {
         CostBreakdown cb = evaluatePathCost(graph, path, tracker);
-        logger.debug(String.format(
+        logger.debug(String.format(Locale.ROOT,
                 "routing-cost diagnostic: findPath src=(%d,%d) tgt=(%d,%d) bp=%d"
                         + " runtime-cost {base=%.1f, occExtra=%.1f, bend=%.1f,"
                         + " direction=%.1f, congestion=%.1f, clearance=%.1f,"

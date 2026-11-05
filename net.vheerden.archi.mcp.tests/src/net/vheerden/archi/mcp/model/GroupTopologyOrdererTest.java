@@ -167,6 +167,23 @@ public class GroupTopologyOrdererTest {
                 manhattan == 1);
     }
 
+    /**
+     * A column count past the group count lays the groups out in one row, as the count itself would. The grid
+     * used to be sized by the caller's count: at Integer.MAX_VALUE that is an array past the VM limit.
+     */
+    @Test(timeout = 2000)
+    public void orderGrid_moreColumnsThanGroups_shouldOrderAsOneRowOfThem() {
+        List<String> groups = List.of("A", "B", "C");
+        Map<String, Map<String, Integer>> weights = new HashMap<>();
+        weights.put("A", Map.of("C", 10));
+        weights.put("B", Map.of("C", 3));
+
+        List<String> oneRow = orderer.orderGrid(groups, weights, 3);
+
+        assertEquals(oneRow, orderer.orderGrid(groups, weights, 4));
+        assertEquals(oneRow, orderer.orderGrid(groups, weights, Integer.MAX_VALUE));
+    }
+
     @Test
     public void orderGrid_noConnections_shouldReturnInputOrder() {
         List<String> groups = List.of("A", "B", "C", "D");

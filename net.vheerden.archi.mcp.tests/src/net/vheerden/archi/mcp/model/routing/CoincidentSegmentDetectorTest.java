@@ -992,6 +992,17 @@ public class CoincidentSegmentDetectorTest {
 
     // ---- Fixture helper for perimeter-anchored coincidence ----
 
+    /**
+     * The terminal face margin, read from production. Every fixture below is built around
+     * corridors at round coordinates with a face line landing exactly on them, and the rects were
+     * originally sized by hand to a margin of 1 ("width 49 → RIGHT face line at x=50"). Sizing
+     * them from the constant instead keeps every corridor coordinate, every terminal bendpoint and
+     * every offset expectation in this class byte-identical when the margin moves — only the rect
+     * edge behind the face line shifts, and no test here is about where that edge is. The margin's
+     * own value is pinned in {@code EdgeAttachmentCalculatorTest}.
+     */
+    private static final int MARGIN = EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN;
+
     private static class Fixture {
         List<String> connectionIds;
         List<List<AbsoluteBendpointDto>> paths;
@@ -1009,17 +1020,17 @@ public class CoincidentSegmentDetectorTest {
      */
     private static Fixture buildPerimeterAnchoredCoincidenceFixture() {
         Fixture f = new Fixture();
-        // Hub target on RIGHT side of the canvas; LEFT face line at x=199.
-        RoutingRect target = new RoutingRect(200, 0, 100, 100, "target-hub");
+        // Hub target on RIGHT side of the canvas; LEFT face line at x=199 at any margin.
+        RoutingRect target = new RoutingRect(199 + MARGIN, 0, 100, 100, "target-hub");
         int[] targetCenter = {target.centerX(), target.centerY()};
         // Source A: RIGHT face line at x=50, y∈[25, 75].
-        // TerminalAnchoring.lineCoordinate = rect.x + width + 1 = 0 + 49 + 1.
-        RoutingRect sourceA = new RoutingRect(0, 25, 49, 50, "source-A");
+        // TerminalAnchoring.lineCoordinate = rect.x + width + MARGIN = 0 + (50 - MARGIN) + MARGIN.
+        RoutingRect sourceA = new RoutingRect(0, 25, 50 - MARGIN, 50, "source-A");
         int[] sourceACenter = {sourceA.centerX(), sourceA.centerY()};
         // Source B: visually disjoint from sourceA, placed below at y∈[100, 120].
         // (Both rects have RIGHT face line at x=50, which is exactly where
         // pathA/pathB put bp[0] — both terminals arrive ON their faceline.)
-        RoutingRect sourceB = new RoutingRect(0, 100, 49, 20, "source-B");
+        RoutingRect sourceB = new RoutingRect(0, 100, 50 - MARGIN, 20, "source-B");
         int[] sourceBCenter = {sourceB.centerX(), sourceB.centerY()};
 
         // Conn A: source A → target LEFT face slot y=80.
@@ -1074,17 +1085,15 @@ public class CoincidentSegmentDetectorTest {
      */
     private static Fixture buildThreeSegmentCorridorFixture() {
         Fixture f = new Fixture();
-        RoutingRect target = new RoutingRect(200, 0, 100, 200, "target-hub");
+        RoutingRect target = new RoutingRect(199 + MARGIN, 0, 100, 200, "target-hub");
         int[] targetCenter = {target.centerX(), target.centerY()};
 
-        // Sources stacked vertically (tangent edges) below the hub. Each
-        // source's RIGHT face line is at x=49 (rect.x + width); pathX bp[0].x=50
-        // tracks the +1 face-line tolerance the V4 oracle exhibits.
-        // sourceA y∈[100,140] center (24,120); sourceB y∈[140,180] center (24,160);
-        // sourceC y∈[180,220] center (24,200).
-        RoutingRect sourceA = new RoutingRect(0, 100, 49, 40, "source-A");
-        RoutingRect sourceB = new RoutingRect(0, 140, 49, 40, "source-B");
-        RoutingRect sourceC = new RoutingRect(0, 180, 49, 40, "source-C");
+        // Sources stacked vertically (tangent edges) below the hub, each sized so its RIGHT face
+        // line lands on x=50 — exactly where pathA/pathB/pathC put bp[0].
+        // sourceA y∈[100,140]; sourceB y∈[140,180]; sourceC y∈[180,220].
+        RoutingRect sourceA = new RoutingRect(0, 100, 50 - MARGIN, 40, "source-A");
+        RoutingRect sourceB = new RoutingRect(0, 140, 50 - MARGIN, 40, "source-B");
+        RoutingRect sourceC = new RoutingRect(0, 180, 50 - MARGIN, 40, "source-C");
         int[] sourceACenter = {sourceA.centerX(), sourceA.centerY()};
         int[] sourceBCenter = {sourceB.centerX(), sourceB.centerY()};
         int[] sourceCCenter = {sourceC.centerX(), sourceC.centerY()};
@@ -1146,13 +1155,13 @@ public class CoincidentSegmentDetectorTest {
      */
     private static Fixture buildBridgeWithTwoCorridorsFixture() {
         Fixture f = new Fixture();
-        RoutingRect hub = new RoutingRect(200, 0, 100, 200, "hub-target");
+        RoutingRect hub = new RoutingRect(199 + MARGIN, 0, 100, 200, "hub-target");
         int[] hubCenter = {hub.centerX(), hub.centerY()};
 
-        // Width 49 → RIGHT face line at x=50 (same convention as the canonical
-        // fixture: TerminalAnchoring.lineCoordinate = rect.x + width + 1).
-        RoutingRect prodA = new RoutingRect(0, 0, 49, 40, "prod-A");
-        RoutingRect prodB = new RoutingRect(0, 80, 49, 40, "prod-B");
+        // Sized so the RIGHT face line lands at x=50 (same convention as the canonical
+        // fixture: TerminalAnchoring.lineCoordinate = rect.x + width + MARGIN).
+        RoutingRect prodA = new RoutingRect(0, 0, 50 - MARGIN, 40, "prod-A");
+        RoutingRect prodB = new RoutingRect(0, 80, 50 - MARGIN, 40, "prod-B");
         int[] prodACenter = {prodA.centerX(), prodA.centerY()};
         int[] prodBCenter = {prodB.centerX(), prodB.centerY()};
 
@@ -1429,13 +1438,13 @@ public class CoincidentSegmentDetectorTest {
      */
     private static Fixture buildSourceTouchingCorridorFixture(boolean sourceOnBottomFace) {
         Fixture f = new Fixture();
-        // RIGHT face line = 0 + 49 + 1 = 50; BOTTOM face line = 0 + 49 + 1 = 50.
+        // Square, sized so RIGHT face line == BOTTOM face line == 50 at any margin.
         // One rect serves both readings, so the two arms differ only in the
         // anchoring handed to the wrap.
-        RoutingRect sourceA = new RoutingRect(0, 0, 49, 49, "source-A");
+        RoutingRect sourceA = new RoutingRect(0, 0, 50 - MARGIN, 50 - MARGIN, "source-A");
         RoutingRect targetA = new RoutingRect(280, 400, 100, 60, "target-A");
-        RoutingRect sourceB = new RoutingRect(100, 150, 49, 60, "source-B");
-        RoutingRect targetB = new RoutingRect(451, 120, 80, 60, "target-B");
+        RoutingRect sourceB = new RoutingRect(100, 150, 50 - MARGIN, 60, "source-B");
+        RoutingRect targetB = new RoutingRect(450 + MARGIN, 120, 80, 60, "target-B");
 
         // Conn A: exits its source into the y=50 corridor. Segment 0 is
         // bp[0]->bp[1], so bpIdx1 == 0 and the wrap's terminal gate opens.
@@ -1462,8 +1471,9 @@ public class CoincidentSegmentDetectorTest {
         f.targetCenters = List.of(centerTA, centerTB);
         f.obstacles = List.of(sourceA, targetA, sourceB, targetB);
 
-        // Conn A's target arrives OFF its TOP face line (400 - 1 = 399, bp is
-        // at y=400) — the untouched end whose veto this policy removes.
+        // Conn A's target arrives OFF its TOP face line (the bp sits at y=400, on target-A's own
+        // top edge, which is inside the face line at any margin) — the untouched end whose veto
+        // this policy removes.
         TerminalAnchoring sourceFaceA = new TerminalAnchoring(sourceOnBottomFace
                 ? EdgeAttachmentCalculator.Face.BOTTOM
                 : EdgeAttachmentCalculator.Face.RIGHT);
@@ -1503,19 +1513,24 @@ public class CoincidentSegmentDetectorTest {
      */
     private static Fixture buildTargetTouchingCorridorFixture() {
         Fixture f = new Fixture();
-        RoutingRect sourceD = new RoutingRect(400, 700, 49, 60, "source-D");
+        RoutingRect sourceD = new RoutingRect(400, 700, 50 - MARGIN, 60, "source-D");
+        // target-D keeps its literal height: its BOTTOM EDGE (y=479) is the ceiling that bounds
+        // the corridor's proportional spread, so it is load-bearing geometry rather than a face
+        // line. Conn D's terminal below derives from its face line instead.
         RoutingRect targetD = new RoutingRect(160, 420, 80, 59, "target-D");
-        // RIGHT face line = 100 + 54 + 1 = 155, but conn C's bp[0].x is 150 —
-        // the source arrives OFF its faceline, and is the untouched end here.
-        RoutingRect sourceC = new RoutingRect(100, 700, 54, 60, "source-C");
-        RoutingRect targetC = new RoutingRect(500, 570, 80, 60, "target-C");
+        // RIGHT face line = 155, but conn C's bp[0].x is 150 — the source arrives OFF its
+        // faceline, and is the untouched end here.
+        RoutingRect sourceC = new RoutingRect(100, 700, 55 - MARGIN, 60, "source-C");
+        RoutingRect targetC = new RoutingRect(499 + MARGIN, 570, 80, 60, "target-C");
 
         // Conn D: crosses the y=600 corridor mid-path. Segment 1 is interior.
         List<AbsoluteBendpointDto> pathD = mutableList(
                 new AbsoluteBendpointDto(450, 700),
                 new AbsoluteBendpointDto(450, 600),
                 new AbsoluteBendpointDto(200, 600),
-                new AbsoluteBendpointDto(200, 480));
+                new AbsoluteBendpointDto(200,
+                        EdgeAttachmentCalculator.faceLineCoordinate(
+                                targetD, EdgeAttachmentCalculator.Face.BOTTOM)));
         // Conn C: enters its target from the y=600 corridor. Segment 1 is
         // bp[1]->bp[2], so bpIdx2 == path.size() - 1 and the terminal gate opens.
         List<AbsoluteBendpointDto> pathC = mutableList(
@@ -1551,7 +1566,7 @@ public class CoincidentSegmentDetectorTest {
 
     /**
      * As {@link #buildSourceTouchingCorridorFixture}, but conn A's source
-     * terminal arrives OFF its RIGHT face line (50) at x=60. Nothing can flip;
+     * terminal arrives OFF its RIGHT face line (x=50) at x=60. Nothing can flip;
      * only the pin decides.
      */
     private static Fixture buildOffFaceSourceCorridorFixture() {

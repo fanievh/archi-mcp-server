@@ -354,11 +354,13 @@ public class ParentFitAnchoredChildContainmentTest {
 
         String tree = describe(dispatched.get(0));
         assertEquals("with no anchored children the command tree must be the cascade's own shape: "
-                        + "the update, wrapped once with the two group resizes\n" + tree,
-                "NonNotifyingCompoundCommand|Update view object bounds with parent-group resize\n"
-                        + "  UpdateViewObjectCommand|Update view object\n"
-                        + "  UpdateViewObjectCommand|Update view object\n"
-                        + "  UpdateViewObjectCommand|Update view object\n",
+                        + "the update, wrapped once with the two group resizes, under the guard that declines "
+                        + "it when the object is gone\n" + tree,
+                "RequireAttachedContainerCommand|Update view object bounds with parent-group resize\n"
+                        + "  NonNotifyingCompoundCommand|Update view object bounds with parent-group resize\n"
+                        + "    UpdateViewObjectCommand|Update view object\n"
+                        + "    UpdateViewObjectCommand|Update view object\n"
+                        + "    UpdateViewObjectCommand|Update view object\n",
                 tree);
 
         String body = new ObjectMapper().writeValueAsString(dto);

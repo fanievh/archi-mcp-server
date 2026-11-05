@@ -125,7 +125,7 @@ export LC_ALL=C LANG=C
 #                   collateral. The intermediate 18880 is a SEQUENCING ERROR, recorded rather than
 #                   hidden: the fold's own commit clicked to the bare post-fold count, which the
 #                   commits it exists to pay for then exceed. Click to the figure the work LANDS
-#                   at, as every entry above does; the pawl only ever moves down across a story.)
+#                   at, as every entry above does; the pawl only ever moves down across a change.)
 #   18919 -> 18913 (adversarial review: the styled-connection builder the two auto-connect arms
 #                   shared was folded away, 18 lines, and 12 spent guarding the connection
 #                   endpoints that fold sits on plus clone-view's target folder. This click IS a
@@ -592,8 +592,200 @@ export LC_ALL=C LANG=C
 #                   refusals in the remove prepare, whose shared remedy names the fields a caller
 #                   reads a visual id out of and had five places to drift in. Clicked to what the
 #                   work lands at.)
-CEILING_LOC=17650
-CEILING_PUB=88
+#                   17650 -> 17649 (per-call model addressing: every call now resolves the model it
+#                   acts on through a collaborator, ModelSelection, so the 100 callers of the model
+#                   chokepoint changed no signature and the facade's own resolution is one line. The
+#                   global version counter became per-model counters in ModelVersions, and its 51
+#                   inline increments became one helper reading the call's model. A model close now
+#                   tells listeners which instance closed; that notification and the existing ones
+#                   share one guarded loop. The two constructors folded into one. Clicked to what the
+#                   work lands at.)
+#                   17649 -> 17627 (URL image import errors decided by phase: a failure of the fetch
+#                   is the URL's and answers INVALID_PARAMETER, a failure after it is the server's
+#                   and stays INTERNAL_ERROR. The fetch's error arms -- status, empty body, timeout,
+#                   interruption, transport -- moved into ImageDownloadFailure, where they are
+#                   exercised headlessly, and the accessor now wraps the whole fetch, client and
+#                   request included, in one call instead of catching each failure type itself. A
+#                   URL with no host is refused with the other malformed URLs. Clicked to what the
+#                   work lands at.)
+#                   17627 -> 17626 (a self-connection gets Archi's default loop on creation and is
+#                   taken out of auto-route: the loop rule and the routing split live in their own
+#                   class, and both add-connection prepares call it in place of the absolute-bendpoint
+#                   conversion they each inlined. Clicked to what the work lands at.)
+#                   17626 -> 17625 (a self-connection's loop is decided when the compound runs, by
+#                   a command in the routing split's own class; the accessor's two router-switch
+#                   conditions ask that split whether the call writes anything. Clicked to what
+#                   the work lands at.)
+#                   17625 -> 17624 (auto-route inside a batch refuses once the batch has queued a
+#                   change to what it routes the view against: the predicate and its message live
+#                   in their own class, and the one call to it shares a line with the step comment
+#                   it guards; a terminals-only call with nothing to rectify no longer queues an
+#                   empty compound. Clicked to what the work lands at.)
+#                   17624 -> 17359 (a view clone copies its source when the compound runs, so an
+#                   operation queued ahead of it counts: the copy helpers moved out with the
+#                   command that now calls them, and the prepare keeps only the source lookup, the
+#                   empty view, its folder and the compound. Clicked to what the work lands at.)
+#                   17359 -> 17356 (a clone may copy a view the same batch creates: the source is
+#                   looked up among the batch's queued views first, and the folder a clone given
+#                   none goes in is chosen by the contents command, which also reads the source
+#                   again if the batch commits between the lookups. Clicked to what the work lands
+#                   at.)
+#                   17356 -> 17286 (remove-from-view removes every view object and connection, as
+#                   Archi's own delete does: the group and note arms folded into one arm for any
+#                   view object, connection membership became a containment check, and the cascade
+#                   walk, the removed-type token and the approval card's subject moved out to their
+#                   own class with the two label resolvers they replace. Clicked to what the work
+#                   lands at.)
+#                   17286 -> 17086 (the walk get-view-contents makes over a view, its objects and the
+#                   connections drawn from them, moved out to its own class unchanged, so the read
+#                   can grow there. Clicked to what the work lands at.)
+#                   17086 -> 17031 (the view-contents DTO assembly moved into that class, and the
+#                   reference row add-view-reference-to-view answers with is now built by the one
+#                   mapper the read uses too. Clicked to what the work lands at.)
+#                   17031 -> 17030 (update-view-connection's per-operation read in bulk-mutate hands
+#                   the decision to clear the route to the one rule the single tool also calls,
+#                   which reads the keys given rather than what was parsed. Clicked to what the
+#                   work lands at.)
+#                   17030 -> 17013 (bulk-mutate's labelPosition parser, a copy of the handler's that
+#                   threw an exception the per-operation catch did not take, gave way to the one
+#                   reader both connection tools now call on both paths. Clicked to what the work
+#                   lands at.)
+#                   17013 -> 16999 (best-of-K scores each routing candidate with the label state it
+#                   ships with; the scorer's projection inputs are built by a helper outside this
+#                   file and the scorer's comment shrank to a pointer at it. Clicked to what the
+#                   work lands at.)
+#                   16999 -> 16996 (the routing batch reads each connection's label text through a
+#                   helper outside this file, which blanks a label Archi will not draw, using the
+#                   visibility the caller's open batch will commit. Clicked to what the work lands
+#                   at.)
+#                   16996 -> 16992 (auto-route-connections gains a labels-only mode whose checks,
+#                   pass and response live outside this file; terminals-only and labels-only share
+#                   one proposal/dispatch tail here. Clicked to what the work lands at.)
+#                   16992 -> 16990 (merge-elements lives in MergeElementsOperations and costs this
+#                   file one field line and one forward; the space was paid for by moving the
+#                   one-argument assess-layout and the four-argument bulk overloads to interface
+#                   defaults, which delegate exactly as the overrides did. Clicked to what the
+#                   work lands at.)
+#   CEILING_PUB 88 -> 87 (the same payment: two public overrides left the facade, the
+#                   merge forward is one public method in.)
+#                   16990 -> 16988 (change-element-type lives in ChangeElementTypeOperations and
+#                   costs this file one field line, one forward and two imports; the space was
+#                   paid for by moving the nine-argument auto-route overload to an interface
+#                   default, which delegates exactly as the override did. CEILING_PUB is
+#                   unchanged: one public override out, one forward in. Clicked to what the work
+#                   lands at.)
+#                   16988 -> 16973 (the element type resolver create-element uses moved out to
+#                   ElementTypes, where it gained the refusal of an abstract element class; the
+#                   facade keeps one call to it. Clicked to what the work lands at.)
+#                   16973 -> 16958 (the relationship type resolver create-relationship and
+#                   auto-connect-view use moved out to RelationshipTypes, where it gained the
+#                   refusal of an abstract relationship class; the facade keeps three calls to it.
+#                   Clicked to what the work lands at.)
+#                   16958 -> 16955 (clone-view's create and copy are built as a guarded pair by
+#                   CloneViewContentsCommand.addTo, so the guard asks the copy's check before the
+#                   clone is attached; the facade keeps one call to it. Clicked to what the work
+#                   lands at.)
+#                   16955 -> 16950, CEILING_PUB 87 -> 86 (change-relationship-type lives in
+#                   ChangeRelationshipTypeOperations and costs this file one field line, one forward
+#                   and two imports; the space was paid for by moving two pure delegating overloads to
+#                   interface defaults: the short createElement, and the three-argument
+#                   resizeElementsToFit, whose four-argument overload is no longer a default, so no
+#                   default calls another. Clicked to what the work lands at.)
+#                   16950 -> 16481 (the folder create, update and move prepares moved out to
+#                   FolderMutationOperations, -283, where they learnt to resolve a folder the same
+#                   bulk call creates, +1 here for the parameter that carries it; the delete
+#                   cascade walk moved out to DeleteCascade, -186, which both delete commands now
+#                   run when they execute; auto-route resolves a view the batch created in one
+#                   line, -4; a view reference is guarded on the view it points at too, +3; the
+#                   batch commit's own guard and update-view's queued lookup cost nothing here.
+#                   Clicked to what the work lands at.)
+#                   16481 -> 16480 (a folder the open batch creates resolves for every later
+#                   operation that names it: the queue lookup is handed to FolderMutationOperations
+#                   when it is built, and the delete-folder refusal for a folder made earlier moved
+#                   there as a guard the delete calls wrap, -1 for the bulk arm's own refusal line.
+#                   Clicked to what the work lands at.)
+#                   16480 -> 16474 (bulk update-view reads viewpoint by the one strict reader
+#                   that keeps "" as a clear, so its six-line block that turned "" into a clear
+#                   became one line, -6; the viewpoint id check took two blank lines' places, the
+#                   router type and note readers swapped in place, and every log argument was
+#                   wrapped in place on the line it already sat on, +0.
+#                   Clicked to what the work lands at.)
+#                   16474 -> 16467 (the bulk whole-number reader became one call to the strict
+#                   reader its tools use, so its four-line body and comment shrank, -7; the bulk
+#                   create-view router type, the bendpoint field reads and the connection styling
+#                   read swapped in place on the lines they sat on, +0.
+#                   Clicked to what the work lands at.)
+#                   16467 -> 16465 (add-note-to-view's x/y pair check lost the "position is
+#                   absent" guard around it, so it runs beside position as on the other add
+#                   tools, -2; the layout spacing maximum is read in the handlers, +0.
+#                   Clicked to what the work lands at.)
+#                   Signature baseline 98 -> 99, regenerated with --generate (add-view-reference-to-view
+#                   takes an icon, so the interface gained the ten-argument addViewReferenceToView and
+#                   kept the nine-argument form as a DEFAULT forwarding overload; CEILING_PUB is
+#                   untouched, the impl still carries one public addViewReferenceToView).
+#                   16465 -> 16420 (the update prepares accept text, styling and image fields
+#                   through one per-kind rule and report the alignments from the post-update
+#                   styling, -5; the archive check for an image path moved, unchanged, to the
+#                   image helper, and the add-reference prepare takes an icon in one line, -31;
+#                   each same-call add case records through one helper, and the same-call
+#                   refusal wraps the back-reference resolve, -1; the connection rows read their
+#                   new fields on the lines they sat on, +0; the add-image row is built by the
+#                   image helper's reader that get-view-contents uses, -8.
+#                   Clicked to what the work lands at.)
+#                   16420 -> 16410 (the label fallback no longer keeps the offsets of a pass that
+#                   did not improve, -6; auto-route reads the Label Offset anchors its label pick
+#                   chose instead of computing them again after it, -2, and drops the optimizer
+#                   import that computation needed, -1; the routing runner, handed the offset set,
+#                   sits after the label inputs it reads, -1; a hub's label width is read from the
+#                   label Archi shows on the line it sat on, +0.
+#                   Clicked to what the work lands at.)
+#                   16410 -> 16381 (auto-route counts crossingsAfter in a collaborator that reads
+#                   the written routes back as Archi stores them, instead of building the
+#                   router-frame path map in the facade, -27; the label commands are built for
+#                   the connections whose route is written and whose label the policy leaves
+#                   shown, and labelsOptimized counts the commands built, -2.
+#                   Clicked to what the work lands at.)
+#                   16381 -> 16366 (the routing pass's result moves out of the facade into its
+#                   own file, which also carries the self-connections the pass left out; the
+#                   pass splits those out before routing and the layout loops name them once
+#                   from the pass they keep; -15 net. Clicked to what the work lands at.)
+#                   16366 -> 16360 (string arguments of another JSON type are refused by the
+#                   shared reader, so the facade's own string reads become one-line delegations;
+#                   the label-expression, viewpoint and grown-container disclosures ride on
+#                   existing builder lines, +1 for the viewpoint verdict; -6 net. Clicked to what
+#                   the work lands at.)
+#                   16360 -> 16231 (Archi-palette parity: a group's re-layout after a reorder
+#                   arranges its children through the shared helper that leaves room for what a
+#                   self-connection draws outside its box, replacing its own row/grid/column
+#                   switch; the either-end connection check and the first-occurrence lookup are
+#                   replaced by one occurrences helper; auto-connect-view walks a relationship's
+#                   occurrence pairs in one walk instead of a source scan and a target scan; the
+#                   palette's default size and the receded-parent report ride on existing lines;
+#                   -129 net. Clicked to what the work lands at.)
+#                   16231 -> 16216 (review follow-ups: optimize-group-order's own re-layout
+#                   arranges through the same loop-room helper, replacing its second
+#                   row/grid/column switch; auto-connect-view guards both ends of a new connection
+#                   and its cap refusal names the filters; -15 net. Clicked to what the work
+#                   lands at.)
+#                   16216 -> 16202 (auto-route's id-to-name lookup moves to its own class, -21;
+#                   move recommendations are screened against the parent clamp before they are
+#                   published, +4; the spacing tools list the element containers they do not
+#                   measure on every return path, +3; -14 net. Clicked to what the work lands
+#                   at.)
+#                   16202 -> 16163 (the clear-view prepare moves to ClearViewCommand, and the
+#                   label and clear-view operations read the view through the shared staged-view
+#                   reader: -39 in all. Clicked to what the work lands at.)
+#                   16163 -> 16065 (the add-to-view autoConnect scan moves to PlacementAutoConnect,
+#                   -93; the bulk and batch arms feed it the staged view, +7; the specialization
+#                   lookup reads the batch through StagedProfiles, with the session threaded into
+#                   the prepares that resolve one, -12; -98 net. Clicked to what the work lands at.)
+#                   16065 -> 16000 (the content box a placed note clears moves to ViewContentBounds,
+#                   counting the view's notes and the staged ones; the layout's note-overlap
+#                   warning is built in AutoRouteWarnings and the four layout result paths
+#                   attach it on one line each; the layout summary carries the crossing ratio;
+#                   -65 net. Clicked to what the work lands at.)
+CEILING_LOC=16000
+CEILING_PUB=86
 
 # ---- locate repo (the script lives in <repo>/tools/) ------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

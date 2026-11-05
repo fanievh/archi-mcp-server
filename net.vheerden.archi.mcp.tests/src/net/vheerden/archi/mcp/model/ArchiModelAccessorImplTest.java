@@ -262,10 +262,11 @@ public class ArchiModelAccessorImplTest {
 
         assertTrue(accessor.isModelLoaded());
 
-        // Simulate removing the model — manager now returns empty list
+        // Simulate removing the model — manager now returns empty list. Archi fires the removal with
+        // the model as the NEW value and a null old value (EditorModelManager.closeModel).
         stubModelManager.setModels(Collections.emptyList());
         stubModelManager.firePropertyChange(
-                IEditorModelManager.PROPERTY_MODEL_REMOVED, model, null);
+                IEditorModelManager.PROPERTY_MODEL_REMOVED, null, model);
 
         assertFalse(accessor.isModelLoaded());
         assertFalse(accessor.getCurrentModelName().isPresent());
@@ -286,10 +287,10 @@ public class ArchiModelAccessorImplTest {
 
         assertEquals("Model A", accessor.getCurrentModelName().get());
 
-        // Remove model1 — model2 remains
+        // Remove model1 — model2 remains (Archi's order: null old value, the model as the new value)
         stubModelManager.setModels(new ArrayList<>(List.of(model2)));
         stubModelManager.firePropertyChange(
-                IEditorModelManager.PROPERTY_MODEL_REMOVED, model1, null);
+                IEditorModelManager.PROPERTY_MODEL_REMOVED, null, model1);
 
         assertTrue(accessor.isModelLoaded());
         assertEquals("Model B", accessor.getCurrentModelName().get());
@@ -297,6 +298,129 @@ public class ArchiModelAccessorImplTest {
         // Verify listener notified about switch to Model B
         assertEquals(1, changeListener.events.size());
         assertEquals("Model B", changeListener.events.get(0).modelName);
+    }
+
+    @Test
+    public void shouldSwitchToThePreviouslyActiveModel_whenTheActiveOneOfThreeIsRemoved() {
+        StubArchimateModel modelA = new StubArchimateModel("id-a", "Model A");
+        StubArchimateModel modelB = new StubArchimateModel("id-b", "Model B");
+        StubArchimateModel modelC = new StubArchimateModel("id-c", "Model C");
+        stubModelManager.setModels(new ArrayList<>(List.of(modelA, modelB, modelC)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+        accessor.addModelChangeListener(changeListener);
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_OPENED, null, modelA);
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_OPENED, null, modelC);
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_OPENED, null, modelB);
+        assertEquals("Model B", accessor.getCurrentModelName().get());
+        int before = changeListener.events.size();
+
+        // Archi's order: removed from the open set first, then announced as (null, model)
+        stubModelManager.setModels(new ArrayList<>(List.of(modelA, modelC)));
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_REMOVED, null, modelB);
+
+        assertEquals("the model active before B, not the first listed", "Model C",
+                accessor.getCurrentModelName().get());
+        assertEquals("id-c", accessor.getCurrentModelId().get());
+        assertEquals(before + 1, changeListener.events.size());
+        assertEquals("Model C", changeListener.events.get(before).modelName);
+
+        stubModelManager.setModels(new ArrayList<>(List.of(modelA)));
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_REMOVED, null, modelC);
+
+        assertEquals("Model A", accessor.getCurrentModelName().get());
+        assertEquals("id-a", accessor.getCurrentModelId().get());
+    }
+
+    @Test
+    public void shouldSwitchToTheFirstListedRemainingModel_whenNoRemainingModelWasEverActive() {
+        StubArchimateModel modelA = new StubArchimateModel("id-a", "Model A");
+        StubArchimateModel modelB = new StubArchimateModel("id-b", "Model B");
+        StubArchimateModel modelC = new StubArchimateModel("id-c", "Model C");
+        stubModelManager.setModels(new ArrayList<>(List.of(modelA, modelB, modelC)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);   // only the first listed is detected
+        accessor.addModelChangeListener(changeListener);
+
+        stubModelManager.setModels(new ArrayList<>(List.of(modelB, modelC)));
+        stubModelManager.firePropertyChange(IEditorModelManager.PROPERTY_MODEL_REMOVED, null, modelA);
+
+        assertEquals("Model B", accessor.getCurrentModelName().get());
+        assertEquals(1, changeListener.events.size());
+        assertEquals("Model B", changeListener.events.get(0).modelName);
+    }
+
+    @Test
+    public void shouldStillSeeTheRemoval_whenTheModelArrivesAsTheOldValue() {
+        StubArchimateModel model1 = new StubArchimateModel("id-1", "Model A");
+        StubArchimateModel model2 = new StubArchimateModel("id-2", "Model B");
+        stubModelManager.setModels(new ArrayList<>(List.of(model1, model2)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+        accessor.addModelChangeListener(changeListener);
+
+        // The opposite order to Archi's: the removal is seen whichever slot carries the model.
+        stubModelManager.setModels(new ArrayList<>(List.of(model2)));
+        stubModelManager.firePropertyChange(
+                IEditorModelManager.PROPERTY_MODEL_REMOVED, model1, null);
+
+        assertEquals(java.util.Optional.of("Model B"), accessor.getCurrentModelName());
+        assertEquals("listeners are told of the switch", 1, changeListener.events.size());
+        assertEquals("Model B", changeListener.events.get(0).modelName);
+        assertEquals("id-2", changeListener.events.get(0).modelId);
+    }
+
+    @Test
+    public void shouldActivateTheNewModel_whenArchiCreatesOne() {
+        StubArchimateModel existing = new StubArchimateModel("id-1", "Model A");
+        stubModelManager.setModels(new ArrayList<>(List.of(existing)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+        accessor.addModelChangeListener(changeListener);
+
+        // File > New: Archi registers the model, then fires "created" as (null, model) — never
+        // "opened" or "loaded" (EditorModelManager.createNewModel → registerModel).
+        StubArchimateModel created = new StubArchimateModel("id-new", "(new model)");
+        stubModelManager.getModels().add(created);
+        stubModelManager.firePropertyChange(
+                IEditorModelManager.PROPERTY_MODEL_CREATED, null, created);
+
+        assertEquals(java.util.Optional.of("(new model)"), accessor.getCurrentModelName());
+        assertEquals(java.util.Optional.of("id-new"), accessor.getCurrentModelId());
+        assertEquals("listeners are told of the switch once", 1, changeListener.events.size());
+        assertEquals("(new model)", changeListener.events.get(0).modelName);
+        assertEquals("id-new", changeListener.events.get(0).modelId);
+    }
+
+    @Test
+    public void shouldNotReactivateTheClosingModel_whenItIsStillListedAtTheRemoval() {
+        StubArchimateModel closing = new StubArchimateModel("id-1", "Model A");
+        StubArchimateModel other = new StubArchimateModel("id-2", "Model B");
+        stubModelManager.setModels(new ArrayList<>(List.of(closing, other)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+        accessor.addModelChangeListener(changeListener);
+
+        // Archi 5.7-5.10 removes the model from the list before firing; a version that fired first
+        // would still list it, first, at the moment the removal is seen.
+        stubModelManager.firePropertyChange(
+                IEditorModelManager.PROPERTY_MODEL_REMOVED, null, closing);
+
+        assertEquals(java.util.Optional.of("Model B"), accessor.getCurrentModelName());
+        assertEquals(java.util.Optional.of("id-2"), accessor.getCurrentModelId());
+        assertEquals(1, changeListener.events.size());
+        assertEquals("id-2", changeListener.events.get(0).modelId);
+    }
+
+    @Test
+    public void shouldLeaveNoModelLoaded_whenOnlyTheClosingModelIsStillListedAtTheRemoval() {
+        StubArchimateModel closing = new StubArchimateModel("id-1", "Model A");
+        stubModelManager.setModels(new ArrayList<>(List.of(closing)));
+        accessor = new ArchiModelAccessorImpl(stubModelManager);
+        accessor.addModelChangeListener(changeListener);
+
+        stubModelManager.firePropertyChange(
+                IEditorModelManager.PROPERTY_MODEL_REMOVED, null, closing);
+
+        assertFalse(accessor.isModelLoaded());
+        assertEquals(1, changeListener.events.size());
+        assertNull(changeListener.events.get(0).modelName);
+        assertNull(changeListener.events.get(0).modelId);
     }
 
     // ---- getCurrentModelId edge case tests ----
@@ -322,7 +446,7 @@ public class ArchiModelAccessorImplTest {
     }
 
     @Test
-    public void shouldIncrementVersion_whenModelSwitched() {
+    public void shouldReportTheNewModelsOwnVersion_whenModelSwitched_leavingTheFirstModelsUnmoved() {
         StubArchimateModel model1 = new StubArchimateModel("id-1", "Model A");
         stubModelManager.setModels(List.of(model1));
         accessor = new ArchiModelAccessorImpl(stubModelManager);
@@ -334,10 +458,14 @@ public class ArchiModelAccessorImplTest {
         stubModelManager.firePropertyChange(
                 IEditorModelManager.PROPERTY_MODEL_OPENED, null, model2);
 
-        String versionAfter = accessor.getModelVersion();
-        long before = Long.parseLong(versionBefore);
-        long after = Long.parseLong(versionAfter);
-        assertTrue("Version should increment on model switch", after > before);
+        // Versions are per model: the switch reads B's own counter, and A's has not moved.
+        assertEquals("1", accessor.getModelVersion());
+        accessor.getMutationDispatcher().selection().enter("probe", "id-1");
+        try {
+            assertEquals(versionBefore, accessor.getModelVersion());
+        } finally {
+            accessor.getMutationDispatcher().selection().exit();
+        }
     }
 
     // ---- removeModelChangeListener tests ----
@@ -1426,6 +1554,143 @@ public class ArchiModelAccessorImplTest {
         }
     }
 
+    private static final String ABSTRACT_TYPE_TAIL = " is abstract: it groups element types and names none of them";
+    private static final String CONCRETE_TYPE_SUGGESTION =
+            "Use a concrete element type, such as BusinessActor, ApplicationComponent or Node.";
+
+    @Test
+    public void shouldRefuseAnAbstractElementType_asTheCallersMistake_creatingNothing() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        int elementsBefore = countElements(model);
+        String versionBefore = accessor.getModelVersion();
+
+        for (String type : List.of("BusinessElement", "ArchimateElement")) {
+            ModelAccessException e = createElementRefusal(type);
+            assertEquals(type, ErrorCode.INVALID_ELEMENT_TYPE, e.getErrorCode());
+            assertEquals("Invalid ArchiMate element type: " + type + ABSTRACT_TYPE_TAIL, e.getMessage());
+            assertEquals(type, CONCRETE_TYPE_SUGGESTION, e.getSuggestedCorrection());
+        }
+        assertEquals("no element may be created", elementsBefore, countElements(model));
+        assertEquals(versionBefore, accessor.getModelVersion());
+    }
+
+    /** The types the refusal suggests are ones create-element builds. */
+    @Test
+    public void shouldSuggestOnlyConcreteElementTypes_inTheAbstractTypeRefusal() {
+        org.eclipse.emf.ecore.EClass element = com.archimatetool.model.IArchimatePackage.eINSTANCE.getArchimateElement();
+        java.util.regex.Matcher names = java.util.regex.Pattern.compile("such as (\\w+), (\\w+) or (\\w+)\\.$")
+                .matcher(CONCRETE_TYPE_SUGGESTION);
+        assertTrue(CONCRETE_TYPE_SUGGESTION, names.find());
+        for (int i = 1; i <= 3; i++) {
+            org.eclipse.emf.ecore.EClassifier c =
+                    com.archimatetool.model.IArchimatePackage.eINSTANCE.getEClassifier(names.group(i));
+            assertTrue(names.group(i), c instanceof org.eclipse.emf.ecore.EClass e && element.isSuperTypeOf(e)
+                    && !e.isAbstract() && !e.isInterface());
+        }
+    }
+
+    /**
+     * Every element class in the package: each abstract one is refused by name, and each concrete one
+     * is still created, so an abstract test that reached too far would fail here too.
+     */
+    @Test
+    public void shouldRefuseEveryAbstractElementClass_andCreateEveryConcreteOne() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        org.eclipse.emf.ecore.EClass element = com.archimatetool.model.IArchimatePackage.eINSTANCE.getArchimateElement();
+
+        List<String> wrong = new ArrayList<>();
+        int abstractCount = 0;
+        int concreteCount = 0;
+        for (org.eclipse.emf.ecore.EClassifier classifier
+                : com.archimatetool.model.IArchimatePackage.eINSTANCE.getEClassifiers()) {
+            if (!(classifier instanceof org.eclipse.emf.ecore.EClass c) || !element.isSuperTypeOf(c)) {
+                continue;
+            }
+            String type = c.getName();
+            if (c.isAbstract() || c.isInterface()) {
+                abstractCount++;
+                try {
+                    accessor.createElement("default", type, "Walk " + type, null, null, null, null);
+                    wrong.add(type + ": created");
+                } catch (ModelAccessException e) {
+                    String want = "Invalid ArchiMate element type: " + type + ABSTRACT_TYPE_TAIL;
+                    if (e.getErrorCode() != ErrorCode.INVALID_ELEMENT_TYPE || !want.equals(e.getMessage())) {
+                        wrong.add(type + ": " + e.getErrorCode() + " " + e.getMessage());
+                    }
+                }
+            } else {
+                concreteCount++;
+                try {
+                    MutationResult<ElementDto> created =
+                            accessor.createElement("default", type, "Walk " + type, null, null, null, null);
+                    if (!type.equals(created.entity().type())) {
+                        wrong.add(type + ": created as " + created.entity().type());
+                    }
+                } catch (RuntimeException e) {
+                    wrong.add(type + ": refused " + e);
+                }
+            }
+        }
+        assertTrue(wrong.size() + " element classes answered wrongly:\n" + String.join("\n", wrong),
+                wrong.isEmpty());
+        String recount = " (Archi 5.10's count; a new Archi release that adds or drops element classes changes it:"
+                + " re-count, the per-class checks above still apply)";
+        assertEquals("abstract element classes" + recount, 15, abstractCount);
+        assertEquals("concrete element classes" + recount, 61, concreteCount);
+    }
+
+    @Test
+    public void shouldKeepTheNonElementAndUnknownTypeTexts() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        for (String type : List.of("ServingRelationship", "DiagramModelNote", "ArchimateRelationship")) {
+            ModelAccessException e = createElementRefusal(type);
+            assertEquals(type, ErrorCode.INVALID_ELEMENT_TYPE, e.getErrorCode());
+            assertEquals("'" + type + "' is not an ArchiMate element type", e.getMessage());
+        }
+        ModelAccessException unknown = createElementRefusal("NotARealType");
+        assertEquals(ErrorCode.INVALID_ELEMENT_TYPE, unknown.getErrorCode());
+        assertEquals("Invalid ArchiMate element type: NotARealType", unknown.getMessage());
+    }
+
+    @Test
+    public void shouldRefuseAnAbstractElementType_beforeAnyApprovalCardIsStored() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        accessor.getMutationDispatcher().setApprovalModeProvider(() -> true);
+
+        ModelAccessException e = createElementRefusal("BusinessElement");
+        assertEquals(ErrorCode.INVALID_ELEMENT_TYPE, e.getErrorCode());
+        assertEquals("Invalid ArchiMate element type: BusinessElement" + ABSTRACT_TYPE_TAIL, e.getMessage());
+        assertTrue(accessor.getMutationDispatcher().getPendingProposals("default").isEmpty());
+    }
+
+    private ModelAccessException createElementRefusal(String type) {
+        try {
+            accessor.createElement("default", type, "Test", null, null, null, null);
+        } catch (ModelAccessException e) {
+            return e;
+        }
+        throw new AssertionError(type + " was created");
+    }
+
+    private static int countElements(IArchimateModel model) {
+        int count = 0;
+        for (java.util.Iterator<EObject> it = model.eAllContents(); it.hasNext();) {
+            if (it.next() instanceof IArchimateElement) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     @Test(expected = NoModelLoadedException.class)
     public void shouldThrowNoModelLoaded_whenCreateElementWithNoModel() {
         stubModelManager.setModels(Collections.emptyList());
@@ -1524,6 +1789,84 @@ public class ArchiModelAccessorImplTest {
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.INVALID_RELATIONSHIP_TYPE, e.getErrorCode());
         }
+    }
+
+    private static final String ABSTRACT_RELATIONSHIP_TAIL =
+            " is abstract: it groups relationship types and names none of them";
+    private static final String CONCRETE_RELATIONSHIP_SUGGESTION =
+            "Use a concrete relationship type, such as ServingRelationship, FlowRelationship or AssociationRelationship.";
+
+    /**
+     * An abstract relationship type is refused as the type the caller sent, before the endpoints are
+     * judged: no relationship-rules lookup is reached, so this runs without the OSGi bundle.
+     */
+    @Test
+    public void shouldRefuseAnAbstractRelationshipType_asTheCallersMistake_creatingNothing() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+        int relationshipsBefore = countRelationships(model);
+        String versionBefore = accessor.getModelVersion();
+
+        for (String type : List.of("ArchimateRelationship", "StructuralRelationship")) {
+            ModelAccessException e = createRelationshipRefusal(type);
+            assertEquals(type, ErrorCode.INVALID_RELATIONSHIP_TYPE, e.getErrorCode());
+            assertEquals("Invalid ArchiMate relationship type: " + type + ABSTRACT_RELATIONSHIP_TAIL, e.getMessage());
+            assertEquals(type, CONCRETE_RELATIONSHIP_SUGGESTION, e.getSuggestedCorrection());
+        }
+        assertEquals("no relationship may be created", relationshipsBefore, countRelationships(model));
+        assertEquals(versionBefore, accessor.getModelVersion());
+    }
+
+    /** The types the refusal suggests are ones create-relationship builds. */
+    @Test
+    public void shouldSuggestOnlyConcreteRelationshipTypes_inTheAbstractTypeRefusal() {
+        org.eclipse.emf.ecore.EClass relationship =
+                com.archimatetool.model.IArchimatePackage.eINSTANCE.getArchimateRelationship();
+        java.util.regex.Matcher names = java.util.regex.Pattern.compile("such as (\\w+), (\\w+) or (\\w+)\\.$")
+                .matcher(CONCRETE_RELATIONSHIP_SUGGESTION);
+        assertTrue(CONCRETE_RELATIONSHIP_SUGGESTION, names.find());
+        for (int i = 1; i <= 3; i++) {
+            org.eclipse.emf.ecore.EClassifier c =
+                    com.archimatetool.model.IArchimatePackage.eINSTANCE.getEClassifier(names.group(i));
+            assertTrue(names.group(i), c instanceof org.eclipse.emf.ecore.EClass e && relationship.isSuperTypeOf(e)
+                    && !e.isAbstract() && !e.isInterface());
+        }
+    }
+
+    @Test
+    public void shouldKeepTheNonRelationshipAndUnknownRelationshipTypeTexts() {
+        IArchimateModel model = createTestModel();
+        stubModelManager.setModels(List.of(model));
+        accessor = createAccessorWithTestDispatcher(model);
+
+        for (String type : List.of("BusinessActor", "DiagramModelNote", "ArchimateElement")) {
+            ModelAccessException e = createRelationshipRefusal(type);
+            assertEquals(type, ErrorCode.INVALID_RELATIONSHIP_TYPE, e.getErrorCode());
+            assertEquals("'" + type + "' is not an ArchiMate relationship type", e.getMessage());
+        }
+        ModelAccessException unknown = createRelationshipRefusal("NotARealRelationship");
+        assertEquals(ErrorCode.INVALID_RELATIONSHIP_TYPE, unknown.getErrorCode());
+        assertEquals("Invalid ArchiMate relationship type: NotARealRelationship", unknown.getMessage());
+    }
+
+    private ModelAccessException createRelationshipRefusal(String type) {
+        try {
+            accessor.createRelationship("default", type, "ac-001", "bp-001", null, null);
+        } catch (ModelAccessException e) {
+            return e;
+        }
+        throw new AssertionError(type + " was created");
+    }
+
+    private static int countRelationships(IArchimateModel model) {
+        int count = 0;
+        for (java.util.Iterator<EObject> it = model.eAllContents(); it.hasNext();) {
+            if (it.next() instanceof IArchimateRelationship) {
+                count++;
+            }
+        }
+        return count;
     }
 
     @Test(expected = NoModelLoadedException.class)
@@ -6629,7 +6972,7 @@ public class ArchiModelAccessorImplTest {
 
         // Create a fresh empty view
         MutationResult<ViewDto> viewResult = accessor.createView(
-                "default", "Empty View", "EmptyViewpoint", null, null);
+                "default", "Empty View", "", null, null);
         String emptyViewId = viewResult.entity().id();
 
         ContentBounds bounds = accessor.getContentBounds(emptyViewId);
@@ -11226,7 +11569,7 @@ public class ArchiModelAccessorImplTest {
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
         try {
-            accessor.prepareMoveToFolder("move-actor-1", "app-sub-1");
+            accessor.folderOps.prepareMoveToFolder("move-actor-1", "app-sub-1");
             fail("Expected ModelAccessException");
         } catch (ModelAccessException e) {
             assertEquals(ErrorCode.FOLDER_LAYER_MISMATCH, e.getErrorCode());
@@ -11250,7 +11593,7 @@ public class ArchiModelAccessorImplTest {
         accessor = new ArchiModelAccessorImpl(stubModelManager);
 
         // Should not throw — staying within the Business layer.
-        accessor.prepareMoveToFolder("move-actor-2", "biz-sub-1");
+        accessor.folderOps.prepareMoveToFolder("move-actor-2", "biz-sub-1");
     }
 
     @Test
@@ -11739,7 +12082,7 @@ public class ArchiModelAccessorImplTest {
         IArchimateDiagramModel view = (IArchimateDiagramModel) result[1];
 
         ArchiModelAccessorImpl accessor = createAccessorWithTestDispatcher(model);
-        ArchiModelAccessorImpl.AutoRoutePassResult passResult =
+        AutoRoutePassResult passResult =
                 accessor.computeAutoRoutePass("view-grouped", view, model);
 
         assertNotNull("Should return result for view with connections", passResult);

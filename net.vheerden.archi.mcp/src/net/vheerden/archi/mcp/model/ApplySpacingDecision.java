@@ -153,7 +153,11 @@ public record ApplySpacingDecision(
      *                                      steps need different numbers of the
      *                                      view's own containers before they
      *                                      have work — one to space inside,
-     *                                      two to widen between
+     *                                      two to widen between. Either may
+     *                                      instead carry the element-container
+     *                                      reason (the only containers are
+     *                                      ArchiMate elements holding children),
+     *                                      told apart by its marker
      * @return decision describing the chosen branches + clamped deltas
      */
     public static ApplySpacingDecision decide(
@@ -239,7 +243,13 @@ public record ApplySpacingDecision(
         String groupReason = null;
 
         if (groupInScope) {
-            if (!hasAtLeast2TopLevelGroups) {
+            if (!hasAtLeast2TopLevelGroups
+                    && SpacingEntryGuardTermination.isElementContainersReason(
+                            groupContainersNotPositionedReason)) {
+                // Mirrors ApplyGroupSpacingDecision: the element-container reason replaces the
+                // fewer-than-two sentence in exactly the branch that sentence fires in.
+                groupReason = "group: " + groupContainersNotPositionedReason;
+            } else if (!hasAtLeast2TopLevelGroups) {
                 groupReason = "group: view has fewer than 2 top-level groups; "
                         + "inter-group spacing not adjustable (a view needs "
                         + "at least two top-level groups before there is a "

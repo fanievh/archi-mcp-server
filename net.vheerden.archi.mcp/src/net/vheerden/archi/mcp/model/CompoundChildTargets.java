@@ -14,13 +14,14 @@ import com.archimatetool.model.IIdentifier;
  *
  * <p>The layout/route compounds the approval path freezes are built exclusively from this project's own
  * GEF commands — {@link UpdateViewObjectCommand}, {@link UpdateViewConnectionCommand},
- * {@link SetTextPositionCommand}, {@link SetTextRelativePositionCommand}, {@link AddConnectionToViewCommand}
- * — each of which exposes a typed
+ * {@link SetTextPositionCommand}, {@link SetTextRelativePositionCommand}, {@link AddConnectionToViewCommand},
+ * {@link SelfConnectionLoop.LoopCommand} — each of which exposes a typed
  * accessor for the model object it touches. (Archi's accessor-less {@code SetConstraintCommand} is never
  * used here, so the "GEF commands expose no touched-objects generically" caveat does not apply.) Walking
  * {@link CompoundCommand#getCommands()} therefore recovers every affected child id at propose-time with no
  * layout/route algorithm re-run — the broadened set the {@link ProposalStalenessGuard} then rejects-stale on
- * if the human deletes/edits/moves any tracked child during review.</p>
+ * if the human deletes, edits, moves or reroutes any tracked child during review. A tracked connection's
+ * ends need not be in the set: the guard reads where they sit from the connection itself.</p>
  *
  * <p>A connection an {@link AddConnectionToViewCommand} is <em>creating</em> is not yet in the model (its id
  * will not resolve at {@link ProposalStalenessGuard#capture}) — so it is skipped and its pre-existing
@@ -70,6 +71,8 @@ final class CompoundChildTargets {
                     addId(ids, u.getDiagramObject());
                 } else if (child instanceof UpdateViewConnectionCommand u) {
                     addId(ids, u.getConnection());
+                } else if (child instanceof SelfConnectionLoop.LoopCommand l) {
+                    addId(ids, l.getConnection());
                 } else if (child instanceof SetTextPositionCommand s) {
                     addId(ids, s.getConnection());
                 } else if (child instanceof SetTextRelativePositionCommand s) {

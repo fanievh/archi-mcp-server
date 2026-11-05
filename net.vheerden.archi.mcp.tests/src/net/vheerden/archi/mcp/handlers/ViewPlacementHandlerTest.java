@@ -529,6 +529,19 @@ public class ViewPlacementHandlerTest {
     }
 
     @Test
+    public void removeFromView_descriptionShouldNameEveryKindItRemovesAndEveryTypeItReports() {
+        String desc = descriptionOf("remove-from-view");
+        assertTrue(desc, desc.contains("Remove a visual element, group, note, view reference, image or "
+                + "connection from a view without deleting any model object."));
+        assertTrue(desc, desc.contains("As Archi's own Delete does, the removal also takes every connection "
+                + "attached to the object or to anything inside it, and every connection attached to those "
+                + "connections."));
+        assertTrue(desc, desc.contains("removedObjectType (viewObject/group/note/viewReference/image/"
+                + "viewConnection; connection for a connection that is not an ArchiMate one; the Archi type "
+                + "name for any other view object)"));
+    }
+
+    @Test
     public void updateViewConnection_descriptionShouldDocumentResponseFields() {
         String desc = descriptionOf("update-view-connection");
         // NOTE: bare `viewConnectionId` is NOT a valid pin — it is already the required
@@ -1013,6 +1026,38 @@ public class ViewPlacementHandlerTest {
             assertTrue(tool + ": and it must name the tool that does position those containers. "
                     + "Clause: " + clause, clause.contains("arrange-groups"));
         }
+    }
+
+    /**
+     * The element-container reason is a second entry inside the (d) branch, with its own fixed
+     * code: the served clause must name that code and the field the containers are listed in, or a
+     * caller reading the taxonomy cannot tell the swimlane view from a genuinely flat one.
+     */
+    @Test
+    public void spacingTools_structuralBranchShouldNameTheElementContainerReason() {
+        for (String tool : new String[] {
+                "apply-element-spacing-recommendations",
+                "apply-group-spacing-recommendations",
+                "apply-spacing-recommendations" }) {
+            String desc = descriptionOf(tool);
+            int open = desc.indexOf("(d) structural_no_change_<reason>");
+            int close = desc.indexOf("(e) heuristic_already_met_no_change");
+            assertTrue(tool + ": the (d) clause must still be bounded by (e)", open >= 0 && close > open);
+            String clause = desc.substring(open, close);
+            for (String owed : List.of("structural_no_change_containers_not_spaced_by_this_tool",
+                    "skippedContainers", "layout-within-group")) {
+                assertTrue(tool + ": the (d) clause does not name " + owed + ". Clause: " + clause,
+                        clause.contains(owed));
+            }
+            assertTrue(tool + ": the description must say that elements holding children are "
+                    + "listed in skippedContainers on every call, not only on the no-change path",
+                    desc.contains("such element drawn directly on the view (one holding only notes or images does not count) in skippedContainers"));
+        }
+        String adjust = descriptionOf("adjust-view-spacing");
+        assertTrue("adjust-view-spacing must say it refuses a view whose only containers are "
+                + "ArchiMate elements holding children, and name layout-within-group",
+                adjust.contains("only containers are such elements")
+                        && adjust.contains("layout-within-group"));
     }
 
     // ---- add-to-view tests ----
@@ -1933,8 +1978,10 @@ public class ViewPlacementHandlerTest {
                 desc.contains(StructuredWarningCodes.CONNECTION_ROUTED_THROUGH_NOTE));
         assertTrue("description must name the net-zero nudge code. Was: " + desc,
                 desc.contains(StructuredWarningCodes.AUTO_NUDGE_NET_ZERO));
+        assertTrue("description must name the self-connection code. Was: " + desc,
+                desc.contains(StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED));
 
-        // The ordinals are the half of the defect a presence check cannot see: six codes listed
+        // The ordinals are the half of the defect a presence check cannot see: seven codes listed
         // under "A second code... A third code..." would satisfy every assertion above while still
         // telling the reader the list ends at three.
         assertFalse("description must not number the codes as a closed list. Was: " + desc,
@@ -1943,7 +1990,7 @@ public class ViewPlacementHandlerTest {
                 desc.contains("A third code"));
 
         // The two codes this tool does NOT emit. Naming either here would take the routing count to
-        // eight -- a regression wearing a fix's clothes, since both belong to other tools and are
+        // nine -- a regression wearing a fix's clothes, since both belong to other tools and are
         // correctly documented on their own surfaces.
         assertFalse("auto-route must not claim the auto-layout rating code. Was: " + desc,
                 desc.contains(StructuredWarningCodes.AUTO_LAYOUT_RATING_REGRESSED));
@@ -3619,8 +3666,7 @@ public class ViewPlacementHandlerTest {
                                 "ApplicationComponent", 8, 120, 55, 250)),
                         List.of("Element 'Hub Element' has 8 connections (large hub: > 6). "
                                 + "Consider increasing height to 85px (55 + 15 \u00d7 2) for horizontal layouts, "
-                                + "or width to 370px (120 + 15 \u00d7 2) for vertical layouts. "
-                                + "Label-adjusted width: 370px (longest label: 250px).")));
+                                + "or width to 370px (120 + longest label 250px) for vertical layouts.")));
 
         Map<String, Object> result = callAndParse("detect-hub-elements",
                 Map.of("viewId", "v-1"));
@@ -3629,10 +3675,8 @@ public class ViewPlacementHandlerTest {
         @SuppressWarnings("unchecked")
         List<String> suggestions = (List<String>) entity.get("suggestions");
         assertNotNull(suggestions);
-        assertTrue("Should contain label-adjusted text",
-                suggestions.get(0).contains("Label-adjusted width"));
-        assertTrue("Should contain longest label info",
-                suggestions.get(0).contains("longest label: 250px"));
+        assertTrue("Should carry the label term's arithmetic",
+                suggestions.get(0).contains("width to 370px (120 + longest label 250px)"));
     }
 
     @Test
@@ -3653,8 +3697,8 @@ public class ViewPlacementHandlerTest {
         @SuppressWarnings("unchecked")
         List<String> suggestions = (List<String>) entity.get("suggestions");
         assertNotNull(suggestions);
-        assertFalse("Should NOT contain label-adjusted text when connection-based is larger",
-                suggestions.get(0).contains("Label-adjusted width"));
+        assertFalse("Should NOT carry a label term when connection-based is larger",
+                suggestions.get(0).contains("longest label"));
     }
 
     @Test
@@ -5178,7 +5222,7 @@ public class ViewPlacementHandlerTest {
             "name", "overallRating", "overallExcludingAcceptedCosmetics", "elementCount",
             "connectionCount", "overlapCount", "cousinOverlapCount", "ownIconOverLabelCount",
             "boundaryViolationCount", "parentLabelObscuredCount", "nonOrthogonalTerminalCount",
-            "crossElementPassThroughCount", "contextualPartialDimensions");
+            "crossElementPassThroughCount", "ownEndpointPassThroughCount", "contextualPartialDimensions");
 
     /** Rebuilds a DTO with one component replaced; the widest constructor takes 87 arguments. */
     private static AssessLayoutResultDto withOwnIconOverLabelCount(
@@ -6543,6 +6587,38 @@ public class ViewPlacementHandlerTest {
                 nextSteps.stream().anyMatch(s -> s.contains("layout-bound")));
         assertTrue("nextSteps names the corridor-widening remedy",
                 nextSteps.stream().anyMatch(s -> s.contains("Increase element spacing")));
+    }
+
+    /** The {force, autoNudge, snapThreshold, perimeterMargin} the handler passes for {@code args}. */
+    private List<Object> autoRouteValuesFor(Map<String, Object> args) throws Exception {
+        List<Object> seen = new ArrayList<>();
+        accessor.setAutoRouteConnectionsBehavior((sid, vId, connIds, strategy, force, autoNudge, snapThreshold, perimeterMargin, mode) -> {
+            seen.addAll(List.of(force, autoNudge, snapThreshold, perimeterMargin));
+            return new MutationResult<>(new AutoRouteResultDto(vId, 0, "orthogonal", false), null);
+        });
+        Map<String, Object> call = new HashMap<>(args);
+        call.put("viewId", "v-1");
+        callAndParse("auto-route-connections", call);
+        return seen;
+    }
+
+    @Test
+    public void autoRoute_shouldClampWholeNumbersOfAnySize_toThePublishedRanges() throws Exception {
+        assertEquals(List.of(false, false, 20, 50), autoRouteValuesFor(Map.of()));
+        assertEquals(List.of(false, false, 50, 200), autoRouteValuesFor(Map.of(
+                "snapThreshold", 3_000_000_000L, "perimeterMargin", 3_000_000_000L)));
+        assertEquals(List.of(false, false, 0, 10), autoRouteValuesFor(Map.of(
+                "snapThreshold", -3_000_000_000L, "perimeterMargin", -3_000_000_000L)));
+        assertEquals(List.of(false, false, 20, 50), autoRouteValuesFor(Map.of(
+                "snapThreshold", 20.0, "perimeterMargin", 50.0)));
+        assertEquals(List.of(false, false, 35, 120), autoRouteValuesFor(Map.of(
+                "snapThreshold", 35, "perimeterMargin", 120)));
+    }
+
+    @Test
+    public void autoRoute_shouldReadBooleansSentAsStrings() throws Exception {
+        assertEquals(List.of(true, true, 20, 50), autoRouteValuesFor(Map.of("force", "true", "autoNudge", "TRUE")));
+        assertEquals(List.of(false, false, 20, 50), autoRouteValuesFor(Map.of("force", "false", "autoNudge", false)));
     }
 
     @Test
@@ -8197,6 +8273,21 @@ public class ViewPlacementHandlerTest {
     }
 
     @Test
+    public void autoConnectViewDescription_shouldSayTheSelfLoopIsSizedWhenTheConnectionIsCreated() {
+        // The accessor sizes a self-relationship's default loop when the batch runs, not when the
+        // call is queued; the description is the only place a caller learns a queued resize counts.
+        String desc = registry.getToolSpecifications().stream()
+                .filter(s -> "auto-connect-view".equals(s.tool().name()))
+                .findFirst().orElseThrow().tool().description();
+        assertTrue("must say a self-relationship gets Archi's default loop. Was: " + desc,
+                desc.contains("each occurrence that has no loop for it gets one")
+                        && desc.contains("The loop is Archi's default loop"));
+        assertTrue("must say when the loop is sized. Was: " + desc,
+                desc.contains("The loop is sized from the element as it is when the connection is created, "
+                        + "so a resize an earlier operation of the same batch makes counts."));
+    }
+
+    @Test
     public void autoConnect_shouldConnectAllRelationships() throws Exception {
         Map<String, Object> result = callAndParse("auto-connect-view",
                 Map.of("viewId", "v-1"));
@@ -9106,8 +9197,19 @@ public class ViewPlacementHandlerTest {
         assertNotNull("Should have position note", entity.get("note"));
     }
 
+    /**
+     * The position/parent exclusion is the accessor's, so the tool and its bulk operation share one rule
+     * (pinned through the real accessor in ToolArgumentReadsTest): the handler hands both over unchanged.
+     */
     @Test
-    public void addNote_positionWithParentViewObjectId_shouldReturnError() throws Exception {
+    public void addNote_positionWithParentViewObjectId_shouldReachTheAccessorThatRefusesIt() throws Exception {
+        accessor.setAddNoteToViewBehavior((sid, vId, content, pos, gap2, x, y, w, h, pvoId) -> {
+            assertEquals("above-content", pos);
+            assertEquals("vg-1", pvoId);
+            throw new ModelAccessException("Cannot use 'position' with 'parentViewObjectId'. "
+                    + "Position-based placement only works for top-level notes.",
+                    net.vheerden.archi.mcp.response.ErrorCode.INVALID_PARAMETER);
+        });
         Map<String, Object> args = new HashMap<>();
         args.put("viewId", "v-1");
         args.put("content", "Title");
@@ -9691,6 +9793,14 @@ public class ViewPlacementHandlerTest {
                     + "apply-spacing-recommendations), then re-route; re-routing alone will not clear "
                     + "them. See the structuredWarnings entry (EGRESS_LIFT_LAYOUT_BOUND) for details.";
 
+    private static final String IMMEDIATE_EGRESS_LIFT_PRE_GATED_STEP =
+            "One or more off-face terminal hugs were left in place because the vertical connection "
+                    + "runs this routing produced sit too close together for the router to lift them — "
+                    + "it skipped its off-face lift pass for the view. Spread the parallel runs apart "
+                    + "(e.g. run apply-spacing-recommendations), then re-route; re-routing alone will "
+                    + "not lift them. See the structuredWarnings entry (EGRESS_LIFT_PRE_GATED) for the "
+                    + "measured gap and the connections still hugging.";
+
     private static final String IMMEDIATE_AUTO_ROUTE_CROSSINGS_REGRESSED_STEP =
             "This re-route increased edge crossings. The new paths were applied anyway. "
                     + "Crossings alone do not determine layout quality — a routed view can score "
@@ -9779,6 +9889,12 @@ public class ViewPlacementHandlerTest {
         return new StructuredWarningDto(StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND,
                 "1 off-face terminal hug(s) could not be cleared … 15px healthy floor …",
                 "apply-spacing-recommendations", List.of());
+    }
+
+    private static StructuredWarningDto egressPreGatedWarning() {
+        return new StructuredWarningDto(StructuredWarningCodes.EGRESS_LIFT_PRE_GATED,
+                "2 connection(s) still hug the face they leave: … gap 5.6px, below the 8px floor …",
+                "apply-spacing-recommendations", List.of("c-1", "c-2"));
     }
 
     private static StructuredWarningDto crossingsRegressedWarning() {
@@ -9945,6 +10061,7 @@ public class ViewPlacementHandlerTest {
     private static final List<String> AUTO_ROUTE_APPLIED_STATE_CLAIMS = List.of(
             "were routed normally", "that were found are routed",
             "kept the hug(s) in place", "were left in place because",
+            "left the hug(s) in place", "still hug the face they leave",
             "ended at their starting position",
             "were still applied", "were applied anyway",
             "were applied through it", "crossings THIS CALL applied",
@@ -10038,13 +10155,15 @@ public class ViewPlacementHandlerTest {
         }
     }
 
-    /** The four codes that have a prose sibling, emitted for {@code arm} by the real emitters. */
+    /** The five codes that have a prose sibling, emitted for {@code arm} by the real emitters. */
     private static Map<String, AutoRouteWarningsProbe.Emitted> emittersFor(DispatchArm arm) {
         Map<String, AutoRouteWarningsProbe.Emitted> emitted = new LinkedHashMap<>();
         emitted.put(StructuredWarningCodes.CONNECTION_NOT_FOUND,
                 AutoRouteWarningsProbe.connectionsNotFound(arm));
         emitted.put(StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND,
                 AutoRouteWarningsProbe.egressLiftLayoutBound(arm));
+        emitted.put(StructuredWarningCodes.EGRESS_LIFT_PRE_GATED,
+                AutoRouteWarningsProbe.egressLiftPreGated(arm));
         emitted.put(StructuredWarningCodes.AUTO_ROUTE_CROSSINGS_REGRESSED,
                 AutoRouteWarningsProbe.crossingsRegressed(arm));
         emitted.put(StructuredWarningCodes.CONNECTION_ROUTED_THROUGH_NOTE,
@@ -10145,6 +10264,46 @@ public class ViewPlacementHandlerTest {
                         && s.contains("layout-bound")));
         assertTrue("and the queued remedy is named: " + steps,
                 steps.stream().anyMatch(s -> s.contains("end-batch")));
+    }
+
+    @Test
+    public void autoRoute_preGated_immediate_keepsItsDisclosureVerbatim_andNotTheLayoutBoundOne()
+            throws Exception {
+        stubAutoRouteWithWarning(egressPreGatedWarning(), null, null, null);
+
+        List<String> steps = autoRouteSteps();
+
+        assertTrue("the immediate pre-gated step must not drift: " + steps,
+                steps.contains(IMMEDIATE_EGRESS_LIFT_PRE_GATED_STEP));
+        assertFalse("a pre-gated skip is not a layout-bound rollback: " + steps,
+                steps.contains(IMMEDIATE_EGRESS_LIFT_LAYOUT_BOUND_STEP));
+    }
+
+    @Test
+    public void autoRoute_preGated_queued_doesNotClaimTheHugsWereLeftInPlace() throws Exception {
+        stubAutoRouteWithWarning(egressPreGatedWarning(), null, 2, null);
+
+        List<String> steps = autoRouteSteps();
+
+        assertTrue(steps.toString(), steps.contains(ViewPlacementHandler.EGRESS_LIFT_PRE_GATED_QUEUED_STEP));
+        assertFalse("a queued call has left nothing anywhere yet: " + steps,
+                steps.contains(IMMEDIATE_EGRESS_LIFT_PRE_GATED_STEP));
+        assertFalse(steps.toString(), steps.stream().anyMatch(s -> s.contains("hugs were left in place")));
+        assertTrue("and the queued remedy is named: " + steps,
+                steps.stream().anyMatch(s -> s.contains("EGRESS_LIFT_PRE_GATED") && s.contains("end-batch")));
+    }
+
+    @Test
+    public void autoRoute_preGated_awaitingApproval_disclosesWithoutNamingARecovery() throws Exception {
+        stubAutoRouteWithWarning(egressPreGatedWarning(), null, null, proposal("p-pregate"));
+
+        List<String> steps = autoRouteSteps();
+
+        assertTrue("the three fixed approval lines come first: " + steps,
+                steps.subList(0, 3).equals(FIXED_APPROVAL_LINES));
+        assertTrue(steps.toString(), steps.contains(ViewPlacementHandler.EGRESS_LIFT_PRE_GATED_PROPOSED_STEP));
+        assertFalse(steps.toString(), steps.contains(IMMEDIATE_EGRESS_LIFT_PRE_GATED_STEP));
+        assertNoRecoveryToolIsPrescribed(steps);
     }
 
     @Test
@@ -11973,4 +12132,63 @@ public class ViewPlacementHandlerTest {
                 description.contains("only the CONTEXTUAL downgrades"));
     }
 
+    /**
+     * The layout refusal logs through the shared rule. Today no entry of that refusal can be
+     * {@code INTERNAL_ERROR} (measured), so the observable line is DEBUG; what this pins is the
+     * route, so a future server-side entry would reach the rule's ERROR arm.
+     */
+    @Test
+    public void shouldLogThroughTheSharedRule_whenBuildingTheLayoutRefusal() {
+        java.util.List<Object[]> calls = new java.util.ArrayList<>();
+        java.util.List<String> methods = new java.util.ArrayList<>();
+        org.slf4j.Logger log = (org.slf4j.Logger) java.lang.reflect.Proxy.newProxyInstance(
+                org.slf4j.Logger.class.getClassLoader(), new Class<?>[] {org.slf4j.Logger.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    if (name.startsWith("is") && method.getReturnType() == boolean.class) {
+                        return true;
+                    }
+                    if (name.equals("getName")) {
+                        return "recording";
+                    }
+                    methods.add(name);
+                    calls.add(args == null ? new Object[0] : args);
+                    return null;
+                });
+        net.vheerden.archi.mcp.model.LayoutValidationFailures failures =
+                new net.vheerden.archi.mcp.model.LayoutValidationFailures();
+        failures.recordMalformedEntry("positions", 0, new ModelAccessException(
+                "positions[0] is not an object", ErrorCode.INVALID_PARAMETER));
+
+        handler.buildLayoutValidationError(failures.toException(), log);
+
+        assertEquals("one line, through the rule: " + methods, java.util.List.of("debug"), methods);
+        assertEquals("the rule's DEBUG format", "Tool error (expected): {} [{}]", calls.get(0)[0]);
+    }
+
+    /**
+     * The labels-only mode is discoverable from the schema alone: the mode description names it, and the tool
+     * description says what it never writes, that it runs only when asked over the whole view, the strict-improvement
+     * rule, the manhattan refusal, the batch clause and the arguments it ignores.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void autoRouteDescription_shouldDescribeTheLabelsOnlyMode() {
+        io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification spec = registry.getToolSpecifications()
+                .stream().filter(s -> "auto-route-connections".equals(s.tool().name())).findFirst().orElseThrow();
+        String desc = spec.tool().description();
+        Map<String, Object> mode = (Map<String, Object>) ((Map<String, Object>) spec.tool().inputSchema().properties())
+                .get("mode");
+
+        assertTrue("mode description: " + mode, ((String) mode.get("description"))
+                .contains("'labels-only' re-routes nothing and moves nothing"));
+        for (String clause : java.util.List.of("LABELS-ONLY MODE: pass mode='labels-only'",
+                "It re-routes nothing and moves nothing", "It runs only when asked", "the whole view is in scope",
+                "scores strictly lower than the", "Refused on a view drawn by Archi's manhattan",
+                "A call in mode='labels-only' is also refused after a bendpoint edit to any",
+                "styling and showLabel edits do not refuse it",
+                "force, snapThreshold, perimeterMargin and enableChannelNudging are")) {
+            assertTrue("description must say: " + clause, desc.replaceAll("\\s+", " ").contains(clause));
+        }
+    }
 }

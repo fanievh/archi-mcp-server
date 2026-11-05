@@ -78,6 +78,30 @@ public class NoteOverlapSurfaceParityTest {
                                         + " element or a group. Informational"));
     }
 
+    /**
+     * The note-on-note count is the sibling a reader confuses with {@code noteOverlapCount}: both
+     * documents must say it counts note pairs, that it publishes a violator key where its sibling
+     * does not, and that it moves no rating.
+     */
+    @Test
+    public void bothDocuments_mustCarryTheNoteOnNoteCountApartFromTheNoteOverlapCount() {
+        String section = headingBlock(read(LAYOUT_ENGINE), "#### Note Overlap");
+        String table = headingBlock(read(GLOSSARY), "## Layout-quality metrics");
+
+        assertTrue("layout-engine must name the field pair",
+                section.contains("`noteOnNoteOverlapCount` / `noteOnNoteOverlapDescriptions`"));
+        assertTrue("...its counting unit", section.contains("Counted per **unordered note pair**, once, at any depth"));
+        assertTrue("...its violator key", section.contains("violator-id key `noteOnNoteOverlap`"));
+        assertTrue("...that it is informational", section.contains("Informational only, under the same "
+                + "`noteOverlap` coverage dimension: no rating, band or breakdown key reads it."));
+        assertTrue("the glossary must carry the row, informational",
+                table.contains("| **Note on note** | `noteOnNoteOverlapCount` | A note lying on another note, "
+                        + "hiding the lower note's text. Informational (no rating impact)."));
+        assertTrue("...with the counting unit and the key",
+                table.contains("Counted per **unordered note pair**, once, at any depth")
+                        && table.contains("violator-id key `noteOnNoteOverlap`"));
+    }
+
     /** The block introduced by a markdown heading, ending at the next heading. */
     private static String headingBlock(String text, String heading) {
         String[] lines = text.split("\n", -1);

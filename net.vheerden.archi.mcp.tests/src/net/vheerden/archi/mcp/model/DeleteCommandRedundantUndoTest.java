@@ -22,10 +22,9 @@ import com.archimatetool.model.IFolder;
 /**
  * Pins undo integrity when one compound removes the SAME target twice — the shape a batch
  * produces when a caller queues the same delete redundantly, or when a folder-cascade delete
- * overlaps a standalone delete of a contained item. Each delete command captures its
- * re-insertion anchor at construction, before any execute, so both hold the same pre-delete
- * position; committing removes the target once, and the compound's reverse-order undo runs both
- * restores. Without the already-present guard the second restore re-adds the target into an EMF
+ * overlaps a standalone delete of a contained item. Committing removes the target once; the second
+ * delete finds it already gone and removes nothing, so its undo restores nothing and the first
+ * delete's undo puts the target back once. A second restore would re-add the target into an EMF
  * containment list, which forbids duplicates and throws {@code IllegalArgumentException}
  * ("no duplicates"), aborting the undo mid-way and leaving the model half-restored.
  *
@@ -75,8 +74,7 @@ public class DeleteCommandRedundantUndoTest {
     }
 
     private DeleteRelationshipCommand deleteOf(IArchimateRelationship rel) {
-        int index = relations.getElements().indexOf(rel);
-        return new DeleteRelationshipCommand(rel, relations, index, e1, e2, List.of());
+        return new DeleteRelationshipCommand(rel, new DeleteCascade.OfRelationship(List.of(), List.of(), 0));
     }
 
     private IBusinessActor newActor(String id) {
@@ -88,8 +86,7 @@ public class DeleteCommandRedundantUndoTest {
     }
 
     private DeleteElementCommand deleteOf(IArchimateElement element) {
-        int index = business.getElements().indexOf(element);
-        return new DeleteElementCommand(element, business, index, List.of(), List.of(), List.of());
+        return new DeleteElementCommand(element, DeleteCascade.ofElement(element));
     }
 
     /**

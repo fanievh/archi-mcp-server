@@ -20,6 +20,9 @@ import com.archimatetool.model.INameable;
 import com.archimatetool.model.util.ArchimateModelUtils;
 
 import net.vheerden.archi.mcp.response.dto.AddToViewResultDto;
+import net.vheerden.archi.mcp.response.dto.RecededParentDto;
+import net.vheerden.archi.mcp.response.dto.BulkMutationResult;
+import net.vheerden.archi.mcp.response.dto.BulkOperationFailure;
 import net.vheerden.archi.mcp.response.dto.BulkOperationResult;
 import net.vheerden.archi.mcp.response.dto.ClearViewResultDto;
 import net.vheerden.archi.mcp.response.dto.DeleteResultDto;
@@ -167,10 +170,24 @@ final class BulkResultProjection {
             boolean declined = child != null
                     && !CommitSkippableCommand.collectSkipReasons(child).isEmpty();
             retracted.add(declined
-                    ? result.withResizedAncestors(List.of()).withMovedObjects(List.of())
+                    ? result.withResizedAncestors(List.of()).withMovedObjects(List.of()).withRecededParent(null)
                     : withNameAtDestruction(result, child));
         }
         return List.copyOf(retracted);
+    }
+
+    /**
+     * The result of a bulk call that was queued or dispatched, with the reason for each operation that
+     * declined. A dispatched call in which every operation declined with nothing written says so.
+     *
+     * @param compound the compound that was queued or executed, one child per operation
+     */
+    static BulkMutationResult result(List<BulkOperationResult> operations, List<BulkOperationFailure> failures,
+            int totalOperations, Integer batchSequenceNumber, Command compound) {
+        BulkMutationResult result = BulkMutationResult.of(operations, failures, totalOperations,
+                batchSequenceNumber, CommitSkippableCommand.collectSkipReasonsByOperation(compound));
+        return batchSequenceNumber == null && CommitSkippableCommand.vouchesNothingChanged(compound)
+                ? result.withNothingApplied() : result;
     }
 
     /**
@@ -266,6 +283,9 @@ final class BulkResultProjection {
         DeleteResultDto deletion = null;
         List<MovedViewObjectDto> resizedAncestors = List.of();
         List<MovedViewObjectDto> movedObjects = List.of();
+        RecededParentDto recededParent = null;
+        List<ViewConnectionDto> autoConnections = null;
+        List<AddToViewResultDto.SkippedConnection> skippedDueToNesting = List.of(), skippedByCap = List.of();
 
         if (entity instanceof ElementDto dto) {
             entityType = dto.type();
@@ -283,6 +303,13 @@ final class BulkResultProjection {
             // which is any operation's own entity — so effectiveBounds below can never describe
             // them. Carried through here and re-read live after dispatch.
             resizedAncestors = dto.resizedAncestors();
+            // The parent it receded is not this operation's entity either; filled in when it runs.
+            recededParent = dto.recededParent();
+            // What its auto-connect draws and declines, as the direct call reports it: projected, not
+            // dropped, or a skip the single-tool caller is told about would be silent here.
+            autoConnections = dto.autoConnections();
+            skippedDueToNesting = dto.skippedDueToNesting();
+            skippedByCap = dto.skippedByCap();
         } else if (entity instanceof ViewConnectionDto dto) {
             entityType = dto.relationshipType();
             entityName = null;
@@ -298,16 +325,18 @@ final class BulkResultProjection {
         } else if (entity instanceof RemoveFromViewResultDto dto) {
             // removedObjectType keeps its own coarse vocabulary — it is published in the
             // remove-from-view description and branched on in code — so it is translated here
-            // rather than changed at the producer. The four cases mirror prepareRemoveFromView's
-            // guards one for one: IDiagramModelArchimateObject, IDiagramModelGroup,
-            // IDiagramModelNote, IDiagramModelArchimateConnection. A fifth guard would arrive
-            // here as its own unrecognised token and pass through unrelabelled, so it surfaces as
-            // itself instead of being silently filed under one of these four.
+            // rather than changed at the producer. The cases mirror ViewRemoval.typeToken's
+            // coarse nouns one for one. Any other view object is reported there by its Archi
+            // type name already, so it passes through as itself; a new noun added there without
+            // a case here would do the same rather than be silently filed under one of these.
             entityType = switch (dto.removedObjectType()) {
                 case "viewObject" -> "DiagramModelArchimateObject";
                 case "group" -> "DiagramModelGroup";
                 case "note" -> "DiagramModelNote";
+                case "viewReference" -> "DiagramModelReference";
+                case "image" -> "DiagramModelImage";
                 case "viewConnection" -> "DiagramModelArchimateConnection";
+                case "connection" -> "DiagramModelConnection";
                 case null, default -> dto.removedObjectType();
             };
             entityName = null;
@@ -317,6 +346,7 @@ final class BulkResultProjection {
         } else if (entity instanceof ViewGroupDto dto) {
             entityType = "DiagramModelGroup";
             entityName = dto.label();
+            recededParent = dto.recededParent();
         } else if (entity instanceof ViewNoteDto dto) {
             entityType = "DiagramModelNote";
             entityName = null;
@@ -353,7 +383,28 @@ final class BulkResultProjection {
         return new BulkOperationResult(index, tool, action,
                 prepared.entityId(), entityType, entityName, appliedCount, skippedCount,
                 null, deletion, resizedAncestors, movedObjects, null, null, null, null,
-                placementWarningsOf(entity), null);
+                placementWarningsOf(entity), null, recededParent, autoConnections, skippedDueToNesting, skippedByCap);
+    }
+
+    /**
+     * The auto-connections an operation drew that are still on a view once the whole call has run. A
+     * later operation in the same call can take one off again, by removing its other end or deleting
+     * its relationship, and a line whose endpoint was gone when it ran was never drawn; neither is
+     * listed. Its id stops resolving either way.
+     */
+    private static BulkOperationResult withAutoConnectionsRefreshed(IArchimateModel model,
+            BulkOperationResult result) {
+        if (result.autoConnections() == null) {
+            return result;
+        }
+        List<ViewConnectionDto> drawn = new ArrayList<>();
+        for (ViewConnectionDto connection : result.autoConnections()) {
+            if (ArchimateModelUtils.getObjectByID(model, connection.viewConnectionId())
+                    instanceof IDiagramModelArchimateConnection) {
+                drawn.add(connection);
+            }
+        }
+        return result.withAutoConnections(List.copyOf(drawn));
     }
 
     /**
@@ -370,6 +421,9 @@ final class BulkResultProjection {
             case ViewNoteDto dto -> dto.structuredWarnings();
             case EmbeddedViewDto dto -> dto.structuredWarnings();
             case DiagramImageDto dto -> dto.structuredWarnings();
+            case ViewObjectDto dto -> dto.structuredWarnings();
+            case AddToViewResultDto dto -> dto.structuredWarnings();
+            case SetViewLabelExpressionResultDto dto -> dto.structuredWarnings();
             case null, default -> null;
         };
         return warnings == null ? List.of() : warnings;
@@ -404,7 +458,7 @@ final class BulkResultProjection {
      */
     private static BulkOperationResult withLiveEntityState(IArchimateModel model,
             BulkOperationResult result) {
-        BulkOperationResult withAncestors = withAncestorsRefreshed(model, result);
+        BulkOperationResult withAncestors = withAncestorsRefreshed(model, withAutoConnectionsRefreshed(model, result));
         withAncestors = withAncestors.withMovedObjects(
                 refreshLive(model, withAncestors.movedObjects()));
         if (withAncestors.entityId() == null) {
@@ -528,8 +582,8 @@ final class BulkResultProjection {
 
         ViewConnectionDto base = ConnectionResponseBuilder.buildConnectionResponseDto(
                 connection.getId(), relationship,
-                (source != null) ? source.getId() : null,
-                (target != null) ? target.getId() : null,
+                ConnectionResponseBuilder.endId(connection.getSource()),
+                ConnectionResponseBuilder.endId(connection.getTarget()),
                 ConnectionResponseBuilder.collectBendpoints(connection),
                 anchorable(source), anchorable(target), connection.getTextPosition());
 
@@ -542,7 +596,10 @@ final class BulkResultProjection {
         return ConnectionResponseBuilder.withConnectionStyling(base, connection);
     }
 
-    /** The endpoint as an ArchiMate view object, or null when it is a group, note or reference. */
+    /**
+     * The endpoint as an ArchiMate view object, or null when it is anything else. For an ArchiMate
+     * connection that is another connection: Archi refuses a group, note, image or view reference.
+     */
     private static IDiagramModelArchimateObject archimateEndpoint(IConnectable endpoint) {
         return (endpoint instanceof IDiagramModelArchimateObject obj) ? obj : null;
     }

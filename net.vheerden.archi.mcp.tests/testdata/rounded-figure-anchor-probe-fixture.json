@@ -1,0 +1,188 @@
+{
+ "viewName": "Rounded-figure anchor probe (hand-built)",
+ "_provenance": "Hand-built 2026-10-20: one plain source, one bendpoint and one rounded target per case; each end derived by hand from Archi release_5.10.0 OrthogonalAnchor (see RoundedFigureAnchorCensusTest). The same layout, exported from Archi 5.10.0 at scale 1, drew the band and corner points the census expects for cases b, c and d.",
+ "elements": [
+  {
+   "id": "s-a",
+   "name": "Source a",
+   "x": 200,
+   "y": 140,
+   "w": 100,
+   "h": 40,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "t-a",
+   "name": "Target a",
+   "x": 50,
+   "y": 240,
+   "w": 206,
+   "h": 56,
+   "isChild": false,
+   "type": "ApplicationFunction",
+   "figureType": 0
+  },
+  {
+   "id": "s-b",
+   "name": "Source b",
+   "x": 340,
+   "y": 240,
+   "w": 40,
+   "h": 60,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "t-b",
+   "name": "Target b",
+   "x": 400,
+   "y": 300,
+   "w": 120,
+   "h": 60,
+   "isChild": false,
+   "type": "ApplicationFunction",
+   "figureType": 0
+  },
+  {
+   "id": "s-c",
+   "name": "Source c",
+   "x": 540,
+   "y": 85,
+   "w": 80,
+   "h": 50,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "t-c",
+   "name": "Target c",
+   "x": 700,
+   "y": 100,
+   "w": 120,
+   "h": 56,
+   "isChild": false,
+   "type": "BusinessService",
+   "figureType": 1
+  },
+  {
+   "id": "s-d",
+   "name": "Source d",
+   "x": 670,
+   "y": 180,
+   "w": 120,
+   "h": 40,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "t-d",
+   "name": "Target d",
+   "x": 700,
+   "y": 300,
+   "w": 120,
+   "h": 56,
+   "isChild": false,
+   "type": "Value",
+   "figureType": 1
+  },
+  {
+   "id": "s-e",
+   "name": "Source e",
+   "x": 560,
+   "y": 560,
+   "w": 60,
+   "h": 40,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "t-e",
+   "name": "Target e",
+   "x": 400,
+   "y": 500,
+   "w": 120,
+   "h": 60,
+   "isChild": false,
+   "type": "ApplicationProcess",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "c-a",
+   "sourceId": "s-a",
+   "targetId": "t-a",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 7,
+     "startY": 61,
+     "endX": 104,
+     "endY": -47
+    }
+   ]
+  },
+  {
+   "id": "c-b",
+   "sourceId": "s-b",
+   "targetId": "t-b",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 40,
+     "startY": 0,
+     "endX": -60,
+     "endY": -60
+    }
+   ]
+  },
+  {
+   "id": "c-c",
+   "sourceId": "s-c",
+   "targetId": "t-c",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 70,
+     "startY": 0,
+     "endX": -110,
+     "endY": -18
+    }
+   ]
+  },
+  {
+   "id": "c-d",
+   "sourceId": "s-d",
+   "targetId": "t-d",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 0,
+     "startY": 50,
+     "endX": -30,
+     "endY": -78
+    }
+   ]
+  },
+  {
+   "id": "c-e",
+   "sourceId": "s-e",
+   "targetId": "t-e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -50,
+     "startY": 0,
+     "endX": 80,
+     "endY": 50
+    }
+   ]
+  }
+ ]
+}

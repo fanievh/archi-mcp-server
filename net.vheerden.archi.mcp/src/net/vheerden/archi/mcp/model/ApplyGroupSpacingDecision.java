@@ -80,9 +80,12 @@ public record ApplyGroupSpacingDecision(
      *                                    {@code SpacingEntryGuardTermination}
      *                                    when this view's corridor lies
      *                                    between containers this tool's own
-     *                                    positioning step does not move; null
-     *                                    when the step has a corridor of its
-     *                                    own. Passed as the built sentence
+     *                                    positioning step does not move — or,
+     *                                    despite the name, the element-container
+     *                                    reason when the only containers are
+     *                                    ArchiMate elements holding children,
+     *                                    told apart by its marker; null when the
+     *                                    step has a corridor of its own. Passed as the built sentence
      *                                    rather than as a flag because it
      *                                    names the view and counts its
      *                                    containers, and because three tools
@@ -102,6 +105,13 @@ public record ApplyGroupSpacingDecision(
             String containersNotPositionedReason) {
 
         if (!hasAtLeast2TopLevelGroups) {
+            // On a view whose containers are ArchiMate elements holding children, "fewer than 2
+            // top-level groups" is the half of the truth that reads as "nothing here". The reason
+            // that says what the view holds and which tool spaces inside it takes its place; it
+            // is built only when this branch is the one that fires, so no view changes branch.
+            if (SpacingEntryGuardTermination.isElementContainersReason(containersNotPositionedReason)) {
+                return new ApplyGroupSpacingDecision(0, false, containersNotPositionedReason);
+            }
             return new ApplyGroupSpacingDecision(0, false,
                     "view has fewer than 2 top-level groups; "
                     + "inter-group spacing not adjustable (a view needs at "

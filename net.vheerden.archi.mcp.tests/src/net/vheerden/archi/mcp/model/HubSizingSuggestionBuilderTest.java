@@ -185,17 +185,44 @@ public class HubSizingSuggestionBuilderTest {
 
     // ---- Label-aware-width preservation (extracted from prior accessor logic) ----
 
+    /**
+     * When the longest label needs more width than the connection count does, the width the
+     * sentence prints is the label term, and the parenthesis beside it gives that term's
+     * arithmetic. 8 connections, width 120, longest label 180: the connection term is
+     * 120 + 15 × 2 = 150 and the label term is 120 + 180 = 300, so the sentence says 300 and adds
+     * it up as 120 + 180. The height clause is the connection term, as before.
+     */
     @Test
-    public void buildSuggestions_labelAwareWidth_shouldStillApply() {
-        // 8 conns + maxLabelWidth=180 + width=120 → labelAwareWidth = 300, connectionBasedWidth = 150
-        // labelAwareWidth > connectionBasedWidth → suffix appended.
+    public void buildSuggestions_whenTheLabelNeedsMoreWidth_shouldPrintTheLabelTermsArithmetic() {
         List<String> result = HubSizingSuggestionBuilder.buildSuggestions(
                 List.of(entry("API Gateway", 8, 120, 55, 180)));
-        assertEquals(1, result.size());
-        assertTrue("Should preserve label-adjusted-width suffix when labelAware > connectionBased",
-                result.get(0).contains("Label-adjusted width: 300px"));
-        assertTrue("Should cite the longest label width",
-                result.get(0).contains("longest label: 180px"));
+        assertEquals(List.of("Element 'API Gateway' has 8 connections (large hub: > 6). "
+                + "Consider increasing height to 85px (55 + 15 × 2) for horizontal layouts, "
+                + "or width to 300px (120 + longest label 180px) for vertical layouts."), result);
+    }
+
+    /**
+     * A tie prints the connection term: both terms give the same number, so the parenthesis is
+     * true either way, and the formula text stays byte-identical to the no-label case.
+     * 8 connections, width 120, longest label 30: 120 + 15 × 2 = 150 = 120 + 30.
+     */
+    @Test
+    public void buildSuggestions_whenBothTermsGiveTheSameWidth_shouldPrintTheConnectionTerm() {
+        List<String> result = HubSizingSuggestionBuilder.buildSuggestions(
+                List.of(entry("API Gateway", 8, 120, 55, 30)));
+        assertEquals(List.of("Element 'API Gateway' has 8 connections (large hub: > 6). "
+                + "Consider increasing height to 85px (55 + 15 × 2) for horizontal layouts, "
+                + "or width to 150px (120 + 15 × 2) for vertical layouts."), result);
+    }
+
+    /** A label narrower than the connection term leaves the sentence exactly as the no-label case. */
+    @Test
+    public void buildSuggestions_whenTheConnectionsNeedMoreWidth_shouldPrintTheConnectionTerm() {
+        List<String> result = HubSizingSuggestionBuilder.buildSuggestions(
+                List.of(entry("API Gateway", 8, 120, 55, 29)));
+        assertEquals(List.of("Element 'API Gateway' has 8 connections (large hub: > 6). "
+                + "Consider increasing height to 85px (55 + 15 × 2) for horizontal layouts, "
+                + "or width to 150px (120 + 15 × 2) for vertical layouts."), result);
     }
 
     // ---- Served sentence, asserted whole ----

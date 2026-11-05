@@ -16,15 +16,32 @@ import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.DispatchArm;
 import net.vheerden.archi.mcp.model.RoutingRect;
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator.Face;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
+
 
 /**
  * Tests for {@link RoutingPipeline}.
  * Pure-geometry tests — no OSGi runtime required.
  */
 public class RoutingPipelineTest {
+
+    /**
+     * The face-line coordinate, read from production — {@code
+     * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} px outside the named face.
+     *
+     * <p>Nearly every fixture and expectation in this class needs a terminal to be <em>on</em> a
+     * face line; none of them is asserting where that line is, and the margin's value is pinned
+     * once in {@code EdgeAttachmentCalculatorTest}. Reading the coordinate from production keeps
+     * these tests asserting what they are named for — that the pipeline puts a terminal on its
+     * face, detects the face it is on, or declines to overwrite it — instead of re-asserting a
+     * constant they do not own.
+     */
+    private static int faceLine(RoutingRect r, Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
 
     private RoutingPipeline pipeline;
 
@@ -830,6 +847,58 @@ public class RoutingPipelineTest {
         assertNotNull(result.get("c1"));
     }
 
+    @Test
+    public void shouldMoveAVisibleLabel_onlyForANeighbourThatCarriesText() {
+        // A neighbouring label is an obstacle to this one, so a neighbour's text alone decides where
+        // the visible label goes. An empty text is no label: the caller blanks a hidden label so that
+        // a label Archi does not draw cannot push a drawn one aside. Neither route depends on labels.
+        // The neighbour's line runs at x 630, clear of the visible Middle label (x 340..620), and Archi
+        // centres its Middle label on (630, 319), 8 px above the visible line, so neither label lies on
+        // the other's line; the neighbour's line is the longer, so its label is placed first.
+        List<RoutingRect> nodes = neighbourNodes();
+
+        RoutingResult blank = routeNeighbours(nodes, "");
+        // 18 characters render 204 px wide, x 528..732, y 309..329: on the visible Middle label
+        // (y 317..337) and clear of its Source slot (x 74..354).
+        RoutingResult named = routeNeighbours(nodes, "settles the ledger");
+
+        assertEquals("the routes do not depend on the neighbour's text", blank.routed(), named.routed());
+        assertNull("beside an unlabelled neighbour the visible label stays put",
+                blank.optimalPositions().get("visible"));
+        assertEquals("a neighbour with text pushes it to Source", Integer.valueOf(0),
+                named.optimalPositions().get("visible"));
+    }
+
+    @Test
+    public void shouldMoveTheNeighbourInstead_whenItsOwnLabelRendersOntoABox() {
+        // 86 characters render 939 px wide, x 161..1100: onto n3, one of the visible connection's boxes,
+        // so the optimizer moves the neighbour's label to Source and the visible label stays put.
+        RoutingResult named = routeNeighbours(neighbourNodes(),
+                "settles the quarterly ledger nightly across every region of the bank, every single day");
+
+        assertEquals(Map.of("neighbour", 0), named.optimalPositions());
+    }
+
+    /**
+     * n0 far above n1 (a 1128 px vertical line at x 630, whose drawn midpoint is (630, 319)), and n2 left of
+     * n3 (a horizontal line at y 327). The lines cross at (630, 327), clear of both Middle labels.
+     */
+    private static List<RoutingRect> neighbourNodes() {
+        return List.of(
+                new RoutingRect(570, -300, 120, 55, "n0"), new RoutingRect(570, 883, 120, 55, "n1"),
+                new RoutingRect(0, 300, 60, 55, "n2"), new RoutingRect(900, 300, 60, 55, "n3"));
+    }
+
+    private RoutingResult routeNeighbours(List<RoutingRect> nodes, String neighbourText) {
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                new RoutingPipeline.ConnectionEndpoints("neighbour", nodes.get(0), nodes.get(1),
+                        List.of(nodes.get(2), nodes.get(3)), neighbourText, 1, List.of()),
+                new RoutingPipeline.ConnectionEndpoints("visible", nodes.get(2), nodes.get(3),
+                        List.of(nodes.get(0), nodes.get(1)), "carries the nightly batch", 1, List.of()));
+        return pipeline.routeAllConnections(connections, nodes,
+                Map.of("neighbour", Set.of("n0", "n1"), "visible", Set.of("n2", "n3")));
+    }
+
     // --- Post-pipeline obstacle re-validation ---
 
     @Test
@@ -863,7 +932,7 @@ public class RoutingPipelineTest {
 
     @Test
     public void shouldRepositionTerminalOnItsFace_whenTerminalSegmentCrossesObstacle() {
-        // Source element at (100,100,100,100): right face line x = 201, extent y in [100,200].
+        // Source element at (100,100,100,100): terminal on its right face line, extent y in [100,200].
         // The terminal sits high on that face and its segment to bp[1] runs diagonally down
         // through an obstacle. Sliding the terminal down its own face to bp[1]'s row makes the
         // segment horizontal and clears the obstacle, without deleting the terminal.
@@ -871,17 +940,18 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(600, 300, 100, 100, "tgt");
         RoutingRect obstacle = new RoutingRect(220, 100, 60, 40, "obs");
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(201, 110),
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 110),
                 new AbsoluteBendpointDto(300, 190),
                 new AbsoluteBendpointDto(300, 350),
-                new AbsoluteBendpointDto(599, 350)));
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 350)));
         RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
                 "c1", source, target, List.of(obstacle), null, 0, List.of());
 
         RoutingPipeline.removeObstacleViolations(path, List.of(obstacle), conn);
 
         assertEquals("Terminal must not be deleted", 4, path.size());
-        assertEquals("Terminal stays on its own face line", 201, path.get(0).x());
+        assertEquals("Terminal stays on its own face line",
+                faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals("Terminal slid to its neighbour's row", 190, path.get(0).y());
         assertTrue("Terminal stays within the face extent",
                 path.get(0).y() >= source.y()
@@ -907,17 +977,18 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(600, 600, 100, 100, "tgt");
         RoutingRect obstacle = new RoutingRect(215, 140, 30, 40, "obs");
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(201, 110),
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 110),
                 new AbsoluteBendpointDto(300, 400),
-                new AbsoluteBendpointDto(599, 400),
-                new AbsoluteBendpointDto(599, 650)));
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 400),
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 650)));
         RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
                 "c1", source, target, List.of(obstacle), null, 0, List.of());
 
         RoutingPipeline.removeObstacleViolations(path, List.of(obstacle), conn);
 
         assertEquals("Terminal must not be deleted", 4, path.size());
-        assertEquals("Terminal stays on its own face line", 201, path.get(0).x());
+        assertEquals("Terminal stays on its own face line",
+                faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals("Terminal is clamped to the bottom of the face, not the neighbour's row",
                 200, path.get(0).y());
     }
@@ -2275,8 +2346,7 @@ public class RoutingPipelineTest {
     @Test
     public void shouldDetectRightFace_whenTerminalAtRightEdge() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // RIGHT: x + w + 1 = 221
-        int[] terminal = {221, 220};
+        int[] terminal = {faceLine(element, Face.RIGHT), 220};
         assertEquals(EdgeAttachmentCalculator.Face.RIGHT,
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
     }
@@ -2284,8 +2354,7 @@ public class RoutingPipelineTest {
     @Test
     public void shouldDetectLeftFace_whenTerminalAtLeftEdge() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // LEFT: x - 1 = 99
-        int[] terminal = {99, 220};
+        int[] terminal = {faceLine(element, Face.LEFT), 220};
         assertEquals(EdgeAttachmentCalculator.Face.LEFT,
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
     }
@@ -2293,8 +2362,7 @@ public class RoutingPipelineTest {
     @Test
     public void shouldDetectTopFace_whenTerminalAtTopEdge() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // TOP: y - 1 = 199
-        int[] terminal = {160, 199};
+        int[] terminal = {160, faceLine(element, Face.TOP)};
         assertEquals(EdgeAttachmentCalculator.Face.TOP,
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
     }
@@ -2302,8 +2370,7 @@ public class RoutingPipelineTest {
     @Test
     public void shouldDetectBottomFace_whenTerminalAtBottomEdge() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // BOTTOM: y + h + 1 = 241
-        int[] terminal = {160, 241};
+        int[] terminal = {160, faceLine(element, Face.BOTTOM)};
         assertEquals(EdgeAttachmentCalculator.Face.BOTTOM,
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
     }
@@ -2311,9 +2378,12 @@ public class RoutingPipelineTest {
     @Test
     public void shouldAbstain_whenTerminalIsOnNoFaceLine() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // One pixel inside the right face line (221) — on no face line of the element at all.
-        // The old fallback chain answered RIGHT here, indistinguishably from a measured RIGHT.
-        int[] justInside = {220, 220};
+        // One pixel INSIDE the right face line — on no face line of the element at all, and a
+        // near miss rather than an arbitrary interior point, which is the case the old fallback
+        // chain answered RIGHT for, indistinguishably from a measured RIGHT. Derived, so it stays
+        // a near miss when the margin moves: a literal here silently becomes an ordinary interior
+        // point and the boundary this test is named for goes unexercised.
+        int[] justInside = {faceLine(element, Face.RIGHT) - 1, 220};
         assertFalse("Precondition: the point is on no face line",
                 RoutingPipeline.isOnElementPerimeter(
                         new AbsoluteBendpointDto(justInside[0], justInside[1]), element));
@@ -2330,12 +2400,14 @@ public class RoutingPipelineTest {
     @Test
     public void shouldResolveCornerToTheVerticalFace_whenTwoFaceLinesHold() {
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // x = 99 is the left face line and y = 199 is the top face line: both hold. A corner is
+        // A point on the left face line AND the top face line: both hold. A corner is
         // NOT an abstention — the vertical faces are tested first, as they always were.
-        assertEquals(EdgeAttachmentCalculator.Face.LEFT,
-                RoutingPipeline.determineFaceFromTerminal(new int[]{99, 199}, element));
-        assertEquals(EdgeAttachmentCalculator.Face.RIGHT,
-                RoutingPipeline.determineFaceFromTerminal(new int[]{221, 241}, element));
+        int[] topLeft = {faceLine(element, Face.LEFT), faceLine(element, Face.TOP)};
+        int[] bottomRight = {faceLine(element, Face.RIGHT), faceLine(element, Face.BOTTOM)};
+        assertEquals(Face.LEFT,
+                RoutingPipeline.determineFaceFromTerminal(topLeft, element));
+        assertEquals(Face.RIGHT,
+                RoutingPipeline.determineFaceFromTerminal(bottomRight, element));
     }
 
     // --- Full pipeline integration test ---
@@ -2360,7 +2432,7 @@ public class RoutingPipelineTest {
 
         // First BP at source RIGHT face
         AbsoluteBendpointDto firstBp = path.get(0);
-        assertEquals("Source terminal X at RIGHT face edge", 221, firstBp.x());
+        assertEquals("Source terminal X at RIGHT face edge", faceLine(source, Face.RIGHT), firstBp.x());
         // Y at source face center (220) — pipeline preserves face midpoint
         assertEquals("Source terminal Y at face center", 220, firstBp.y());
 
@@ -2390,7 +2462,7 @@ public class RoutingPipelineTest {
 
         // First BP should be at source BOTTOM face: y = 141 (100+40+1)
         AbsoluteBendpointDto firstBp = path.get(0);
-        assertEquals("Source terminal Y at BOTTOM face edge", 141, firstBp.y());
+        assertEquals("Source terminal Y at BOTTOM face edge", faceLine(source, Face.BOTTOM), firstBp.y());
 
         // First segment must be perpendicular (vertical for BOTTOM face)
         if (path.size() >= 2) {
@@ -2413,35 +2485,35 @@ public class RoutingPipelineTest {
 
         // Both terminals shifted: source Y 220→228, target Y 220→228
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(221, 228),  // shifted source
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 228),  // shifted source
                 new AbsoluteBendpointDto(300, 228),
                 new AbsoluteBendpointDto(300, 228),
-                new AbsoluteBendpointDto(499, 228)   // shifted target
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 228)   // shifted target
         ));
 
-        int[] savedFirst = {221, 220};
-        int[] savedLast = {499, 220};
+        int[] savedFirst = {faceLine(source, Face.RIGHT), 220};
+        int[] savedLast = {faceLine(target, Face.LEFT), 220};
 
         RoutingPipeline.realignTerminals(path, savedFirst, savedLast, conn);
 
         assertEquals("Source terminal Y restored", 220, path.get(0).y());
-        assertEquals("Source terminal X restored", 221, path.get(0).x());
+        assertEquals("Source terminal X restored", faceLine(source, Face.RIGHT), path.get(0).x());
         AbsoluteBendpointDto lastBp = path.get(path.size() - 1);
         assertEquals("Target terminal Y restored", 220, lastBp.y());
-        assertEquals("Target terminal X restored", 499, lastBp.x());
+        assertEquals("Target terminal X restored", faceLine(target, Face.LEFT), lastBp.x());
     }
 
     @Test
     public void shouldDetectFace_whenDistributedTerminalNotAtCenter() {
         // Distributed terminal offset from face center
         RoutingRect element = new RoutingRect(100, 200, 120, 40, "e1");
-        // RIGHT face, distributed: x = 221 (edge+1), y = 210 (not center 220)
-        int[] terminal = {221, 210};
+        // RIGHT face, distributed: x on the face line, y = 210 (not center 220)
+        int[] terminal = {faceLine(element, Face.RIGHT), 210};
         assertEquals(EdgeAttachmentCalculator.Face.RIGHT,
                 RoutingPipeline.determineFaceFromTerminal(terminal, element));
 
-        // BOTTOM face, distributed: y = 241 (edge+1), x = 140 (not center 160)
-        int[] terminalBottom = {140, 241};
+        // BOTTOM face, distributed: y on the face line, x = 140 (not center 160)
+        int[] terminalBottom = {140, faceLine(element, Face.BOTTOM)};
         assertEquals(EdgeAttachmentCalculator.Face.BOTTOM,
                 RoutingPipeline.determineFaceFromTerminal(terminalBottom, element));
     }
@@ -2629,19 +2701,24 @@ public class RoutingPipelineTest {
         assertNotNull("Connection should be routed", routed);
         assertTrue("Routed path should have at least 2 points", routed.size() >= 2);
 
-        // Source terminal should be on source element perimeter (±1 for face offset)
+        // Both terminals must be inside their element's box grown by the face offset the router
+        // places them at — the band has to be the margin itself, or it rejects every correctly
+        // placed terminal the moment the margin grows.
         AbsoluteBendpointDto first = routed.get(0);
         assertTrue("Source terminal X on element perimeter",
-                first.x() >= source.x() - 1 && first.x() <= source.x() + source.width() + 1);
+                first.x() >= faceLine(source, Face.LEFT)
+                        && first.x() <= faceLine(source, Face.RIGHT));
         assertTrue("Source terminal Y on element perimeter",
-                first.y() >= source.y() - 1 && first.y() <= source.y() + source.height() + 1);
+                first.y() >= faceLine(source, Face.TOP)
+                        && first.y() <= faceLine(source, Face.BOTTOM));
 
-        // Target terminal should be on target element perimeter (±1 for face offset)
         AbsoluteBendpointDto last = routed.get(routed.size() - 1);
         assertTrue("Target terminal X on element perimeter",
-                last.x() >= target.x() - 1 && last.x() <= target.x() + target.width() + 1);
+                last.x() >= faceLine(target, Face.LEFT)
+                        && last.x() <= faceLine(target, Face.RIGHT));
         assertTrue("Target terminal Y on element perimeter",
-                last.y() >= target.y() - 1 && last.y() <= target.y() + target.height() + 1);
+                last.y() >= faceLine(target, Face.TOP)
+                        && last.y() <= faceLine(target, Face.BOTTOM));
     }
 
     @Test
@@ -4339,7 +4416,7 @@ public class RoutingPipelineTest {
     @Test
     public void egressClearance_rectifyAndClear_liftsHug_whenTerminalAlreadyOrthogonal() {
         // The terminal segment center→firstBP is already orthogonal (so terminalsOnlyRectify is a
-        // no-op), but the routed bendpoint sits 1px off the bottom face with a horizontal trunk —
+        // no-op), but the routed bendpoint sits on the bottom face line with a horizontal trunk —
         // the hug must still be lifted via the composed entry point.
         RoutingRect src = egressSource();                              // bottom y=109, centerX 507
         // Target center (472,830) aligns with the last bendpoint (472,400) so the target terminal is
@@ -4550,18 +4627,20 @@ public class RoutingPipelineTest {
 
     @Test
     public void shouldNotAlignSourceTerminal_whenLeftFacePerimeterDistributedY() {
-        // Element center at (50, 130). LEFT face terminal at (-1, distY=115) — distY ≠ centerY.
-        // BP is on LEFT perimeter (x == element.x() - 1), so the guard fires and skips the
-        // center-alignment prepend. The line from center (50,130) to (-1,115) already exits
-        // the LEFT face at ~y=115.3 — within 1 px of the distributed port.
+        // Element center at (50, 130). LEFT face terminal at distY=115 — distY ≠ centerY.
+        // BP is on the LEFT face line, so the guard fires and skips the center-alignment
+        // prepend: the line from the centre to the terminal already exits the LEFT face
+        // within a pixel of the distributed port.
         RoutingRect source = new RoutingRect(0, 100, 100, 60, "src"); // center=(50,130)
         RoutingRect target = new RoutingRect(400, 100, 100, 60, "tgt");
+        int srcLeft = faceLine(source, Face.LEFT);
+        int tgtLeft = faceLine(target, Face.LEFT);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(-1, 115));   // source terminal LEFT face, distributed Y
-        path.add(new AbsoluteBendpointDto(-1, 50));    // alignment BP (same X, different Y)
-        path.add(new AbsoluteBendpointDto(200, 50));   // intermediate
-        path.add(new AbsoluteBendpointDto(399, 130));  // target terminal LEFT face, at center
+        path.add(new AbsoluteBendpointDto(srcLeft, 115)); // source terminal LEFT face, distributed Y
+        path.add(new AbsoluteBendpointDto(srcLeft, 50));  // alignment BP (same X, different Y)
+        path.add(new AbsoluteBendpointDto(200, 50));      // intermediate
+        path.add(new AbsoluteBendpointDto(tgtLeft, 130)); // target terminal LEFT face, at center
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4573,22 +4652,23 @@ public class RoutingPipelineTest {
                 0, alignments);
         assertEquals("Path size unchanged", 4, path.size());
         // Original terminal preserved as BP[0]
-        assertEquals(-1, path.get(0).x());
+        assertEquals(srcLeft, path.get(0).x());
         assertEquals(115, path.get(0).y());
     }
 
     @Test
     public void shouldNotAlignSourceTerminal_whenRightFacePerimeterDistributedY() {
-        // Element at (0,100,100,60), center=(50,130). RIGHT face terminal at (101, 145).
-        // RIGHT perimeter x = element.x() + element.width() + 1 = 101. Guard fires.
+        // Element at (0,100,100,60), center=(50,130). RIGHT face terminal at distributed Y=145,
+        // on the RIGHT face line. Guard fires.
         RoutingRect source = new RoutingRect(0, 100, 100, 60, "src"); // center=(50,130)
         RoutingRect target = new RoutingRect(400, 100, 100, 60, "tgt");
+        int srcRight = faceLine(source, Face.RIGHT);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(101, 145));  // source terminal RIGHT face, distributed Y
-        path.add(new AbsoluteBendpointDto(200, 145));  // alignment BP
-        path.add(new AbsoluteBendpointDto(200, 130));  // intermediate
-        path.add(new AbsoluteBendpointDto(399, 130));  // target terminal
+        path.add(new AbsoluteBendpointDto(srcRight, 145)); // source terminal RIGHT, distributed Y
+        path.add(new AbsoluteBendpointDto(200, 145));      // alignment BP
+        path.add(new AbsoluteBendpointDto(200, 130));      // intermediate
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 130)); // target terminal
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4599,22 +4679,23 @@ public class RoutingPipelineTest {
         assertEquals("B70 guard: perimeter-distributed terminal must NOT be overwritten",
                 0, alignments);
         assertEquals(4, path.size());
-        assertEquals(101, path.get(0).x());
+        assertEquals(srcRight, path.get(0).x());
         assertEquals(145, path.get(0).y());
     }
 
     @Test
     public void shouldNotAlignSourceTerminal_whenTopFacePerimeterDistributedX() {
-        // Element at (100,0,120,60), center=(160,30). TOP face terminal at (140, -1).
-        // TOP perimeter y = element.y() - 1 = -1. Guard fires.
+        // Element at (100,0,120,60), center=(160,30). TOP face terminal at distributed X=140,
+        // on the TOP face line. Guard fires.
         RoutingRect source = new RoutingRect(100, 0, 120, 60, "src"); // center=(160,30)
         RoutingRect target = new RoutingRect(100, 300, 120, 60, "tgt");
+        int srcTop = faceLine(source, Face.TOP);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(140, -1));   // source terminal TOP face, distributed X
-        path.add(new AbsoluteBendpointDto(140, -30));  // alignment BP
-        path.add(new AbsoluteBendpointDto(160, -30));  // intermediate
-        path.add(new AbsoluteBendpointDto(160, 299));  // target terminal
+        path.add(new AbsoluteBendpointDto(140, srcTop)); // source terminal TOP, distributed X
+        path.add(new AbsoluteBendpointDto(140, -30));    // alignment BP
+        path.add(new AbsoluteBendpointDto(160, -30));    // intermediate
+        path.add(new AbsoluteBendpointDto(160, faceLine(target, Face.TOP))); // target terminal
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4626,21 +4707,22 @@ public class RoutingPipelineTest {
                 0, alignments);
         assertEquals(4, path.size());
         assertEquals(140, path.get(0).x());
-        assertEquals(-1, path.get(0).y());
+        assertEquals(srcTop, path.get(0).y());
     }
 
     @Test
     public void shouldNotAlignSourceTerminal_whenBottomFacePerimeterDistributedX() {
-        // Element at (100,0,120,60), center=(160,30). BOTTOM face terminal at (180, 61).
-        // BOTTOM perimeter y = element.y() + element.height() + 1 = 61. Guard fires.
+        // Element at (100,0,120,60), center=(160,30). BOTTOM face terminal at distributed X=180,
+        // on the BOTTOM face line. Guard fires.
         RoutingRect source = new RoutingRect(100, 0, 120, 60, "src"); // center=(160,30)
         RoutingRect target = new RoutingRect(100, 300, 120, 60, "tgt");
+        int srcBottom = faceLine(source, Face.BOTTOM);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(180, 61));   // source terminal BOTTOM face, distributed X
-        path.add(new AbsoluteBendpointDto(180, 100));  // alignment BP
-        path.add(new AbsoluteBendpointDto(160, 100));  // intermediate
-        path.add(new AbsoluteBendpointDto(160, 299));  // target terminal
+        path.add(new AbsoluteBendpointDto(180, srcBottom)); // source terminal BOTTOM, distributed X
+        path.add(new AbsoluteBendpointDto(180, 100));       // alignment BP
+        path.add(new AbsoluteBendpointDto(160, 100));       // intermediate
+        path.add(new AbsoluteBendpointDto(160, faceLine(target, Face.TOP))); // target terminal
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4652,7 +4734,7 @@ public class RoutingPipelineTest {
                 0, alignments);
         assertEquals(4, path.size());
         assertEquals(180, path.get(0).x());
-        assertEquals(61, path.get(0).y());
+        assertEquals(srcBottom, path.get(0).y());
     }
 
     @Test
@@ -4661,11 +4743,12 @@ public class RoutingPipelineTest {
         RoutingRect source = new RoutingRect(0, 100, 100, 60, "src"); // center=(50,130)
         RoutingRect target = new RoutingRect(400, 100, 100, 60, "tgt"); // center=(450,130)
 
+        int srcLeft = faceLine(source, Face.LEFT);
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(-1, 130));   // source terminal LEFT face, Y = centerY
-        path.add(new AbsoluteBendpointDto(-1, 50));    // alignment BP
-        path.add(new AbsoluteBendpointDto(200, 50));   // intermediate
-        path.add(new AbsoluteBendpointDto(399, 130));  // target terminal LEFT face, Y = centerY
+        path.add(new AbsoluteBendpointDto(srcLeft, 130)); // source terminal LEFT face, Y = centerY
+        path.add(new AbsoluteBendpointDto(srcLeft, 50));  // alignment BP
+        path.add(new AbsoluteBendpointDto(200, 50));      // intermediate
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 130)); // target, Y = centerY
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4679,17 +4762,18 @@ public class RoutingPipelineTest {
 
     @Test
     public void shouldNotAlignBothTerminals_whenBothPerimeterDistributed() {
-        // Both source and target terminals are distributed on their respective perimeters.
-        // Source RIGHT perimeter x = 0 + 100 + 1 = 101. Target LEFT perimeter x = 400 - 1 = 399.
+        // Both source and target terminals are distributed on their respective face lines.
         // Both guards fire; neither terminal is overwritten.
         RoutingRect source = new RoutingRect(0, 100, 100, 60, "src"); // center=(50,130)
         RoutingRect target = new RoutingRect(400, 100, 100, 60, "tgt"); // center=(450,130)
+        int srcRight = faceLine(source, Face.RIGHT);
+        int tgtLeft = faceLine(target, Face.LEFT);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(101, 115));  // source RIGHT face, distributed Y=115
-        path.add(new AbsoluteBendpointDto(200, 115));  // alignment
-        path.add(new AbsoluteBendpointDto(200, 145));  // intermediate
-        path.add(new AbsoluteBendpointDto(399, 145));  // target LEFT face, distributed Y=145
+        path.add(new AbsoluteBendpointDto(srcRight, 115)); // source RIGHT face, distributed Y=115
+        path.add(new AbsoluteBendpointDto(200, 115));      // alignment
+        path.add(new AbsoluteBendpointDto(200, 145));      // intermediate
+        path.add(new AbsoluteBendpointDto(tgtLeft, 145));  // target LEFT face, distributed Y=145
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4701,10 +4785,10 @@ public class RoutingPipelineTest {
                 0, alignments);
         assertEquals("Path size unchanged", 4, path.size());
         // Source terminal preserved
-        assertEquals(101, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(115, path.get(0).y());
         // Target terminal preserved
-        assertEquals(399, path.get(path.size() - 1).x());
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(145, path.get(path.size() - 1).y());
     }
 
@@ -4715,8 +4799,8 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(400, 100, 100, 60, "tgt"); // center=(450,130)
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(101, 130));  // source RIGHT face, Y = centerY
-        path.add(new AbsoluteBendpointDto(399, 130));  // target LEFT face, Y = centerY
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 130)); // source RIGHT face
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 130));  // target LEFT face
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4730,14 +4814,15 @@ public class RoutingPipelineTest {
 
     @Test
     public void shouldNotAlignShortPath_whenTwoBpPerimeterDistributed() {
-        // 2-BP path (terminal-to-terminal). Both terminals on LEFT perimeters.
-        // Source perimeter x = -1, target perimeter x = -1. Both guards fire.
+        // 2-BP path (terminal-to-terminal). Both terminals on LEFT face lines, which coincide
+        // because the two rects share an x. Both guards fire.
         RoutingRect source = new RoutingRect(0, 100, 100, 60, "src"); // center=(50,130)
         RoutingRect target = new RoutingRect(0, 300, 100, 60, "tgt"); // center=(50,330)
+        int leftLine = faceLine(source, Face.LEFT);
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(-1, 115));   // source LEFT face, distributed Y=115
-        path.add(new AbsoluteBendpointDto(-1, 299));   // target LEFT face, at Y=299 (target center=330)
+        path.add(new AbsoluteBendpointDto(leftLine, 115)); // source LEFT face, distributed Y=115
+        path.add(new AbsoluteBendpointDto(leftLine, 299)); // target LEFT face, Y=299 (centre 330)
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target,
@@ -4748,9 +4833,9 @@ public class RoutingPipelineTest {
         assertEquals("B70 guard: both perimeter terminals must be preserved",
                 0, alignments);
         assertEquals("Path size unchanged", 2, path.size());
-        assertEquals(-1, path.get(0).x());
+        assertEquals(leftLine, path.get(0).x());
         assertEquals(115, path.get(0).y());
-        assertEquals(-1, path.get(path.size() - 1).x());
+        assertEquals(leftLine, path.get(path.size() - 1).x());
         assertEquals(299, path.get(path.size() - 1).y());
     }
 
@@ -4774,7 +4859,7 @@ public class RoutingPipelineTest {
         // Second BP to the right — indicates RIGHT face exit
         path.add(new AbsoluteBendpointDto(300, 230));
         // Target terminal at left face
-        path.add(new AbsoluteBendpointDto(399, 230));
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -4782,8 +4867,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 1 terminal", 1, fixes);
-        // First BP should now be at RIGHT face midpoint: (x+w+1, cy) = (221, 230)
-        assertEquals("Source terminal X at right face edge", 221, path.get(0).x());
+        // First BP should now be at the RIGHT face midpoint: (face line, cy)
+        assertEquals("Source terminal X at right face edge", faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals("Source terminal Y at center", 230, path.get(0).y());
     }
 
@@ -4798,7 +4883,7 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(400, 200, 120, 60, "tgt");
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(221, 230)); // source right face
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 230)); // source right face
         path.add(new AbsoluteBendpointDto(300, 230));
         // Last BP at target center (center-termination scenario)
         path.add(new AbsoluteBendpointDto(460, 230));
@@ -4809,8 +4894,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 1 terminal", 1, fixes);
-        // Last BP should now be at LEFT face midpoint: (x-1, cy) = (399, 230)
-        assertEquals("Target terminal X at left face edge", 399, path.get(path.size() - 1).x());
+        // Last BP should now be at the LEFT face midpoint: (face line, cy)
+        assertEquals("Target terminal X at left face edge", faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals("Target terminal Y at center", 230, path.get(path.size() - 1).y());
     }
 
@@ -4834,10 +4919,10 @@ public class RoutingPipelineTest {
 
         assertEquals("Should fix 2 terminals", 2, fixes);
         // Source → RIGHT face (next BP is to the right): (221, 230)
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
         // Target → LEFT face (prev BP is to the left): (399, 230)
-        assertEquals(399, path.get(path.size() - 1).x());
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(230, path.get(path.size() - 1).y());
     }
 
@@ -4850,9 +4935,9 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(400, 200, 120, 60, "tgt"); // center (460, 230)
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(221, 230)); // at right face, not center
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 230)); // at right face, not center
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230)); // at left face, not center
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230)); // at left face, not center
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -4860,8 +4945,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 0 terminals", 0, fixes);
-        assertEquals(221, path.get(0).x());
-        assertEquals(399, path.get(path.size() - 1).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
     }
 
     /**
@@ -4886,12 +4971,12 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 2 terminals", 2, fixes);
-        // Source → BOTTOM face (next BP is below): (cx, y+h+1) = (160, 161)
+        // Source → BOTTOM face (next BP is below): (cx, face line)
         assertEquals(160, path.get(0).x());
-        assertEquals(161, path.get(0).y());
-        // Target → TOP face (prev BP is above): (cx, y-1) = (160, 179)
+        assertEquals(faceLine(source, Face.BOTTOM), path.get(0).y());
+        // Target → TOP face (prev BP is above): (cx, face line)
         assertEquals(160, path.get(path.size() - 1).x());
-        assertEquals(179, path.get(path.size() - 1).y());
+        assertEquals(faceLine(target, Face.TOP), path.get(path.size() - 1).y());
     }
 
     /**
@@ -4914,11 +4999,11 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 2 terminals", 2, fixes);
-        // Source → RIGHT face: (x+w+1, cy) = (221, 230)
-        assertEquals(221, path.get(0).x());
+        // Source → RIGHT face: (face line, cy)
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
-        // Target → LEFT face: (x-1, cy) = (239, 230)
-        assertEquals(239, path.get(path.size() - 1).x());
+        // Target → LEFT face: (face line, cy)
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(230, path.get(path.size() - 1).y());
     }
 
@@ -4943,9 +5028,9 @@ public class RoutingPipelineTest {
         assertEquals("Should fix 2 terminals", 2, fixes);
         // After fixing source, first BP moves to edge face. Then target fix uses
         // the updated path. Source → RIGHT (next BP was at target center, to the right)
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         // Target → LEFT (prev BP is now at source right face, to the left)
-        assertEquals(399, path.get(path.size() - 1).x());
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
     }
 
     /**
@@ -5006,10 +5091,10 @@ public class RoutingPipelineTest {
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
         // Perimeter-distributed source terminal
-        path.add(new AbsoluteBendpointDto(221, 215));
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 215));
         path.add(new AbsoluteBendpointDto(300, 215));
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230)); // target terminal at center Y
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230)); // target terminal at center Y
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -5019,7 +5104,7 @@ public class RoutingPipelineTest {
         assertEquals("B70 guard: perimeter source terminal must not be overwritten",
                 0, alignments);
         assertEquals("Path size unchanged", 4, path.size());
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(215, path.get(0).y());
     }
 
@@ -5043,11 +5128,11 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixCenterTerminatedPath(path, conn);
 
         assertEquals("Should fix 2 terminals", 2, fixes);
-        // Source → RIGHT face (next BP is to the right): (x+w+1, cy) = (221, 230)
-        assertEquals(221, path.get(0).x());
+        // Source → RIGHT face (next BP is to the right): (face line, cy)
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
-        // Target → LEFT face (prev BP is to the left, now at 221): (x-1, cy) = (179, 230)
-        assertEquals(179, path.get(path.size() - 1).x());
+        // Target → LEFT face (prev BP is to the left, on the source RIGHT line): (face line, cy)
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(230, path.get(path.size() - 1).y());
     }
 
@@ -5074,10 +5159,10 @@ public class RoutingPipelineTest {
 
         assertEquals("Should fix 2 terminals", 2, fixes);
         // Source ��� RIGHT face (next BP is to the right): (221, 230)
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
-        // Target → LEFT face (prev BP is to the left): (1199, 530)
-        assertEquals(1199, path.get(path.size() - 1).x());
+        // Target → LEFT face (prev BP is to the left): (face line, cy)
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(530, path.get(path.size() - 1).y());
     }
 
@@ -5098,7 +5183,7 @@ public class RoutingPipelineTest {
         // post-processing moved it there), target at proper face
         path.add(new AbsoluteBendpointDto(160, 230)); // at source center!
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230)); // target at left face
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230)); // target at left face
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -5114,7 +5199,7 @@ public class RoutingPipelineTest {
         // (Y=230 matches center Y=230), so no alignment BP needed
         assertEquals("No alignment needed — fixed position is already center-aligned",
                 0, alignments);
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
         // Path should still be 3 BPs (no insertions)
         assertEquals(3, path.size());
@@ -5172,8 +5257,8 @@ public class RoutingPipelineTest {
 
         // The hub is the TARGET for all connections, so the entry into the
         // hub's LEFT face is the LAST BP of each routed path. Left perimeter
-        // x is element.x() - 1 per computeAttachmentPoint convention.
-        int leftPerimeterX = hub.x() - 1; // 499
+        // x is the element's LEFT face line per the computeAttachmentPoint convention.
+        int leftPerimeterX = faceLine(hub, Face.LEFT);
         Set<Integer> lastYs = new HashSet<>();
         for (RoutingPipeline.ConnectionEndpoints conn : connections) {
             List<AbsoluteBendpointDto> path = result.routed().get(conn.connectionId());
@@ -5183,7 +5268,7 @@ public class RoutingPipelineTest {
             AbsoluteBendpointDto last = path.get(path.size() - 1);
             assertEquals(
                     "B70: " + conn.connectionId() + " last BP must be on hub LEFT "
-                            + "perimeter (x == hub.x() - 1); got " + last,
+                            + "perimeter (x == the hub's LEFT face line); got " + last,
                     leftPerimeterX, last.x());
             lastYs.add(last.y());
         }
@@ -5259,7 +5344,7 @@ public class RoutingPipelineTest {
 
         RoutingResult result = pipeline.routeAllConnections(connections, allObstacles);
 
-        int leftPerimeterX = hub.x() - 1; // 499
+        int leftPerimeterX = faceLine(hub, Face.LEFT);
 
         // Build a diagnostic snapshot of every first BP before asserting,
         // so a failing run dumps the full picture for triage.
@@ -6901,8 +6986,8 @@ public class RoutingPipelineTest {
 
         // Captured path: (471,191) → (471,679) → (134,679)
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(471, 191),
-                new AbsoluteBendpointDto(471, 679),
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 191),
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 679),
                 new AbsoluteBendpointDto(134, 679)
         ));
 
@@ -6936,8 +7021,8 @@ public class RoutingPipelineTest {
         // Captured path: source exits RIGHT at x=657, hugs face
         // ESB slot exits at (657, ~350), face-hug to (657, ~572), then corner to target
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(657, 350),
-                new AbsoluteBendpointDto(657, 572),
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 350),
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 572),
                 new AbsoluteBendpointDto(1087, 572)
         ));
 
@@ -6965,8 +7050,8 @@ public class RoutingPipelineTest {
 
         // Shorter face-hug: 58px
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(471, 100),
-                new AbsoluteBendpointDto(471, 158),
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 100),
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 158),
                 new AbsoluteBendpointDto(200, 158)
         ));
 
@@ -7004,8 +7089,8 @@ public class RoutingPipelineTest {
         // Captured path: (657,396) → (1005,396) → (1005,941)
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
                 new AbsoluteBendpointDto(657, 396),
-                new AbsoluteBendpointDto(1005, 396),
-                new AbsoluteBendpointDto(1005, 941)
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 396),
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 941)
         ));
 
         // Event Streaming Platform right edge at x=670 is the nearest obstacle
@@ -7042,8 +7127,8 @@ public class RoutingPipelineTest {
         // Captured path: (1005,276) → (671,276) → (671,500)
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
                 new AbsoluteBendpointDto(1005, 276),
-                new AbsoluteBendpointDto(671, 276),
-                new AbsoluteBendpointDto(671, 500)
+                new AbsoluteBendpointDto(faceLine(target, Face.RIGHT), 276),
+                new AbsoluteBendpointDto(faceLine(target, Face.RIGHT), 500)
         ));
 
         // Consumers group left edge at x=991 is the nearest obstacle to the RIGHT
@@ -7074,15 +7159,16 @@ public class RoutingPipelineTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT);
         int faceLine = anchoring.lineCoordinate(target); // 227
 
-        // Captured path: (471,143) → (227,143) → (227,506)
-        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(471, 143),
-                new AbsoluteBendpointDto(227, 143),
-                new AbsoluteBendpointDto(227, 506)
-        ));
-
-        // API Gateway left edge at x=472 is the nearest obstacle to the RIGHT
+        // API Gateway left edge is the nearest obstacle to the RIGHT
         RoutingRect apiGateway = new RoutingRect(472, 67, 107, 200, "apiGateway");
+
+        // Captured path: from the API Gateway's LEFT face line across to the target's RIGHT
+        // face line, then a 363px hug down that face.
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(faceLine(apiGateway, Face.LEFT), 143),
+                new AbsoluteBendpointDto(faceLine, 143),
+                new AbsoluteBendpointDto(faceLine, 506)
+        ));
         List<RoutingRect> obstacles = List.of(apiGateway);
 
         boolean corrected = RoutingPipeline.correctTargetSelfHug(path, obstacles, anchoring, target);
@@ -7110,15 +7196,16 @@ public class RoutingPipelineTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT);
         int faceLine = anchoring.lineCoordinate(target); // 206
 
-        // Captured path: (471,120) → (206,120) → (206,401)
-        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(471, 120),
-                new AbsoluteBendpointDto(206, 120),
-                new AbsoluteBendpointDto(206, 401)
-        ));
-
-        // API Gateway left edge at x=472 is the nearest obstacle to the RIGHT
+        // API Gateway left edge is the nearest obstacle to the RIGHT
         RoutingRect apiGateway = new RoutingRect(472, 67, 107, 200, "apiGateway");
+
+        // Captured path: from the API Gateway's LEFT face line across to the target's RIGHT
+        // face line, then a 281px hug down that face.
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(faceLine(apiGateway, Face.LEFT), 120),
+                new AbsoluteBendpointDto(faceLine, 120),
+                new AbsoluteBendpointDto(faceLine, 401)
+        ));
         List<RoutingRect> obstacles = List.of(apiGateway);
 
         boolean corrected = RoutingPipeline.correctTargetSelfHug(path, obstacles, anchoring, target);
@@ -7144,15 +7231,16 @@ public class RoutingPipelineTest {
         TerminalAnchoring anchoring = new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT);
         int faceLine = anchoring.lineCoordinate(target); // 192
 
-        // Captured path: (471,215) → (192,215) → (192,191)
-        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(471, 215),
-                new AbsoluteBendpointDto(192, 215),
-                new AbsoluteBendpointDto(192, 191)
-        ));
-
-        // API Gateway left edge at x=472 is the nearest obstacle to the RIGHT
+        // API Gateway left edge is the nearest obstacle to the RIGHT
         RoutingRect apiGateway = new RoutingRect(472, 67, 107, 200, "apiGateway");
+
+        // Captured path: from the API Gateway's LEFT face line across to the target's RIGHT
+        // face line, then a 24px hug up that face.
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(faceLine(apiGateway, Face.LEFT), 215),
+                new AbsoluteBendpointDto(faceLine, 215),
+                new AbsoluteBendpointDto(faceLine, 191)
+        ));
         List<RoutingRect> obstacles = List.of(apiGateway);
 
         boolean corrected = RoutingPipeline.correctTargetSelfHug(path, obstacles, anchoring, target);
@@ -7289,7 +7377,7 @@ public class RoutingPipelineTest {
         // BP inside source (x=777, within 574-796) but NOT at center (685,186)
         path.add(new AbsoluteBendpointDto(777, 186));
         path.add(new AbsoluteBendpointDto(850, 186));
-        path.add(new AbsoluteBendpointDto(899, 186));
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 186));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -7297,8 +7385,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
         assertEquals("Should fix 1 terminal", 1, fixes);
-        // Next BP is to the right → RIGHT face: x+w+1 = 797, cy = 186
-        assertEquals("Source terminal X at right face edge", 797, path.get(0).x());
+        // Next BP is to the right → RIGHT face: x on the face line, cy = 186
+        assertEquals("Source terminal X at right face edge", faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals("Source terminal Y at center", 186, path.get(0).y());
     }
 
@@ -7317,7 +7405,7 @@ public class RoutingPipelineTest {
         // BP inside source (y=398, within 374-429) but NOT at center (857,401)
         path.add(new AbsoluteBendpointDto(857, 398));
         path.add(new AbsoluteBendpointDto(857, 460));
-        path.add(new AbsoluteBendpointDto(857, 499));
+        path.add(new AbsoluteBendpointDto(857, faceLine(target, Face.TOP)));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -7325,9 +7413,9 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
         assertEquals("Should fix 1 terminal", 1, fixes);
-        // Next BP is below → BOTTOM face: cx = 857, y+h+1 = 430
+        // Next BP is below → BOTTOM face: cx = 857, y on the face line
         assertEquals("Source terminal X at center", 857, path.get(0).x());
-        assertEquals("Source terminal Y at bottom face edge", 430, path.get(0).y());
+        assertEquals("Source terminal Y at bottom face edge", faceLine(source, Face.BOTTOM), path.get(0).y());
     }
 
     /**
@@ -7341,7 +7429,7 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(400, 200, 120, 60, "tgt");
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(221, 230)); // source right face
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 230)); // source right face
         path.add(new AbsoluteBendpointDto(300, 230));
         // Last BP inside target (x=420, within 400-520) but not at center (460,230)
         path.add(new AbsoluteBendpointDto(420, 230));
@@ -7353,7 +7441,7 @@ public class RoutingPipelineTest {
 
         assertEquals("Should fix 1 terminal", 1, fixes);
         // Prev BP is to the left → LEFT face: x-1 = 399, cy = 230
-        assertEquals("Target terminal X at left face edge", 399, path.get(path.size() - 1).x());
+        assertEquals("Target terminal X at left face edge", faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals("Target terminal Y at center", 230, path.get(path.size() - 1).y());
     }
 
@@ -7415,7 +7503,7 @@ public class RoutingPipelineTest {
     /**
      * fixInteriorTerminalBPs should fix BP exactly on element boundary.
      * isInsideOrOnBoundary returns true for boundary BPs. Normal edge attachment
-     * places BPs at 1px outside (x-1, x+w+1, etc.), so a BP ON the boundary
+     * places BPs TERMINAL_FACE_MARGIN px outside, so a BP ON the boundary
      * indicates a problem that needs correction.
      */
     @Test
@@ -7428,7 +7516,7 @@ public class RoutingPipelineTest {
         // BP on source right boundary (x=220, which is x+w = 100+120)
         path.add(new AbsoluteBendpointDto(220, 230));
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230));
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -7436,25 +7524,28 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
         assertEquals("Should fix boundary BP", 1, fixes);
-        // Next BP is to the right → RIGHT face: x+w+1 = 221
-        assertEquals("Source terminal X moved to 1px outside right face", 221, path.get(0).x());
+        // Next BP is to the right → RIGHT face
+        assertEquals("Source terminal X moved onto the right face line",
+                faceLine(source, Face.RIGHT), path.get(0).x());
     }
 
     /**
-     * fixInteriorTerminalBPs should NOT trigger for BP 1px outside
+     * fixInteriorTerminalBPs should NOT trigger for a BP on the face line
      * element boundary. This is the normal edge attachment position.
      */
     @Test
-    public void shouldNotFixBP_whenOnePixelOutsideElement() {
-        // Source at (100, 200) w=120 h=60 → right edge at x=220
+    public void shouldNotFixBP_whenTerminalIsOnItsFaceLine() {
         RoutingRect source = new RoutingRect(100, 200, 120, 60, "src");
         RoutingRect target = new RoutingRect(400, 200, 120, 60, "tgt");
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        // BP at 1px outside right face (x=221) — normal edge attachment
-        path.add(new AbsoluteBendpointDto(221, 230));
+        // Both terminals where edge attachment actually puts them — on their own face lines, which
+        // is outside the element box, so fixInteriorTerminalBPs must leave them alone. Derived: a
+        // literal here stops being the face line the moment the margin moves, and the guard under
+        // test (isInsideOrOnBoundary) would go on passing for the wrong reason.
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 230));
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230));
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -7462,7 +7553,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
         assertEquals("Should not fix — BP is outside element", 0, fixes);
-        assertEquals("Source terminal unchanged", 221, path.get(0).x());
+        assertEquals("Source terminal unchanged",
+                faceLine(source, Face.RIGHT), path.get(0).x());
     }
 
     /**
@@ -7488,10 +7580,10 @@ public class RoutingPipelineTest {
 
         assertEquals("Should fix 2 terminals", 2, fixes);
         // Source → RIGHT face (221, 230)
-        assertEquals(221, path.get(0).x());
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(230, path.get(0).y());
         // Target → LEFT face (399, 230)
-        assertEquals(399, path.get(path.size() - 1).x());
+        assertEquals(faceLine(target, Face.LEFT), path.get(path.size() - 1).x());
         assertEquals(230, path.get(path.size() - 1).y());
     }
 
@@ -7508,7 +7600,7 @@ public class RoutingPipelineTest {
         // First BP at exact source center
         path.add(new AbsoluteBendpointDto(160, 230));
         path.add(new AbsoluteBendpointDto(300, 230));
-        path.add(new AbsoluteBendpointDto(399, 230));
+        path.add(new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 230));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
@@ -7516,8 +7608,8 @@ public class RoutingPipelineTest {
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
         assertEquals("Should fix center BP as interior BP", 1, fixes);
-        // RIGHT face: x+w+1 = 221, cy = 230
-        assertEquals(221, path.get(0).x());
+        // RIGHT face: x on the face line, cy = 230
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
     }
 
     /**
@@ -7540,6 +7632,125 @@ public class RoutingPipelineTest {
     }
 
     /**
+     * Removing the corner between two terminals that sit on two different margin lines must not
+     * leave the slanted segment the removal opens: the replacement corner is the one that keeps
+     * both endpoints clear. Captured geometry: the source leaves its LEFT face, the target is
+     * entered at its TOP face, and the original corner sits inside the source — so the
+     * horizontal-first corner is the removed point itself and only vertical-first is clear.
+     */
+    @Test
+    public void shouldReplaceARemovedSourceCornerWithTheCornerOutsideBothEnds_notASlant() {
+        RoutingRect source = new RoutingRect(1335, 2600, 620, 635, "src");
+        RoutingRect target = new RoutingRect(868, 3345, 620, 635, "tgt");
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(faceLine(source, Face.LEFT), 2917),
+                new AbsoluteBendpointDto(1358, 2917), // inside the source
+                new AbsoluteBendpointDto(1358, faceLine(target, Face.TOP))));
+        RoutingPipeline.ConnectionEndpoints conn =
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
+
+        int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
+
+        assertTrue("precondition: the corner inside the source was acted on", fixes > 0);
+        assertFalse("the interior corner is gone: " + path,
+                path.contains(new AbsoluteBendpointDto(1358, 2917)));
+        assertEquals(List.of(
+                new AbsoluteBendpointDto(1331, 2917),
+                new AbsoluteBendpointDto(1331, 3341),
+                new AbsoluteBendpointDto(1358, 3341)), path);
+        assertOrthogonalAndClearOf(path, source, target);
+    }
+
+    /**
+     * The target-side twin: a self-hug correction pushed the run down through the target, so the
+     * corner inside it is removed and the gap it leaves is closed on the side that clears both.
+     * The run the corner joined overshot the target's right face line by 2 px and came back; the
+     * new corner puts that point in line with it, so it is dropped rather than left as a spike.
+     */
+    @Test
+    public void shouldReplaceARemovedTargetCornerWithTheCornerOutsideBothEnds_notASlant() {
+        RoutingRect source = new RoutingRect(298, 4219, 300, 70, "src");
+        RoutingRect target = new RoutingRect(142, 4399, 300, 70, "tgt");
+        List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
+                new AbsoluteBendpointDto(400, faceLine(source, Face.BOTTOM)),
+                new AbsoluteBendpointDto(400, 4436), // inside the target
+                new AbsoluteBendpointDto(446, 4436),
+                new AbsoluteBendpointDto(faceLine(target, Face.RIGHT), 4434)));
+        RoutingPipeline.ConnectionEndpoints conn =
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
+
+        int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
+
+        assertTrue("precondition: the corner inside the target was acted on", fixes > 0);
+        assertFalse("the interior corner is gone: " + path,
+                path.contains(new AbsoluteBendpointDto(400, 4436)));
+        assertEquals(List.of(
+                new AbsoluteBendpointDto(400, 4293),
+                new AbsoluteBendpointDto(446, 4293),
+                new AbsoluteBendpointDto(446, 4434)), path);
+        assertOrthogonalAndClearOf(path, source, target);
+    }
+
+    /**
+     * When neither corner can close the gap — one lies inside an endpoint, the other on an
+     * obstacle — the removal is undone byte-identically: an orthogonal route through its own
+     * element is left for later stages, never turned into a slanted one.
+     */
+    @Test
+    public void shouldKeepTheInteriorCornerByteIdentical_whenNoReplacementCornerIsClear() {
+        RoutingRect source = new RoutingRect(100, 100, 100, 100, "src");
+        RoutingRect target = new RoutingRect(400, 200, 100, 100, "tgt");
+        RoutingRect blocker = new RoutingRect(194, 230, 20, 20, "obs");
+        List<AbsoluteBendpointDto> before = List.of(
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 120),
+                new AbsoluteBendpointDto(150, 120), // inside the source
+                new AbsoluteBendpointDto(150, 240),
+                new AbsoluteBendpointDto(faceLine(target, Face.LEFT), 240));
+
+        // Control: without the blocker the same removal is closed with the vertical-first corner,
+        // so the undo below is the blocker's doing, not a removal that never ran.
+        List<AbsoluteBendpointDto> unblocked = new ArrayList<>(before);
+        int controlFixes = RoutingPipeline.fixInteriorTerminalBPs(unblocked,
+                new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1));
+        assertTrue("control: the corner is removed and replaced: " + unblocked, controlFixes > 0);
+        assertEquals(List.of(
+                new AbsoluteBendpointDto(204, 120),
+                new AbsoluteBendpointDto(204, 240),
+                new AbsoluteBendpointDto(396, 240)), unblocked);
+
+        List<AbsoluteBendpointDto> path = new ArrayList<>(before);
+        RoutingPipeline.ConnectionEndpoints conn = new RoutingPipeline.ConnectionEndpoints(
+                "c1", source, target, List.of(blocker), null, 1);
+
+        int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
+
+        assertEquals("nothing was changed, so nothing is counted", 0, fixes);
+        assertEquals(before, path);
+    }
+
+    private static void assertOrthogonalAndClearOf(List<AbsoluteBendpointDto> path,
+            RoutingRect source, RoutingRect target) {
+        for (int i = 0; i + 1 < path.size(); i++) {
+            AbsoluteBendpointDto a = path.get(i);
+            AbsoluteBendpointDto b = path.get(i + 1);
+            assertTrue("segment " + i + " is axis-aligned: " + path, a.x() == b.x() || a.y() == b.y());
+            for (RoutingRect r : List.of(source, target)) {
+                assertFalse("segment " + i + " stays out of " + r.id() + ": " + path,
+                        entersInterior(a, b, r));
+            }
+        }
+    }
+
+    /** Strict interior: an axis-aligned segment on or outside the rectangle's edge does not enter. */
+    private static boolean entersInterior(AbsoluteBendpointDto a, AbsoluteBendpointDto b, RoutingRect r) {
+        int minX = Math.min(a.x(), b.x());
+        int maxX = Math.max(a.x(), b.x());
+        int minY = Math.min(a.y(), b.y());
+        int maxY = Math.max(a.y(), b.y());
+        return maxX > r.x() && minX < r.x() + r.width() && maxY > r.y() && minY < r.y() + r.height();
+    }
+
+    /**
      * fixInteriorTerminalBPs should insert an L-bend when repositioning
      * a source terminal BP to the TOP face creates a diagonal with the next BP.
      * Mirrors E2E finding: Integration Hub (730,374,254,55) → DMS (1430,399,246,55),
@@ -7556,23 +7767,28 @@ public class RoutingPipelineTest {
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
         // BP[0] inside source (y=398, within 374-429)
-        path.add(new AbsoluteBendpointDto(857, 398));
+        path.add(new AbsoluteBendpointDto(857, faceLine(target, Face.TOP)));
         // BP[1] at target: x=1553 in [1430,1676], y=398 < 399 (just outside target)
-        path.add(new AbsoluteBendpointDto(1553, 398));
+        path.add(new AbsoluteBendpointDto(1553, faceLine(target, Face.TOP)));
 
         RoutingPipeline.ConnectionEndpoints conn =
                 new RoutingPipeline.ConnectionEndpoints("c1", source, target, List.of(), null, 1);
 
         int fixes = RoutingPipeline.fixInteriorTerminalBPs(path, conn);
 
-        // Source fix moves BP[0] to RIGHT face midpoint (985, 401), inserts L-bend (1553, 401).
-        // L-bend (1553, 401) is inside target (x:1430-1676, y:399-454) → removed as interior BP.
+        // Source fix moves BP[0] to RIGHT face midpoint (988, 401), inserts L-bend (1553, 401).
+        // L-bend (1553, 401) is inside target (x:1430-1676, y:399-454) → removed as interior BP,
+        // and the slant its removal opens is closed by the vertical-first corner (988, 395), the
+        // one of the two corners that stays out of both elements.
         assertEquals("Source terminal fix + interior BP removal", 2, fixes);
         // Source terminal moved to RIGHT face midpoint
-        assertEquals("Source terminal X at right face", 985, path.get(0).x());
+        assertEquals("Source terminal X at right face", faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals("Source terminal Y at center", 401, path.get(0).y());
-        // After L-bend removal, only 2 BPs remain
-        assertEquals("Path should have 2 BPs after L-bend removal", 2, path.size());
+        assertEquals(List.of(
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 401),
+                new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), faceLine(target, Face.TOP)),
+                new AbsoluteBendpointDto(1553, faceLine(target, Face.TOP))), path);
+        assertOrthogonalAndClearOf(path, source, target);
     }
 
     /**
@@ -7586,7 +7802,7 @@ public class RoutingPipelineTest {
         RoutingRect target = new RoutingRect(500, 180, 120, 60, "tgt");
 
         List<AbsoluteBendpointDto> path = new ArrayList<>();
-        path.add(new AbsoluteBendpointDto(221, 230)); // source right face
+        path.add(new AbsoluteBendpointDto(faceLine(source, Face.RIGHT), 230)); // source right face
         path.add(new AbsoluteBendpointDto(350, 230)); // intermediate
         // Last BP inside target (x=520, within 500-620), y=220 (not at center 210)
         path.add(new AbsoluteBendpointDto(520, 220));
@@ -7603,7 +7819,7 @@ public class RoutingPipelineTest {
         assertEquals("L-bend X matches prev BP", 350, path.get(2).x());
         assertEquals("L-bend Y matches target face", 210, path.get(2).y());
         // Target terminal at LEFT face
-        assertEquals("Target terminal X at left face edge", 499, path.get(3).x());
+        assertEquals("Target terminal X at left face edge", faceLine(target, Face.LEFT), path.get(3).x());
         assertEquals("Target terminal Y at center", 210, path.get(3).y());
     }
 
@@ -7629,8 +7845,8 @@ public class RoutingPipelineTest {
 
         assertEquals("Should fix 1 terminal", 1, fixes);
         assertEquals("No L-bend inserted — path should still have 2 BPs", 2, path.size());
-        // RIGHT face: x+w+1 = 797, cy = 186
-        assertEquals(797, path.get(0).x());
+        // RIGHT face: x on the face line, cy = 186
+        assertEquals(faceLine(source, Face.RIGHT), path.get(0).x());
         assertEquals(186, path.get(0).y());
     }
 
@@ -8187,10 +8403,10 @@ public class RoutingPipelineTest {
                 rcConn);
         AbsoluteBendpointDto bp0 = path.get(0);
         RoutingRect rcSrc = rcConn.source();
-        boolean onFaceLine = bp0.x() == rcSrc.x() - 1
-                || bp0.x() == rcSrc.x() + rcSrc.width() + 1
-                || bp0.y() == rcSrc.y() - 1
-                || bp0.y() == rcSrc.y() + rcSrc.height() + 1;
+        boolean onFaceLine = bp0.x() == faceLine(rcSrc, Face.LEFT)
+                || bp0.x() == faceLine(rcSrc, Face.RIGHT)
+                || bp0.y() == faceLine(rcSrc, Face.TOP)
+                || bp0.y() == faceLine(rcSrc, Face.BOTTOM);
         boolean centreCollinearOnParallel = bp0.x() == rcSrc.centerX()
                 || bp0.y() == rcSrc.centerY();
         assertTrue(
@@ -8570,7 +8786,7 @@ public class RoutingPipelineTest {
 
         // For LEFT-face exits, verify reduced port distribution:
         // multiple connections should share ports (fewer distinct y than connections)
-        int leftPerimeterX = hub.x() - 1;
+        int leftPerimeterX = faceLine(hub, Face.LEFT);
         Set<Integer> leftFaceYs = new HashSet<>();
         int leftFaceCount = 0;
         for (int i = 0; i < 8; i++) {
@@ -8619,7 +8835,7 @@ public class RoutingPipelineTest {
 
         // All connections enter hub LEFT face — last BPs should have distinct y values
         Set<Integer> lastYs = new HashSet<>();
-        int leftPerimeterX = hub.x() - 1;
+        int leftPerimeterX = faceLine(hub, Face.LEFT);
         for (RoutingPipeline.ConnectionEndpoints conn : connections) {
             List<AbsoluteBendpointDto> path = result.routed().get(conn.connectionId());
             assertNotNull("B73 contrast: " + conn.connectionId() + " should be routed", path);
@@ -8711,8 +8927,8 @@ public class RoutingPipelineTest {
     @Test
     public void shouldRewriteTheAnchoring_whenTheTerminalMovedToAnotherFaceLine() {
         List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
-        // 301 is the element's right face line (x + width + 1).
-        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(301, 150), true, REFRESH_ELEMENT);
+        RoutingPipeline.refreshAnchoring(anchorings, 0,
+                pathEndingAt(faceLine(REFRESH_ELEMENT, Face.RIGHT), 150), true, REFRESH_ELEMENT);
         assertEquals("record follows the terminal onto the face it now sits on",
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), anchorings.get(0));
     }
@@ -8720,9 +8936,10 @@ public class RoutingPipelineTest {
     @Test
     public void shouldLeaveTheAnchoring_whenTheTerminalIsOnNoFaceLine() {
         List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
-        // 305 is four pixels beyond the right face line — the derived face is RIGHT, but the
+        // Four pixels beyond the right face line — the derived face is RIGHT, but the
         // terminal is not on its line, so there is no evidence of which face it belongs to.
-        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(305, 150), true, REFRESH_ELEMENT);
+        RoutingPipeline.refreshAnchoring(anchorings, 0,
+                pathEndingAt(faceLine(REFRESH_ELEMENT, Face.RIGHT) + 4, 150), true, REFRESH_ELEMENT);
         assertEquals("a stale record is not replaced by an invented one",
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT), anchorings.get(0));
     }
@@ -8730,7 +8947,8 @@ public class RoutingPipelineTest {
     @Test
     public void shouldLeaveTheAnchoring_whenTheTerminalIsStillOnTheRecordedFace() {
         List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.LEFT);
-        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(99, 150), true, REFRESH_ELEMENT);
+        RoutingPipeline.refreshAnchoring(anchorings, 0,
+                pathEndingAt(faceLine(REFRESH_ELEMENT, Face.LEFT), 150), true, REFRESH_ELEMENT);
         assertEquals("no face change means no rewrite",
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.LEFT), anchorings.get(0));
     }
@@ -8738,10 +8956,12 @@ public class RoutingPipelineTest {
     @Test
     public void shouldLeaveTheAnchoring_whenTheTerminalSitsOnTwoFaceLinesAtOnce() {
         List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.RIGHT);
-        // (99,99) is the element's left face line AND its top face line. Both are equally true, and
-        // determineFaceFromTerminal breaks the tie by testing the vertical faces first — so without
-        // the corner guard this would silently record LEFT on an arbitrary tie-break.
-        RoutingPipeline.refreshAnchoring(anchorings, 0, pathEndingAt(99, 99), true, REFRESH_ELEMENT);
+        // The element's top-left corner sits on its left face line AND its top face line. Both are
+        // equally true, and determineFaceFromTerminal breaks the tie by testing the vertical faces
+        // first — so without the corner guard this would silently record LEFT on a tie-break.
+        RoutingPipeline.refreshAnchoring(anchorings, 0,
+                pathEndingAt(faceLine(REFRESH_ELEMENT, Face.LEFT),
+                        faceLine(REFRESH_ELEMENT, Face.TOP)), true, REFRESH_ELEMENT);
         assertEquals("an arbitrary tie-break is not evidence, so the record is left alone",
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.RIGHT), anchorings.get(0));
     }
@@ -8750,8 +8970,9 @@ public class RoutingPipelineTest {
     public void shouldRefreshTheTargetEnd_whenTheLastBendpointMovedToAnotherFaceLine() {
         List<TerminalAnchoring> anchorings = anchoringList(EdgeAttachmentCalculator.Face.TOP);
         List<AbsoluteBendpointDto> path = new ArrayList<>(List.of(
-                new AbsoluteBendpointDto(150, 40), new AbsoluteBendpointDto(150, 201)));
-        // 201 is the element's bottom face line (y + height + 1); the target end reads path[last].
+                new AbsoluteBendpointDto(150, 40),
+                new AbsoluteBendpointDto(150, faceLine(REFRESH_ELEMENT, Face.BOTTOM))));
+        // The last bendpoint is on the element's bottom face line; the target end reads it.
         RoutingPipeline.refreshAnchoring(anchorings, 0, path, false, REFRESH_ELEMENT);
         assertEquals("the target end is re-derived from the last bendpoint",
                 new TerminalAnchoring(EdgeAttachmentCalculator.Face.BOTTOM), anchorings.get(0));

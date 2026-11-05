@@ -75,13 +75,48 @@ public record ViewObjectDto(
     Integer anchorDy,
     String parentViewObjectId,
     @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> movedObjects,
-    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedAncestors
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedAncestors,
+    /**
+     * Disclosures about what was written, such as a label expression reading a property the object
+     * does not carry. Empty, and omitted, when there are none.
+     */
+    @JsonInclude(JsonInclude.Include.NON_EMPTY) List<StructuredWarningDto> structuredWarnings
 ) {
 
     /** Never null: the canonical constructor normalizes null lists to empty. */
     public ViewObjectDto {
         movedObjects = movedObjects != null ? movedObjects : List.of();
         resizedAncestors = resizedAncestors != null ? resizedAncestors : List.of();
+        structuredWarnings = structuredWarnings != null ? structuredWarnings : List.of();
+    }
+
+    /** Constructor matching the shape before per-object disclosures: no warnings, omitted from JSON. */
+    public ViewObjectDto(
+            String viewObjectId, String elementId, String elementName, String elementType,
+            int x, int y, int width, int height,
+            String fillColor, String lineColor, String fontColor,
+            Integer opacity, Integer lineWidth,
+            String imagePath, String imagePosition, String showIcon,
+            Double imageCoveragePercent, String imageCoverageWarning,
+            String figureType, String textAlignment, String verticalTextAlignment,
+            String labelExpression,
+            String fontName, Integer fontSize, String fontStyle,
+            String gradient, String borderType, Boolean deriveLineColor,
+            Integer outlineOpacity, String lineStyle,
+            String anchorTarget, String anchorEdge, Integer anchorDx, Integer anchorDy,
+            String parentViewObjectId,
+            List<MovedViewObjectDto> movedObjects, List<MovedViewObjectDto> resizedAncestors) {
+        this(viewObjectId, elementId, elementName, elementType,
+                x, y, width, height,
+                fillColor, lineColor, fontColor, opacity, lineWidth,
+                imagePath, imagePosition, showIcon,
+                imageCoveragePercent, imageCoverageWarning,
+                figureType, textAlignment, verticalTextAlignment,
+                labelExpression,
+                fontName, fontSize, fontStyle,
+                gradient, borderType, deriveLineColor, outlineOpacity, lineStyle,
+                anchorTarget, anchorEdge, anchorDx, anchorDy,
+                parentViewObjectId, movedObjects, resizedAncestors, List.of());
     }
 
     /**

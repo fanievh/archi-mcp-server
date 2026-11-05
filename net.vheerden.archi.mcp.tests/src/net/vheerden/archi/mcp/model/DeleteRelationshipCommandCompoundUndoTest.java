@@ -24,9 +24,10 @@ import com.archimatetool.model.IFolder;
  * produces.
  *
  * <p>A compound undoes its members in reverse, so a later-listed delete restores
- * into a folder whose earlier-listed deletes are not yet back. Restoring at the
- * captured absolute index then overshoots into the collapsed survivors and the
- * folder order is silently re-shuffled — membership is preserved, position is not.
+ * into a folder whose earlier-listed deletes are not yet back. Restoring at an
+ * absolute index captured before any of them ran then overshoots into the collapsed
+ * survivors and the folder order is silently re-shuffled — membership is preserved,
+ * position is not.
  * Commands are constructed directly and driven with raw {@code execute()/undo()},
  * mirroring {@code DeleteViewCommandCompoundCascadeTest}; no {@code CommandStack}.</p>
  */
@@ -78,9 +79,8 @@ public class DeleteRelationshipCommandCompoundUndoTest {
     }
 
     private DeleteRelationshipCommand deleteOf(IArchimateRelationship rel) {
-        // Prepare-time index capture, against the unmutated folder (production semantics).
-        int index = relations.getElements().indexOf(rel);
-        return new DeleteRelationshipCommand(rel, relations, index, e1, e2, List.of());
+        // The command takes its index and anchor when it runs, against the folder as it meets it.
+        return new DeleteRelationshipCommand(rel, new DeleteCascade.OfRelationship(List.of(), List.of(), 0));
     }
 
     private List<String> relationIds() {
@@ -146,14 +146,11 @@ public class DeleteRelationshipCommandCompoundUndoTest {
     }
 
     @Test
-    public void shouldPreserveMembership_whenThreeSiblingsDeletedInNonMonotonicOrder() {
-        // The documented residual: 3+ co-deleted siblings in NON-monotonic
-        // compound order can leave a middle item whose only anchor is another
-        // not-yet-restored co-deleted sibling, so the fallback index is used and
-        // paint order can drift. Membership and reconnection must NEVER drift. This
-        // is also the only command-level test that exercises the fallback branch
-        // through a real compound undo (the anchor for r2 — r3 — is absent when r2
-        // restores).
+    public void shouldRestoreFolderOrder_whenThreeSiblingsDeletedInNonMonotonicOrder() {
+        // Each delete takes its anchor against the folder as it meets it, after the deletes
+        // before it ran, so the reverse undo meets the folder exactly as each delete left it and
+        // restores the order exactly, in any compound order. Anchors taken at prepare, against
+        // the untouched folder, left r2 with an anchor (r3) not yet back when r2 restored.
         CompoundCommand compound = new CompoundCommand("Delete three relationships non-monotonic");
         compound.add(deleteOf(r3));
         compound.add(deleteOf(r1));
@@ -164,16 +161,13 @@ public class DeleteRelationshipCommandCompoundUndoTest {
 
         compound.undo();
 
-        // Load-bearing guarantee: every relationship is back and reconnected; order may drift.
+        // Every relationship is back and reconnected, in its original order.
         assertTrue("r1 restored", relations.getElements().contains(r1));
         assertTrue("r2 restored", relations.getElements().contains(r2));
         assertTrue("r3 restored", relations.getElements().contains(r3));
         assertTrue("r4 present", relations.getElements().contains(r4));
         assertEquals("Membership fully intact after non-monotonic compound undo",
                 4, relations.getElements().size());
-        // Pin the deterministic residual order so a fallback-branch regression is caught,
-        // and so any future improvement to exact ordering must consciously update this pin.
-        assertEquals("Residual order is deterministic (paint order may drift, membership does not)",
-                List.of("r3", "r4", "r1", "r2"), relationIds());
+        assertEquals("Order is restored exactly", List.of("r1", "r2", "r3", "r4"), relationIds());
     }
 }

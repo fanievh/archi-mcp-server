@@ -15,6 +15,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
@@ -473,7 +474,8 @@ public class ElementCreationHandler {
         Map<String, Object> viewpointProp = new LinkedHashMap<>();
         viewpointProp.put("type", "string");
         viewpointProp.put("description",
-                "Optional viewpoint type (e.g., 'layered', 'application_cooperation')");
+                "Optional viewpoint id (e.g., 'layered', 'application_cooperation'), one Archi defines; an "
+                + "unknown id is refused, listing the valid ones. Empty string or omitted: no viewpoint.");
 
         Map<String, Object> folderIdProp = new LinkedHashMap<>();
         folderIdProp.put("type", "string");
@@ -485,7 +487,7 @@ public class ElementCreationHandler {
         connectionRouterTypeProp.put("type", "string");
         connectionRouterTypeProp.put("description",
                 "Connection routing style for the view. 'manhattan' for orthogonal "
-                + "right-angle paths, 'manual' for direct lines (default). Omit for default.");
+                + "right-angle paths, 'manual' for direct lines (default). Omit, or send an empty string, for default.");
 
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("name", nameProp);
@@ -499,8 +501,8 @@ public class ElementCreationHandler {
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("create-view")
                 .description("[Mutation] Create a new ArchiMate view (diagram). "
-                        + "Requires name. Optional: viewpoint (e.g., 'layered', "
-                        + "'application_cooperation'), folderId, connectionRouterType "
+                        + "Requires name. Optional: viewpoint (an id Archi defines, e.g. 'layered', "
+                        + "'application_cooperation'; an unknown id is refused), folderId, connectionRouterType "
                         + "('manhattan' or 'manual', default is 'manual'). "
                         + "ROUTING GUIDANCE: Do NOT set connectionRouterType 'manhattan' "
                         + "unless the view has 5 or fewer connections and no inter-group "
@@ -532,10 +534,9 @@ public class ElementCreationHandler {
 
             Map<String, Object> args = request.arguments();
             String name = HandlerUtils.requireStringParam(args, "name");
-            String viewpoint = HandlerUtils.optionalStringParam(args, "viewpoint");
+            String viewpoint = ToolArguments.text(args, "viewpoint", true); // "" = no viewpoint; ids checked in model/
             String folderId = HandlerUtils.optionalStringParam(args, "folderId");
-            String connectionRouterType = HandlerUtils.optionalStringParam(args,
-                    "connectionRouterType");
+            String connectionRouterType = ToolArguments.text(args, "connectionRouterType", true); // "" = default
 
             MutationResult<ViewDto> result = accessor.createView(
                     sessionId, name, viewpoint, folderId, connectionRouterType);
@@ -599,12 +600,30 @@ public class ElementCreationHandler {
                 .name("clone-view")
                 .description("[Mutation] Clone an existing view (deep copy of visual layout). "
                         + "Creates a new view with identical element positions, connection routing, "
-                        + "groups, notes, and styling. Model elements and relationships are "
-                        + "REFERENCED (not duplicated) — the clone shares the same underlying "
-                        + "model objects. Useful for creating before/after pairs, filtered subsets, "
+                        + "groups, notes, view references, images, and styling. Model elements and "
+                        + "relationships are REFERENCED (not duplicated) — the clone shares the same "
+                        + "underlying model objects. A view reference to the source view itself points "
+                        + "to the clone in the copy, as in Archi's Duplicate. An object anchored to "
+                        + "another is anchored to that object's copy. A view holding a view "
+                        + "reference to a view that is not in the model, or an object a clone cannot "
+                        + "copy (one only a script or a hand-edited file can put on an ArchiMate view, "
+                        + "such as a sketch sticky), is refused with INVALID_PARAMETER. "
+                        + "Useful for creating before/after pairs, filtered subsets, "
                         + "or alternative layout experiments. "
                         + "Required: sourceViewId, newName. Optional: folderId. "
                         + "Supports undo (removes entire clone as single operation). "
+                        + "Inside a batch, the clone copies the source view as the batch's earlier "
+                        + "operations leave it, when the batch commits; if one of them removed the "
+                        + "source view, or left it holding a view reference to a view that is not in "
+                        + "the model, no clone is created and the commit summary says why. "
+                        + "The source may be a view an earlier operation of the same batch creates, "
+                        + "another clone included: the clone copies it as it is when the batch commits, "
+                        + "and goes in the folder that view is created in unless folderId is given. If "
+                        + "that view is not created, no clone is created either, and the commit summary "
+                        + "says why. "
+                        + "Until the batch commits, a later operation in the same batch sees the clone "
+                        + "empty: add-to-view onto it places objects as on an empty view, so they can "
+                        + "overlap the cloned objects, and its autoConnect connects nothing to them. "
                         + "Related: get-views (find source view ID), get-view-contents "
                         + "(inspect cloned view), remove-from-view (selectively remove elements "
                         + "from clone).")

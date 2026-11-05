@@ -9,6 +9,7 @@ import java.util.List;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.RoutingRect;
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator.Face;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 
 /**
@@ -30,6 +31,25 @@ public class EgressClearanceView12RegressionTest {
     private final TerminalEgressClearancePass pass = new TerminalEgressClearancePass();
 
     private static AbsoluteBendpointDto bp(int x, int y) { return new AbsoluteBendpointDto(x, y); }
+
+    /**
+     * The face-line coordinate, read from production.
+     *
+     * <p>The capture below was read off a live view whose terminals the pipeline had placed at the
+     * then-current {@code EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN}. This class's whole claim
+     * is that it reproduces what the pass sees live, so the terminals derive from the margin rather
+     * than restating the captured integers: at a different margin the captured integers would be a
+     * reproduction of geometry the pipeline no longer emits, and every hug this class pins would go
+     * undetected because {@code tryEgress} requires exact equality to the face line.
+     *
+     * <p>Everything else in the capture is left exactly as read. Interior bendpoints are router
+     * output positioned against element edges, so they do not move with the margin — except where
+     * one is collinear with its terminal on the face's orthogonal axis, where moving them together
+     * is what keeps the segment axis-aligned rather than a choice about geometry.
+     */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
     private static List<AbsoluteBendpointDto> path(AbsoluteBendpointDto... b) {
         return new ArrayList<>(List.of(b));
     }
@@ -56,16 +76,33 @@ public class EgressClearanceView12RegressionTest {
 
     private static void build(List<RoutingPipeline.ConnectionEndpoints> conns,
                               List<List<AbsoluteBendpointDto>> paths) {
-        conns.add(c("1b87", E1, E2));  paths.add(path(bp(1898, 81), bp(1737, 81)));
-        conns.add(c("b9b9", E2, E4));  paths.add(path(bp(1521, 81), bp(1368, 81)));
-        conns.add(c("3d4b", E4, E6));  paths.add(path(bp(1184, 81), bp(927, 81)));
-        conns.add(c("cdda", E5, E3));  paths.add(path(bp(1368, 226), bp(1521, 226), bp(1521, 233)));
-        conns.add(c("032c", E6, E7));  paths.add(path(bp(847, 110), bp(847, 118), bp(899, 118), bp(899, 198)));
-        conns.add(c("4d85", E7, E8));  paths.add(path(bp(899, 255), bp(899, 299), bp(775, 299)));
-        conns.add(c("4964", E8, E9));  paths.add(path(bp(767, 351), bp(137, 351), bp(137, 123)));
-        conns.add(c("62d6", E8, E10)); paths.add(path(bp(767, 306), bp(540, 306), bp(540, 110)));
-        conns.add(c("9569", E9, E10)); paths.add(path(bp(245, 88), bp(398, 88), bp(398, 81)));
-        conns.add(c("e594", E10, E5)); paths.add(path(bp(472, 110), bp(1276, 110), bp(1276, 198)));
+        int e3Left   = faceLine(E3, Face.LEFT);
+        int e10Left  = faceLine(E10, Face.LEFT);
+        int e10Bot   = faceLine(E10, Face.BOTTOM);
+        conns.add(c("1b87", E1, E2));  paths.add(path(bp(faceLine(E1, Face.LEFT), 81),
+                bp(faceLine(E2, Face.RIGHT), 81)));
+        conns.add(c("b9b9", E2, E4));  paths.add(path(bp(faceLine(E2, Face.LEFT), 81),
+                bp(faceLine(E4, Face.RIGHT), 81)));
+        conns.add(c("3d4b", E4, E6));  paths.add(path(bp(faceLine(E4, Face.LEFT), 81),
+                bp(faceLine(E6, Face.RIGHT), 81)));
+        // cdda's last two points share the LEFT face line — that shared x IS the micro-hug, so
+        // both move with the margin and the 7px run length is untouched.
+        conns.add(c("cdda", E5, E3));  paths.add(path(bp(faceLine(E5, Face.RIGHT), 226),
+                bp(e3Left, 226), bp(e3Left, 233)));
+        conns.add(c("032c", E6, E7));  paths.add(path(bp(847, faceLine(E6, Face.BOTTOM)),
+                bp(847, 118), bp(899, 118), bp(899, faceLine(E7, Face.TOP))));
+        conns.add(c("4d85", E7, E8));  paths.add(path(bp(899, faceLine(E7, Face.BOTTOM)),
+                bp(899, 299), bp(775, 299)));
+        conns.add(c("4964", E8, E9));  paths.add(path(bp(faceLine(E8, Face.LEFT), 351),
+                bp(137, 351), bp(137, faceLine(E9, Face.BOTTOM))));
+        conns.add(c("62d6", E8, E10)); paths.add(path(bp(faceLine(E8, Face.LEFT), 306),
+                bp(540, 306), bp(540, e10Bot)));
+        // 9569's last two points share E10's LEFT face line — the second micro-hug, same rule.
+        conns.add(c("9569", E9, E10)); paths.add(path(bp(faceLine(E9, Face.RIGHT), 88),
+                bp(e10Left, 88), bp(e10Left, 81)));
+        // e594's first two points share E10's BOTTOM face line — the named defect's own-face trunk.
+        conns.add(c("e594", E10, E5)); paths.add(path(bp(472, e10Bot), bp(1276, e10Bot),
+                bp(1276, faceLine(E5, Face.TOP))));
     }
 
     /** e5946477 (the named defect) is lifted clear of the BOTTOM face by >= the egress target. */
@@ -86,7 +123,8 @@ public class EgressClearanceView12RegressionTest {
         int firstStubY = e.get(1).y();                  // first interior point after the fix
         int clearance = Math.abs(firstStubY - termY);
         assertEquals("terminal byte-identical (perimeter-immutable)", 472, e.get(0).x());
-        assertEquals("terminal byte-identical (perimeter-immutable)", 110, termY);
+        assertEquals("terminal byte-identical (perimeter-immutable)",
+                faceLine(E10, Face.BOTTOM), termY);
         assertTrue("egress stub clears the face by >= 8px, got " + clearance + " path=" + e,
                 clearance >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
     }
@@ -118,18 +156,22 @@ public class EgressClearanceView12RegressionTest {
         // point now leaves the face perpendicularly (same y=233, pushed left off the face line).
         AbsoluteBendpointDto cddaTerm = cdda.get(cdda.size() - 1);
         AbsoluteBendpointDto cddaAdj = cdda.get(cdda.size() - 2);
-        assertEquals("cdda target terminal byte-identical (perimeter-immutable)", bp(1521, 233), cddaTerm);
+        assertEquals("cdda target terminal byte-identical (perimeter-immutable)",
+                bp(faceLine(E3, Face.LEFT), 233), cddaTerm);
         assertEquals("cdda first interior point shares terminal y (perpendicular egress)", 233, cddaAdj.y());
-        assertTrue("cdda stub lifted >= TARGET off the face edge (1522), got x=" + cddaAdj.x(),
-                (1522 - cddaAdj.x()) >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
+        assertTrue("cdda stub lifted >= TARGET off E3's left edge (" + E3.x() + "), got x="
+                        + cddaAdj.x(),
+                (E3.x() - cddaAdj.x()) >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
 
         // 9569 target terminal on E10 LEFT face line (x=398): same shape.
         AbsoluteBendpointDto n9569Term = n9569.get(n9569.size() - 1);
         AbsoluteBendpointDto n9569Adj = n9569.get(n9569.size() - 2);
-        assertEquals("9569 target terminal byte-identical (perimeter-immutable)", bp(398, 81), n9569Term);
+        assertEquals("9569 target terminal byte-identical (perimeter-immutable)",
+                bp(faceLine(E10, Face.LEFT), 81), n9569Term);
         assertEquals("9569 first interior point shares terminal y (perpendicular egress)", 81, n9569Adj.y());
-        assertTrue("9569 stub lifted >= TARGET off the face edge (399), got x=" + n9569Adj.x(),
-                (399 - n9569Adj.x()) >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
+        assertTrue("9569 stub lifted >= TARGET off E10's left edge (" + E10.x() + "), got x="
+                        + n9569Adj.x(),
+                (E10.x() - n9569Adj.x()) >= TerminalEgressClearancePass.TARGET_EGRESS_CLEARANCE_PX);
     }
 
     /** Idempotency: re-running on the fixed geometry is a no-op. */

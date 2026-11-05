@@ -1,23 +1,16 @@
 package net.vheerden.archi.mcp.model;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import java.util.Set;
 
 import org.junit.Before;
 import org.junit.Test;
 
-import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
-import net.vheerden.archi.mcp.model.routing.RoutingResult;
 import net.vheerden.archi.mcp.model.routing.ViewFixture;
-import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator;
 
 /**
  * V4 Integration Architecture Oracle quality regression test
@@ -35,7 +28,7 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *   <li>{@code coincidentSegmentCount} &le; {@link #M5_CEILING}
  *       (current actual: 2; manual oracle: 1; v1.3: 1).</li>
  *   <li>{@code nonOrthogonalTerminalCount} &le; {@link #M1_CEILING}
- *       (current actual: 0 after the visible-segment-length guard).</li>
+ *       (current actual: 3, all corner-zone ends Archi draws diagonal).</li>
  *   <li>{@code corridorUtilisationScore} &ge; {@link #R8_FLOOR}
  *       (current actual: 0.30 after the divisor-7 cap relaxation; pre-fix
  *       baseline: 0.135). Added 2026-05-03.</li>
@@ -81,9 +74,9 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *
  * <p><b>Predecessor work closed:</b>
  * <ul>
- *   <li>M1 visible-segment-length guard (closed 2026-04-27) — explains why
- *       M1 = 0 on the V4 oracle and justifies the {@link #M1_CEILING} = 5
- *       headroom against post-clip-diagonal drift.</li>
+ *   <li>M1 visible-segment-length guard (closed 2026-04-27) — the original
+ *       {@link #M1_CEILING} = 5 anchor. M1 has since moved to the stub Archi
+ *       draws; see the constant's Javadoc for the current actual.</li>
  *   <li>Coincident-regression bisect (closed 2026-04-28) — named commit
  *       0db3d91 (Mode B perimeter-terminal guard) as primary responsible
  *       commit.</li>
@@ -143,18 +136,53 @@ public class V4OracleQualityRegressionTest {
      * AssessmentNodes (which seeds {@code buildConnectionRoutingOrder}
      * tiebreakers) is not reproducible from a JSON fixture. The protection
      * the test provides is preserved — pre-Approach-3 baseline was M5 = 12,
-     * any future regression to ≥ 4 fires this assertion. Tightening to 2
+     * any future regression above this ceiling fires this assertion. Tightening to 2
      * would make the test red on day one without protecting against any
      * actual routing regression.
+     *
+     * <p><strong>This ceiling is a function of {@code
+     * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} and is anchored at the shipped margin of 4,
+     * where it is 6; at margin 1 it is 3.</strong> Unlike the M1 ceiling below this is a REAL
+     * movement in the routed output — the assessor's model is not implicated. Measured across
+     * margins 1, 2, 3, 4, 6 and 8 the count runs 3, 3, 4, 6, 3, 3, so margin 4 is a local worst
+     * point on this corpus rather than a trend. Widening the margin further is not available as a
+     * remedy — 8 breaks the strict {@code
+     * TERMINAL_FACE_MARGIN < LayoutQualityAssessor.OFF_FACE_MIN_STUB_PX} tripwire that keeps the
+     * off-face detector from declaring complete coverage while reporting nothing.
+     *
+     * <p><strong>Move this in the same commit as the margin, in BOTH directions.</strong> A ceiling
+     * widened for a larger margin still passes at every smaller one, so a revert leaves it slack
+     * with the whole suite green and nothing reporting that the sentinel has stopped guarding
+     * anything. That happened: the margin went 4 to 1 and back, and this ceiling had to be restored
+     * by hand both times because no test could see it.
+     *
+     * <p>The two coincident segments are worth an investigation of their own; this ceiling records
+     * where the corpus actually sits and keeps the sentinel live above it.
      */
-    private static final int M5_CEILING = 3;
+    private static final int M5_CEILING = 6;
 
     /**
-     * Non-orthogonal-terminal ceiling (visible-segment-length
-     * guard calibration anchor). Approach-3 closure actual: 0. The 5px
-     * headroom is intentional — gives the routing pipeline room for minor
-     * terminal-segment drift without false-positive regression. Manual
-     * oracle: 1 (the geometry-forced #12 APIM&rarr;CorpBank diagonal).
+     * Non-orthogonal-terminal ceiling. Manual oracle: 1 (the geometry-forced #12
+     * APIM&rarr;CorpBank diagonal).
+     *
+     * <p>Measured actual at the shipped terminal face margin of 4: <b>3</b>. M1 tests the stub Archi
+     * draws — its {@code OrthogonalAnchor} projects a terminal bendpoint that lies within a face's
+     * extent onto that face, so the stub is perpendicular whatever the element centre's offset —
+     * and all three counted ends are corner-zone ends, where the stub is diagonal under the
+     * assessor's anchor model ({@code id-a65887a0…} target 30.8&deg;/66 px, {@code id-123d02ef…}
+     * target 28.7&deg;/15 px, {@code id-b250a38f…} source 27.3&deg;/11 px). That model anchors a
+     * corner-zone end on a ray from the element centre, where Archi anchors a plain rectangle at
+     * the corner itself, so the angles are the model's, not a measurement of the drawn canvas.
+     * {@code NonOrthogonalTerminalZoneCensusTest} classifies every end on this fixture and
+     * re-measures the figure.
+     *
+     * <p>The ceiling is the value in force before the margin moved to 4. It fails a regression
+     * above 5, which leaves 2 of headroom over the actual of 3; at margin 1 the actual is 1
+     * (the router puts the last two of those ends in a face zone there), so the headroom there
+     * is 4. The count no longer depends on the margin's relation to {@code
+     * LayoutQualityAssessor.VISIBLE_DIAGONAL_MIN_PX} — the earlier centre-to-bendpoint model read 24
+     * here, 28 of its 31 ends being face-zone stubs Archi draws perpendicular — so this ceiling is
+     * no longer one of the gates the margin pin below guards.
      */
     private static final int M1_CEILING = 5;
 
@@ -310,33 +338,11 @@ public class V4OracleQualityRegressionTest {
     private static final double VP10_FLOOR = 2.0;
 
     private ViewFixture fixture;
-    private RoutingPipeline pipeline;
     private LayoutQualityAssessor assessor;
-
-    /**
-     * Live-MCP {@code auto-route-connections} perimeterMargin handler default
-     * (ViewPlacementHandler line ~2050: {@code perimeterMarginObj != null
-     * ? Math.max(10, Math.min(200, perimeterMarginObj)) : 50}). The no-arg
-     * RoutingPipeline constructor uses {@code DEFAULT_MARGIN=10} for
-     * perimeterMargin which produces a tighter visibility graph than the
-     * live MCP path — a 5x exterior corridor difference that meaningfully
-     * shifts A* path choices and inflates M5 (verified 2026-04-29: M5
-     * dropped 9 → 6 → 2 as the test parameters converged on the live MCP
-     * configuration).
-     */
-    private static final int LIVE_MCP_PERIMETER_MARGIN = 50;
 
     @Before
     public void setUp() throws IOException {
         fixture = ViewFixture.load("testdata/v4-integration-architecture-oracle-fixture.json");
-        // Match live-MCP RoutingPipeline construction (perimeterMargin=50).
-        // No-arg RoutingPipeline() defaults perimeterMargin to DEFAULT_MARGIN=10
-        // which produces visibly different routing than the live tool path.
-        pipeline = new RoutingPipeline(
-                RoutingPipeline.DEFAULT_BEND_PENALTY,
-                RoutingPipeline.DEFAULT_MARGIN,
-                RoutingPipeline.DEFAULT_CONGESTION_WEIGHT,
-                LIVE_MCP_PERIMETER_MARGIN);
         assessor = new LayoutQualityAssessor();
     }
 
@@ -367,10 +373,9 @@ public class V4OracleQualityRegressionTest {
         LayoutAssessmentResult result = routeAndAssess();
         int actual = result.nonOrthogonalTerminalCount();
         assertTrue("V4 oracle non-orthogonal-terminal count regressed above "
-                + "story-original ceiling " + M1_CEILING + ": actual=" + actual
-                + " (Story #3 closure 2026-04-28 actual was 0 after Story #1 "
-                + "M1 visible-segment guard — investigate clipped-diagonal "
-                + "regression or M1 metric semantic drift)",
+                + "ceiling " + M1_CEILING + ": actual=" + actual
+                + " (measured actual is 3, all corner-zone ends — run "
+                + "NonOrthogonalTerminalZoneCensusTest to see which ends are counted and why)",
                 actual <= M1_CEILING);
     }
 
@@ -507,167 +512,31 @@ public class V4OracleQualityRegressionTest {
     // ---- helpers ----
 
     private LayoutAssessmentResult routeAndAssess() {
-        // 1. Route every connection via the production pipeline.
-        // Mirrors ArchiModelAccessorImpl.java:5949-5974 + 6005-6013 — group
-        // containers go to a SEPARATE per-connection groupBoundaries list
-        // (group-wall clearance cost), NOT to the obstacles list (which
-        // is non-group-only). Without this split, the 3 V4 oracle groups
-        // (322x1422 / 400x1589 / 338x2089) become fat hard obstacles that
-        // force connections into narrow corridors, producing M5 ~ 33 vs the
-        // live MCP M5 = 2 (falsification surfaced 2026-04-29).
-        List<RoutingPipeline.ConnectionEndpoints> endpoints = new ArrayList<>();
-        for (RoutingPipeline.ConnectionEndpoints ep : fixture.buildConnectionEndpoints()) {
-            List<RoutingRect> filteredObstacles = new ArrayList<>();
-            List<RoutingRect> groupBoundaries = new ArrayList<>();
-            for (RoutingRect obs : ep.obstacles()) {
-                if (isGroupId(obs.id())) {
-                    groupBoundaries.add(obs);
-                } else {
-                    filteredObstacles.add(obs);
-                }
-            }
-            endpoints.add(new RoutingPipeline.ConnectionEndpoints(
-                    ep.connectionId(), ep.source(), ep.target(),
-                    filteredObstacles, ep.labelText(), ep.textPosition(),
-                    groupBoundaries));
-        }
-        List<RoutingRect> allObstacles = new ArrayList<>();
-        for (RoutingRect obs : fixture.buildAllObstacles()) {
-            if (!isGroupId(obs.id())) {
-                allObstacles.add(obs);
-            }
-        }
-        // Build per-connection labelExcludeSets matching ArchiModelAccessorImpl
-        // line 6022-6035 — source + ancestors + descendants + target + ancestors
-        // + descendants. Used by Stage 4.8 label position optimizer.
-        Map<String, Set<String>> labelExcludeSets = new LinkedHashMap<>();
-        for (RoutingPipeline.ConnectionEndpoints conn : endpoints) {
-            Set<String> excludeIds = new HashSet<>();
-            excludeIds.add(conn.source().id());
-            excludeIds.add(conn.target().id());
-            collectAncestors(conn.source().id(), excludeIds);
-            collectAncestors(conn.target().id(), excludeIds);
-            collectChildren(conn.source().id(), excludeIds);
-            collectChildren(conn.target().id(), excludeIds);
-            labelExcludeSets.put(conn.connectionId(), excludeIds);
-        }
-
-        RoutingResult routingResult = pipeline.routeAllConnections(
-                endpoints, allObstacles, labelExcludeSets);
-
-        // Mirror ArchiModelAccessorImpl.java:6042-6049 — successful routes
-        // PLUS violated routes (force=true semantics). Live-MCP default is
-        // force=false (only routed applied; violated kept at pre-existing
-        // bendpoints) — but in a stateless JUnit fixture there are no
-        // pre-existing bendpoints to fall back to, so including
-        // violatedRoutes is the closest stateless approximation. Without
-        // this merge, connections in violatedRoutes are omitted from the
-        // AssessmentConnection list entirely, which produces a degenerate
-        // hub-port-quality + coincident-segment count vs the live model.
-        Map<String, List<AbsoluteBendpointDto>> routedBps = new LinkedHashMap<>();
-        routedBps.putAll(routingResult.routed());
-        routedBps.putAll(routingResult.violatedRoutes());
-
-        // Diagnostic: log routing yield. If routed + violated < total,
-        // some connections failed entirely and the test can't represent
-        // them — investigate before trusting the metrics. Fires once per
-        // @Test method (4× per full class run; Sonnet 4.6 cross-model
-        // The 4 identical lines are expected,
-        // one per @Test method, since each routes from scratch).
-        System.out.println("[V4OracleQualityRegressionTest] routing yield: "
-                + routingResult.routed().size() + " routed + "
-                + routingResult.violatedRoutes().size() + " violated + "
-                + routingResult.failed().size() + " failed = "
-                + (routingResult.routed().size()
-                        + routingResult.violatedRoutes().size()
-                        + routingResult.failed().size())
-                + " of " + fixture.getConnections().size() + " total");
-
-        // 2. Build AssessmentNode list from fixture elements.
-        // Group containers (isChild=false) become isGroup=true so the assessor
-        // excludes them from hub-port-quality and coincident-segment scoring.
-        List<AssessmentNode> nodes = new ArrayList<>();
-        for (ViewFixture.FixtureElement e : fixture.getElements()) {
-            boolean isGroup = !e.isChild();
-            nodes.add(new AssessmentNode(
-                    e.id(),
-                    e.x(), e.y(), e.w(), e.h(),
-                    e.parentId(),
-                    isGroup,
-                    false, // isNote — fixture excludes notes
-                    e.name(),
-                    0.0,   // labelTextWidth — informational, not used by these three metrics
-                    null,  // imagePath
-                    null   // imagePosition
-            , 0.0, 0.0, 0.0));
-        }
-
-        // 3. Build AssessmentConnection list from routed bendpoints.
-        // pathPoints = [sourceCenter, ...bendpoints, targetCenter] per
-        // AssessmentConnection contract.
-        List<AssessmentConnection> connections = new ArrayList<>();
-        for (ViewFixture.FixtureConnection c : fixture.getConnections()) {
-            List<AbsoluteBendpointDto> bps = routedBps.get(c.id());
-            if (bps == null) {
-                // Routing failed for this connection — skip rather than
-                // fabricate a path; lets HPQ/M5/M1 reflect only successful
-                // routes (matches live MCP assess-layout semantics).
-                continue;
-            }
-            ViewFixture.FixtureElement src = fixture.getElementById(c.sourceId());
-            ViewFixture.FixtureElement tgt = fixture.getElementById(c.targetId());
-            // A fixture
-            // sourceId/targetId mismatch (orphaned connection) would NPE on
-            // the next line and surface as a stack trace, not a useful
-            // assertion failure. Guard with explicit messages so future
-            // fixture corruption is diagnosed at the connection-level.
-            assertNotNull("Fixture connection " + c.id()
-                    + " references unknown sourceId=" + c.sourceId(), src);
-            assertNotNull("Fixture connection " + c.id()
-                    + " references unknown targetId=" + c.targetId(), tgt);
-
-            List<double[]> pathPoints = new ArrayList<>();
-            pathPoints.add(new double[] {src.x() + src.w() / 2.0, src.y() + src.h() / 2.0});
-            for (AbsoluteBendpointDto bp : bps) {
-                pathPoints.add(new double[] {bp.x(), bp.y()});
-            }
-            pathPoints.add(new double[] {tgt.x() + tgt.w() / 2.0, tgt.y() + tgt.h() / 2.0});
-
-            connections.add(new AssessmentConnection(
-                    c.id(), c.sourceId(), c.targetId(),
-                    pathPoints, c.label(), 1));
-        }
-
-        // 4. Run the no-EMF assess overload (package-private — accessible
-        // from this same-package test class per Path A cross-package decision).
-        return assessor.assess(nodes, connections, true /*includeViolatorIds*/);
+        OracleFixtureRouting.Inputs in = OracleFixtureRouting.of(fixture, "V4OracleQualityRegressionTest").route();
+        return assessor.assess(in.nodes(), in.connections(), true /*includeViolatorIds*/);
     }
 
     /**
-     * True if the fixture element id is a group container (isChild=false in
-     * the fixture means top-level, which for the V4 oracle fixture means a
-     * styling group container — every leaf element is parented in a group).
+     * The gates in this class are calibrated against a specific value of {@code
+     * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN}, and every one of them is a one-sided bound.
+     * That combination is silently dangerous: a ceiling anchored for a wider margin still passes at
+     * every narrower one, so moving the margin down leaves these gates green while they guard
+     * nothing. It is not hypothetical — the margin went 4 to 1 and back during this story, and a
+     * mutation run confirmed all of them passed at 1 while M5_CEILING (6) and M1_CEILING (24)
+     * were sitting far above the corpus actuals.
+     *
+     * <p>A Javadoc instruction to re-anchor them is not a mechanism. This is: change the margin and
+     * this test reds, naming what has to move with it. It asserts nothing about layout quality and
+     * is not a duplicate of the margin's own value pins in {@code EdgeAttachmentCalculatorTest} —
+     * those exist so the margin cannot change unnoticed, this one exists so it cannot change
+     * without the gates in THIS file being re-measured.
      */
-    private boolean isGroupId(String id) {
-        ViewFixture.FixtureElement e = fixture.getElementById(id);
-        return e != null && !e.isChild();
-    }
-
-    /** Walks parentId chain (matches ArchiModelAccessorImpl.getAncestorIds). */
-    private void collectAncestors(String id, Set<String> into) {
-        ViewFixture.FixtureElement e = fixture.getElementById(id);
-        while (e != null && e.parentId() != null) {
-            into.add(e.parentId());
-            e = fixture.getElementById(e.parentId());
-        }
-    }
-
-    /** One-level children (matches ArchiModelAccessorImpl.getChildIds). */
-    private void collectChildren(String parentId, Set<String> into) {
-        for (ViewFixture.FixtureElement e : fixture.getElements()) {
-            if (parentId.equals(e.parentId())) {
-                into.add(e.id());
-            }
-        }
+    @Test
+    public void gatesInThisClassAreCalibratedForTheShippedTerminalFaceMargin() {
+        assertEquals("M5_CEILING (6) in this class was measured at a terminal face margin of 4. "
+                        + "The margin has changed, so it is no longer anchored to anything "
+                        + "measured: re-run the corpus at the new margin and re-anchor it in the "
+                        + "same commit that moved it.",
+                4, EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN);
     }
 }

@@ -11,6 +11,7 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.handlers.ToolAccess;
 import net.vheerden.archi.mcp.response.dto.PendingProposalView;
 import net.vheerden.archi.mcp.response.dto.ProposalDto;
 import net.vheerden.archi.mcp.ui.ApprovalCardModel.ChangeRow;
@@ -112,6 +113,56 @@ public class ApprovalCardModelTest {
 
         assertTrue(c.hasDestructive());
         assertEquals("1 removal", rollupText(c));
+    }
+
+    @Test
+    public void shouldClassifyMergeElements_asDestructive_sinceTheDuplicatesAreDeleted() {
+        ApprovalCardModel c = card("p-m", "merge-elements",
+                "Merge 1 duplicate into 1 element (2 relationships re-pointed, 1 view object re-pointed, "
+                        + "0 self-relationships dropped)",
+                Map.of("merges", List.of(Map.of("targetId", "t", "sourceIds", List.of("s")))),
+                "2026-01-01T00:00:00Z");
+
+        assertEquals("1 merge", rollupText(c));
+        assertTrue(c.hasDestructive());
+        assertTrue(c.rollup().get(0).destructive());
+        assertTrue(ApprovalCardModel.isDestructiveTool("merge-elements"));
+    }
+
+    @Test
+    public void shouldClassifyChangeElementType_asAnUpdate_sinceNothingIsDeleted() {
+        ApprovalCardModel c = card("p-t", "change-element-type",
+                "Change the type of 1 element (2 relationships re-pointed, 1 view object re-pointed, "
+                        + "0 specializations dropped)",
+                Map.of("changes", List.of(Map.of("elementId", "a", "fromType", "BusinessActor",
+                        "toType", "BusinessRole"))),
+                "2026-01-01T00:00:00Z");
+
+        assertEquals("1 update", rollupText(c));
+        assertFalse(c.hasDestructive());
+        assertFalse(ApprovalCardModel.isDestructiveTool("change-element-type"));
+        assertEquals("the card's row is the description, which names the counts",
+                "Change the type of 1 element (2 relationships re-pointed, 1 view object re-pointed, "
+                        + "0 specializations dropped)", c.rows().get(0).text());
+        assertTrue("restating the verb is no intent",
+                ApprovalCardModel.isHollowIntent("Change type", "change-element-type"));
+    }
+
+    @Test
+    public void shouldClassifyChangeRelationshipType_asAnUpdate_sinceNothingIsDeleted() {
+        ApprovalCardModel c = card("p-r", "change-relationship-type",
+                "Change the type of 1 relationship (1 view connection re-pointed)",
+                Map.of("changes", List.of(Map.of("relationshipId", "r", "fromType", "FlowRelationship",
+                        "toType", "TriggeringRelationship"))),
+                "2026-01-01T00:00:00Z");
+
+        assertEquals("1 update", rollupText(c));
+        assertFalse(c.hasDestructive());
+        assertFalse(ApprovalCardModel.isDestructiveTool("change-relationship-type"));
+        assertEquals("the card's row is the description, which names the counts",
+                "Change the type of 1 relationship (1 view connection re-pointed)", c.rows().get(0).text());
+        assertTrue("restating the verb is no intent",
+                ApprovalCardModel.isHollowIntent("Change type", "change-relationship-type"));
     }
 
     @Test
@@ -847,5 +898,50 @@ public class ApprovalCardModelTest {
         assertTrue("a supplied name must still be shown: " + text, text.contains("Serves"));
         assertFalse("and must not be described as a clear: " + text,
                 text.toLowerCase().contains("clear"));
+    }
+
+    // ---- target model ----
+
+    @Test
+    public void shouldNameTheModelApprovingWritesTo_whenTheProposalIsBoundToOne() {
+        ProposalDto dto = new ProposalDto("p-m", "create-element", "pending", "Create BusinessActor: Ann",
+                null, Map.of("name", "Ann"), "Valid", "2026-01-01T00:00:00Z", null, null,
+                "model-a", "Meridian Retail Bank");
+
+        ApprovalCardModel c = ApprovalCardModel.fromProposal(new PendingProposalView("default", dto));
+
+        assertEquals("Approving writes to model \u201CMeridian Retail Bank\u201D.", c.targetModelText());
+    }
+
+    @Test
+    public void shouldFallBackToTheModelId_whenTheBoundModelHasNoName() {
+        assertEquals("Approving writes to model \u201Cmodel-a\u201D.",
+                ApprovalCardModel.targetModelText(null, "model-a"));
+    }
+
+    @Test
+    public void shouldNameNoModel_whenTheProposalCarriesNone() {
+        ApprovalCardModel c = card("p-n", "create-element", "Create BusinessActor: Ann",
+                Map.of("name", "Ann"), "2026-01-01T00:00:00Z");
+
+        assertNull(c.targetModelText());
+    }
+
+    /**
+     * The access table's destructive flag and the approval card's destructive warning describe the same
+     * tools, so a client told by the tool hints that a tool is destructive sees the same warning in
+     * Archi's approval card.
+     */
+    @Test
+    public void shouldAgreeWithTheAccessTableOnWhichToolsAreDestructive() {
+        StringBuilder disagreements = new StringBuilder();
+        ToolAccess.table().forEach((tool, entry) -> {
+            boolean hinted = entry.access() == ToolAccess.WRITE && entry.destructive();
+            if (hinted != ApprovalCardModel.isDestructiveTool(tool)) {
+                disagreements.append(tool).append(' ');
+            }
+        });
+        assertEquals("tools on which the access table and the approval card disagree", "",
+                disagreements.toString().trim());
     }
 }

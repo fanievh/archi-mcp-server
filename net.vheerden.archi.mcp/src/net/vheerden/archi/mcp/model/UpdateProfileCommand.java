@@ -130,7 +130,7 @@ public class UpdateProfileCommand extends Command {
         }
     }
 
-    /** Package-visible for testing. */
+    /** Package-visible for testing. Also read by {@link StagedProfiles}. */
     IProfile getProfile() {
         return profile;
     }
@@ -140,7 +140,7 @@ public class UpdateProfileCommand extends Command {
         return oldName;
     }
 
-    /** Package-visible for testing. */
+    /** Package-visible for testing. Also read by {@link StagedProfiles}. */
     String getNewName() {
         return newName;
     }

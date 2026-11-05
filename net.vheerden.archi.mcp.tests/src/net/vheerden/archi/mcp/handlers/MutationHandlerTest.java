@@ -36,6 +36,8 @@ import net.vheerden.archi.mcp.response.dto.BulkOperationFailure;
 import net.vheerden.archi.mcp.response.dto.BulkOperationResult;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
 
 import org.eclipse.gef.commands.Command;
@@ -107,7 +109,7 @@ public class MutationHandlerTest {
         // nextSteps hints are returned on every call, so a stale promise there is read more
         // often than the tool description itself.
         assertFalse("begin-batch's nextSteps must not promise atomicity",
-                String.valueOf(callAndParse("begin-batch", Map.of())).contains("atomically"));
+                String.valueOf(callAndParse("begin-batch", Map.of("modelId", "model-1"))).contains("atomically"));
         assertFalse("get-batch-status's nextSteps must not promise atomicity",
                 String.valueOf(callAndParse("get-batch-status", Map.of())).contains("atomically"));
         callAndParse("end-batch", Map.of("rollback", true));
@@ -156,6 +158,46 @@ public class MutationHandlerTest {
         assertEquals(true, res.get("allSucceeded"));
         assertNull("The field must stay absent in the normal case",
                 res.get("skippedOperations"));
+    }
+
+    /**
+     * The operation result already carries the disclosure its prepare measured; the operation row
+     * is assembled field by field, so it reaches the agent only if it is copied across.
+     */
+    @Test
+    public void bulkMutate_shouldPutEachOperationsStructuredWarningsOnTheWire() throws Exception {
+        StructuredWarningDto warning = new StructuredWarningDto(
+                StructuredWarningCodes.ANNOTATION_PLACED_IN_ROUTED_CORRIDOR,
+                "The note was placed across 1 connection route.", "update-view-object",
+                List.of("conn-r1"));
+        accessor.setBulkBehavior(ops -> BulkMutationResult.of(
+                List.of(new BulkOperationResult(0, "add-note-to-view", "placed",
+                        "note-1", "Note", "Legend", null, null, null, null, List.of(), List.of(),
+                        null, null, null, null, List.of(warning), null),
+                        new BulkOperationResult(1, "create-element", "created",
+                                "e-1", "BusinessActor", "Fine")),
+                List.of(), 2, null, List.of()));
+
+        Map<String, Object> parsed = callAndParse("bulk-mutate", Map.of("operations", List.of(
+                Map.of("tool", "add-note-to-view",
+                        "params", Map.of("viewId", "view-1", "content", "Legend")),
+                Map.of("tool", "create-element",
+                        "params", Map.of("type", "BusinessActor", "name", "Fine")))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> res = (Map<String, Object>) parsed.get("result");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) res.get("operations");
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> onWire =
+                (List<Map<String, Object>>) rows.get(0).get("structuredWarnings");
+        assertNotNull("the operation's structured warnings must reach the wire: " + rows.get(0),
+                onWire);
+        assertEquals(1, onWire.size());
+        assertEquals(StructuredWarningCodes.ANNOTATION_PLACED_IN_ROUTED_CORRIDOR,
+                onWire.get(0).get("code"));
+        assertEquals(List.of("conn-r1"), onWire.get(0).get("remediationViolatorIds"));
+        assertNull("an operation with none carries no key", rows.get(1).get("structuredWarnings"));
     }
 
     @Test
@@ -329,7 +371,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnBatchMode_whenBeginBatchCalled() throws Exception {
-        Map<String, Object> result = callAndParse("begin-batch", Map.of());
+        Map<String, Object> result = callAndParse("begin-batch", Map.of("modelId", "model-1"));
 
         Map<String, Object> batchResult = getResult(result);
         assertEquals("BATCH", batchResult.get("mode"));
@@ -337,7 +379,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnNextSteps_whenBeginBatchCalled() throws Exception {
-        Map<String, Object> result = callAndParse("begin-batch", Map.of());
+        Map<String, Object> result = callAndParse("begin-batch", Map.of("modelId", "model-1"));
 
         @SuppressWarnings("unchecked")
         List<String> nextSteps = (List<String>) result.get("nextSteps");
@@ -347,20 +389,42 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnEnvelopeWithMeta_whenBeginBatchCalled() throws Exception {
-        Map<String, Object> result = callAndParse("begin-batch", Map.of());
+        Map<String, Object> result = callAndParse("begin-batch", Map.of("modelId", "model-1"));
 
         assertNotNull(result.get("result"));
         assertNotNull(result.get("nextSteps"));
         assertNotNull(result.get("_meta"));
     }
 
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldReportBatchAlreadyActive_beforeAMissingModelId() throws Exception {
+        callTool("begin-batch", Map.of("modelId", "model-1"));
+
+        McpSchema.CallToolResult result = callTool("begin-batch", Map.of());
+
+        assertEquals("BATCH_ALREADY_ACTIVE",
+                ((Map<String, Object>) parseResult(result).get("error")).get("code"));
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldRefuseBeginBatch_whenItNamesNoModel() throws Exception {
+        McpSchema.CallToolResult result = callTool("begin-batch", Map.of("description", "work"));
+        Map<String, Object> parsed = parseResult(result);
+
+        assertTrue("Should be an error", result.isError());
+        assertEquals("INVALID_PARAMETER", ((Map<String, Object>) parsed.get("error")).get("code"));
+        assertTrue(String.valueOf(parsed), String.valueOf(parsed).contains("modelId"));
+    }
+
     @Test
     public void shouldReturnBatchAlreadyActive_whenBeginBatchCalledTwice() throws Exception {
         // First begin-batch succeeds
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
 
         // Second begin-batch should return error
-        McpSchema.CallToolResult result = callTool("begin-batch", Map.of());
+        McpSchema.CallToolResult result = callTool("begin-batch", Map.of("modelId", "model-1"));
         Map<String, Object> parsed = parseResult(result);
 
         assertTrue("Should be an error", result.isError());
@@ -373,7 +437,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnCommitSummary_whenEndBatchWithCommit() throws Exception {
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
 
         Map<String, Object> result = callAndParse("end-batch", Map.of());
 
@@ -384,7 +448,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnRollbackSummary_whenEndBatchWithRollback() throws Exception {
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
 
         Map<String, Object> result = callAndParse("end-batch", Map.of("rollback", true));
 
@@ -405,7 +469,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnCommitNextSteps_whenEndBatchCommit() throws Exception {
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
         Map<String, Object> result = callAndParse("end-batch", Map.of());
 
         @SuppressWarnings("unchecked")
@@ -416,7 +480,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnRollbackNextSteps_whenEndBatchRollback() throws Exception {
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
         Map<String, Object> result = callAndParse("end-batch", Map.of("rollback", true));
 
         @SuppressWarnings("unchecked")
@@ -437,7 +501,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldReturnBatchMode_whenInBatch() throws Exception {
-        callTool("begin-batch", Map.of());
+        callTool("begin-batch", Map.of("modelId", "model-1"));
 
         Map<String, Object> result = callAndParse("get-batch-status", Map.of());
 
@@ -454,6 +518,18 @@ public class MutationHandlerTest {
         List<String> nextSteps = (List<String>) result.get("nextSteps");
         assertNotNull(nextSteps);
         assertTrue(nextSteps.stream().anyMatch(s -> s.contains("begin-batch")));
+        assertEquals(List.of("Currently in GUI-attached mode — mutations apply immediately",
+                "Use begin-batch to switch to batch mode"), nextSteps);
+    }
+
+    @Test
+    public void shouldGiveTheRollbackAdviceOnce_namingOnlyRealTools_whenInBatch() throws Exception {
+        callTool("begin-batch", Map.of("modelId", "model-1"));
+
+        @SuppressWarnings("unchecked")
+        List<String> nextSteps = (List<String>) callAndParse("get-batch-status", Map.of()).get("nextSteps");
+        assertEquals(List.of("0 mutation(s) queued",
+                "Use end-batch to commit all changes, or end-batch with rollback=true to discard them"), nextSteps);
     }
 
     // ---- Model not loaded tests ----
@@ -487,6 +563,59 @@ public class MutationHandlerTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> error = (Map<String, Object>) parsed.get("error");
         assertEquals("MODEL_NOT_LOADED", error.get("code"));
+    }
+
+    @Test
+    public void shouldReturnTheBoundModelCode_whenTheCommitIsRefusedForAnotherModel() throws Exception {
+        StubMutationDispatcher refusing = new StubMutationDispatcher() {
+            @Override
+            public net.vheerden.archi.mcp.response.dto.BatchSummaryDto endBatch(String sessionId,
+                    boolean commit) {
+                throw new ModelAccessException("Commit refused: this batch is bound to model 'A' (id a), "
+                        + "but the active model is now 'B' (id b).", ErrorCode.BOUND_MODEL_NOT_ACTIVE,
+                        "Queued operations (1): 1. Create BusinessActor: X", "Close 'B' (id b) in Archi", null);
+            }
+        };
+        BaseTestAccessor withRefusal = new BaseTestAccessor(true) {
+            @Override
+            public MutationDispatcher getMutationDispatcher() {
+                return refusing;
+            }
+        };
+        refusing.beginBatch("default", null);
+        MutationHandler refusingHandler = new MutationHandler(withRefusal, formatter, new CommandRegistry(), null);
+
+        McpSchema.CallToolResult result = refusingHandler.handleEndBatch(null,
+                McpSchema.CallToolRequest.builder().name("end-batch").arguments(Map.of()).build());
+
+        assertTrue("Should be an error", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> error = (Map<String, Object>) parseResult(result).get("error");
+        assertEquals("BOUND_MODEL_NOT_ACTIVE", error.get("code"));
+        assertEquals("Queued operations (1): 1. Create BusinessActor: X", error.get("details"));
+        assertEquals("Close 'B' (id b) in Archi", error.get("suggestedCorrection"));
+    }
+
+    @Test
+    public void shouldRollBackAnOpenBatch_whenNoModelIsLoaded() throws Exception {
+        StubMutationDispatcher open = new StubMutationDispatcher();
+        open.beginBatch("default", null);
+        BaseTestAccessor noModel = new BaseTestAccessor(false) {
+            @Override
+            public MutationDispatcher getMutationDispatcher() {
+                return open;
+            }
+        };
+        MutationHandler noModelHandler = new MutationHandler(noModel, formatter, new CommandRegistry(), null);
+
+        McpSchema.CallToolResult result = noModelHandler.handleEndBatch(null,
+                McpSchema.CallToolRequest.builder().name("end-batch")
+                        .arguments(Map.of("rollback", true)).build());
+
+        assertFalse("a rollback must not require the bound model to be open", result.isError());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> summary = (Map<String, Object>) parseResult(result).get("result");
+        assertEquals(Boolean.TRUE, summary.get("rolledBack"));
     }
 
     @Test
@@ -1737,7 +1866,7 @@ public class MutationHandlerTest {
 
     @Test
     public void shouldHaveStandardEnvelope_whenBeginBatch() throws Exception {
-        Map<String, Object> result = callAndParse("begin-batch", Map.of());
+        Map<String, Object> result = callAndParse("begin-batch", Map.of("modelId", "model-1"));
 
         assertNotNull("result key should exist", result.get("result"));
         assertNotNull("nextSteps key should exist", result.get("nextSteps"));

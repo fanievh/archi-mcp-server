@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.logging;
 
+import java.util.Locale;
+
 import org.eclipse.core.runtime.ILog;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Platform;
@@ -9,6 +11,8 @@ import org.slf4j.Marker;
 import org.slf4j.event.Level;
 import org.slf4j.helpers.LegacyAbstractLogger;
 import org.slf4j.helpers.MessageFormatter;
+
+import net.vheerden.archi.mcp.model.CallerText;
 
 /**
  * SLF4J logger implementation that forwards log messages to Eclipse's ILog system.
@@ -85,18 +89,21 @@ public class EclipseLogger extends LegacyAbstractLogger {
         String formattedMessage = formatMessage(messagePattern, arguments);
         int severity = mapLevelToSeverity(level);
 
-        // Prefix with logger name for clarity in Error Log
-        String logMessage = "[" + name + "] " + formattedMessage;
+        // Prefix with logger name for clarity in Error Log. Every entry is one line, whatever a value in it
+        // holds: a line break in a message, or in the header a stack trace prints for each throwable, would
+        // split the entry or forge another.
+        String logMessage = oneLine("[" + name + "] " + formattedMessage);
+        Throwable logged = OneLineThrowable.of(throwable);
 
         ILog log = getEclipseLog();
         if (log != null) {
-            IStatus status = new Status(severity, PLUGIN_ID, logMessage, throwable);
+            IStatus status = new Status(severity, PLUGIN_ID, logMessage, logged);
             log.log(status);
         } else {
             // Fallback to stderr if Eclipse platform not yet available
             System.err.println("[" + level + "] " + logMessage);
-            if (throwable != null) {
-                throwable.printStackTrace(System.err);
+            if (logged != null) {
+                logged.printStackTrace(System.err);
             }
         }
     }
@@ -167,7 +174,7 @@ public class EclipseLogger extends LegacyAbstractLogger {
      * Parses a log level string to its SLF4J Level ordinal.
      */
     static int parseLevelOrdinal(String levelStr) {
-        return switch (levelStr.toUpperCase()) {
+        return switch (levelStr.toUpperCase(Locale.ROOT)) {
             case "TRACE" -> Level.TRACE.toInt();
             case "DEBUG" -> Level.DEBUG.toInt();
             case "INFO" -> Level.INFO.toInt();
@@ -189,6 +196,16 @@ public class EclipseLogger extends LegacyAbstractLogger {
             case INFO -> IStatus.INFO;
             case DEBUG, TRACE -> IStatus.OK;
         };
+    }
+
+    /**
+     * {@code message} with every character {@link CallerText#loggedMessage} escapes escaped, or the same
+     * instance when it holds none. The backslash is kept, so a value a call site already escaped is not
+     * escaped twice.
+     */
+    static String oneLine(String message) {
+        String escaped = CallerText.loggedMessage(message);
+        return escaped.equals(message) ? message : escaped;
     }
 
     /**

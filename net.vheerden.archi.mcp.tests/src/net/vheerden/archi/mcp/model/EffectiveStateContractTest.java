@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import java.beans.PropertyChangeListener;
@@ -36,6 +37,7 @@ import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IBusinessActor;
+import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelContainer;
@@ -50,6 +52,7 @@ import com.archimatetool.editor.model.IEditorModelManager;
 
 import net.vheerden.archi.mcp.handlers.HandlerRegistrar;
 import net.vheerden.archi.mcp.handlers.SearchHandler;
+import net.vheerden.archi.mcp.handlers.ToolAccess;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.session.SessionManager;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
@@ -146,7 +149,7 @@ public class EffectiveStateContractTest {
     private static final Set<String> READ_ONLY = Set.of(
             "assess-layout", "begin-batch", "detect-hub-elements", "end-batch", "export-view",
             "find-concept-usage", "get-batch-status", "get-element", "get-folder-tree",
-            "get-folders", "get-guidance", "get-model-info", "get-relationships", "get-session-filters",
+            "get-folders", "get-guidance", "get-model-info", "get-models", "get-relationships", "get-session-filters",
             "get-specialization-usage", "get-view-contents", "get-views", "list-model-images",
             "list-pending-approvals", "list-specializations", "search-elements",
             "search-relationships", "set-session-filter");
@@ -163,6 +166,9 @@ public class EffectiveStateContractTest {
             "auto-route-connections",
             "bulk-mutate",
             "layout-within-group",
+            "merge-elements",
+            "change-element-type",
+            "change-relationship-type",
             "create-folder",
             "create-specialization",
             "delete-relationship",
@@ -181,6 +187,7 @@ public class EffectiveStateContractTest {
     private static final String HANDLER_SESSION = "default";
 
     private IArchimateFactory factory;
+    private StubEditorModelManager stubModelManager;
     private ArchiModelAccessorImpl accessor;
     private MutationDispatcher dispatcher;
     private CommandStack stack;
@@ -190,7 +197,7 @@ public class EffectiveStateContractTest {
     @Before
     public void setUp() {
         factory = IArchimateFactory.eINSTANCE;
-        StubEditorModelManager stubModelManager = new StubEditorModelManager();
+        stubModelManager = new StubEditorModelManager();
 
         model = factory.createArchimateModel();
         model.setName("Effective State Contract Fixture");
@@ -337,6 +344,23 @@ public class EffectiveStateContractTest {
         assertTrue("These classifications name tools that are no longer registered. Delete them "
                 + "rather than leaving them to inflate the gap ceiling: " + stale,
                 stale.isEmpty());
+    }
+
+    /**
+     * A read-only server offers exactly the tools {@link ToolAccess} classifies READ, so every one of
+     * them must be a tool this suite already holds to mutate nothing. The reverse is not required: the
+     * batch and approval tools mutate nothing here, yet are WRITE because they only serve a change.
+     */
+    @Test
+    public void shouldOfferOnlyToolsThatMutateNothing_onAReadOnlyServer() {
+        Set<String> mutating = new TreeSet<>();
+        ToolAccess.table().forEach((tool, entry) -> {
+            if (entry.access() == ToolAccess.READ && !READ_ONLY.contains(tool)) {
+                mutating.add(tool);
+            }
+        });
+        assertTrue("These tools are classified READ, so a read-only server offers them, but this suite "
+                + "does not hold them to mutate nothing: " + mutating, mutating.isEmpty());
     }
 
     /** A tool may not be excused twice; overlapping classification hides which one is load-bearing. */
@@ -2406,6 +2430,542 @@ public class EffectiveStateContractTest {
         assertEquals("viewConnectionsRemoved IS measured and must match what the view lost",
                 connectionsBefore - countConnections(), deleted.viewConnectionsRemoved());
         assertEquals("the view's connection must be gone", 0, countConnections());
+    }
+
+    /**
+     * {@code merge-elements} reports what it re-pointed and dropped. Each count is measured here
+     * from the model before and after the call, never taken from the fixture's intent: the
+     * relationships that ended at the duplicate and still exist must now end at the target, the
+     * boxes that showed it must now show the target, and the self-relationship it formed with the
+     * target must be gone along with the duplicate itself.
+     */
+    @Test
+    public void shouldReportTheMergeTheModelHolds_whenMergeElementsIsCalledAsATool() throws Exception {
+        CommandRegistry registry = registryOverLiveAccessor();
+        String actorBox = accessor.addToView(SESSION, view.getId(), "actor-1",
+                10, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        String duplicateBox = accessor.addToView(SESSION, view.getId(), "actor-2",
+                10, 200, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        accessor.addConnectionToView(SESSION, view.getId(), "rel-1",
+                actorBox, duplicateBox, null, null, null, null, null);
+        IArchimateElement duplicate = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-2");
+        IArchimateElement target = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-3");
+        IArchimateRelationship self = factory.createAssociationRelationship();
+        self.setId("rel-self");
+        self.setSource(duplicate);
+        self.setTarget(target);
+        model.getFolder(FolderType.RELATIONS).getElements().add(self);
+
+        List<IArchimateRelationship> touching = new ArrayList<>(duplicate.getSourceRelationships());
+        touching.addAll(duplicate.getTargetRelationships());
+        List<IDiagramModelArchimateObject> boxes = new ArrayList<>();
+        for (Object component : duplicate.getReferencingDiagramComponents()) {
+            boxes.add((IDiagramModelArchimateObject) component);
+        }
+
+        Map<String, Object> envelope = invokeTool(registry, "merge-elements", Map.of(
+                "merges", List.of(Map.of("targetId", "actor-3", "sourceIds", List.of("actor-2")))));
+
+        int repointed = 0;
+        int dropped = 0;
+        for (IArchimateRelationship relationship : touching) {
+            if (relationship.eContainer() == null) {
+                dropped++;
+            } else {
+                assertTrue(relationship.getId() + " must end at the target now",
+                        relationship.getSource() == target || relationship.getTarget() == target);
+                repointed++;
+            }
+        }
+        int boxesRepointed = 0;
+        for (IDiagramModelArchimateObject box : boxes) {
+            assertSame(box.getId() + " must show the target now", target, box.getArchimateElement());
+            boxesRepointed++;
+        }
+        assertNull("the duplicate must be gone", duplicate.eContainer());
+        assertTrue("fixture must re-point one relationship and drop one", repointed == 1 && dropped == 1);
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envelope);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("the call must succeed. Response was: " + json, result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> cluster = ((List<Map<String, Object>>) result.get("clusters")).get(0);
+        assertEquals(json, repointed, cluster.get("relationshipsRepointed"));
+        assertEquals(json, boxesRepointed, cluster.get("diagramObjectsRepointed"));
+        assertEquals(json, dropped, ((List<?>) cluster.get("selfRelationshipsDropped")).size());
+        assertEquals(json, Map.of("actor-2", "actor-3"), result.get("idMap"));
+    }
+
+    /**
+     * {@code merge-elements} queued in a batch: nothing has merged, so the clusters and the id map
+     * are a projection and must sit under {@code preview} beside a {@code batch} sibling, never at
+     * the top level where an agent would read them as merged.
+     */
+    @Test
+    public void shouldLabelAQueuedMergeAsAPreview() throws Exception {
+        CommandRegistry registry = registryOverLiveAccessor();
+        dispatcher.beginBatch(HANDLER_SESSION, "queued merge");
+        Map<String, Object> envelope;
+        try {
+            envelope = invokeTool(registry, "merge-elements", Map.of(
+                    "merges", List.of(Map.of("targetId", "actor-3", "sourceIds", List.of("actor-2")))));
+        } finally {
+            dispatcher.endBatch(HANDLER_SESSION, false);
+        }
+
+        assertPreviewLabelled(envelope, "merge-elements", "clusters");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertFalse("the id map must NOT appear at the top level of 'result'", result.containsKey("idMap"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> preview = (Map<String, Object>) result.get("preview");
+        assertEquals("the preview carries the clusters the call would merge", 1,
+                ((List<?>) preview.get("clusters")).size());
+        assertNotNull("nothing merged before the commit",
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, "actor-2"));
+    }
+
+    /**
+     * {@code change-element-type} reports what it changed. Measured from the model before and after
+     * the call: the element must be in the model with the reported id and the new type, every
+     * relationship that ended at it must end at the new element, every box that showed it must
+     * show the new element with the new type's default figure, and the reported folder, counts,
+     * reset figures and dropped specialization must be what a fresh read finds.
+     *
+     * <p>Archi's relationship rule loads its matrix from the running platform, which this lane
+     * does not have, so the accessor here builds its type-change operations with a rule that
+     * allows every relationship and a fixed default figure; everything else is production's path
+     * from the tool's handler down.</p>
+     */
+    @Test
+    public void shouldReportTheTypeChangeTheModelHolds_whenChangeElementTypeIsCalledAsATool() throws Exception {
+        accessor.dispose();
+        accessor = new ArchiModelAccessorImpl(stubModelManager, dispatcher) {
+            private final ChangeElementTypeOperations ops = new ChangeElementTypeOperations(
+                    sessionId -> getMutationDispatcher().admit(sessionId, "change-element-type", model),
+                    this::getMutationDispatcher, () -> { }, (source, target, relationship) -> true,
+                    type -> type.getName().equals("BusinessRole") ? 1 : 0);
+
+            @Override
+            public MutationResult<net.vheerden.archi.mcp.response.dto.ChangeElementTypeResultDto> changeElementType(
+                    String sessionId, List<net.vheerden.archi.mcp.response.dto.ElementTypeChangeRequest> changes,
+                    String invalidRelationships) {
+                return ops.changeElementType(sessionId, changes, invalidRelationships);
+            }
+        };
+        CommandRegistry registry = registryOverLiveAccessor();
+        String actorBox = accessor.addToView(SESSION, view.getId(), "actor-1",
+                10, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        String peerBox = accessor.addToView(SESSION, view.getId(), "actor-2",
+                300, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        accessor.addConnectionToView(SESSION, view.getId(), "rel-1", actorBox, peerBox, null, null, null, null, null);
+        IArchimateElement old = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-1");
+        IArchimateRelationship in = factory.createAssociationRelationship();
+        in.setId("rel-in");
+        in.setSource((IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model,
+                "actor-3"));
+        in.setTarget(old);
+        model.getFolder(FolderType.RELATIONS).getElements().add(in);
+        com.archimatetool.model.IProfile profile = factory.createProfile();
+        profile.setId("profile-vip");
+        profile.setName("VIP");
+        profile.setConceptType("BusinessActor");
+        model.getProfiles().add(profile);
+        old.getProfiles().add(profile);
+
+        List<IArchimateRelationship> touching = new ArrayList<>(old.getSourceRelationships());
+        touching.addAll(old.getTargetRelationships());
+        Map<IDiagramModelArchimateObject, Integer> figuresBefore = new java.util.IdentityHashMap<>();
+        for (Object component : old.getReferencingDiagramComponents()) {
+            IDiagramModelArchimateObject box = (IDiagramModelArchimateObject) component;
+            figuresBefore.put(box, box.getType());
+        }
+
+        Map<String, Object> envelope = invokeTool(registry, "change-element-type", Map.of(
+                "changes", List.of(Map.of("elementId", "actor-1", "type", "BusinessRole"))));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envelope);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("the call must succeed. Response was: " + json, result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> change = ((List<Map<String, Object>>) result.get("changes")).get(0);
+        String resultingId = (String) change.get("resultingId");
+        IArchimateElement now = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, resultingId);
+        assertNotNull(json, now);
+        assertEquals(json, "BusinessRole", now.eClass().getName());
+        assertEquals(json, now.eClass().getName(), change.get("toType"));
+        assertNull("the old element must be gone", old.eContainer());
+        assertEquals(json, Map.of("actor-1", resultingId), result.get("idMap"));
+
+        int repointed = 0;
+        for (IArchimateRelationship relationship : touching) {
+            assertTrue(relationship.getId() + " must end at the new element now",
+                    relationship.getSource() == now || relationship.getTarget() == now);
+            repointed++;
+        }
+        List<Map<String, Object>> resetMeasured = new ArrayList<>();
+        for (Map.Entry<IDiagramModelArchimateObject, Integer> each : figuresBefore.entrySet()) {
+            IDiagramModelArchimateObject box = each.getKey();
+            assertSame(box.getId() + " must show the new element now", now, box.getArchimateElement());
+            assertEquals(box.getId() + " must draw the new type's default figure", 1, box.getType());
+            if (each.getValue() != box.getType()) {
+                resetMeasured.add(Map.of("diagramObjectId", box.getId(), "viewId", box.getDiagramModel().getId(),
+                        "from", each.getValue(), "to", box.getType()));
+            }
+        }
+        assertTrue("fixture must re-point two relationships and one box", repointed == 2 && figuresBefore.size() == 1);
+        assertEquals(json, repointed, change.get("relationshipsRepointed"));
+        assertEquals(json, figuresBefore.size(), change.get("diagramObjectsRepointed"));
+        assertEquals(json, resetMeasured, change.get("figureTypesReset"));
+        assertEquals(json, ((IFolder) now.eContainer()).getId(), change.get("folderId"));
+        assertEquals(json, false, change.get("folderChanged"));
+        assertTrue("the new element carries no specialization", now.getProfiles().isEmpty());
+        assertEquals(json, Map.of("name", "VIP", "conceptType", "BusinessActor"), change.get("specializationDropped"));
+    }
+
+    /**
+     * {@code change-element-type} with {@code invalidRelationships: "to-association"} reports the
+     * relationships it converted. Measured from the model before and after the call: every
+     * relationship of the element that is a different object afterwards must be reported, and
+     * each reported one must be, on a fresh read, an Association with the reported id and ends,
+     * in the folder and at the index the old relationship held, drawn by every connection that
+     * drew the old one (as many as reported), with the old type's attributes as reported dropped.
+     *
+     * <p>The relationship rule is a stand-in that refuses one triple, for the reason the test
+     * above gives; the note preference is off.</p>
+     */
+    @Test
+    public void shouldReportTheConversionsTheModelHolds_whenChangeElementTypeConvertsRelationships()
+            throws Exception {
+        accessor.dispose();
+        accessor = new ArchiModelAccessorImpl(stubModelManager, dispatcher) {
+            private final ChangeElementTypeOperations ops = new ChangeElementTypeOperations(
+                    sessionId -> getMutationDispatcher().admit(sessionId, "change-element-type", model),
+                    this::getMutationDispatcher, () -> { },
+                    (source, target, relationship) -> !(source.getName().equals("BusinessRole")
+                            && relationship.getName().equals("AccessRelationship")),
+                    type -> 0, () -> false, type -> type.getName());
+
+            @Override
+            public MutationResult<net.vheerden.archi.mcp.response.dto.ChangeElementTypeResultDto> changeElementType(
+                    String sessionId, List<net.vheerden.archi.mcp.response.dto.ElementTypeChangeRequest> changes,
+                    String invalidRelationships) {
+                return ops.changeElementType(sessionId, changes, invalidRelationships);
+            }
+        };
+        CommandRegistry registry = registryOverLiveAccessor();
+        String actorBox = accessor.addToView(SESSION, view.getId(), "actor-1",
+                10, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        String peerBox = accessor.addToView(SESSION, view.getId(), "actor-4",
+                300, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        IArchimateElement old = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-1");
+        IAccessRelationship access = factory.createAccessRelationship();
+        access.setId("rel-access");
+        access.setAccessType(IAccessRelationship.READ_ACCESS);
+        access.setSource(old);
+        access.setTarget((IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model,
+                "actor-4"));
+        model.getFolder(FolderType.RELATIONS).getElements().add(0, access);
+        accessor.addConnectionToView(SESSION, view.getId(), "rel-access", actorBox, peerBox, null, null, null, null,
+                null);
+
+        List<IArchimateRelationship> touching = new ArrayList<>(old.getSourceRelationships());
+        touching.addAll(old.getTargetRelationships());
+        Map<String, IArchimateRelationship> objectsBefore = new java.util.HashMap<>();
+        Map<String, Integer> indexBefore = new java.util.HashMap<>();
+        Map<String, IFolder> folderBefore = new java.util.HashMap<>();
+        Map<String, List<IDiagramModelArchimateConnection>> drawnBy = new java.util.HashMap<>();
+        for (IArchimateRelationship each : touching) {
+            objectsBefore.put(each.getId(), each);
+            folderBefore.put(each.getId(), (IFolder) each.eContainer());
+            indexBefore.put(each.getId(), ((IFolder) each.eContainer()).getElements().indexOf(each));
+            List<IDiagramModelArchimateConnection> connections = new ArrayList<>();
+            for (Object component : each.getReferencingDiagramComponents()) {
+                connections.add((IDiagramModelArchimateConnection) component);
+            }
+            drawnBy.put(each.getId(), connections);
+        }
+
+        Map<String, Object> envelope = invokeTool(registry, "change-element-type", Map.of(
+                "changes", List.of(Map.of("elementId", "actor-1", "type", "BusinessRole")),
+                "invalidRelationships", "to-association"));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envelope);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("the call must succeed. Response was: " + json, result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> change = ((List<Map<String, Object>>) result.get("changes")).get(0);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> converted = (List<Map<String, Object>>) change.get("relationshipsConverted");
+        assertNotNull(json, converted);
+
+        List<String> measured = new ArrayList<>();
+        for (IArchimateRelationship each : touching) {
+            if (com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, each.getId()) != each) {
+                measured.add(each.getId());
+            }
+        }
+        assertEquals("fixture must convert exactly the access relationship", List.of("rel-access"), measured);
+        assertEquals(json, measured, converted.stream().map(c -> c.get("relationshipId")).toList());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> totals = (Map<String, Object>) result.get("totals");
+        assertEquals(json, measured.size(), totals.get("relationshipsConverted"));
+        for (Map<String, Object> entry : converted) {
+            String id = (String) entry.get("relationshipId");
+            IArchimateRelationship now = (IArchimateRelationship) com.archimatetool.model.util.ArchimateModelUtils
+                    .getObjectByID(model, (String) entry.get("resultingId"));
+            assertNotNull(json, now);
+            assertEquals(json, now.getId(), entry.get("resultingId"));
+            assertEquals(json, now.eClass().getName(), entry.get("toType"));
+            assertEquals(json, objectsBefore.get(id).eClass().getName(), entry.get("fromType"));
+            assertEquals(json, now.getSource().getId(), entry.get("sourceId"));
+            assertEquals(json, now.getTarget().getId(), entry.get("targetId"));
+            assertSame(id + " must be in the old relationship's folder", folderBefore.get(id), now.eContainer());
+            assertEquals(id + " must be at the old relationship's index", indexBefore.get(id),
+                    (Integer) folderBefore.get(id).getElements().indexOf(now));
+            for (IDiagramModelArchimateConnection connection : drawnBy.get(id)) {
+                assertSame(connection.getId() + " must draw the Association now", now,
+                        connection.getArchimateRelationship());
+            }
+            assertEquals(json, drawnBy.get(id).size(), entry.get("connectionsRepointed"));
+            assertEquals(json, Map.of("accessType", DtoMapper.accessTypeForDto(objectsBefore.get(id))),
+                    entry.get("attributesDropped"));
+            assertNull("the note preference is off", entry.get("documentationNoteAdded"));
+        }
+        assertTrue("the fixture draws the converted relationship", drawnBy.get("rel-access").size() == 1);
+    }
+
+    /**
+     * {@code change-relationship-type} reports what it changed. Measured from the model before and
+     * after the call: the relationship must be in the model with the reported id, the new type, its
+     * default attribute and the reported ends, at the place in its folder the old one held; every
+     * connection that drew the old one must draw the new one, every relationship attached to it must
+     * be attached to the new one, and the reported counts, totals, attributes, dropped attributes
+     * and dropped specialization must be what a fresh read finds.
+     *
+     * <p>Archi's relationship rule loads its matrix from the running platform, which this lane
+     * does not have, so the accessor here builds its type-change operations with rules that allow
+     * every relationship; everything else is production's path from the tool's handler down.</p>
+     */
+    @Test
+    public void shouldReportTheRelationshipTypeChangeTheModelHolds_whenChangeRelationshipTypeIsCalledAsATool()
+            throws Exception {
+        accessor.dispose();
+        accessor = new ArchiModelAccessorImpl(stubModelManager, dispatcher) {
+            private final ChangeRelationshipTypeOperations ops = new ChangeRelationshipTypeOperations(
+                    sessionId -> getMutationDispatcher().admit(sessionId, "change-relationship-type", model),
+                    this::getMutationDispatcher, () -> { }, (source, target, relationship) -> true,
+                    (source, target, type) -> true);
+
+            @Override
+            public MutationResult<net.vheerden.archi.mcp.response.dto.ChangeRelationshipTypeResultDto>
+                    changeRelationshipType(String sessionId,
+                            List<net.vheerden.archi.mcp.response.dto.RelationshipTypeChangeRequest> changes) {
+                return ops.changeRelationshipType(sessionId, changes);
+            }
+        };
+        CommandRegistry registry = registryOverLiveAccessor();
+        String actorBox = accessor.addToView(SESSION, view.getId(), "actor-1",
+                10, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        String peerBox = accessor.addToView(SESSION, view.getId(), "actor-2",
+                300, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        accessor.addConnectionToView(SESSION, view.getId(), "rel-1", actorBox, peerBox, null, null, null, null, null);
+        com.archimatetool.model.IAssociationRelationship old = (com.archimatetool.model.IAssociationRelationship)
+                com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, "rel-1");
+        old.setDirected(true);
+        IFolder relations = model.getFolder(FolderType.RELATIONS);
+        IArchimateRelationship attached = factory.createAssociationRelationship();
+        attached.setId("rel-attached");
+        attached.setSource((IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model,
+                "actor-3"));
+        attached.setTarget(old);
+        relations.getElements().add(0, attached);
+        com.archimatetool.model.IProfile profile = factory.createProfile();
+        profile.setId("profile-strong");
+        profile.setName("Strong");
+        profile.setConceptType("AssociationRelationship");
+        model.getProfiles().add(profile);
+        old.getProfiles().add(profile);
+
+        int indexBefore = relations.getElements().indexOf(old);
+        List<IArchimateRelationship> attachedBefore = new ArrayList<>(old.getSourceRelationships());
+        attachedBefore.addAll(old.getTargetRelationships());
+        List<Object> connectionsBefore = new ArrayList<>(old.getReferencingDiagramComponents());
+
+        Map<String, Object> envelope = invokeTool(registry, "change-relationship-type", Map.of(
+                "changes", List.of(Map.of("relationshipId", "rel-1", "type", "AccessRelationship"))));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envelope);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("the call must succeed. Response was: " + json, result);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> change = ((List<Map<String, Object>>) result.get("changes")).get(0);
+        String resultingId = (String) change.get("resultingId");
+        IArchimateRelationship now = (IArchimateRelationship) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, resultingId);
+        assertNotNull(json, now);
+        assertEquals(json, "AccessRelationship", now.eClass().getName());
+        assertEquals(json, now.eClass().getName(), change.get("toType"));
+        assertNull("the old relationship must be gone", old.eContainer());
+        assertEquals(json, Map.of("rel-1", resultingId), result.get("idMap"));
+        assertEquals(json, now.getSource().getId(), change.get("sourceId"));
+        assertEquals(json, now.getTarget().getId(), change.get("targetId"));
+        assertEquals(json, ((IFolder) now.eContainer()).getId(), change.get("folderId"));
+        assertEquals("the new relationship holds the old one's place in its folder", indexBefore,
+                ((IFolder) now.eContainer()).getElements().indexOf(now));
+
+        for (Object connection : connectionsBefore) {
+            assertSame("a connection that drew the old relationship must draw the new one", now,
+                    ((com.archimatetool.model.IDiagramModelArchimateConnection) connection).getArchimateRelationship());
+        }
+        for (IArchimateRelationship each : attachedBefore) {
+            assertTrue(each.getId() + " must be attached to the new relationship now",
+                    each.getSource() == now || each.getTarget() == now);
+        }
+        assertTrue("fixture must re-point one connection and one attached relationship",
+                connectionsBefore.size() == 1 && attachedBefore.size() == 1);
+        assertEquals(json, connectionsBefore.size(), change.get("connectionsRepointed"));
+        assertEquals(json, attachedBefore.size(), change.get("relationshipsRepointed"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> dropped = (Map<String, Object>) change.get("attributesDropped");
+        assertNotNull(json, dropped);
+        assertEquals(json, true, dropped.get("associationDirected"));
+        assertTrue("the new relationship carries no specialization", now.getProfiles().isEmpty());
+        assertEquals(json, Map.of("name", "Strong", "conceptType", "AssociationRelationship"),
+                change.get("specializationDropped"));
+        com.archimatetool.model.IAccessRelationship access = (com.archimatetool.model.IAccessRelationship) now;
+        assertEquals("the new type's default attribute, as the model holds it",
+                com.archimatetool.model.IAccessRelationship.WRITE_ACCESS, access.getAccessType());
+        assertEquals(json, Map.of("accessType", "write"), change.get("attributes"));
+        assertEquals(json, Map.of("relationshipsChanged", 1, "connectionsRepointed", connectionsBefore.size(),
+                "relationshipsRepointed", attachedBefore.size(), "attributesDropped", 1,
+                "specializationsDropped", 1), result.get("totals"));
+    }
+
+    /**
+     * {@code merge-elements} with {@code collapseParallel} reports what it folded. Measured from
+     * the model before and after: every relationship of the duplicate that is gone afterwards must
+     * be in {@code relationshipIdMap}, mapped to a relationship still in the model with its type
+     * and its ends as the merge left them; each view connection that drew a folded relationship is
+     * either gone (counted as removed) or now draws that survivor (counted as re-pointed), and the
+     * reported counts must equal those measured.
+     */
+    @Test
+    public void shouldReportTheFoldsTheModelHolds_whenMergeElementsCollapsesParallels() throws Exception {
+        CommandRegistry registry = registryOverLiveAccessor();
+        String sourceBox = accessor.addToView(SESSION, view.getId(), "actor-1",
+                10, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        String duplicateBox = accessor.addToView(SESSION, view.getId(), "actor-2",
+                300, 10, 120, 55, false, null, null, null).entity().viewObject().viewObjectId();
+        IArchimateElement source = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-1");
+        IArchimateElement duplicate = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-2");
+        IArchimateElement target = (IArchimateElement) com.archimatetool.model.util.ArchimateModelUtils
+                .getObjectByID(model, "actor-3");
+        IArchimateRelationship survivor = factory.createAssociationRelationship();
+        survivor.setId("rel-survivor");
+        survivor.connect(source, target);
+        model.getFolder(FolderType.RELATIONS).getElements().add(survivor);
+        IArchimateRelationship folded = factory.createAssociationRelationship();
+        folded.setId("rel-folded");
+        folded.connect(source, duplicate);
+        model.getFolder(FolderType.RELATIONS).getElements().add(folded);
+        for (String id : List.of("conn-folded-1", "conn-folded-2")) {
+            com.archimatetool.model.IDiagramModelArchimateConnection drawn =
+                    factory.createDiagramModelArchimateConnection();
+            drawn.setId(id);
+            drawn.setArchimateRelationship(folded);
+            drawn.connect((com.archimatetool.model.IConnectable) com.archimatetool.model.util.ArchimateModelUtils
+                    .getObjectByID(model, sourceBox), (com.archimatetool.model.IConnectable)
+                    com.archimatetool.model.util.ArchimateModelUtils.getObjectByID(model, duplicateBox));
+        }
+
+        List<IArchimateRelationship> touching = new ArrayList<>(duplicate.getSourceRelationships());
+        touching.addAll(duplicate.getTargetRelationships());
+        Map<IArchimateRelationship, List<com.archimatetool.model.IDiagramModelArchimateConnection>> drawnBefore =
+                new java.util.IdentityHashMap<>();
+        Map<IArchimateRelationship, List<Object>> endsBefore = new java.util.IdentityHashMap<>();
+        for (IArchimateRelationship relationship : touching) {
+            endsBefore.put(relationship, List.of(relationship.getSource(), relationship.getTarget()));
+            List<com.archimatetool.model.IDiagramModelArchimateConnection> connections = new ArrayList<>();
+            for (Object component : relationship.getReferencingDiagramComponents()) {
+                connections.add((com.archimatetool.model.IDiagramModelArchimateConnection) component);
+            }
+            drawnBefore.put(relationship, connections);
+        }
+
+        Map<String, Object> envelope = invokeTool(registry, "merge-elements", Map.of(
+                "merges", List.of(Map.of("targetId", "actor-3", "sourceIds", List.of("actor-2"))),
+                "collapseParallel", true));
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(envelope);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> result = (Map<String, Object>) envelope.get("result");
+        assertNotNull("the call must succeed. Response was: " + json, result);
+        @SuppressWarnings("unchecked")
+        Map<String, String> idMap = (Map<String, String>) result.get("relationshipIdMap");
+        assertNotNull(json, idMap);
+        int foldedGone = 0;
+        int repointed = 0;
+        int removed = 0;
+        for (IArchimateRelationship relationship : touching) {
+            if (relationship.eContainer() != null) {
+                assertFalse(json, idMap.containsKey(relationship.getId()));
+                continue;
+            }
+            String survivorId = idMap.get(relationship.getId());
+            assertNotNull(relationship.getId() + " is gone, so it must be in relationshipIdMap: " + json, survivorId);
+            foldedGone++;
+            IArchimateRelationship kept = (IArchimateRelationship) com.archimatetool.model.util.ArchimateModelUtils
+                    .getObjectByID(model, survivorId);
+            assertNotNull(survivorId + " must still be in the model", kept);
+            assertSame(relationship.eClass(), kept.eClass());
+            Object sourceBefore = endsBefore.get(relationship).get(0);
+            Object targetBefore = endsBefore.get(relationship).get(1);
+            assertSame(sourceBefore == duplicate ? target : sourceBefore, kept.getSource());
+            assertSame(targetBefore == duplicate ? target : targetBefore, kept.getTarget());
+            for (com.archimatetool.model.IDiagramModelArchimateConnection connection : drawnBefore.get(relationship)) {
+                if (connection.getDiagramModel() == null) {
+                    removed++;
+                } else {
+                    assertSame(connection.getId() + " must draw the survivor now", kept,
+                            connection.getArchimateRelationship());
+                    repointed++;
+                }
+            }
+        }
+        assertTrue("the fixture must fold, with one connection re-pointed and one removed",
+                foldedGone >= 1 && repointed >= 1 && removed >= 1);
+        assertNull(folded.eContainer());
+        assertNotNull(survivor.eContainer());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> totals = (Map<String, Object>) result.get("totals");
+        assertEquals(json, foldedGone, totals.get("parallelRelationshipsCollapsed"));
+        assertEquals(json, foldedGone, idMap.size());
+        int reportedRepointed = 0;
+        int reportedRemoved = 0;
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> clusters = (List<Map<String, Object>>) result.get("clusters");
+        for (Map<String, Object> cluster : clusters) {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> collapsed = (List<Map<String, Object>>) cluster.get("parallelsCollapsed");
+            for (Map<String, Object> fold : collapsed) {
+                reportedRepointed += ((List<?>) fold.get("connectionsRepointed")).size();
+                reportedRemoved += ((List<?>) fold.get("connectionsRemoved")).size();
+            }
+        }
+        assertEquals(json, repointed, reportedRepointed);
+        assertEquals(json, removed, reportedRemoved);
     }
 
     /** Every connection currently attached to an object in the fixture view. */

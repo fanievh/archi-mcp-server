@@ -20,8 +20,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * <p>Cursor format:</p>
  * <pre>
  * {
- *   "v": 1,
+ *   "v": 2,
  *   "mv": "modelVersion",
+ *   "mid": "modelId",
+ *   "mkey": "modelInstanceKey",
+ *   "mname": "Model name",
  *   "offset": 50,
  *   "limit": 50,
  *   "total": 250,
@@ -29,12 +32,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * }
  * </pre>
  *
+ * <p>{@code mid}, {@code mkey} and {@code mname} name the model instance the cursor pages, so that a
+ * cursor carried to a call reading another model, or a later instance of the same one, can be refused
+ * rather than answered with that model's page at this cursor's offset. They are absent when the cursor
+ * was issued with no model to name, and a blank value decodes as absent: a cursor with no identity is
+ * checked by its version alone, never matched against an identity that names nothing. A version-1
+ * cursor carries no identity and is refused as unsupported.</p>
+ *
  * <p>Thread-safe: uses a single shared {@link ObjectMapper} instance.</p>
  */
 public final class PaginationCursor {
 
     /** Current cursor format version. */
-    public static final int CURSOR_VERSION = 1;
+    public static final int CURSOR_VERSION = 2;
 
     /** Default page size when no limit parameter is provided. */
     public static final int DEFAULT_PAGE_SIZE = 50;
@@ -48,10 +58,24 @@ public final class PaginationCursor {
     private PaginationCursor() {} // utility class
 
     /**
+     * The model instance a cursor pages.
+     *
+     * @param id   the model's id
+     * @param name the model's name, so a refusal can name it after it has closed
+     * @param key  the instance key: a reopened file, or a copy open beside its original, has the
+     *             same id and a different key
+     */
+    public record CursorModel(String id, String name, String key) {
+    }
+
+    /**
      * Decoded cursor data record.
      *
      * @param version      cursor format version
      * @param modelVersion model version at cursor creation time
+     * @param modelId      id of the model the cursor pages, or null when it names none
+     * @param modelKey     instance key of that model, or null when it names none
+     * @param modelName    name of that model, or null when it names none
      * @param offset       starting offset for the next page
      * @param limit        page size
      * @param total        total result count at cursor creation time
@@ -60,6 +84,9 @@ public final class PaginationCursor {
     public record CursorData(
             int version,
             String modelVersion,
+            String modelId,
+            String modelKey,
+            String modelName,
             int offset,
             int limit,
             int total,
@@ -70,17 +97,23 @@ public final class PaginationCursor {
      * Encodes pagination state into a Base64 cursor token.
      *
      * @param modelVersion current model version
+     * @param model        the model instance the cursor pages, or null when there is none to name
      * @param offset       starting offset for the next page
      * @param limit        page size
      * @param total        total result count
      * @param params       original query parameters (may be null or empty)
      * @return Base64-encoded cursor string
      */
-    public static String encode(String modelVersion, int offset, int limit,
+    public static String encode(String modelVersion, CursorModel model, int offset, int limit,
                                 int total, Map<String, String> params) {
         Map<String, Object> cursorMap = new LinkedHashMap<>();
         cursorMap.put("v", CURSOR_VERSION);
         cursorMap.put("mv", modelVersion);
+        if (model != null) {
+            cursorMap.put("mid", model.id());
+            cursorMap.put("mkey", model.key());
+            cursorMap.put("mname", model.name());
+        }
         cursorMap.put("offset", offset);
         cursorMap.put("limit", limit);
         cursorMap.put("total", total);
@@ -134,6 +167,11 @@ public final class PaginationCursor {
             throw new InvalidCursorException("The pagination cursor is malformed");
         }
 
+        // Model identity (absent, or blank, means none)
+        String modelId = optionalText(cursorMap.get("mid"));
+        String modelKey = optionalText(cursorMap.get("mkey"));
+        String modelName = optionalText(cursorMap.get("mname"));
+
         // Offset
         Object offsetObj = cursorMap.get("offset");
         int offset = (offsetObj instanceof Number n) ? n.intValue() : -1;
@@ -168,7 +206,12 @@ public final class PaginationCursor {
             params = Collections.unmodifiableMap(typedParams);
         }
 
-        return new CursorData(version, modelVersion, offset, limit, total, params);
+        return new CursorData(version, modelVersion, modelId, modelKey, modelName,
+                offset, limit, total, params);
+    }
+
+    private static String optionalText(Object value) {
+        return (value instanceof String text && !text.isBlank()) ? text : null;
     }
 
     /**

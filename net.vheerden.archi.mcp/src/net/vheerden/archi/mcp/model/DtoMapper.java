@@ -15,7 +15,9 @@ import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IAssociationRelationship;
 import com.archimatetool.model.IBusinessElement;
+import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IDiagramModel;
+import com.archimatetool.model.IDiagramModelReference;
 import com.archimatetool.model.IFolder;
 import com.archimatetool.model.IImplementationMigrationElement;
 import com.archimatetool.model.IInfluenceRelationship;
@@ -27,6 +29,7 @@ import com.archimatetool.model.IStrategyElement;
 import com.archimatetool.model.ITechnologyElement;
 
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewDto;
 
@@ -206,6 +209,49 @@ final class DtoMapper {
                 layer,
                 documentation,
                 properties.isEmpty() ? null : properties);
+    }
+
+    /**
+     * The row a view reference is reported as: by {@code add-view-reference-to-view}, which adds its
+     * placement-time disclosure to it, and by {@code get-view-contents}, which reads it back. One
+     * mapper for both, so a reference reads back exactly as it was answered.
+     *
+     * <p>Everything comes from the object as the model holds it: its bounds (the add tool's
+     * default size when it has none), the view it stores (null when it stores none, and possibly a
+     * view no longer in the model), its styling, its icon and its label expression (null when it
+     * has none). {@code parentViewObjectId} is the caller's: the id of the group or element
+     * holding the reference, or null when the view holds it directly.</p>
+     */
+    static EmbeddedViewDto toEmbeddedViewDto(IDiagramModelReference reference, String parentViewObjectId) {
+        IBounds bounds = reference.getBounds();
+        IDiagramModel referenced = reference.getReferencedModel();
+        return new EmbeddedViewDto(
+                reference.getId(),
+                referenced != null ? referenced.getId() : null,
+                bounds != null ? bounds.getX() : 0,
+                bounds != null ? bounds.getY() : 0,
+                bounds != null ? bounds.getWidth() : ArchiModelAccessorImpl.DEFAULT_VIEW_REF_WIDTH,
+                bounds != null ? bounds.getHeight() : ArchiModelAccessorImpl.DEFAULT_VIEW_REF_HEIGHT,
+                parentViewObjectId,
+                StylingHelper.readFillColor(reference),
+                StylingHelper.readLineColor(reference),
+                StylingHelper.readFontColor(reference),
+                StylingHelper.readOpacity(reference),
+                StylingHelper.readLineWidth(reference),
+                StylingHelper.readFontName(reference),
+                StylingHelper.readFontSize(reference),
+                StylingHelper.readFontStyle(reference),
+                StylingHelper.readGradient(reference),
+                StylingHelper.readDeriveLineColor(reference),
+                StylingHelper.readOutlineOpacity(reference),
+                StylingHelper.readLineStyle(reference),
+                StylingHelper.readTextAlignment(reference),
+                StylingHelper.readVerticalTextAlignment(reference),
+                ImageHelper.readImagePath(reference),
+                ImageHelper.readImagePosition(reference),
+                ImageHelper.readShowIcon(reference),
+                null, null,
+                StylingHelper.readLabelExpression(reference));
     }
 
     /**

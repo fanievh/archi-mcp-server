@@ -24,7 +24,9 @@ import net.vheerden.archi.mcp.McpPlugin;
  * ({@link McpPlugin#DEFAULT_APPROVAL_MODE} = on) at class-load — fail safe, and with <em>no</em>
  * dependency on the plugin being started yet — and the stored value is applied later via
  * {@link #restoreFromPreference()}, called once from {@code McpPlugin.start()} when the
- * preference store is guaranteed available. A fresh install (preference never set) stays GATED.
+ * preference store is guaranteed available. The stored value is read only through
+ * {@link McpPlugin#isApprovalModeEnabled()}, which falls back to GATED when the preference is missing or
+ * unusable, so a fresh install (preference never set) stays GATED even if no default was registered.
  * {@link #setOn(boolean)} writes the preference so the next start restores it.</p>
  *
  * <p>Reading the preference at a well-defined lifecycle point (rather than in the static
@@ -78,9 +80,10 @@ public final class ApprovalMode {
     }
 
     /**
-     * Restores the effective bit from the stored {@link McpPlugin#PREF_APPROVAL_MODE} preference.
+     * Restores the effective bit from the stored {@link McpPlugin#PREF_APPROVAL_MODE} preference, read
+     * through {@link McpPlugin#isApprovalModeEnabled()} (GATED when the value is missing or unusable).
      * Called once from {@code McpPlugin.start()} — after the plugin is
-     * activated and defaults are registered — so the read is deterministic and never races
+     * activated — so the read is deterministic and never races
      * class-loading. A no-op (leaves the fail-safe default) when the plugin is unavailable.
      * Does not re-persist: this reads the durable value, it does not write one.
      */
@@ -89,7 +92,7 @@ public final class ApprovalMode {
         if (plugin == null) {
             return; // leave the fail-safe default (GATED)
         }
-        this.on = plugin.getPreferenceStore().getBoolean(McpPlugin.PREF_APPROVAL_MODE);
+        this.on = plugin.isApprovalModeEnabled();
         logger.info("Approval mode restored from preference: {}", on ? "ON (gated)" : "OFF (direct apply)");
     }
 

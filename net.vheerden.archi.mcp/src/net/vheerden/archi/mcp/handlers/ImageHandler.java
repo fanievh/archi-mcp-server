@@ -15,8 +15,10 @@ import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
 import net.vheerden.archi.mcp.model.ModelAccessException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.AddImagesResultDto;
@@ -39,6 +41,29 @@ public class ImageHandler {
     private final ResponseFormatter formatter;
     private final CommandRegistry registry;
     private final SessionManager sessionManager;
+    /** True on a server reachable from other machines that does not read server files or fetch URLs. */
+    private final boolean serverSourcesRefused;
+
+    /**
+     * Why {@code filePath} and {@code url} are refused, said in the refusal and in the tool's description.
+     * Package-visible for tests.
+     */
+    static final String SERVER_SOURCES_REFUSED =
+            "This server is reachable from other machines, so it takes an image only as imageData: it does "
+                    + "not read a file path on the server or fetch a URL for a caller. The server's operator "
+                    + "can allow both with the mcp.server.allowServerImageSources preference.";
+    private static final String SERVER_SOURCES_CORRECTION =
+            "Send the image as imageData (base64), with a filename whose extension names its format";
+
+    // Corrections for a rejection of the caller's own arguments: they name the remedy, so the
+    // error is answered as a parameter error rather than a server fault.
+    private static final String ONE_FORM_CORRECTION =
+            "Send either 'images' or one of filePath/url/imageData, not both";
+    private static final String SINGLE_FORM_CORRECTION =
+            "Provide exactly one of 'filePath' (preferred), 'url' or 'imageData' (base64, max 1MB)";
+    private static final String IMAGES_SHAPE_CORRECTION =
+            "Pass 'images' as a non-empty array of at most " + BulkOperation.MAX_OPERATIONS
+                    + " objects, each with one of filePath/url/imageData";
 
     /**
      * The SVG condition, stated once and carried by all three import sources.
@@ -63,6 +88,22 @@ public class ImageHandler {
                         ResponseFormatter formatter,
                         CommandRegistry registry,
                         SessionManager sessionManager) {
+        this(accessor, formatter, registry, sessionManager, false);
+    }
+
+    /**
+     * As {@link #ImageHandler(ArchiModelAccessor, ResponseFormatter, CommandRegistry, SessionManager)},
+     * optionally refusing the image sources that make the server act for the caller.
+     *
+     * @param serverSourcesRefused true to refuse {@code filePath} and {@code url}, single and batch, before
+     *        any file is read or URL fetched; {@code imageData} is always taken
+     */
+    public ImageHandler(ArchiModelAccessor accessor,
+                        ResponseFormatter formatter,
+                        CommandRegistry registry,
+                        SessionManager sessionManager,
+                        boolean serverSourcesRefused) {
+        this.serverSourcesRefused = serverSourcesRefused;
         this.accessor = Objects.requireNonNull(accessor, "accessor must not be null");
         this.formatter = Objects.requireNonNull(formatter, "formatter must not be null");
         this.registry = Objects.requireNonNull(registry, "registry must not be null");
@@ -87,7 +128,8 @@ public class ImageHandler {
                         + "parameter. So author a corner icon at the size you want it drawn — 16x16 renders as a "
                         + "corner badge, 48x48 fills the element. "
                         + "add-image-to-view is the exception: it places a standalone image visual on the view "
-                        + "rather than an icon on an object, and does take width and height.");
+                        + "rather than an icon on an object, and does take width and height."
+                        + refusedNote());
 
         Map<String, Object> urlProp = new LinkedHashMap<>();
         urlProp.put("type", "string");
@@ -96,7 +138,7 @@ public class ImageHandler {
                         + "Server downloads directly — no base64 encoding needed. "
                         + "Supported formats: PNG, JPEG, GIF, BMP, ICO, TIFF. "
                         + "10s connect timeout, 30s read timeout. Max 1MB. Redirects followed. "
-                        + SVG_HOST_CAVEAT);
+                        + SVG_HOST_CAVEAT + refusedNote());
 
         Map<String, Object> imageDataProp = new LinkedHashMap<>();
         imageDataProp.put("type", "string");
@@ -182,7 +224,8 @@ public class ImageHandler {
                         + "Avoid placing custom images at top-right — they will be obscured by the type icon. "
                         + "Use bottom-left (recommended for small icons) or another corner instead. "
                         + "To show both the type icon and a custom image, place them in different corners. "
-                        + "To hide the type icon entirely, set showIcon='never' on the view object.")
+                        + "To hide the type icon entirely, set showIcon='never' on the view object."
+                        + refusedNote())
                 .inputSchema(inputSchema)
                 .build();
 
@@ -228,16 +271,18 @@ public class ImageHandler {
             Object imagesRaw = args == null ? null : args.get("images");
             if (imagesRaw != null) {
                 if (filePath != null || url != null || imageDataBase64 != null) {
-                    return HandlerUtils.buildInternalError(formatter,
+                    throw invalidParameter(
                             "Provide either the 'images' array (batch import) or a single "
-                                    + "filePath/url/imageData — not both.");
+                                    + "filePath/url/imageData — not both.",
+                            ONE_FORM_CORRECTION);
                 }
                 if (filename != null) {
                     // Accepting it would silently drop it: a batch entry carries its own filename,
                     // and there is no single image here for a top-level one to name.
-                    return HandlerUtils.buildInternalError(formatter,
+                    throw invalidParameter(
                             "'filename' cannot be combined with 'images' — it names a single "
-                                    + "image. Put a filename on the entry it belongs to instead.");
+                                    + "image. Put a filename on the entry it belongs to instead.",
+                            ONE_FORM_CORRECTION);
                 }
                 return importBatch(sessionId, imagesRaw);
             }
@@ -255,7 +300,8 @@ public class ImageHandler {
                     result, nextSteps, modelVersion, 1, 1, false);
             return HandlerUtils.buildResult(formatter.toJsonString(envelope), false);
         } catch (ImageEntryRejected e) {
-            return HandlerUtils.buildInternalError(formatter, e.getMessage());
+            return HandlerUtils.buildModelAccessError(formatter,
+                    invalidParameter(e.getMessage(), SINGLE_FORM_CORRECTION));
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
         } catch (ModelAccessException e) {
@@ -286,6 +332,9 @@ public class ImageHandler {
                     "Only one of 'filePath', 'url', or 'imageData' may be provided. Got " + providedCount + ".");
         }
 
+        if (serverSourcesRefused && imageDataBase64 == null) {
+            throw invalidParameter(SERVER_SOURCES_REFUSED, SERVER_SOURCES_CORRECTION);
+        }
         if (filePath != null) {
             return accessor.addImageFromFilePath(sessionId, filePath);
         }
@@ -326,19 +375,21 @@ public class ImageHandler {
      */
     private McpSchema.CallToolResult importBatch(String sessionId, Object imagesRaw) {
         if (!(imagesRaw instanceof List<?> entries)) {
-            return HandlerUtils.buildInternalError(formatter,
+            throw invalidParameter(
                     "'images' must be an array of objects, each providing one of "
-                            + "'filePath', 'url' or 'imageData'.");
+                            + "'filePath', 'url' or 'imageData'.",
+                    IMAGES_SHAPE_CORRECTION);
         }
         if (entries.isEmpty()) {
-            return HandlerUtils.buildInternalError(formatter,
-                    "'images' must contain at least one entry.");
+            throw invalidParameter(
+                    "'images' must contain at least one entry.", IMAGES_SHAPE_CORRECTION);
         }
         if (entries.size() > BulkOperation.MAX_OPERATIONS) {
-            return HandlerUtils.buildInternalError(formatter,
+            throw invalidParameter(
                     "'images' accepts at most " + BulkOperation.MAX_OPERATIONS
                             + " entries per call (the same cap bulk-mutate uses). Got "
-                            + entries.size() + ". Split the import across several calls.");
+                            + entries.size() + ". Split the import across several calls.",
+                    IMAGES_SHAPE_CORRECTION);
         }
 
         List<AddImagesResultDto.ImportedImage> imported = new ArrayList<>();
@@ -360,6 +411,7 @@ public class ImageHandler {
                 imported.add(new AddImagesResultDto.ImportedImage(i, imageResult.imagePath(),
                         imageResult.width(), imageResult.height(), imageResult.formatDetected()));
             } catch (ImageEntryRejected | ModelAccessException e) {
+                logFailedEntry(logger, e);
                 failures.add(new AddImagesResultDto.FailedImage(i, e.getMessage()));
             } catch (NoModelLoadedException e) {
                 // The model went away part-way through — the supplier is re-entered on every entry,
@@ -396,10 +448,35 @@ public class ImageHandler {
         return HandlerUtils.buildResult(formatter.toJsonString(envelope), false);
     }
 
-    /** Reads one string field of a batch entry, treating blank as absent (as the single form does). */
+    /**
+     * Logs one failed batch entry. A partial success carries only the entry's message, so a server
+     * fault's cause would otherwise reach no log at all; it goes through the shared rule for model
+     * errors. A rejected entry or a client error is the caller's to fix and adds no log line.
+     */
+    static void logFailedEntry(Logger log, RuntimeException e) {
+        if (e instanceof ModelAccessException mae
+                && mae.getErrorCode() == ErrorCode.INTERNAL_ERROR) {
+            HandlerUtils.logModelAccessError(log, mae);
+        }
+    }
+
+    /** The refusal, as a sentence to append to a description, or nothing when the sources are taken. */
+    private String refusedNote() {
+        return serverSourcesRefused ? " " + SERVER_SOURCES_REFUSED : "";
+    }
+
+    /** A rejection of the caller's own arguments, answered through the model-error route. */
+    private static ModelAccessException invalidParameter(String message, String correction) {
+        return new ModelAccessException(message, ErrorCode.INVALID_PARAMETER, null, correction, null);
+    }
+
+    /**
+     * Reads one string field of a batch entry, treating blank as absent (as the single form does). A value of
+     * another type fails the entry naming the field, rather than reading as absent.
+     */
+    @SuppressWarnings("unchecked")
     private static String entryString(Map<?, ?> entry, String key) {
-        Object value = entry.get(key);
-        return (value instanceof String str && !str.isBlank()) ? str : null;
+        return ToolArguments.optionalText((Map<String, ?>) entry, key, false);
     }
 
     /**

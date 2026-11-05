@@ -1,0 +1,905 @@
+{
+ "viewId": "id-eee6138da32b4d4f8df40558aa694357",
+ "viewName": "Application Collaboration (estate-wide interaction topology)",
+ "_captureProvenance": "Captured 2026-11-01 from the saved model file of a copy of the retail-bank test model (the state auto-route-connections starts from), not via get-view-contents. Child x/y converted from parent-relative to absolute canvas coordinates. type is the ArchiMate class name of the referenced element; figureType is the diagram object's alternate-figure attribute (absent = 0). label is the relationship name when the connection shows it, else empty (33 of the 44 hide it). Stored bendpoints are omitted: a full re-route discards them. Routed through auto-route-connections before the fix that added this file, two connections were written with a slanted bendpoint-to-bendpoint segment through their own endpoint: id-61fdfb209e4f4be2afebd2c725b991bb (source) and id-a2e7106986d3442aa05bb57f351822cc (target).",
+ "elements": [
+  {
+   "id": "id-af4da02ab6094c34acea9f7500d859ea",
+   "name": "Customer Identity & Onboarding Collaboration",
+   "x": 332,
+   "y": 12,
+   "w": 1020,
+   "h": 749,
+   "isChild": false,
+   "type": "ApplicationCollaboration",
+   "figureType": 0
+  },
+  {
+   "id": "id-481493840c584d79a36f1e573289fbab",
+   "name": "Customer Identity & Access Management Platform",
+   "x": 360,
+   "y": 429,
+   "w": 640,
+   "h": 305,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-af4da02ab6094c34acea9f7500d859ea"
+  },
+  {
+   "id": "id-4de4b15591fb41399a395f1aef2b0800",
+   "name": "Authentication & SCA Orchestration",
+   "x": 388,
+   "y": 486,
+   "w": 280,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-481493840c584d79a36f1e573289fbab"
+  },
+  {
+   "id": "id-009b6660e0e541fd9befb0aae83536fe",
+   "name": "Consent-Bound Token Issuance",
+   "x": 388,
+   "y": 651,
+   "w": 280,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-481493840c584d79a36f1e573289fbab"
+  },
+  {
+   "id": "id-1252324306dc49728f0cdf82c4d7da07",
+   "name": "eKYC & Identity Verification Service",
+   "x": 360,
+   "y": 69,
+   "w": 300,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-af4da02ab6094c34acea9f7500d859ea"
+  },
+  {
+   "id": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "name": "Customer Master Data Management Hub",
+   "x": 360,
+   "y": 249,
+   "w": 640,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-af4da02ab6094c34acea9f7500d859ea"
+  },
+  {
+   "id": "id-3c1a2b1e31b44a9c8a74a338946bfd58",
+   "name": "Payment Execution Collaboration",
+   "x": 2447,
+   "y": 12,
+   "w": 1320,
+   "h": 1644,
+   "isChild": false,
+   "type": "ApplicationCollaboration",
+   "figureType": 0
+  },
+  {
+   "id": "id-27c149c22d8542a491cc582364fdc5b4",
+   "name": "Payments Hub",
+   "x": 2475,
+   "y": 814,
+   "w": 620,
+   "h": 635,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-3c1a2b1e31b44a9c8a74a338946bfd58"
+  },
+  {
+   "id": "id-72df33cf7b0b4a90ad087d8034fcfa5e",
+   "name": "Payment Validation & Enrichment",
+   "x": 2503,
+   "y": 871,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-27c149c22d8542a491cc582364fdc5b4"
+  },
+  {
+   "id": "id-1ed764175a3b4eabaadc3af07ce46d2a",
+   "name": "Payment Routing & Scheme Selection",
+   "x": 2503,
+   "y": 1036,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-27c149c22d8542a491cc582364fdc5b4"
+  },
+  {
+   "id": "id-ea84df3d33da4ae890d366e90cac617a",
+   "name": "Clearing & Settlement Processing",
+   "x": 2503,
+   "y": 1201,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-27c149c22d8542a491cc582364fdc5b4"
+  },
+  {
+   "id": "id-9e708db0345a47a4adb859bbba5e7ee9",
+   "name": "Reconciliation & Returns Handling",
+   "x": 2503,
+   "y": 1366,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-27c149c22d8542a491cc582364fdc5b4"
+  },
+  {
+   "id": "id-86f22a75aae64c80bd8b00d9b63fe7fc",
+   "name": "Core Banking Platform",
+   "x": 2475,
+   "y": 69,
+   "w": 620,
+   "h": 635,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-3c1a2b1e31b44a9c8a74a338946bfd58"
+  },
+  {
+   "id": "id-99accdb8710441479559449b4a893f56",
+   "name": "Account Lifecycle Management",
+   "x": 2503,
+   "y": 126,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-86f22a75aae64c80bd8b00d9b63fe7fc"
+  },
+  {
+   "id": "id-233b30e517404321b2ffe1c04025ef3a",
+   "name": "Interest & Fee Calculation",
+   "x": 2503,
+   "y": 291,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-86f22a75aae64c80bd8b00d9b63fe7fc"
+  },
+  {
+   "id": "id-7a526bd320e545d2ab4242ef77c78724",
+   "name": "Statement Generation",
+   "x": 2503,
+   "y": 456,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-86f22a75aae64c80bd8b00d9b63fe7fc"
+  },
+  {
+   "id": "id-00a35f5aa8314482a3d5b2c2e6461bc4",
+   "name": "Standing Order & Direct Debit Processing",
+   "x": 2503,
+   "y": 621,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-86f22a75aae64c80bd8b00d9b63fe7fc"
+  },
+  {
+   "id": "id-87f539f618b84ae6afceb7ede26c2c95",
+   "name": "Payment Initiation Experience API",
+   "x": 2475,
+   "y": 1558,
+   "w": 620,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-3c1a2b1e31b44a9c8a74a338946bfd58"
+  },
+  {
+   "id": "id-e8383d96d4394621a57d1e17e9024694",
+   "name": "Financial Crime Detection Collaboration",
+   "x": 1372,
+   "y": 816,
+   "w": 1020,
+   "h": 1094,
+   "isChild": false,
+   "type": "ApplicationCollaboration",
+   "figureType": 0
+  },
+  {
+   "id": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "name": "Real-Time Fraud Detection Platform",
+   "x": 1400,
+   "y": 1413,
+   "w": 640,
+   "h": 470,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-e8383d96d4394621a57d1e17e9024694"
+  },
+  {
+   "id": "id-50b02e6cf3324e84b765c1a5d67f2893",
+   "name": "Behavioural Risk Scoring",
+   "x": 1428,
+   "y": 1470,
+   "w": 280,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-3d3fae043705440ba52e8ff78b79e4b7"
+  },
+  {
+   "id": "id-29061496c6c942a195ccdaab96e988eb",
+   "name": "Rule & Model Execution",
+   "x": 1428,
+   "y": 1635,
+   "w": 280,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-3d3fae043705440ba52e8ff78b79e4b7"
+  },
+  {
+   "id": "id-b10c9b40cfc647be9a0eaed17f3bbed3",
+   "name": "Case Triage & Alerting",
+   "x": 1428,
+   "y": 1800,
+   "w": 280,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-3d3fae043705440ba52e8ff78b79e4b7"
+  },
+  {
+   "id": "id-ba1e3975026e404eb6e30fd9d928c50a",
+   "name": "AML Transaction Monitoring System",
+   "x": 1400,
+   "y": 1053,
+   "w": 300,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-e8383d96d4394621a57d1e17e9024694"
+  },
+  {
+   "id": "id-db47faf66a354f3c9f3d458fc3c12051",
+   "name": "Sanctions & PEP Screening Service",
+   "x": 1400,
+   "y": 873,
+   "w": 640,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-e8383d96d4394621a57d1e17e9024694"
+  },
+  {
+   "id": "id-a7fd47d7f4804043af48e86b0faa5c28",
+   "name": "Security Information & Event Management Platform",
+   "x": 1400,
+   "y": 1233,
+   "w": 300,
+   "h": 70,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-e8383d96d4394621a57d1e17e9024694"
+  },
+  {
+   "id": "id-0056ca0682a7470da640239534c7acd6",
+   "name": "Meridian Mobile Banking App",
+   "x": 868,
+   "y": 3345,
+   "w": 620,
+   "h": 635,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-618863d1a0ee41949e831475fd663e2e",
+   "name": "Account & Balance Presentation",
+   "x": 896,
+   "y": 3402,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0056ca0682a7470da640239534c7acd6"
+  },
+  {
+   "id": "id-76801ffa1f4f4176baee9da2d790fd9b",
+   "name": "In-App Payment Initiation",
+   "x": 896,
+   "y": 3567,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0056ca0682a7470da640239534c7acd6"
+  },
+  {
+   "id": "id-89f9be546a514755b954c1a5028111ab",
+   "name": "Card Controls & Freeze",
+   "x": 896,
+   "y": 3732,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0056ca0682a7470da640239534c7acd6"
+  },
+  {
+   "id": "id-d8d23b2a3cca4a9e8e2fd3773605afaa",
+   "name": "Secure Mobile Onboarding",
+   "x": 896,
+   "y": 3897,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0056ca0682a7470da640239534c7acd6"
+  },
+  {
+   "id": "id-f6bd935d5b04420dbc2c158c41ec4314",
+   "name": "Enterprise API Gateway",
+   "x": 1335,
+   "y": 2600,
+   "w": 620,
+   "h": 635,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-63adf17379c94fa3a036e3739de7f239",
+   "name": "API Routing & Version Management",
+   "x": 1363,
+   "y": 2657,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-f6bd935d5b04420dbc2c158c41ec4314"
+  },
+  {
+   "id": "id-7acf9330d6de4246946ba0e222bfae57",
+   "name": "Rate Limiting & Traffic Shaping",
+   "x": 1363,
+   "y": 2822,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-f6bd935d5b04420dbc2c158c41ec4314"
+  },
+  {
+   "id": "id-919ddfbfde1d484d83eab97717085839",
+   "name": "Token Validation & Policy Enforcement",
+   "x": 1363,
+   "y": 2987,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-f6bd935d5b04420dbc2c158c41ec4314"
+  },
+  {
+   "id": "id-1d2f4c11b658410889359131c0cc2fe8",
+   "name": "API Analytics & Consumer Reporting",
+   "x": 1363,
+   "y": 3152,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-f6bd935d5b04420dbc2c158c41ec4314"
+  },
+  {
+   "id": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "name": "Kafka Event Streaming Platform",
+   "x": 138,
+   "y": 3444,
+   "w": 620,
+   "h": 470,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-e04efbde33864e7496241308cde48c20",
+   "name": "Event Publication & Topic Management",
+   "x": 166,
+   "y": 3501,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0de6db4860a941a2810bd9b0db9b88a9"
+  },
+  {
+   "id": "id-fcc9e0bfa9594a148d6ca5ca963a5475",
+   "name": "Stream Processing & Enrichment",
+   "x": 166,
+   "y": 3666,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0de6db4860a941a2810bd9b0db9b88a9"
+  },
+  {
+   "id": "id-53c1afec22ee4d679f0841599c463441",
+   "name": "Schema Registry Governance",
+   "x": 166,
+   "y": 3831,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-0de6db4860a941a2810bd9b0db9b88a9"
+  },
+  {
+   "id": "id-ef0d6c4f58874f75b01a08b87cc3de66",
+   "name": "Card Management System",
+   "x": 661,
+   "y": 1856,
+   "w": 620,
+   "h": 635,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-d8fd61f0be274af48bf2df9a9bc03a0b",
+   "name": "Card & Token Lifecycle Management",
+   "x": 689,
+   "y": 1913,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-ef0d6c4f58874f75b01a08b87cc3de66"
+  },
+  {
+   "id": "id-bf3c1cf9774f4645b794ec58a0799fbe",
+   "name": "Cardholder Billing & Statements",
+   "x": 689,
+   "y": 2078,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-ef0d6c4f58874f75b01a08b87cc3de66"
+  },
+  {
+   "id": "id-8ce9ebf60a57433f867866d13aca7461",
+   "name": "Chargeback & Dispute Processing",
+   "x": 689,
+   "y": 2243,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-ef0d6c4f58874f75b01a08b87cc3de66"
+  },
+  {
+   "id": "id-a022169438ab4e6eaba4975fb44f8442",
+   "name": "Credit Limit Management",
+   "x": 689,
+   "y": 2408,
+   "w": 270,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationFunction",
+   "figureType": 0,
+   "parentId": "id-ef0d6c4f58874f75b01a08b87cc3de66"
+  },
+  {
+   "id": "id-7da3d2b2eb6c438ab941f67ccd5eafce",
+   "name": "Customer Experience API (BFF)",
+   "x": 925,
+   "y": 2882,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-9320a650a0ef4d56b1f21b0a80d16a87",
+   "name": "Open Banking AISP & PISP API",
+   "x": 1598,
+   "y": 3345,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-4f6ff3ec51454e75871d9c6bc5039c3f",
+   "name": "Legacy Adapter Enterprise Service Bus",
+   "x": 12,
+   "y": 12,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-19840d61ad4648518a822f0f42ffb45c",
+   "name": "Loan Origination System",
+   "x": 195,
+   "y": 2138,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-83bd11916037497c84f9dc7c3325b3f9",
+   "name": "Credit Decision Engine",
+   "x": 195,
+   "y": 1676,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-6aab00f41e434263a05ec07e287463af",
+   "name": "Enterprise Data Lakehouse",
+   "x": 298,
+   "y": 4219,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-540e23a1cd2e448093b1a3a58fc59442",
+   "name": "Real-Time Streaming Analytics Engine",
+   "x": 708,
+   "y": 4219,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-817526be7ea54e728a21fe9a1ee39d0f",
+   "name": "Customer 360 Analytics & Segmentation",
+   "x": 142,
+   "y": 4399,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  },
+  {
+   "id": "id-5c4ac2b8b8fa4c10af364e6b5b6c7842",
+   "name": "Next-Best-Action Decisioning Engine",
+   "x": 633,
+   "y": 4579,
+   "w": 300,
+   "h": 70,
+   "isChild": false,
+   "type": "ApplicationComponent",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-b00588c321e343ad86342cbe050889ff",
+   "sourceId": "id-481493840c584d79a36f1e573289fbab",
+   "targetId": "id-0056ca0682a7470da640239534c7acd6",
+   "label": ""
+  },
+  {
+   "id": "id-86e233d0e7f34cf89929dab027c4b32f",
+   "sourceId": "id-481493840c584d79a36f1e573289fbab",
+   "targetId": "id-f6bd935d5b04420dbc2c158c41ec4314",
+   "label": ""
+  },
+  {
+   "id": "id-d4c30aa2967b4f48864e8b88738542d6",
+   "sourceId": "id-481493840c584d79a36f1e573289fbab",
+   "targetId": "id-9320a650a0ef4d56b1f21b0a80d16a87",
+   "label": ""
+  },
+  {
+   "id": "id-7ad6ad3a4cf743b0bd979c4bc3cab13a",
+   "sourceId": "id-481493840c584d79a36f1e573289fbab",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "auth.event"
+  },
+  {
+   "id": "id-23eb1a2f766b4cbca1b3c3affaf6fc2d",
+   "sourceId": "id-1252324306dc49728f0cdf82c4d7da07",
+   "targetId": "id-19840d61ad4648518a822f0f42ffb45c",
+   "label": ""
+  },
+  {
+   "id": "id-92449a99a742442790d76421eea3bef3",
+   "sourceId": "id-1252324306dc49728f0cdf82c4d7da07",
+   "targetId": "id-0056ca0682a7470da640239534c7acd6",
+   "label": ""
+  },
+  {
+   "id": "id-e90c809d5c5845f9bbcc9d0bc91ffef8",
+   "sourceId": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "targetId": "id-7da3d2b2eb6c438ab941f67ccd5eafce",
+   "label": ""
+  },
+  {
+   "id": "id-6938100f7d0b4cfdbe14cfb27f1f4153",
+   "sourceId": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "targetId": "id-817526be7ea54e728a21fe9a1ee39d0f",
+   "label": ""
+  },
+  {
+   "id": "id-5e5675b2aae7435e85ddd82f21c987da",
+   "sourceId": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "targetId": "id-19840d61ad4648518a822f0f42ffb45c",
+   "label": ""
+  },
+  {
+   "id": "id-53aebdaceec9465a8b56e592c7004032",
+   "sourceId": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "targetId": "id-ba1e3975026e404eb6e30fd9d928c50a",
+   "label": ""
+  },
+  {
+   "id": "id-9fe9063c0b0f49eba944911b1ad8d2f4",
+   "sourceId": "id-4451780d3735414aaa2f8268c4d0bb4f",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "customer.changed"
+  },
+  {
+   "id": "id-45c9963d2f0f485f9d965300a7fcb9b9",
+   "sourceId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "targetId": "id-87f539f618b84ae6afceb7ede26c2c95",
+   "label": ""
+  },
+  {
+   "id": "id-969e2602537c42cfa9793e6748a9d616",
+   "sourceId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "targetId": "id-9320a650a0ef4d56b1f21b0a80d16a87",
+   "label": ""
+  },
+  {
+   "id": "id-85e30517346a4768b70a98156efdd06b",
+   "sourceId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "payment.statechanged"
+  },
+  {
+   "id": "id-c5d98304408043c88e961b356c2b8dcb",
+   "sourceId": "id-86f22a75aae64c80bd8b00d9b63fe7fc",
+   "targetId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "label": ""
+  },
+  {
+   "id": "id-1f398d45ac8848e583eafda0d6a3d848",
+   "sourceId": "id-86f22a75aae64c80bd8b00d9b63fe7fc",
+   "targetId": "id-7da3d2b2eb6c438ab941f67ccd5eafce",
+   "label": ""
+  },
+  {
+   "id": "id-c2c38a628669443fb851d74741b52d1f",
+   "sourceId": "id-86f22a75aae64c80bd8b00d9b63fe7fc",
+   "targetId": "id-9320a650a0ef4d56b1f21b0a80d16a87",
+   "label": ""
+  },
+  {
+   "id": "id-5b73512205f14c0f9b2ea8ed5263e0dc",
+   "sourceId": "id-86f22a75aae64c80bd8b00d9b63fe7fc",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "account.posted"
+  },
+  {
+   "id": "id-26bf0ea309204332b60e87710f4c64c5",
+   "sourceId": "id-87f539f618b84ae6afceb7ede26c2c95",
+   "targetId": "id-0056ca0682a7470da640239534c7acd6",
+   "label": ""
+  },
+  {
+   "id": "id-6f826b4f2a8647b181dedbfb5e13d358",
+   "sourceId": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "targetId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "label": ""
+  },
+  {
+   "id": "id-d8d4d71cfffb49faa269c0ab8b187b2e",
+   "sourceId": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "targetId": "id-87f539f618b84ae6afceb7ede26c2c95",
+   "label": ""
+  },
+  {
+   "id": "id-483a09d16e74446789e793ee2cf35fb3",
+   "sourceId": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "targetId": "id-ef0d6c4f58874f75b01a08b87cc3de66",
+   "label": ""
+  },
+  {
+   "id": "id-8d1df5bd8fb34705a3b456a2fbfa3a78",
+   "sourceId": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "fraud.alert.raised"
+  },
+  {
+   "id": "id-99cefeb48535447da86e2ec238567d9c",
+   "sourceId": "id-ba1e3975026e404eb6e30fd9d928c50a",
+   "targetId": "id-a7fd47d7f4804043af48e86b0faa5c28",
+   "label": ""
+  },
+  {
+   "id": "id-59f162cde80b4df3bc6bb9c1d7838cc0",
+   "sourceId": "id-db47faf66a354f3c9f3d458fc3c12051",
+   "targetId": "id-1252324306dc49728f0cdf82c4d7da07",
+   "label": ""
+  },
+  {
+   "id": "id-b14727f4a9274f27945d6a21fc291b84",
+   "sourceId": "id-db47faf66a354f3c9f3d458fc3c12051",
+   "targetId": "id-27c149c22d8542a491cc582364fdc5b4",
+   "label": ""
+  },
+  {
+   "id": "id-53d6b50138b64300b98cdf97fd38926c",
+   "sourceId": "id-db47faf66a354f3c9f3d458fc3c12051",
+   "targetId": "id-19840d61ad4648518a822f0f42ffb45c",
+   "label": ""
+  },
+  {
+   "id": "id-61fdfb209e4f4be2afebd2c725b991bb",
+   "sourceId": "id-f6bd935d5b04420dbc2c158c41ec4314",
+   "targetId": "id-0056ca0682a7470da640239534c7acd6",
+   "label": ""
+  },
+  {
+   "id": "id-342ef41b2a814a028519f592a161cc13",
+   "sourceId": "id-f6bd935d5b04420dbc2c158c41ec4314",
+   "targetId": "id-9320a650a0ef4d56b1f21b0a80d16a87",
+   "label": ""
+  },
+  {
+   "id": "id-d793bf4965d448f6bdb09844a14c80cc",
+   "sourceId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "targetId": "id-540e23a1cd2e448093b1a3a58fc59442",
+   "label": ""
+  },
+  {
+   "id": "id-cb80c8ac17354896a7afc63616c15696",
+   "sourceId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "targetId": "id-ba1e3975026e404eb6e30fd9d928c50a",
+   "label": "payment / account events"
+  },
+  {
+   "id": "id-e7028a7e32c44cef8359c677771a1992",
+   "sourceId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "targetId": "id-a7fd47d7f4804043af48e86b0faa5c28",
+   "label": "security / audit events"
+  },
+  {
+   "id": "id-1b65ae7229404b709c2bdbc495c78aab",
+   "sourceId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "targetId": "id-6aab00f41e434263a05ec07e287463af",
+   "label": "all topics → raw zone"
+  },
+  {
+   "id": "id-f0c1a1d732154ee5b66335483f722423",
+   "sourceId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "targetId": "id-817526be7ea54e728a21fe9a1ee39d0f",
+   "label": "customer / behaviour events"
+  },
+  {
+   "id": "id-9c96a30744dd4a5589a65c1216e924ca",
+   "sourceId": "id-ef0d6c4f58874f75b01a08b87cc3de66",
+   "targetId": "id-7da3d2b2eb6c438ab941f67ccd5eafce",
+   "label": ""
+  },
+  {
+   "id": "id-b9ddce68d67c418e9d66d1cf3c63a2eb",
+   "sourceId": "id-ef0d6c4f58874f75b01a08b87cc3de66",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "card.authorised"
+  },
+  {
+   "id": "id-414e7ff051144b86b397aa7b9f899510",
+   "sourceId": "id-7da3d2b2eb6c438ab941f67ccd5eafce",
+   "targetId": "id-0056ca0682a7470da640239534c7acd6",
+   "label": ""
+  },
+  {
+   "id": "id-ee19b5a680e040c2b493da76651e45d1",
+   "sourceId": "id-19840d61ad4648518a822f0f42ffb45c",
+   "targetId": "id-0de6db4860a941a2810bd9b0db9b88a9",
+   "label": "application.decisioned"
+  },
+  {
+   "id": "id-364ece7cb64c43b9ab2bd586d2dde5d1",
+   "sourceId": "id-83bd11916037497c84f9dc7c3325b3f9",
+   "targetId": "id-19840d61ad4648518a822f0f42ffb45c",
+   "label": ""
+  },
+  {
+   "id": "id-a2e7106986d3442aa05bb57f351822cc",
+   "sourceId": "id-6aab00f41e434263a05ec07e287463af",
+   "targetId": "id-817526be7ea54e728a21fe9a1ee39d0f",
+   "label": ""
+  },
+  {
+   "id": "id-bd7349202c244d73b1ec41826ff1e5c7",
+   "sourceId": "id-6aab00f41e434263a05ec07e287463af",
+   "targetId": "id-5c4ac2b8b8fa4c10af364e6b5b6c7842",
+   "label": ""
+  },
+  {
+   "id": "id-d1a3f3db975f48c8bc409b89598c5252",
+   "sourceId": "id-540e23a1cd2e448093b1a3a58fc59442",
+   "targetId": "id-3d3fae043705440ba52e8ff78b79e4b7",
+   "label": ""
+  },
+  {
+   "id": "id-03c52f1b893b42c199bf5551a1db0af7",
+   "sourceId": "id-540e23a1cd2e448093b1a3a58fc59442",
+   "targetId": "id-5c4ac2b8b8fa4c10af364e6b5b6c7842",
+   "label": ""
+  },
+  {
+   "id": "id-d4ea6946e37944fe97672cb3debecc95",
+   "sourceId": "id-817526be7ea54e728a21fe9a1ee39d0f",
+   "targetId": "id-5c4ac2b8b8fa4c10af364e6b5b6c7842",
+   "label": ""
+  }
+ ]
+}

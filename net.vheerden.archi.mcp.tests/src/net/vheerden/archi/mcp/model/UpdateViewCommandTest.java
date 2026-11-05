@@ -10,10 +10,11 @@ import com.archimatetool.model.IArchimateFactory;
 import com.archimatetool.model.IDiagramModel;
 
 /**
- * Tests for {@link UpdateViewCommand} connection router type handling.
+ * Tests for {@link UpdateViewCommand} connection router type and viewpoint-clear handling.
  *
  * <p>Uses real EMF objects (IArchimateFactory.eINSTANCE) to verify the command
- * correctly sets, undoes, and redoes connection router type changes.</p>
+ * correctly sets, undoes, and redoes connection router type changes, and that
+ * clearing the viewpoint writes the value Archi itself uses for "no viewpoint".</p>
  */
 public class UpdateViewCommandTest {
 
@@ -120,5 +121,73 @@ public class UpdateViewCommandTest {
         // Undo should restore Manhattan
         cmd.undo();
         assertEquals(IDiagramModel.CONNECTION_ROUTER_MANHATTAN, view.getConnectionRouterType());
+    }
+
+    // ---- Clearing the viewpoint ----
+    // Archi's "no viewpoint" is "" (the model default, and what the GUI's "None" choice
+    // writes). A null viewpoint makes Archi's ViewpointAction throw when the view's editor
+    // is built, so the view cannot be opened. These pins assert the exact value, not just
+    // non-null: a write of any other non-null id would pass a weaker check.
+
+    @Test
+    public void execute_shouldWriteEmptyStringNotNull_whenClearingViewpoint() {
+        view.setViewpoint("layered");
+
+        UpdateViewCommand cmd = new UpdateViewCommand(view, null, null, true, null, null, null);
+        cmd.execute();
+
+        assertEquals("", view.getViewpoint());
+    }
+
+    @Test
+    public void undo_shouldRestorePriorViewpoint_afterClear() {
+        view.setViewpoint("layered");
+
+        UpdateViewCommand cmd = new UpdateViewCommand(view, null, null, true, null, null, null);
+        cmd.execute();
+        cmd.undo();
+
+        assertEquals("layered", view.getViewpoint());
+    }
+
+    @Test
+    public void redo_shouldWriteEmptyStringAgain_afterUndo() {
+        view.setViewpoint("layered");
+
+        UpdateViewCommand cmd = new UpdateViewCommand(view, null, null, true, null, null, null);
+        cmd.execute();
+        cmd.undo();
+        cmd.redo();
+
+        assertEquals("", view.getViewpoint());
+    }
+
+    @Test
+    public void undo_shouldRestoreLegacyNullVerbatim() {
+        // A view damaged by an earlier null write: undo restores the prior state as
+        // captured, it does not repair it.
+        view.setViewpoint(null);
+
+        UpdateViewCommand cmd = new UpdateViewCommand(view, null, "layered", false, null, null, null);
+        cmd.execute();
+        assertEquals("layered", view.getViewpoint());
+
+        cmd.undo();
+        assertNull(view.getViewpoint());
+    }
+
+    @Test
+    public void clear_shouldNotTouchOtherFields_whenOnlyViewpointCleared() {
+        view.setViewpoint("layered");
+        view.setDocumentation("Some documentation");
+        view.setConnectionRouterType(IDiagramModel.CONNECTION_ROUTER_MANHATTAN);
+
+        UpdateViewCommand cmd = new UpdateViewCommand(view, null, null, true, null, null, null);
+        cmd.execute();
+
+        assertEquals("Test View", view.getName());
+        assertEquals("Some documentation", view.getDocumentation());
+        assertEquals(IDiagramModel.CONNECTION_ROUTER_MANHATTAN, view.getConnectionRouterType());
+        assertEquals("", view.getViewpoint());
     }
 }

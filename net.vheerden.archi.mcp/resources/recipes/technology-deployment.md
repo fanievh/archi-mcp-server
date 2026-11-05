@@ -1,3 +1,16 @@
+---
+relationships:
+  - permitted Association Node Node
+  - permitted Association Node CommunicationNetwork
+  - permitted Association Node Path
+  - permitted Assignment Node Artifact
+  - permitted Assignment Node SystemSoftware
+  - permitted Composition Device Device
+  - permitted Composition Node Node
+  - permitted Realization Artifact ApplicationComponent
+  - forbidden Assignment * ApplicationComponent
+---
+
 # Recipe Family — Technology / Deployment
 
 Topology archetype: **nodes as large containers with their deployed software/artifacts nested inside, wired by network links**. Apply the invariant build sequence from the index; only the deltas below change.

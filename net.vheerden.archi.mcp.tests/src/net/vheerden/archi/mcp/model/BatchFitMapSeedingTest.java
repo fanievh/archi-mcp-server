@@ -1,10 +1,9 @@
 package net.vheerden.archi.mcp.model;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.beans.PropertyChangeListener;
 import java.io.File;
@@ -31,6 +30,7 @@ import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IFolder;
 
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.ResizedGroupDto;
 
@@ -196,9 +196,12 @@ public class BatchFitMapSeedingTest {
 
     /**
      * The clobber itself. One batch, two prepares: the caller sizes a group explicitly, then runs a
-     * routing pass over the same view. Without the seed the routing pass measures the group at its
-     * pre-batch 200x200, emits an absolute resize to 200x385, and that command — queued second —
-     * silently overwrites the 900x700 the caller asked for.
+     * routing pass over the same view. Measured against the group's pre-batch 200x200, the pass
+     * emitted an absolute resize to 200x385, and that command — queued second — silently overwrote
+     * the 900x700 the caller asked for. The pass now refuses instead: the group's bounds are routing
+     * input (each route's group boundaries), and a route computed against the pre-batch rectangle
+     * would be stored for one the commit no longer has. Nothing is queued, so the size the batch
+     * asked for is the size it commits.
      */
     @Test
     public void shouldKeepTheGroupSizeTheBatchQueued_whenAutoRouteRunsInTheSameBatch()
@@ -209,55 +212,50 @@ public class BatchFitMapSeedingTest {
 
         dispatcher.beginBatch(SESSION, "size the group, then route the same view");
         accessor.updateViewObject(SESSION, groupId, null, null, 900, 700, null, null, null, null);
-        route();
+        assertRouteRefusedNaming(groupId);
         dispatcher.endBatch(SESSION, true);
 
-        assertEquals("the size the batch explicitly queued must survive the routing pass — the "
-                + "pass measures against it rather than against the pre-batch rectangle",
+        assertEquals("the size the batch explicitly queued survives: the routing pass queued nothing",
                 "0,0 900x700", box(find(view, groupId)));
     }
 
     /**
-     * The other half: having measured against the queued size, the pass must not then claim it
-     * resized the group. Nothing about the group changed in this pass — the batch had already sized
-     * it — so an entry naming it would be a fabricated outcome in a field the agent is meant to act
-     * on.
+     * The other half: a routing pass that measured against the queued size must not claim it
+     * resized the group. That pass can no longer run after the batch sized the group, so it cannot
+     * name the group either; the refusal names it as the batch's own change instead.
      */
     @Test
-    public void shouldNotNameAGroupTheBatchMerelyEstablished_whenTheRoutingPassDidNotGrowIt()
+    public void shouldRefuseAndQueueNothing_whenTheBatchEstablishedTheGroupSize()
             throws Exception {
         String groupId = overflowingGroup(200, 200);
 
         dispatcher.beginBatch(SESSION, "size the group, then route the same view");
         accessor.updateViewObject(SESSION, groupId, null, null, 900, 700, null, null, null, null);
-        AutoRouteResultDto routed = route();
+        assertRouteRefusedNaming(groupId);
+        assertEquals("only the batch's own resize is queued", 1,
+                dispatcher.getBatchStatus(SESSION).queuedDescriptions().size());
         dispatcher.endBatch(SESSION, true);
-
-        assertNotNull("auto-route must always return a resizedGroups list", routed.resizedGroups());
-        assertTrue("the routing pass grew nothing — the group was already 900x700 by the batch's "
-                + "own doing — so it must name nothing. Reported: " + routed.resizedGroups(),
-                routed.resizedGroups().isEmpty());
     }
 
     /**
-     * ...and the exclusion must not become a blanket mute. When the size the batch queued is still
-     * too small for the children, the pass genuinely does grow the group, and must say so with the
-     * rectangle it grew to.
+     * ...and a queued size that is still too small for the children is refused the same way. The
+     * pass that would have grown it runs after the commit, outside the batch, where
+     * {@link #shouldGrowAndReportExactlyAsBefore_whenNoBatchIsOpen} pins what it reports.
      */
     @Test
-    public void shouldStillNameTheGroupItGrew_whenTheQueuedSizeIsStillTooSmall() throws Exception {
+    public void shouldNameTheGroupItGrew_whenRoutedAfterTheCommitOfASizeStillTooSmall() throws Exception {
         String groupId = overflowingGroup(200, 200);
 
         dispatcher.beginBatch(SESSION, "size the group too small, then route the same view");
         accessor.updateViewObject(SESSION, groupId, null, null, 210, 210, null, null, null, null);
-        AutoRouteResultDto routed = route();
+        assertRouteRefusedNaming(groupId);
         dispatcher.endBatch(SESSION, true);
 
+        assertEquals("the batch commits the size it queued", "0,0 210x210", box(find(view, groupId)));
+        AutoRouteResultDto routed = route();
         IDiagramModelObject live = find(view, groupId);
-        assertTrue("fixture must actually make the pass grow the group past the queued 210, or "
-                + "this proves nothing: " + box(live), live.getBounds().getHeight() > 210);
-
-        assertFalse("the pass grew the group, so it must be named", routed.resizedGroups().isEmpty());
+        assertTrue("routed after the commit, the pass grows the group past 210: " + box(live),
+                live.getBounds().getHeight() > 210);
         ResizedGroupDto reported = routed.resizedGroups().get(0);
         assertEquals("the reported group", groupId, reported.viewObjectId());
         assertEquals("reported x must be the x the model holds",
@@ -268,6 +266,16 @@ public class BatchFitMapSeedingTest {
                 live.getBounds().getWidth(), reported.newWidth());
         assertEquals("reported height must be the height the model holds",
                 live.getBounds().getHeight(), reported.newHeight());
+    }
+
+    private void assertRouteRefusedNaming(String groupId) {
+        try {
+            route();
+            fail("auto-route must refuse inside a batch that has already resized a group on the view");
+        } catch (ModelAccessException e) {
+            assertEquals(ErrorCode.INVALID_PARAMETER, e.getErrorCode());
+            assertTrue(e.getMessage(), e.getMessage().contains("moved or resized: " + groupId));
+        }
     }
 
     /**

@@ -2,6 +2,8 @@ package net.vheerden.archi.mcp.handlers;
 
 import static org.junit.Assert.*;
 
+import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -9,6 +11,7 @@ import java.util.Map;
 
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -16,8 +19,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.BaseTestAccessor;
+import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.AddImageResultDto;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
@@ -102,6 +107,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(Map.of());
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("Exactly one"));
     }
@@ -119,6 +125,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("Only one"));
         assertTrue(text.contains("2"));
@@ -138,6 +145,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("Only one"));
         assertTrue(text.contains("3"));
@@ -156,6 +164,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("Only one"));
     }
@@ -173,6 +182,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("Only one"));
     }
@@ -255,6 +265,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(Map.of("imageData", oversized));
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("1MB"));
     }
@@ -268,6 +279,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(Map.of("imageData", "not-valid-base64!!!"));
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "Provide exactly one of");
         String text = getTextContent(result);
         assertTrue(text.contains("base64"));
     }
@@ -675,6 +687,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "not both");
         assertTrue(getTextContent(result).contains("filename"));
     }
 
@@ -710,6 +723,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(args);
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "not both");
         assertTrue(getTextContent(result).contains("'images'"));
     }
 
@@ -722,6 +736,7 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(Map.of("images", List.of()));
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "non-empty array");
         assertTrue(getTextContent(result).contains("at least one"));
     }
 
@@ -739,11 +754,41 @@ public class ImageHandlerTest {
         McpSchema.CallToolResult result = invokeAddImage(Map.of("images", tooMany));
 
         assertTrue(result.isError());
+        assertInvalidParameter(result, "non-empty array");
         // Pins the cap to bulk-mutate's constant so the two batch limits cannot drift apart.
         assertTrue(getTextContent(result).contains(String.valueOf(BulkOperation.MAX_OPERATIONS)));
     }
 
+    @Test
+    public void shouldReturnInvalidParameter_whenImagesIsNotAnArray() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        ImageHandler handler = new ImageHandler(accessor, formatter, registry, sessionManager);
+        handler.registerTools();
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("images", "/tmp/a.png"));
+
+        assertTrue(result.isError());
+        assertInvalidParameter(result, "non-empty array");
+        assertTrue(getTextContent(result).contains("must be an array"));
+    }
+
     // ---- Helpers ----
+
+    /**
+     * A rejection of the caller's own arguments must say so in its code and carry a remedy: an
+     * agent that reads a server fault gives up instead of fixing its call.
+     */
+    @SuppressWarnings("unchecked")
+    private void assertInvalidParameter(McpSchema.CallToolResult result, String correctionFragment)
+            throws Exception {
+        Map<String, Object> error = (Map<String, Object>) parseJson(result).get("error");
+        assertNotNull("an error response carries an error object", error);
+        assertEquals("INVALID_PARAMETER", error.get("code"));
+        String correction = (String) error.get("suggestedCorrection");
+        assertNotNull("a caller error names its remedy", correction);
+        assertTrue("the correction must fit this error: " + correction,
+                correction.contains(correctionFragment));
+    }
 
     private McpSchema.CallToolResult invokeAddImage(Map<String, Object> args) {
         McpServerFeatures.SyncToolSpecification spec = findToolSpec("add-image-to-model");
@@ -849,5 +894,173 @@ public class ImageHandlerTest {
             lastUrl = url;
             return new AddImageResultDto("images/from-url.png", 16, 16, "PNG");
         }
+    }
+
+    // ---- A server reachable from other machines ----
+
+    private StubAccessor registerRefusingServerSources() {
+        StubAccessor accessor = new StubAccessor(true);
+        new ImageHandler(accessor, formatter, registry, sessionManager, true).registerTools();
+        return accessor;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String errorMessage(McpSchema.CallToolResult result) throws Exception {
+        return (String) ((Map<String, Object>) parseJson(result).get("error")).get("message");
+    }
+
+    @Test
+    public void shouldRefuseAFilePathBeforeReadingIt_whenServerSourcesAreRefused() throws Exception {
+        StubAccessor accessor = registerRefusingServerSources();
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("filePath", "/etc/hosts"));
+
+        assertTrue(result.isError());
+        assertInvalidParameter(result, "imageData");
+        assertEquals(ImageHandler.SERVER_SOURCES_REFUSED, errorMessage(result));
+        assertTrue(ImageHandler.SERVER_SOURCES_REFUSED.contains("mcp.server.allowServerImageSources"));
+        assertEquals("nothing was read", 0, accessor.importCallCount);
+        assertNull(accessor.lastFilePath);
+    }
+
+    @Test
+    public void shouldRefuseAUrlBeforeFetchingIt_whenServerSourcesAreRefused() throws Exception {
+        StubAccessor accessor = registerRefusingServerSources();
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("url", "http://169.254.169.254/latest"));
+
+        assertTrue(result.isError());
+        assertInvalidParameter(result, "imageData");
+        assertEquals(ImageHandler.SERVER_SOURCES_REFUSED, errorMessage(result));
+        assertEquals("nothing was fetched", 0, accessor.importCallCount);
+        assertNull(accessor.lastUrl);
+    }
+
+    @Test
+    public void shouldStillImportImageData_whenServerSourcesAreRefused() throws Exception {
+        StubAccessor accessor = registerRefusingServerSources();
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("imageData", "iVBORw0KGgo="));
+
+        assertFalse(getTextContent(result), result.isError());
+        assertEquals("base64", accessor.lastImportMethod);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldRefuseEachFilePathAndUrlEntryOfABatch_whenServerSourcesAreRefused() throws Exception {
+        StubAccessor accessor = registerRefusingServerSources();
+        List<Map<String, Object>> images = new ArrayList<>();
+        images.add(Map.of("filePath", "/etc/hosts"));
+        images.add(Map.of("imageData", "iVBORw0KGgo="));
+        images.add(Map.of("url", "http://10.0.0.1/x.png"));
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("images", images));
+
+        Map<String, Object> resultMap = (Map<String, Object>) parseJson(result).get("result");
+        assertEquals(1, ((Number) resultMap.get("importedCount")).intValue());
+        List<Map<String, Object>> failures = (List<Map<String, Object>>) resultMap.get("failures");
+        assertEquals(2, failures.size());
+        assertEquals(0, ((Number) failures.get(0).get("index")).intValue());
+        assertEquals(2, ((Number) failures.get(1).get("index")).intValue());
+        assertEquals(ImageHandler.SERVER_SOURCES_REFUSED, failures.get(0).get("message"));
+        assertEquals(ImageHandler.SERVER_SOURCES_REFUSED, failures.get(1).get("message"));
+        assertEquals("only the imageData entry reached the accessor", 1, accessor.importCallCount);
+        assertNull(accessor.lastFilePath);
+        assertNull(accessor.lastUrl);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    public void shouldSayInTheDescriptionThatFilePathAndUrlAreRefused_onlyWhenTheyAre() {
+        registerRefusingServerSources();
+        McpSchema.Tool refusing = findToolSpec("add-image-to-model").tool();
+        CommandRegistry other = new CommandRegistry();
+        new ImageHandler(new StubAccessor(true), formatter, other, sessionManager).registerTools();
+        McpSchema.Tool allowing = other.getToolSpecifications().stream().map(s -> s.tool())
+                .filter(t -> t.name().equals("add-image-to-model")).findFirst().orElseThrow();
+
+        assertTrue(refusing.description().contains(ImageHandler.SERVER_SOURCES_REFUSED));
+        Map<String, Object> filePath = (Map<String, Object>) refusing.inputSchema().properties().get("filePath");
+        Map<String, Object> url = (Map<String, Object>) refusing.inputSchema().properties().get("url");
+        assertTrue(String.valueOf(filePath.get("description")).contains(ImageHandler.SERVER_SOURCES_REFUSED));
+        assertTrue(String.valueOf(url.get("description")).contains(ImageHandler.SERVER_SOURCES_REFUSED));
+        assertFalse(allowing.toString().contains(ImageHandler.SERVER_SOURCES_REFUSED));
+    }
+
+    @Test
+    public void shouldHandTheRefusalThroughTheRegistrar() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        HandlerRegistrar.registerAll(accessor, formatter, registry, sessionManager, false, true);
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("filePath", "/etc/hosts"));
+
+        assertEquals(ImageHandler.SERVER_SOURCES_REFUSED, errorMessage(result));
+        assertEquals(0, accessor.importCallCount);
+
+        CommandRegistry full = new CommandRegistry();
+        HandlerRegistrar.registerAll(accessor, formatter, full, sessionManager, false);
+        assertFalse("the five-argument form refuses nothing", full.getToolSpecifications().stream()
+                .filter(s -> s.tool().name().equals("add-image-to-model")).findFirst().orElseThrow()
+                .tool().description().contains(ImageHandler.SERVER_SOURCES_REFUSED));
+    }
+
+    @Test
+    public void shouldImportAFilePath_whenServerSourcesAreNotRefused() throws Exception {
+        StubAccessor accessor = new StubAccessor(true);
+        new ImageHandler(accessor, formatter, registry, sessionManager, false).registerTools();
+
+        McpSchema.CallToolResult result = invokeAddImage(Map.of("filePath", "/tmp/a.png"));
+
+        assertFalse(result.isError());
+        assertEquals("/tmp/a.png", accessor.lastFilePath);
+    }
+
+    // ---- Logging a failed batch entry ----
+
+    /** Records the name of every logging method called, and its arguments. */
+    private static Logger recordingLogger(List<String> methods, List<Object[]> args) {
+        return (Logger) Proxy.newProxyInstance(
+                Logger.class.getClassLoader(), new Class<?>[] {Logger.class},
+                (proxy, method, a) -> {
+                    if (method.getName().startsWith("is") && method.getReturnType() == boolean.class) {
+                        return true;
+                    }
+                    if (method.getName().equals("getName")) {
+                        return "recording";
+                    }
+                    methods.add(method.getName());
+                    args.add(a == null ? new Object[0] : a);
+                    return null;
+                });
+    }
+
+    @Test
+    public void shouldLogTheFailedEntryAtErrorWithItsCause_whenItFailedWithInternalError() {
+        List<String> methods = new ArrayList<>();
+        List<Object[]> args = new ArrayList<>();
+        ModelAccessException e = new ModelAccessException("Failed to add image to model: disk full",
+                new IOException("disk full"), ErrorCode.INTERNAL_ERROR, "disk full", null, null);
+
+        ImageHandler.logFailedEntry(recordingLogger(methods, args), e);
+
+        assertEquals("a server fault in one entry is logged once, at ERROR", List.of("error"), methods);
+        Object[] call = args.get(0);
+        assertSame("the exception is the last argument, so its cause is printed", e, call[call.length - 1]);
+    }
+
+    @Test
+    public void shouldNotLogTheFailedEntry_whenItWasTheCallersToFix() {
+        List<String> methods = new ArrayList<>();
+        List<Object[]> args = new ArrayList<>();
+        Logger log = recordingLogger(methods, args);
+
+        ImageHandler.logFailedEntry(log, new ModelAccessException(
+                "Downloaded content is not a valid image", ErrorCode.INVALID_PARAMETER));
+        // Stands in for a parameter rejection, which is not a model error at all.
+        ImageHandler.logFailedEntry(log, new IllegalArgumentException("filePath and url both given"));
+
+        assertEquals("a client error or a rejected entry adds no log line, not even DEBUG",
+                List.of(), methods);
     }
 }

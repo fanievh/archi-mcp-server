@@ -8,6 +8,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.archimatetool.model.IDiagramModelObject;
+
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.BulkOperation;
 
@@ -120,15 +122,79 @@ final class BulkBackReferences {
     static final String VIEW_TARGET_ADVICE =
             "Use get-view-contents to find valid view object IDs and connection IDs on the view. A "
             + "back-reference — $N.id by position, or $name.id when the operation declared as: "
-            + "\"name\" — resolves only to something addressable ON a view: a note, group, element "
-            + "view object or connection this call created. An element or relationship created in "
-            + "this call is a model concept with no view object until an add-to-view or "
-            + "add-connection-to-view places it — back-reference THAT operation instead.";
+            + "\"name\" — resolves only to something addressable ON a view: a note, group, image, "
+            + "view reference, element view object or connection this call created. An element or "
+            + "relationship created in this call is a model concept with no view object until an "
+            + "add-to-view or add-connection-to-view places it — back-reference THAT operation instead.";
 
     private static final Set<String> CREATE_TOOLS = Set.of(
-            "create-element", "create-relationship", "create-view",
+            "create-element", "create-relationship", "create-view", "create-folder",
             "add-to-view", "add-connection-to-view",
-            "add-group-to-view", "add-note-to-view");
+            "add-group-to-view", "add-note-to-view",
+            "add-image-to-view", "add-view-reference-to-view");
+
+    /**
+     * Refuses a view object placed earlier in this call where it cannot stand, and answers
+     * {@code resolvedParams} unchanged otherwise: a note, image or view reference as a parent or a
+     * relationship's connection end, and any placed object, group and element view object included, as
+     * the object to remove.
+     *
+     * <p>Such an object exists only in this call's queue until the call commits, so the live lookups a
+     * parent, a connection end and a removal make cannot find it. Their answer, "not found", names an id
+     * the caller can see in the same response. The refusal says what the object is and why it cannot
+     * serve there instead. A same-call group or element view object still nests and still connects
+     * through the call's own maps.</p>
+     */
+    static Map<String, Object> refuseSameCallLeaf(String tool, Map<String, Object> resolvedParams,
+            Map<Integer, IDiagramModelObject> sameCallObjects,
+            Map<Integer, ? extends IDiagramModelObject> sameCallGroups,
+            Map<Integer, ? extends IDiagramModelObject> sameCallViewObjects) {
+        refuseAs(resolvedParams.get("parentViewObjectId"), sameCallObjects, "Parent view object must be a "
+                + "group or element", QueuedObjectRefusals.PARENT_ADVICE);
+        if ("add-connection-to-view".equals(tool)) {
+            refuseAs(resolvedParams.get("sourceViewObjectId"), sameCallObjects,
+                    "Source view object must be an element view object", QueuedObjectRefusals.CONNECTION_END_ADVICE);
+            refuseAs(resolvedParams.get("targetViewObjectId"), sameCallObjects,
+                    "Target view object must be an element view object", QueuedObjectRefusals.CONNECTION_END_ADVICE);
+        }
+        if ("remove-from-view".equals(tool)) {
+            Object id = resolvedParams.get("viewObjectId");
+            String refusal = "Cannot remove a view object this call places";
+            String advice = "Leave the operation that places it out of the call instead.";
+            refuseAs(id, sameCallObjects, refusal, advice);
+            refuseAs(id, sameCallGroups, refusal, advice);
+            refuseAs(id, sameCallViewObjects, refusal, advice);
+        }
+        return resolvedParams;
+    }
+
+    private static void refuseAs(Object id, Map<Integer, ? extends IDiagramModelObject> sameCallObjects,
+            String refusal, String suggestion) {
+        for (Map.Entry<Integer, ? extends IDiagramModelObject> placed : sameCallObjects.entrySet()) {
+            if (placed.getValue().getId().equals(id)) {
+                throw new ModelAccessException(
+                        refusal + ": " + id + " is the " + QueuedObjectRefusals.kindOf(placed.getValue()) + " operation "
+                                + placed.getKey() + " places",
+                        ErrorCode.INVALID_PARAMETER,
+                        null,
+                        suggestion,
+                        null);
+            }
+        }
+    }
+
+    /**
+     * Records the view object a prepared placement made, keyed by its operation index, so a later
+     * operation in the same call can address it by back-reference while its add command has not run
+     * yet. Answers {@code prepared} unchanged, so a bulk case can yield through it.
+     */
+    static <T> PreparedMutation<T> track(PreparedMutation<T> prepared,
+            Map<Integer, IDiagramModelObject> sameCallObjects, int operationIndex) {
+        if (prepared.rawObject() instanceof IDiagramModelObject placed) {
+            sameCallObjects.put(operationIndex, placed);
+        }
+        return prepared;
+    }
 
     /**
      * Indexes the labels the operations declare, refusing the two things a declaration can get
@@ -163,7 +229,7 @@ final class BulkBackReferences {
             }
             if (!LABEL_PATTERN.matcher(label).matches()) {
                 failures.record(i, op.tool(), new ModelAccessException(
-                        "Operation name '" + label + "' is not a legal name. A name must start "
+                        "Operation name " + CallerText.quoted(label) + " is not a legal name. A name must start "
                                 + "with a letter or underscore and continue with letters, digits "
                                 + "or underscores.",
                         ErrorCode.INVALID_PARAMETER,
@@ -334,8 +400,8 @@ final class BulkBackReferences {
         String refTool = operationTools.get(refIndex);
         if (!CREATE_TOOLS.contains(refTool)) {
             throw new ModelAccessException(
-                    "Back-reference '$" + shown + ".id' targets an " + refTool
-                            + " operation — only create operations can be referenced",
+                    "Back-reference '$" + shown + ".id' targets " + ("aeiou".indexOf(refTool.charAt(0)) >= 0 ? "an " : "a ")
+                            + refTool + " operation — only create operations can be referenced",
                     ErrorCode.INVALID_PARAMETER);
         }
     }

@@ -15,11 +15,14 @@ import org.slf4j.LoggerFactory;
 import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
+import net.vheerden.archi.mcp.model.ModelAccessException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
 import net.vheerden.archi.mcp.response.FieldSelector;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
+import net.vheerden.archi.mcp.session.SessionFilterRefusal;
 import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
@@ -136,47 +139,13 @@ public class SessionHandler {
             Map<String, Object> args = request.arguments();
             String sessionId = SessionManager.extractSessionId(exchange);
 
-            // Extract parameters
-            String type = null;
-            String layer = null;
-            boolean clear = false;
-            String fieldsPreset = null;
-            Set<String> excludeFields = null;
-
-            if (args != null) {
-                Object typeObj = args.get("type");
-                if (typeObj instanceof String t && !t.isBlank()) {
-                    type = t;
-                }
-
-                Object layerObj = args.get("layer");
-                if (layerObj instanceof String l && !l.isBlank()) {
-                    layer = l;
-                }
-
-                Object clearObj = args.get("clear");
-                if (clearObj instanceof Boolean c) {
-                    clear = c;
-                }
-
-                Object fieldsObj = args.get("fields");
-                if (fieldsObj instanceof String f && !f.isBlank()) {
-                    fieldsPreset = f;
-                }
-
-                Object excludeObj = args.get("exclude");
-                if (excludeObj instanceof List<?> excludeList && !excludeList.isEmpty()) {
-                    excludeFields = new LinkedHashSet<>();
-                    for (Object item : excludeList) {
-                        if (item instanceof String s && !s.isBlank()) {
-                            excludeFields.add(s);
-                        }
-                    }
-                    if (excludeFields.isEmpty()) {
-                        excludeFields = null;
-                    }
-                }
-            }
+            // Extract parameters: a value that does not read is refused naming its key, not read as absent
+            String type = ToolArguments.text(args, "type", false);
+            String layer = ToolArguments.text(args, "layer", false);
+            boolean clear = ToolArguments.flag(args, "clear", false);
+            String fieldsPreset = ToolArguments.text(args, "fields", false);
+            List<String> exclude = ToolArguments.names(args, "exclude", "field");
+            Set<String> excludeFields = exclude == null ? null : new LinkedHashSet<>(exclude);
 
             // Validate: at least one parameter must be provided
             boolean hasFieldSelection = fieldsPreset != null || excludeFields != null;
@@ -204,22 +173,24 @@ public class SessionHandler {
             boolean clearOnly = clear && type == null && layer == null && !hasFieldSelection;
             return buildActiveFiltersResponse(sessionId, clearOnly);
 
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
+
         } catch (IllegalArgumentException e) {
-            // SessionManager throws IllegalArgumentException for invalid type/layer/fields/exclude
+            // SessionManager says which parameter it refused; the message holds the caller's value, so it is
+            // never searched for the choice. An unattributed refusal keeps the layers suggestion.
             String message = e.getMessage();
-            String suggestion;
-            if (message != null && message.contains("element type")) {
-                suggestion = "Valid types: ApplicationComponent, BusinessProcess, Node, Device, "
+            SessionFilterRefusal.Parameter refused = e instanceof SessionFilterRefusal r ? r.parameter() : null;
+            String suggestion = switch (refused == null ? SessionFilterRefusal.Parameter.LAYER : refused) {
+                case TYPE -> "Valid types: ApplicationComponent, BusinessProcess, Node, Device, "
                         + "Capability, Stakeholder, WorkPackage, and more. "
                         + "Use get-model-info to see all available element types.";
-            } else if (message != null && message.contains("fields preset")) {
-                suggestion = "Valid presets: minimal, standard, full";
-            } else if (message != null && message.contains("exclude field")) {
-                suggestion = "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse();
-            } else {
-                suggestion = "Valid layers: Business, Application, Technology, Physical, "
+                case FIELDS -> "Valid presets: minimal, standard, full";
+                case EXCLUDE -> "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse();
+                case LAYER -> "Valid layers: Business, Application, Technology, Physical, "
                         + "Strategy, Motivation, Implementation & Migration";
-            }
+            };
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.INVALID_PARAMETER,
                     message != null ? message : "Invalid filter parameter",

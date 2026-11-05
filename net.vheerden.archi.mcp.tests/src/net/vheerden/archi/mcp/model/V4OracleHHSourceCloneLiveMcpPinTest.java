@@ -5,20 +5,12 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import org.junit.Before;
 import org.junit.Test;
 
-import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
-import net.vheerden.archi.mcp.model.routing.RoutingResult;
 import net.vheerden.archi.mcp.model.routing.ViewFixture;
-import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator;
 
 /**
  * HH ("Hub Heavy") source-clone pin test — H5 Task 14.2 (closes the
@@ -113,33 +105,37 @@ public class V4OracleHHSourceCloneLiveMcpPinTest {
 
     /**
      * HH source clone pure-JUnit M5 ceiling. Captured 2026-05-14 first-run
-     * actual = 2 (identical to V4 oracle pure-JUnit). +1 noise headroom per
+     * actual = 2 (identical to V4 oracle pure-JUnit). Noise headroom per
      * V4 oracle {@code M5_CEILING} stateless-fixture-parity precedent.
+     *
+     * <p>Anchored at the shipped terminal face margin of 4, where it is 6; at margin 1 it is 3. It
+     * moves with the V4 oracle's — same substrate, same measurement, and a real movement in the
+     * routed output rather than a metric artefact. See {@code
+     * V4OracleQualityRegressionTest.M5_CEILING} for the margin sweep that shows margin 4 to be a
+     * local worst point rather than a trend, and for why a ceiling must be narrowed again when the
+     * margin moves back.
      */
-    private static final int HH_M5_CEILING = 3;
+    private static final int HH_M5_CEILING = 6;
 
     /**
-     * HH source clone pure-JUnit M1 ceiling. Captured 2026-05-14 first-run
-     * actual = 1. +4 headroom matches V4 oracle {@code M1_CEILING} precedent
-     * (visible-segment-length guard tolerance for minor terminal-segment drift).
+     * HH source clone pure-JUnit M1 ceiling.
+     *
+     * <p>Measured actual at the shipped terminal face margin of 4: <b>3</b>, all three of them
+     * corner-zone ends (this fixture is a source clone of the V4 oracle, so the routes and the
+     * counted ends are the same; see {@code V4OracleQualityRegressionTest.M1_CEILING} and {@code
+     * NonOrthogonalTerminalZoneCensusTest}). At margin 1 it is 1. The ceiling is the value in
+     * force before the margin moved: it fails a regression above 5, with 2 of headroom at margin
+     * 4 and 4 at margin 1, and does not need to move with the margin.
      */
     private static final int HH_M1_CEILING = 5;
 
-    /** Live-MCP perimeter margin per {@link V4OracleQualityRegressionTest}. */
-    private static final int LIVE_MCP_PERIMETER_MARGIN = 50;
 
     private ViewFixture fixture;
-    private RoutingPipeline pipeline;
     private LayoutQualityAssessor assessor;
 
     @Before
     public void setUp() throws IOException {
         fixture = ViewFixture.load("testdata/hh-source-clone-fixture.json");
-        pipeline = new RoutingPipeline(
-                RoutingPipeline.DEFAULT_BEND_PENALTY,
-                RoutingPipeline.DEFAULT_MARGIN,
-                RoutingPipeline.DEFAULT_CONGESTION_WEIGHT,
-                LIVE_MCP_PERIMETER_MARGIN);
         assessor = new LayoutQualityAssessor();
     }
 
@@ -241,120 +237,34 @@ public class V4OracleHHSourceCloneLiveMcpPinTest {
                 structuralOk && tier1Ok);
     }
 
-    // ---- helpers (copied from V4OracleQualityRegressionTest; same semantics) ----
+    // ---- helpers ----
 
     private LayoutAssessmentResult routeAndAssess() {
-        List<RoutingPipeline.ConnectionEndpoints> endpoints = new ArrayList<>();
-        for (RoutingPipeline.ConnectionEndpoints ep : fixture.buildConnectionEndpoints()) {
-            List<RoutingRect> filteredObstacles = new ArrayList<>();
-            List<RoutingRect> groupBoundaries = new ArrayList<>();
-            for (RoutingRect obs : ep.obstacles()) {
-                if (isGroupId(obs.id())) {
-                    groupBoundaries.add(obs);
-                } else {
-                    filteredObstacles.add(obs);
-                }
-            }
-            endpoints.add(new RoutingPipeline.ConnectionEndpoints(
-                    ep.connectionId(), ep.source(), ep.target(),
-                    filteredObstacles, ep.labelText(), ep.textPosition(),
-                    groupBoundaries));
-        }
-        List<RoutingRect> allObstacles = new ArrayList<>();
-        for (RoutingRect obs : fixture.buildAllObstacles()) {
-            if (!isGroupId(obs.id())) {
-                allObstacles.add(obs);
-            }
-        }
-        Map<String, Set<String>> labelExcludeSets = new LinkedHashMap<>();
-        for (RoutingPipeline.ConnectionEndpoints conn : endpoints) {
-            Set<String> excludeIds = new HashSet<>();
-            excludeIds.add(conn.source().id());
-            excludeIds.add(conn.target().id());
-            collectAncestors(conn.source().id(), excludeIds);
-            collectAncestors(conn.target().id(), excludeIds);
-            collectChildren(conn.source().id(), excludeIds);
-            collectChildren(conn.target().id(), excludeIds);
-            labelExcludeSets.put(conn.connectionId(), excludeIds);
-        }
-
-        RoutingResult routingResult = pipeline.routeAllConnections(
-                endpoints, allObstacles, labelExcludeSets);
-
-        Map<String, List<AbsoluteBendpointDto>> routedBps = new LinkedHashMap<>();
-        routedBps.putAll(routingResult.routed());
-        routedBps.putAll(routingResult.violatedRoutes());
-
-        System.out.println("[V4OracleHHSourceCloneLiveMcpPinTest] routing yield: "
-                + routingResult.routed().size() + " routed + "
-                + routingResult.violatedRoutes().size() + " violated + "
-                + routingResult.failed().size() + " failed = "
-                + (routingResult.routed().size()
-                        + routingResult.violatedRoutes().size()
-                        + routingResult.failed().size())
-                + " of " + fixture.getConnections().size() + " total");
-
-        List<AssessmentNode> nodes = new ArrayList<>();
-        for (ViewFixture.FixtureElement e : fixture.getElements()) {
-            boolean isGroup = !e.isChild();
-            nodes.add(new AssessmentNode(
-                    e.id(),
-                    e.x(), e.y(), e.w(), e.h(),
-                    e.parentId(),
-                    isGroup,
-                    false,
-                    e.name(),
-                    0.0,
-                    null,
-                    null, 0.0, 0.0, 0.0));
-        }
-
-        List<AssessmentConnection> connections = new ArrayList<>();
-        for (ViewFixture.FixtureConnection c : fixture.getConnections()) {
-            List<AbsoluteBendpointDto> bps = routedBps.get(c.id());
-            if (bps == null) {
-                continue;
-            }
-            ViewFixture.FixtureElement src = fixture.getElementById(c.sourceId());
-            ViewFixture.FixtureElement tgt = fixture.getElementById(c.targetId());
-            assertNotNull("Fixture connection " + c.id()
-                    + " references unknown sourceId=" + c.sourceId(), src);
-            assertNotNull("Fixture connection " + c.id()
-                    + " references unknown targetId=" + c.targetId(), tgt);
-
-            List<double[]> pathPoints = new ArrayList<>();
-            pathPoints.add(new double[] {src.x() + src.w() / 2.0, src.y() + src.h() / 2.0});
-            for (AbsoluteBendpointDto bp : bps) {
-                pathPoints.add(new double[] {bp.x(), bp.y()});
-            }
-            pathPoints.add(new double[] {tgt.x() + tgt.w() / 2.0, tgt.y() + tgt.h() / 2.0});
-
-            connections.add(new AssessmentConnection(
-                    c.id(), c.sourceId(), c.targetId(),
-                    pathPoints, c.label(), 1));
-        }
-
-        return assessor.assess(nodes, connections, true);
+        OracleFixtureRouting.Inputs in = OracleFixtureRouting.of(fixture, "V4OracleHHSourceCloneLiveMcpPinTest").route();
+        return assessor.assess(in.nodes(), in.connections(), true /*includeViolatorIds*/);
     }
 
-    private boolean isGroupId(String id) {
-        ViewFixture.FixtureElement e = fixture.getElementById(id);
-        return e != null && !e.isChild();
-    }
-
-    private void collectAncestors(String id, Set<String> into) {
-        ViewFixture.FixtureElement e = fixture.getElementById(id);
-        while (e != null && e.parentId() != null) {
-            into.add(e.parentId());
-            e = fixture.getElementById(e.parentId());
-        }
-    }
-
-    private void collectChildren(String parentId, Set<String> into) {
-        for (ViewFixture.FixtureElement e : fixture.getElements()) {
-            if (parentId.equals(e.parentId())) {
-                into.add(e.id());
-            }
-        }
+    /**
+     * The gates in this class are calibrated against a specific value of {@code
+     * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN}, and every one of them is a one-sided bound.
+     * That combination is silently dangerous: a ceiling anchored for a wider margin still passes at
+     * every narrower one, so moving the margin down leaves these gates green while they guard
+     * nothing. It is not hypothetical — the margin went 4 to 1 and back during this story, and a
+     * mutation run confirmed all of them passed at 1 while HH_M5_CEILING (6) and HH_M1_CEILING (24)
+     * were sitting far above the corpus actuals.
+     *
+     * <p>A Javadoc instruction to re-anchor them is not a mechanism. This is: change the margin and
+     * this test reds, naming what has to move with it. It asserts nothing about layout quality and
+     * is not a duplicate of the margin's own value pins in {@code EdgeAttachmentCalculatorTest} —
+     * those exist so the margin cannot change unnoticed, this one exists so it cannot change
+     * without the gates in THIS file being re-measured.
+     */
+    @Test
+    public void gatesInThisClassAreCalibratedForTheShippedTerminalFaceMargin() {
+        assertEquals("HH_M5_CEILING (6) in this class was measured at a terminal face margin of 4. "
+                        + "The margin has changed, so it is no longer anchored to anything "
+                        + "measured: re-run the corpus at the new margin and re-anchor it in the "
+                        + "same commit that moved it.",
+                4, EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN);
     }
 }

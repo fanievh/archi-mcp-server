@@ -69,6 +69,35 @@ public class InformationalDimensionRatingIsolationTest {
     }
 
     /**
+     * Note-on-note isolation, single-variable: the same two notes, apart and then stacked. Notes are
+     * held apart from the scoring node set, so the stacking may move the informational count and
+     * nothing a rating reads.
+     */
+    @Test
+    public void shouldLeaveEveryRatingOutputIdentical_whenOnlyTwoNotesAreStacked() {
+        List<AssessmentNode> apart = new ArrayList<>(nodes());
+        apart.add(noteAt("n1", 600, 300));
+        apart.add(noteAt("n2", 600, 400));
+        List<AssessmentNode> stacked = new ArrayList<>(nodes());
+        stacked.add(noteAt("n1", 600, 300));
+        stacked.add(noteAt("n2", 600, 300));
+
+        LayoutAssessmentResult clean = assessor.assess(apart, List.of(cleanConnection()), true);
+        LayoutAssessmentResult hidden = assessor.assess(stacked, List.of(cleanConnection()), true);
+
+        assertEquals("the fixture must actually fire the dimension", 0, clean.noteOnNoteOverlapCount());
+        assertEquals(1, hidden.noteOnNoteOverlapCount());
+        assertEquals(clean.overallRating(), hidden.overallRating());
+        assertEquals(clean.layoutRating(), hidden.layoutRating());
+        assertEquals(clean.routingRating(), hidden.routingRating());
+        assertEquals(clean.ratingBreakdown(), hidden.ratingBreakdown());
+    }
+
+    private static AssessmentNode noteAt(String id, double x, double y) {
+        return new AssessmentNode(id, x, y, 200, 40, null, false, true, "note", 0.0, null, null, 0.0, 0.0, 0.0);
+    }
+
+    /**
      * The rating breakdown is the map every tier decision reads. Neither dimension may appear in it
      * under any key — a key present with a "pass" value is still a rating input that a later change
      * could flip.
@@ -171,6 +200,46 @@ public class InformationalDimensionRatingIsolationTest {
                 "parallelConnectionGap", limiting);
     }
 
+    /**
+     * A label on another connection's line, held single-variable. The line cannot be taken away instead: it
+     * crosses the labelled line, and a crossing is rating-bearing. So both views keep both lines, and only the
+     * label moves, from Middle (on the other line) to Target (clear of it, and of every box).
+     */
+    @Test
+    public void shouldLeaveEveryRatingOutputIdentical_whenOnlyALabelOnAnotherLineDiffers() {
+        LayoutAssessmentResult on = assessor.assess(foreignLineNodes(), foreignLineView(1), true);
+        LayoutAssessmentResult off = assessor.assess(foreignLineNodes(), foreignLineView(2), true);
+
+        assertEquals("the fixture must actually fire the dimension", 1, on.labelOnForeignLineCount());
+        assertEquals(0, off.labelOnForeignLineCount());
+
+        assertEquals(off.overallRating(), on.overallRating());
+        assertEquals(off.layoutRating(), on.layoutRating());
+        assertEquals(off.routingRating(), on.routingRating());
+        assertEquals(off.ratingBreakdown(), on.ratingBreakdown());
+        assertEquals(off.labelOverlapCount(), on.labelOverlapCount());
+        List<String> onOtherwise = new ArrayList<>(on.suggestions());
+        onOtherwise.removeIf(s -> s.contains("on another connection's line"));
+        assertEquals("only the new informational line may differ", off.suggestions(), onOtherwise);
+        assertEquals(off.suggestions().size() + 1, on.suggestions().size());
+        for (String key : on.ratingBreakdown().keySet()) {
+            assertEquals("rating breakdown must not carry the dimension: " + key,
+                    false, key.toLowerCase().contains("foreignline"));
+        }
+    }
+
+    @Test
+    public void shouldNotMoveTheTierScoreOrSteerTheLoop_whenOnlyTheLabelOnForeignLineCountDiffers() {
+        AssessLayoutResultDto without = dtoWith(0, 0, 0, 0);
+        AssessLayoutResultDto with = dtoWith(0, 0, 0, 9999);
+
+        assertEquals(QualityTargetTermination.tierWeightedScore(without),
+                QualityTargetTermination.tierWeightedScore(with));
+        assertEquals(false, QualityTargetTermination.hasTier1Regression(with, without));
+        assertNotEquals("labelOnForeignLine", QualityTargetTermination.findLimitingFactor(with));
+        assertEquals(0, QualityTargetTermination.getMetricCount("labelOnForeignLine", with));
+    }
+
     // ---- Fixtures ----
 
     private static AssessLayoutResultDto dtoWith(int anchorDrift, int lateralJog) {
@@ -179,6 +248,11 @@ public class InformationalDimensionRatingIsolationTest {
 
     private static AssessLayoutResultDto dtoWith(int anchorDrift, int lateralJog,
             int hAxisParallelGapNarrow25) {
+        return dtoWith(anchorDrift, lateralJog, hAxisParallelGapNarrow25, 0);
+    }
+
+    private static AssessLayoutResultDto dtoWith(int anchorDrift, int lateralJog,
+            int hAxisParallelGapNarrow25, int labelOnForeignLine) {
         AssessLayoutResultDto base = AssessLayoutResultDto.degenerate(
                 "v1", 2, 1, 0, List.of(), List.of(), 0, List.of(), 0, List.of(),
                 0, List.of(), List.of(), java.util.Map.of(), List.of());
@@ -223,7 +297,8 @@ public class InformationalDimensionRatingIsolationTest {
                 base.zeroBendpointNonOrthogonalTerminalCount(),
                 base.routedNonOrthogonalTerminalCount(),
                 base.unsizedHubs(), base.contextualPartialDimensions(),
-                base.crossElementPassThroughCount());
+                base.crossElementPassThroughCount(), labelOnForeignLine, null,
+                base.ownEndpointPassThroughCount());
     }
 
     /** A connection whose anchors agree and whose route has no reversal. */
@@ -252,6 +327,26 @@ public class InformationalDimensionRatingIsolationTest {
                         new double[]{120.0, 150.0}, new double[]{120.0 + jog, 150.0},
                         new double[]{120.0 + jog, 80.0}, new double[]{350.0, 400.0}),
                 "", 0, RelativePositionFeature.CENTER, 0.0, 0.0);
+    }
+
+    /** A (0, 400) and B (500, 400), both 100 x 60, with c (270, 100) above and d (270, 700) below. */
+    private static List<AssessmentNode> foreignLineNodes() {
+        return Arrays.asList(node("A", 0, 400, 100, 60), node("B", 500, 400, 100, 60),
+                node("c", 270, 100, 60, 60), node("d", 270, 700, 60, 60));
+    }
+
+    /**
+     * l from A to B along y 430, labelled at {@code textPosition}, and an unlabelled f down x 300. At Middle
+     * the label is x 230.2..369.8, on f; at Target it hangs at x 346.4..486, y 434..454, clear of f and B.
+     */
+    private static List<AssessmentConnection> foreignLineView(int textPosition) {
+        return List.of(
+                new AssessmentConnection("l", "A", "B",
+                        List.of(new double[]{50.0, 430.0}, new double[]{550.0, 430.0}),
+                        "sends orders", textPosition, RelativePositionFeature.CENTER, 0.0, 0.0),
+                new AssessmentConnection("f", "c", "d",
+                        List.of(new double[]{300.0, 130.0}, new double[]{300.0, 730.0}),
+                        "", 1, RelativePositionFeature.CENTER, 0.0, 0.0));
     }
 
     private static List<AssessmentNode> nodes() {

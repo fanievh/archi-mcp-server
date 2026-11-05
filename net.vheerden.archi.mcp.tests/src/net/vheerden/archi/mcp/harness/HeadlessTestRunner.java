@@ -7,6 +7,11 @@ import org.junit.runner.notification.RunListener;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.LockInfo;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MonitorInfo;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -14,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Headless JUnit4 runner for the build+test harness ({@code tools/run-tests.sh}).
@@ -46,10 +52,20 @@ import java.util.Set;
  *       build; prints one {@code CLASSIFY <bucket> <fqcn> ...} line per class so each class can be
  *       sorted into the junit bucket vs the {@code tools/osgi-excluded-tests.txt} manifest. In this
  *       mode the {@code testsRun>0} guard is reported, not enforced.</li>
+ *   <li>{@code -Dharness.classTimeoutSeconds=<n>} — per-class deadline (default 180; {@code 0}
+ *       disables it; anything else that is not a whole number of seconds refuses the run). Applies in
+ *       every mode and to every class: a class that overruns ends the run with a thread dump and exit 3
+ *       even when it is quarantined as known-failing, and even in classify mode, which otherwise never
+ *       fails — a stuck main thread leaves nothing to continue with.</li>
  * </ul>
  *
  * <p>Exit code: 0 only if every class passed AND every class satisfied {@code effectiveRan > 0}
- * (the latter enforced only outside classify mode). Non-zero otherwise.</p>
+ * (the latter enforced only outside classify mode); 1 otherwise; 2 for bad usage (no classes, an
+ * unreadable deadline); 3 when a class overran its deadline and the run was stopped.</p>
+ *
+ * <p>Before a run that ran classes ends, normally or by the deadline, every process the tests started
+ * that is still running is ended and named on a {@code [REAPED]} line ({@link #reapDescendants()}),
+ * so nothing outlives the runner holding its output open. That changes no exit code.</p>
  */
 public final class HeadlessTestRunner {
 
@@ -86,6 +102,9 @@ public final class HeadlessTestRunner {
     private static final class RecordingListener extends RunListener {
         final Map<String, TestRecord> records = new LinkedHashMap<>();
 
+        /** The test method that has started and not finished, or null between tests; read by the watchdog. */
+        volatile String running;
+
         private static String methodOf(Description d) {
             String m = d.getMethodName();
             return m != null ? m : d.getDisplayName();
@@ -101,10 +120,12 @@ public final class HeadlessTestRunner {
             TestRecord r = new TestRecord(classOf(d), methodOf(d));
             r.startNanos = System.nanoTime();
             records.put(d.getDisplayName(), r);
+            running = r.methodName;
         }
 
         @Override
         public void testFinished(Description d) {
+            running = null;
             TestRecord r = records.get(d.getDisplayName());
             if (r != null) {
                 r.timeMs = (System.nanoTime() - r.startNanos) / 1_000_000L;
@@ -210,6 +231,18 @@ public final class HeadlessTestRunner {
         // failure in any other class still turns the build red.
         Set<String> knownFailing = loadClassList(System.getProperty("harness.knownFailingFile"));
 
+        // Per-class deadline: a class that stops making progress ends the run with a thread dump
+        // instead of stalling it. An unreadable value refuses the run rather than meaning "no limit".
+        ClassWatchdog watchdog;
+        try {
+            watchdog = new ClassWatchdog(
+                    parseClassTimeoutSeconds(System.getProperty(CLASS_TIMEOUT_PROPERTY)), outDir);
+        } catch (IllegalArgumentException e) {
+            System.err.println("HeadlessTestRunner: " + e.getMessage());
+            System.exit(2);
+            return;
+        }
+
         if (args.length == 0) {
             System.err.println("HeadlessTestRunner: no test classes supplied");
             System.exit(2);
@@ -224,7 +257,7 @@ public final class HeadlessTestRunner {
         int knownFailTests = 0;
 
         for (String fqcn : args) {
-            ClassResult cr = runOne(fqcn);
+            ClassResult cr = watchdog.run(fqcn);
             results.add(cr);
             totalEffective += cr.effectiveRan;
 
@@ -274,6 +307,9 @@ public final class HeadlessTestRunner {
             }
         }
 
+        // A process a test started and left running would hold the runner's output open after exit.
+        reapDescendants();
+
         // Aggregate summary (mirrors AllPluginTestsRunner's ergonomic, plus the run-count guard it lacked).
         long junitBucket = results.stream().filter(r -> "JUNIT".equals(r.bucket())).count();
         long excludedBucket = results.size() - junitBucket;
@@ -293,6 +329,348 @@ public final class HeadlessTestRunner {
         boolean ok = totalFailures == 0 && totalErrors == 0 && violations == 0;
         System.out.println(ok ? "RESULT: PASS" : "RESULT: FAIL");
         System.exit(ok ? 0 : 1);
+    }
+
+    /** System property holding the per-class deadline in seconds; {@code 0} disables it. */
+    static final String CLASS_TIMEOUT_PROPERTY = "harness.classTimeoutSeconds";
+
+    /** Deadline when the property is not set — over ten times the slowest class at the time of writing. */
+    static final long DEFAULT_CLASS_TIMEOUT_SECONDS = 180;
+
+    /** Exit code of a run ended by the deadline, distinct from a test failure (1) and bad usage (2). */
+    static final int TIMEOUT_EXIT_CODE = 3;
+
+    /**
+     * How long the expiry report may take before the JVM is halted without it. Reporting writes to
+     * standard output, which the stuck class may itself be blocking (a full pipe, a stream it
+     * replaced), so the halt must not depend on the report finishing.
+     */
+    static final long REPORT_GRACE_MILLIS = 10_000;
+
+    /** Longest the runner waits, in total, for the processes it ended to be gone before it exits. */
+    static final long REAP_WAIT_MILLIS = 2_000;
+
+    /**
+     * Ends every process this JVM started, directly or through another process, that is still
+     * running, printing one {@code [REAPED] pid <n> <command>} line for each. A process a test started
+     * with the runner's standard output shared holds that output open after the runner exits, so
+     * whatever reads it (the harness script's {@code tee}, CI's log capture) would wait for that
+     * process instead of the run. Ending one is reported, not counted as a failure.
+     *
+     * <p>Every process is ended before anything is written, so output that blocks cannot keep one
+     * alive. Waits at most {@link #REAP_WAIT_MILLIS} in total for them to go, then names any still
+     * running on a {@code [REAP-FAILED]} line and returns. A failure to list or end them is reported
+     * the same way and never escapes: the run's own verdict and exit must still follow.</p>
+     *
+     * <p>It reaches only processes that are still descendants: one that detached itself (its parent
+     * exited and it was re-parented) is out of reach. Nothing here can make it stop a process that
+     * ignores a forced kill, and no test pins that case — no such process can be started from a test —
+     * so the bound on the exit is the wait limit here and, on a timeout, the unconditional halt already
+     * armed.</p>
+     */
+    static void reapDescendants() {
+        try {
+            List<Ended> ended = endDescendants();
+            for (Ended e : ended) {
+                System.out.println(("[REAPED] pid " + e.process().pid() + " " + e.command()).stripTrailing());
+            }
+            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REAP_WAIT_MILLIS);
+            for (Ended e : ended) {
+                long left = until - System.nanoTime();
+                if (left <= 0) {
+                    break;
+                }
+                try {
+                    e.process().onExit().get(left, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException ignored) {
+                    // gone or not, the exit does not wait longer
+                }
+            }
+            for (Ended e : ended) {
+                if (e.process().isAlive()) {
+                    System.out.println("[REAP-FAILED] pid " + e.process().pid() + " still running after "
+                            + REAP_WAIT_MILLIS + " ms");
+                }
+            }
+        } catch (RuntimeException e) {
+            System.out.println("[REAP-FAILED] " + e);
+        }
+    }
+
+    /**
+     * Forcibly ends every live descendant without writing anything, and returns what it ended. Lists
+     * them twice, so a process started while the first ones were being ended is ended too.
+     */
+    private static List<Ended> endDescendants() {
+        List<Ended> ended = new ArrayList<>();
+        Set<Long> seen = new java.util.HashSet<>();
+        for (int listing = 0; listing < 2; listing++) {
+            List<ProcessHandle> fresh = ProcessHandle.current().descendants()
+                    .filter(ProcessHandle::isAlive)
+                    .filter(p -> seen.add(p.pid()))
+                    .toList();
+            if (fresh.isEmpty()) {
+                break;
+            }
+            for (ProcessHandle p : fresh) {
+                // read before the kill: a process that is gone no longer describes itself
+                String command = p.info().commandLine().or(() -> p.info().command()).orElse("");
+                p.destroyForcibly();
+                ended.add(new Ended(p, command));
+            }
+        }
+        return ended;
+    }
+
+    /** {@link #endDescendants()} for the last-resort halt, which must reach its halt whatever happens. */
+    private static void endDescendantsQuietly() {
+        try {
+            endDescendants();
+        } catch (RuntimeException e) {
+            // the halt follows regardless
+        }
+    }
+
+    private record Ended(ProcessHandle process, String command) {
+    }
+
+    static long parseClassTimeoutSeconds(String value) {
+        if (value == null || value.isBlank()) {
+            return DEFAULT_CLASS_TIMEOUT_SECONDS;
+        }
+        long seconds;
+        try {
+            seconds = Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            seconds = -1;
+        }
+        if (seconds < 0) {
+            throw new IllegalArgumentException(CLASS_TIMEOUT_PROPERTY
+                    + " must be a whole number of seconds (0 disables the deadline), was: " + value);
+        }
+        return seconds;
+    }
+
+    /**
+     * Enforces the per-class deadline while the class runs on the CALLING thread. The class must stay
+     * on the main thread: under {@code -XstartOnFirstThread} (the display pass on macOS) SWT can only
+     * create its display there, so the deadline is kept by a separate daemon thread instead.
+     *
+     * <p>On expiry the run cannot continue — the stuck thread is the main thread, and whatever it holds
+     * (a server, a lock, a static) could poison the classes after it. So the watchdog prints the
+     * timeout with the test that was running, a dump of every thread, writes the class's XML with a
+     * timeout error, and halts the JVM. The dump names, for each thread, the lock it waits on and the
+     * thread that owns it, and the monitors and locks it holds, so a stall on a lock can be traced to
+     * its holder from the dump alone ({@link #appendThread(StringBuilder, ThreadInfo)}).
+     * {@code halt}, not {@code exit}: {@code exit} runs shutdown hooks, and a hook waiting on the same
+     * stuck lock would recreate the hang.</p>
+     *
+     * <p>The expiry holds the per-class lock until the halt, and the class's completion takes the same
+     * lock, so a class can never both time out and be reported as finished.</p>
+     *
+     * <p>The report goes to standard output, which the stuck class may be blocking, so expiry first
+     * arms a second, unconditional halt {@link #REPORT_GRACE_MILLIS} later.</p>
+     *
+     * <p>{@code halt} ends this JVM but not the processes the stuck class started, and one sharing the
+     * runner's standard output would keep a pipe reading it open. So after the report, and before the
+     * halt, the expiry ends them ({@link #reapDescendants()}) — still under that second halt, so ending
+     * them can neither delay the report nor keep the JVM alive past it. If the report never finishes,
+     * the second halt ends them itself, silently, just before it halts.</p>
+     */
+    private static final class ClassWatchdog {
+        private final long timeoutSeconds;
+        private final File outDir;
+
+        ClassWatchdog(long timeoutSeconds, File outDir) {
+            this.timeoutSeconds = timeoutSeconds;
+            this.outDir = outDir;
+        }
+
+        ClassResult run(String fqcn) {
+            RecordingListener listener = new RecordingListener();
+            if (timeoutSeconds == 0) {
+                return runOne(fqcn, listener);
+            }
+            Watch watch = new Watch(listener);
+            Thread classThread = Thread.currentThread();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+            Thread waiter = new Thread(() -> awaitDeadline(watch, deadline, fqcn, classThread),
+                    "harness-class-watchdog");
+            waiter.setDaemon(true);
+            waiter.start();
+            try {
+                return runOne(fqcn, listener);
+            } finally {
+                synchronized (watch) {
+                    watch.done = true;
+                    watch.notifyAll();
+                }
+            }
+        }
+
+        private void awaitDeadline(Watch watch, long deadline, String fqcn, Thread classThread) {
+            synchronized (watch) {
+                long remaining;
+                while (!watch.done && (remaining = deadline - System.nanoTime()) > 0) {
+                    try {
+                        TimeUnit.NANOSECONDS.timedWait(watch, remaining);
+                    } catch (InterruptedException e) {
+                        // Nothing may disarm the deadline: keep waiting until it passes or the class ends.
+                    }
+                }
+                if (!watch.done) {
+                    expire(fqcn, classThread, watch.listener.running);
+                }
+            }
+        }
+
+        private void expire(String fqcn, Thread classThread, String runningTest) {
+            Thread lastResort = new Thread(() -> {
+                long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REPORT_GRACE_MILLIS);
+                long left;
+                while ((left = until - System.nanoTime()) > 0) {
+                    try {
+                        TimeUnit.NANOSECONDS.sleep(left);
+                    } catch (InterruptedException e) {
+                        // keep the grace period whole
+                    }
+                }
+                // The report is stuck, so the expiry never reached its own reap: nothing may outlive the halt.
+                endDescendantsQuietly();
+                Runtime.getRuntime().halt(TIMEOUT_EXIT_CODE);
+            }, "harness-class-watchdog-last-resort");
+            lastResort.setDaemon(true);
+            lastResort.start();
+            System.out.printf("[TIMEOUT] %s after %ds in %s — the run stops here; classes after it were not run%n",
+                    fqcn, timeoutSeconds, runningTest != null ? runningTest
+                            : "no test (class setup or teardown, or between tests)");
+            System.out.println("---- thread dump ----");
+            long dumpStarted = System.nanoTime();
+            StringBuilder classThreadTrace = dumpThreads(classThread);
+            System.out.printf("---- end of thread dump (%d ms) ----%n",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - dumpStarted));
+
+            if (outDir != null) {
+                ClassResult cr = new ClassResult(fqcn);
+                TestRecord r = new TestRecord(fqcn, "classTimeout");
+                r.status = Status.ERROR;
+                r.failureType = "timeout";
+                r.failureMessage = "class did not finish within " + timeoutSeconds + "s";
+                r.failureTrace = classThreadTrace.toString();
+                r.timeMs = TimeUnit.SECONDS.toMillis(timeoutSeconds);
+                cr.errors = 1;
+                cr.records.add(r);
+                writeXml(outDir, cr);
+            }
+            System.out.println("RESULT: FAIL");
+            System.out.flush();
+            System.err.flush();
+            reapDescendants();
+            System.out.flush();
+            Runtime.getRuntime().halt(TIMEOUT_EXIT_CODE);
+        }
+
+        /**
+         * Prints every thread, the class's own thread first, and returns the class thread's entry for the
+         * XML record. Each entry carries the lock the thread waits on and its owner, the monitors held at
+         * each frame and the locks held overall; {@link ThreadInfo#toString()} is not used because it cuts
+         * the frames at eight. Where the platform cannot report locks, the dump falls back to frames only.
+         */
+        private static StringBuilder dumpThreads(Thread classThread) {
+            ThreadInfo[] infos;
+            try {
+                ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+                infos = threads.dumpAllThreads(threads.isObjectMonitorUsageSupported(),
+                        threads.isSynchronizerUsageSupported());
+            } catch (RuntimeException | Error e) {
+                // an Error here must not skip the XML record and the orderly halt that follow the dump
+                System.out.println("(locks not available: " + e + ")");
+                return dumpStackTraces(classThread);
+            }
+            StringBuilder classThreadTrace = new StringBuilder();
+            for (ThreadInfo info : infos) {
+                if (info != null && info.getThreadId() == classThread.threadId()) {
+                    appendThread(classThreadTrace, info);
+                }
+            }
+            System.out.print(classThreadTrace);
+            for (ThreadInfo info : infos) {
+                if (info != null && info.getThreadId() != classThread.threadId()) {
+                    StringBuilder sb = new StringBuilder();
+                    appendThread(sb, info);
+                    System.out.print(sb);
+                }
+            }
+            return classThreadTrace;
+        }
+
+        private static StringBuilder dumpStackTraces(Thread classThread) {
+            Map<Thread, StackTraceElement[]> stacks = Thread.getAllStackTraces();
+            StringBuilder classThreadTrace = new StringBuilder();
+            appendThread(classThreadTrace, classThread, stacks.get(classThread));
+            System.out.print(classThreadTrace);
+            for (Map.Entry<Thread, StackTraceElement[]> e : stacks.entrySet()) {
+                if (e.getKey() != classThread) {
+                    StringBuilder sb = new StringBuilder();
+                    appendThread(sb, e.getKey(), e.getValue());
+                    System.out.print(sb);
+                }
+            }
+            return classThreadTrace;
+        }
+
+        private static void appendThread(StringBuilder sb, ThreadInfo info) {
+            sb.append('"').append(info.getThreadName()).append('"')
+                    .append(info.isDaemon() ? " daemon" : "")
+                    .append(' ').append(info.getThreadState());
+            LockInfo waitingOn = info.getLockInfo();
+            if (waitingOn != null) {
+                sb.append(" on ").append(waitingOn);
+                if (info.getLockOwnerName() != null) {
+                    sb.append(" owned by \"").append(info.getLockOwnerName()).append("\" (id ")
+                            .append(info.getLockOwnerId()).append(')');
+                }
+            }
+            sb.append('\n');
+            StackTraceElement[] frames = info.getStackTrace();
+            MonitorInfo[] monitors = info.getLockedMonitors();
+            for (int depth = 0; depth < frames.length; depth++) {
+                sb.append("\tat ").append(frames[depth]).append('\n');
+                for (MonitorInfo monitor : monitors) {
+                    if (monitor.getLockedStackDepth() == depth) {
+                        sb.append("\t- locked ").append(monitor).append('\n');
+                    }
+                }
+            }
+            for (LockInfo held : info.getLockedSynchronizers()) {
+                sb.append("\t- locked ").append(held).append('\n');
+            }
+            sb.append('\n');
+        }
+
+        private static void appendThread(StringBuilder sb, Thread t, StackTraceElement[] frames) {
+            sb.append('"').append(t.getName()).append('"')
+                    .append(t.isDaemon() ? " daemon" : "")
+                    .append(' ').append(t.getState()).append('\n');
+            if (frames != null) {
+                for (StackTraceElement frame : frames) {
+                    sb.append("\tat ").append(frame).append('\n');
+                }
+            }
+            sb.append('\n');
+        }
+
+        private static final class Watch {
+            final RecordingListener listener;
+            boolean done;
+
+            Watch(RecordingListener listener) {
+                this.listener = listener;
+            }
+        }
     }
 
     /** Loads a newline-delimited class list (ignoring blank lines and {@code #} comments). */
@@ -322,7 +700,7 @@ public final class HeadlessTestRunner {
         return out;
     }
 
-    private static ClassResult runOne(String fqcn) {
+    private static ClassResult runOne(String fqcn, RecordingListener listener) {
         ClassResult cr = new ClassResult(fqcn);
         Class<?> clazz;
         try {
@@ -340,7 +718,6 @@ public final class HeadlessTestRunner {
         }
 
         JUnitCore core = new JUnitCore();
-        RecordingListener listener = new RecordingListener();
         core.addListener(listener);
         try {
             core.run(clazz);

@@ -39,6 +39,8 @@ import net.vheerden.archi.mcp.response.ResponseFormatter;
 import org.eclipse.gef.commands.Command;
 import net.vheerden.archi.mcp.response.dto.BendpointDto;
 import net.vheerden.archi.mcp.response.dto.ElementDto;
+import net.vheerden.archi.mcp.response.dto.EmbeddedViewDto;
+import net.vheerden.archi.mcp.response.dto.NonArchimateConnectionDto;
 import net.vheerden.archi.mcp.response.dto.ModelInfoDto;
 import net.vheerden.archi.mcp.response.dto.RelationshipDto;
 import net.vheerden.archi.mcp.response.dto.ViewConnectionDto;
@@ -1238,7 +1240,7 @@ public class ViewHandlerTest {
         double saving = 1.0 - (minimal / (double) standard);
         assertTrue("narrowing the preset must still save something (minimal " + minimal
                 + ", standard " + standard + ")", saving > 0);
-        assertTrue("five of the seven arrays do not follow the preset, so the saving on a view "
+        assertTrue("only two of the arrays follow the preset, so the saving on a view "
                 + "carrying visual rows must be a minority of the payload -- it was " + saving
                 + ", which is the majority saving the two-term estimate used to advertise",
                 saving < 0.30);
@@ -2303,7 +2305,7 @@ public class ViewHandlerTest {
         }
     }
 
-    // ---- The reach of the 'fields' preset over the response's seven arrays -----------------------
+    // ---- The reach of the 'fields' preset over the response's arrays -----------------------------
 
     /**
      * The clause that carries the disclosure, held as one constant so the pin and its two mutation
@@ -2316,9 +2318,19 @@ public class ViewHandlerTest {
     private static final String PRESET_REACH_CLAUSE =
             "the preset reaches the element and relationship rows only";
 
-    /** The five arrays the preset does not reach, in the order the response emits them. */
-    private static final List<String> VISUAL_ARRAYS =
-            List.of("visualMetadata", "connections", "groups", "notes", "images");
+    /**
+     * The arrays the preset does not reach, in the order the response emits them: every list the
+     * response record carries except the element and relationship rows.
+     *
+     * <p>Read off the record rather than written out, so an array added to the response joins every
+     * reach pin below without anyone remembering to list it here.</p>
+     */
+    private static final List<String> VISUAL_ARRAYS = java.util.Arrays
+            .stream(ViewContentsDto.class.getRecordComponents())
+            .filter(c -> c.getType() == List.class)
+            .map(java.lang.reflect.RecordComponent::getName)
+            .filter(name -> !name.equals("elements") && !name.equals("relationships"))
+            .toList();
 
     /**
      * The sentence both tool-description pins anchor on before asserting anything.
@@ -2348,10 +2360,10 @@ public class ViewHandlerTest {
                 + "delete them. It read: " + fieldsDescription,
                 fieldsDescription.contains("Field verbosity preset"));
 
-        assertTrue("The 'fields' description does not say which of the response's seven arrays the "
+        assertTrue("The 'fields' description does not say which of the response's arrays the "
                 + "preset reaches. A caller sizing a large view reads this string to decide, and "
                 + "'minimal returns only id and name' reads as covering the whole response when it "
-                + "governs two arrays of seven. Expected: \"" + PRESET_REACH_CLAUSE + "\". It read: "
+                + "governs two of its arrays. Expected: \"" + PRESET_REACH_CLAUSE + "\". It read: "
                 + fieldsDescription,
                 fieldsDescription.toLowerCase(java.util.Locale.ROOT).contains(PRESET_REACH_CLAUSE));
 
@@ -2428,23 +2440,23 @@ public class ViewHandlerTest {
      * The mechanism, not the sentence.
      *
      * <p>A phrase pin goes red when someone deletes the disclosure. It stays green when someone
-     * makes the disclosure false — routes one of the five visual arrays through the preset, and the
+     * makes the disclosure false — routes one of the visual arrays through the preset, and the
      * published sentence quietly stops describing the code. This drives the real
-     * {@link FieldSelector} at two presets and asserts the boundary itself: the five visual arrays
+     * {@link FieldSelector} at two presets and asserts the boundary itself: the visual arrays
      * come back identical, and the two preset-aware arrays do not.</p>
      *
-     * <p>Every one of the seven arrays is populated in the fixture. An empty array is identical to
-     * itself at every preset, so a fixture that left any of the five empty would assert the
+     * <p>Every array is populated in the fixture. An empty array is identical to
+     * itself at every preset, so a fixture that left any visual array empty would assert the
      * boundary vacuously for that array.</p>
      *
      * <p>All three presets are visited, not the two that bracket the interesting case. The
-     * published sentence says the five arrays come back in full at <em>every</em> preset, and a
+     * published sentence says the visual arrays come back in full at <em>every</em> preset, and a
      * change that enriched them at {@code full} alone would leave {@code minimal} and
      * {@code standard} agreeing with each other while the sentence stopped being true.</p>
      */
     @Test
-    public void shouldReturnTheFiveVisualArraysUnchanged_acrossEveryPreset() {
-        ViewContentsDto dto = sevenArrayViewContents();
+    public void shouldReturnTheVisualArraysUnchanged_acrossEveryPreset() {
+        ViewContentsDto dto = everyArrayViewContents();
 
         Map<String, Object> minimal = viewContentsAt(dto, FieldSelector.FieldPreset.MINIMAL);
         Map<String, Object> standard = viewContentsAt(dto, FieldSelector.FieldPreset.STANDARD);
@@ -2472,13 +2484,13 @@ public class ViewHandlerTest {
     }
 
     /**
-     * The arm the populated fixture cannot reach: three of the five arrays arrive <em>null</em>, not
-     * empty.
+     * The arm the populated fixture cannot reach: five of the visual arrays arrive <em>null</em>,
+     * not empty.
      *
-     * <p>{@code ArchiModelAccessorImpl.getViewContents} maps each of {@code groups}, {@code notes}
-     * and {@code images} through {@code isEmpty() ? null : …}, so a view carrying none of that
-     * object hands the selector a null — and the selector's outer {@code if (dto.X() != null)} guard
-     * then omits the key entirely. That is the shape of most real views: the live gate for this
+     * <p>{@code ViewContentsCollector.read} maps each of {@code groups}, {@code notes},
+     * {@code images}, {@code viewReferences} and {@code nonArchimateConnections} through {@code isEmpty() ? null : …}, so a view
+     * carrying none of that object hands the selector a null — and the selector's outer
+     * {@code if (dto.X() != null)} guard then omits the key entirely. That is the shape of most real views: the live gate for this
      * change measured a 47-element view whose {@code notes} and {@code images} came back absent.</p>
      *
      * <p>The published sentence has to hold there too. Pinned as <em>absent at every preset</em>
@@ -2508,7 +2520,7 @@ public class ViewHandlerTest {
         Map<String, Object> standard = viewContentsAt(dto, FieldSelector.FieldPreset.STANDARD);
         Map<String, Object> full = viewContentsAt(dto, FieldSelector.FieldPreset.FULL);
 
-        for (String array : List.of("groups", "notes", "images")) {
+        for (String array : List.of("groups", "notes", "images", "viewReferences", "nonArchimateConnections")) {
             assertFalse("An absent " + array + " array must stay absent at minimal. If a preset can "
                     + "add or drop the key, the published sentence about what every preset returns "
                     + "is false on the view shape most callers actually have.",
@@ -2544,7 +2556,7 @@ public class ViewHandlerTest {
      *
      * <p>The tool description coordinated the two parameters in one sentence — "use 'fields' to
      * control response verbosity and 'exclude' to omit specific fields" — which reads as two levers
-     * on one axis. They are not: one narrows two arrays of seven, the other drops five. The reach
+     * on one axis. They are not: one narrows two of the arrays, the other drops the rest. The reach
      * clause on the {@code fields} property is what a caller reads when picking a preset; this is
      * what they read when deciding whether a preset is the right instrument at all.</p>
      *
@@ -2564,7 +2576,7 @@ public class ViewHandlerTest {
 
         assertTrue("The description still presents 'fields' and 'exclude' as interchangeable levers "
                 + "on one axis. A caller sizing a large view picks 'fields' on that reading and "
-                + "narrows two arrays of seven. The description has to say that the preset reaches "
+                + "narrows two of its arrays. The description has to say that the preset reaches "
                 + "the element and relationship rows only.",
                 description.contains("'fields' narrows the element")
                         && description.contains("relationship rows only"));
@@ -2640,7 +2652,7 @@ public class ViewHandlerTest {
             }
         }
 
-        assertTrue("The json row of the served format table does not name all seven arrays the "
+        assertTrue("The json row of the served format table does not name every array the "
                 + "format returns. An agent choosing a format off this page is told the default "
                 + "returns less than it does, and the omitted names are the ones 'exclude' takes. "
                 + "Missing: " + missing + ". The row read: " + jsonRow,
@@ -2652,10 +2664,124 @@ public class ViewHandlerTest {
                 jsonRow.contains("field selection needed"));
     }
 
+    /**
+     * Every array the response carries is published, excludable and priced: one property over the
+     * response record, so an array added to it is held to all four surfaces without anyone
+     * remembering to list it.
+     *
+     * <p>The surfaces are where a caller learns an array exists or decides what it costs: the
+     * {@code fields} description and the tool description (both say which arrays the preset leaves
+     * whole), the {@code json} row of the served format table, the names {@code exclude} accepts,
+     * and the dry-run estimate. Each array is priced alone, on a view holding one row of it and
+     * nothing else, so a term the estimator forgot cannot hide behind another array's charge.</p>
+     *
+     * <p>The row priced is the populated fixture's. An array the fixture does not populate fails
+     * here by name, rather than passing on a view that holds none of it.</p>
+     */
+    @Test
+    public void shouldPublishExcludeAndPriceEveryArray_theResponseCarries() throws Exception {
+        new ViewHandler(new StubAccessor(true), formatter, registry, null).registerTools();
+        // Each surface narrowed to the sentence that enumerates the arrays: the short names
+        // (notes, groups, images) occur all over the served text, so a whole-surface search would
+        // stay green with a name gone from the one sentence that says the preset leaves it whole.
+        String fieldsDescription = enumeratingSentence(
+                propertyDescriptionOf("get-view-contents", "fields"), "returned in full at every preset");
+        String description = enumeratingSentence(
+                findToolSpec("get-view-contents").tool().description(), "come back whole at every");
+        String integrationGuide = enumeratingSentence(readRepoFile("docs/mcp-integration.md"),
+                "go in whole at every preset");
+        String jsonRow = tableRowContaining(sectionOf(readViewPatternsPage(),
+                "Which `get-view-contents` Format to Use"), "`json` (default)");
+        ViewContentsDto populated = everyArrayViewContents();
+
+        assertTrue("the property must have arrays to range over", VISUAL_ARRAYS.size() >= 6);
+        for (String array : VISUAL_ARRAYS) {
+            assertTrue("The 'fields' description does not name " + array + " among the arrays the "
+                    + "preset leaves whole. It read: " + fieldsDescription,
+                    fieldsDescription.contains(array));
+            assertTrue("The tool description does not name " + array + " among the arrays that "
+                    + "come back whole at every preset.", description.contains(array));
+            assertTrue("The integration guide's reach paragraph does not name " + array + " among the "
+                    + "arrays that go in whole at every preset. It read: " + integrationGuide,
+                    integrationGuide.contains("`" + array + "`"));
+            assertTrue("The json row of the served format table does not name " + array
+                    + ". The row read: " + jsonRow, jsonRow.contains(array));
+            assertTrue(array + " is not a name 'exclude' accepts, so a caller cannot drop it.",
+                    FieldSelector.VALID_EXCLUDE_FIELDS.contains(array));
+
+            Object row = ViewContentsDto.class.getMethod(array).invoke(populated);
+            assertNotNull("The populated fixture holds no " + array + " row, so this guard cannot "
+                    + "price it. Add one to everyArrayViewContents().", row);
+            registry = new CommandRegistry();
+            new ViewHandler(new FixedViewContentsAccessor(holdingOnly(array, (List<?>) row)),
+                    formatter, registry, null).registerTools();
+            Map<String, Object> kept = new HashMap<>();
+            kept.put("viewId", "view-1");
+            Map<String, Object> dropped = new HashMap<>(kept);
+            dropped.put("exclude", List.of(array));
+            int with = dryRunTokens("get-view-contents", kept, "standard");
+            int without = dryRunTokens("get-view-contents", dropped, "standard");
+            assertTrue("The dry-run estimate does not charge " + array + ": " + with + " tokens "
+                    + "with its row, " + without + " without it.", with > without);
+        }
+    }
+
+    /** The sentence of {@code text} that ends at {@code marker}, from the full stop before it. */
+    private static String enumeratingSentence(String text, String marker) {
+        int at = text.indexOf(marker);
+        assertTrue("The sentence enumerating the arrays has moved: '" + marker + "' is gone. Re-point "
+                + "this guard, do not delete it.", at >= 0);
+        int start = text.lastIndexOf(". ", at);
+        return text.substring(start < 0 ? 0 : start + 2, at + marker.length());
+    }
+
+    private static String readRepoFile(String repoPath) {
+        for (Path path : new Path[] {Paths.get(repoPath), Paths.get("..", repoPath)}) {
+            if (Files.isRegularFile(path)) {
+                try {
+                    return new String(Files.readAllBytes(path), StandardCharsets.UTF_8);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }
+        }
+        throw new AssertionError(repoPath + " resolved from neither the working directory nor its "
+                + "parent (cwd " + Paths.get("").toAbsolutePath() + ")");
+    }
+
+    /** A view holding the given rows in {@code array} and every other list empty. */
+    private static ViewContentsDto holdingOnly(String array, List<?> rows) throws Exception {
+        java.lang.reflect.RecordComponent[] components = ViewContentsDto.class.getRecordComponents();
+        Class<?>[] types = new Class<?>[components.length];
+        Object[] values = new Object[components.length];
+        for (int i = 0; i < components.length; i++) {
+            types[i] = components[i].getType();
+            String name = components[i].getName();
+            values[i] = types[i] == List.class ? (name.equals(array) ? rows : List.of())
+                    : name.equals("viewId") ? "view-1" : name;
+        }
+        return ViewContentsDto.class.getDeclaredConstructor(types).newInstance(values);
+    }
+
+    /** Serves one fixed view's contents. */
+    private static class FixedViewContentsAccessor extends StubAccessor {
+        private final ViewContentsDto contents;
+
+        FixedViewContentsAccessor(ViewContentsDto contents) {
+            super(true);
+            this.contents = contents;
+        }
+
+        @Override
+        public Optional<ViewContentsDto> getViewContents(String viewId) {
+            return Optional.of(contents);
+        }
+    }
+
     // ---- harness for the reach pins ------------------------------------------------------------
 
-    /** A view carrying all seven arrays, each non-empty, with rows the preset can visibly narrow. */
-    private static ViewContentsDto sevenArrayViewContents() {
+    /** A view carrying every array, each non-empty, with rows the preset can visibly narrow. */
+    private static ViewContentsDto everyArrayViewContents() {
         List<ElementDto> elements = List.of(
                 ElementDto.standard("elem-1", "Customer Portal", "ApplicationComponent",
                         null, "Application", "Main web app",
@@ -2678,7 +2804,13 @@ public class ViewHandlerTest {
                         List.of("vo-1"))),
                 List.of(new ViewNoteDto("note-1", "Reviewed", 460, 20, 200, 80, null)),
                 List.of(new DiagramImageDto("img-1", "images/icon.png", 700, 20, 180, 120,
-                        null, null, null)));
+                        null, null, null)),
+                List.of(new EmbeddedViewDto("ref-1", "view-2", 900, 20, 185, 80, null, null, null,
+                        null, null, null, null, null, null, null, null, null, null, null, null,
+                        null, null, null, null, null)),
+                List.of(new NonArchimateConnectionDto("plain-1", "note-1", "ref-1", "see", null, null,
+                        null, 1, null, null, null, null, null, null, null, null, null, null, null, "fill",
+                        null, null)));
     }
 
     /** Description plus every input-schema property description — all of what a client is served. */

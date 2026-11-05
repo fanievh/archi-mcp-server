@@ -1,3 +1,15 @@
+---
+relationships:
+  - permitted Triggering BusinessProcess BusinessProcess
+  - permitted Flow BusinessProcess BusinessProcess
+  - permitted Assignment BusinessRole BusinessProcess
+  - permitted Assignment BusinessActor BusinessProcess
+  - permitted Composition BusinessService BusinessService
+  - permitted Composition ApplicationComponent ApplicationComponent
+  - permitted Assignment ApplicationComponent ApplicationService
+  - forbidden Composition ApplicationComponent ApplicationService
+---
+
 # Recipe Family — Behaviour & Process Flow
 
 Topology archetype: **swimlanes** (process cooperation) or **a journey band over support layers** (service design). Apply the invariant build sequence from the index; only the deltas below change.

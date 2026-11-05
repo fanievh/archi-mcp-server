@@ -4,6 +4,7 @@
 
 Follow this sequence when exploring any ArchiMate model:
 
+0. **`get-models` (when more than one model may be open)** — Lists the open models with their ids. With two or more open, pass `modelId` on every call: a change that names no model is refused with `MODEL_AMBIGUOUS`, and a read follows whichever model is active in Archi.
 1. **`get-model-info`** — Always call first. Returns model name, element/relationship/view counts, type distributions, layer distributions, `specializationCount`, and model-size-aware `nextSteps` suggestions.
 2. **`list-specializations` (conditional)** — If `specializationCount > 0`, call this next to learn the model's specialization vocabulary before searching or creating elements. The catalog changes how subsequent searches and creations should be framed.
 3. **Targeted search** — Use `search-elements` with text queries and type/layer/specialization filters to find specific elements.
@@ -83,6 +84,9 @@ The `get-model-info` response provides planning data:
 | Browse specialization catalog | `list-specializations` | Returns all specializations with `(name, conceptType, layer, usageCount)` |
 | Find elements by specialization | `search-elements` with `specialization` filter | Filtered by the IS-A vocabulary, not just type |
 | Audit a specialization before delete/rename | `get-specialization-usage` | Returns elements + relationships referencing the specialization |
+| See which models are open | `get-models` | Ids to pass as `modelId`, and which model a call without one acts on |
+| Fix an element or relationship created with the wrong type | `change-element-type` / `change-relationship-type` | Keeps the id, relationships, view boxes and connections; do not delete and recreate |
+| Fold duplicate elements into one | `merge-elements` | Re-points relationships and view boxes to the survivor, keeping their ids |
 
 ## Dynamic nextSteps
 

@@ -660,15 +660,20 @@ public class AnnotationCorridorDisclosureTest {
         // approval-blind: it answers "is this write being held?" and not "who is holding it", so a
         // call awaiting a human's decision looked identical to an immediate one. Counting the
         // composed resolution rather than either gate on its own is what keeps a future edit from
-        // dropping one of them and leaving the count intact.
-        assertEquals("and every one of them must ask which ARM it is on -- both gates, not just "
-                        + "the deferral one", 3,
-                countOf(facade, "DispatchArm.of(mutationDispatcher.isApprovalRequired(sessionId), "
-                        + "isQueuedCall(sessionId))"));
-        assertEquals("bulk reachability is why the deferral gate stays isQueuedCall here rather "
-                        + "than the dispatcher's batch-only reading: a bulk call defers without "
-                        + "the session ever entering batch mode", 3,
-                countOf(facade, "isQueuedCall(sessionId)"));
+        // dropping one of them and leaving the count intact. The count is taken at each corridor
+        // call, not across the facade: other disclosures resolve their arm the same way, and a
+        // facade-wide count would let one of them stand in for a corridor call that lost a gate.
+        //
+        // Bulk reachability is why the deferral gate stays isQueuedCall here rather than the
+        // dispatcher's batch-only reading: a bulk call defers without the session ever entering
+        // batch mode.
+        String composedArm = ", DispatchArm.of(mutationDispatcher.isApprovalRequired(sessionId), "
+                + "isQueuedCall(sessionId))";
+        for (String kind : new String[]{"NOTE", "VIEW_REFERENCE", "IMAGE"}) {
+            assertEquals("the " + kind + " corridor call must ask which ARM it is on -- both gates, "
+                            + "not just the deferral one", 1,
+                    countOf(facade, "AnnotationCorridorWarning.Kind." + kind + composedArm));
+        }
     }
 
     private static int countOf(String haystack, String needle) {

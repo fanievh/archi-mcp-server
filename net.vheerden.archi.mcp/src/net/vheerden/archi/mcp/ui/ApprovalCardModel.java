@@ -45,6 +45,9 @@ import net.vheerden.archi.mcp.response.dto.ProposalDto;
  * @param rows           expanded per-change rows with destructive rows hoisted to the top
  * @param rawDetailsJson pretty-printed raw params for the {@code Technical details} auditor disclosure
  * @param copyJson       full pretty-printed proposal payload for the per-card Copy JSON action
+ * @param targetModelText the sentence naming the model approving will write to, or {@code null} when
+ *                       the proposal carries no model — the human approving may not be the agent's
+ *                       operator, and with several models open the card is the only place that says
  */
 public record ApprovalCardModel(
         String sessionId,
@@ -56,7 +59,8 @@ public record ApprovalCardModel(
         String intentText,
         List<ChangeRow> rows,
         String rawDetailsJson,
-        String copyJson) {
+        String copyJson,
+        String targetModelText) {
 
     // NON_NULL so the copied/raw payloads omit null fields without depending on per-DTO
     // annotations — matches the project-wide JSON convention (camelCase + null omission).
@@ -111,6 +115,7 @@ public record ApprovalCardModel(
         VIEW_CONNECTION("view connection", false),
         FOLDER("folder", false),
         OTHER("change", false),
+        MERGE("merge", true),
         REMOVAL("removal", true),
         CLEAR("clear", true),
         DELETE("delete", true);
@@ -155,13 +160,24 @@ public record ApprovalCardModel(
         if (tool.startsWith("add-")) {
             return Category.VIEW_EDIT;
         }
+        if (tool.equals("merge-elements")) {
+            return Category.MERGE;
+        }
+        // Not destructive: the element or relationship is replaced by one of the new type that keeps
+        // its id and everything that referred to it, so nothing the modeller made is deleted.
+        if (tool.equals("change-element-type") || tool.equals("change-relationship-type")) {
+            return Category.UPDATE;
+        }
         if (tool.startsWith("update-") || tool.equals("move-to-folder")) {
             return Category.UPDATE;
         }
         return Category.OTHER;
     }
 
-    /** True if applying {@code tool} destroys or removes something (delete-*, remove-from-view, clear-view). */
+    /**
+     * True if applying {@code tool} destroys or removes something (delete-*, remove-from-view,
+     * clear-view, merge-elements — a merge deletes the duplicates it folds in).
+     */
     static boolean isDestructiveTool(String tool) {
         return categoryOf(tool).destructive;
     }
@@ -196,6 +212,12 @@ public record ApprovalCardModel(
         }
         if (tool.equals("update-view-connection")) {
             return "Update connection";
+        }
+        if (tool.equals("merge-elements")) {
+            return "Merge";
+        }
+        if (tool.equals("change-element-type") || tool.equals("change-relationship-type")) {
+            return "Change type";
         }
         if (tool.startsWith("update-") || tool.equals("move-to-folder")) {
             return "Update";
@@ -361,7 +383,17 @@ public record ApprovalCardModel(
         // the trust slot (the view keeps the slot zero-height when this is null).
         String intentText = deriveIntent(dto.intent(), dto.tool());
         return new ApprovalCardModel(view.sessionId(), dto.proposalId(), dto.tool(),
-                dto.createdAt(), rollup, hasDestructive, intentText, rows, raw, copy);
+                dto.createdAt(), rollup, hasDestructive, intentText, rows, raw, copy,
+                targetModelText(dto.modelName(), dto.modelId()));
+    }
+
+    /** The card's "where this lands" sentence, or null when the proposal names no model. */
+    static String targetModelText(String modelName, String modelId) {
+        if (modelId == null) {
+            return null;
+        }
+        String name = modelName != null && !modelName.isBlank() ? modelName : modelId;
+        return "Approving writes to model \u201C" + name + "\u201D.";
     }
 
     /**

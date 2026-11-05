@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.Locale;
+
 /**
  * The entry-guard half of the spacing family's termination taxonomy: the reasons a spacing tool
  * declines before it enters its control loop, and the machine code each maps to.
@@ -94,6 +96,69 @@ final class SpacingEntryGuardTermination {
     }
 
     /**
+     * The termination code for a view whose containers are ArchiMate elements that hold children
+     * rather than native groups or {@code Grouping} elements — the kind no spacing tool measures.
+     *
+     * <p>A fixed code inside the published {@code structural_no_change_<reason>} branch, for the
+     * reason {@link #CONTAINERS_NOT_POSITIONED_BY_THIS_TOOL} is one: the sentence is long, and a
+     * slug of it would change shape with every edit to its wording.</p>
+     */
+    static final String CONTAINERS_NOT_SPACED_BY_THIS_TOOL =
+            "structural_no_change_containers_not_spaced_by_this_tool";
+
+    /**
+     * The stable substring {@link #mapEntryGuardToTerminationReason} matches on, present once in
+     * every sentence {@link #elementContainersNotSpacedByThisTool} builds.
+     */
+    static final String NOT_SPACED_MARKER = "measured none of the element containers";
+
+    /**
+     * The no-change reason a spacing step owes a view that is short of grouping containers for that
+     * step while it holds ArchiMate elements that hold children.
+     *
+     * <p>What it replaces was false about such a view: "view has no groups … on flat views", with
+     * a spacing of {@code 0} beside it, said of a canvas carrying four {@code BusinessRole}
+     * swimlanes with process steps inside them. The spacing tools act on native groups and
+     * {@code Grouping} elements only, by contract, and that does not change here. What changes is
+     * that the reason says so: how many of each kind the view holds, that this tool measured none
+     * of the element containers, where they are listed, and which tool spaces inside one.</p>
+     *
+     * <p>The counts are what the view holds, never "none" when there is one: a step that needs two
+     * grouping containers can be short on a view that has one, and saying otherwise is the class of
+     * confident falsehood this replaces. Free of "no groups", "flat view" and "already meets / at /
+     * exceeds", and of {@link #NOT_POSITIONED_MARKER}, each of which maps to a different code.</p>
+     *
+     * @param viewId            the view being declined
+     * @param groupingContainers how many native groups and {@code Grouping} elements the view holds,
+     *                          counted the way this step counts them
+     * @param populatedOnly     whether the step counts only the ones holding children, which the
+     *                          sentence then says so the count is not misread
+     * @param elementContainers how many ArchiMate elements on the canvas hold children
+     * @param stepClause        what this tool's step does, completing "… and counts only …"
+     */
+    static String elementContainersNotSpacedByThisTool(String viewId, int groupingContainers,
+            boolean populatedOnly, int elementContainers, String stepClause) {
+        String kind = (populatedOnly ? "populated " : "") + "native group"
+                + (groupingContainers == 1 ? "" : "s") + " or Grouping element"
+                + (groupingContainers == 1 ? "" : "s");
+        String groupingCount = groupingContainers == 0
+                ? "no " + (populatedOnly ? "populated " : "") + "native group or Grouping element"
+                : groupingContainers + " " + kind;
+        return "View " + viewId + " holds " + elementContainers + " element container"
+                + (elementContainers == 1 ? "" : "s")
+                + " (ArchiMate elements that hold children) and " + groupingCount + ". "
+                + stepClause + ", and counts only native groups and Grouping elements as "
+                + "containers, so it " + NOT_SPACED_MARKER + " and has nothing to space here. "
+                + "They are listed in skippedContainers; to space the elements inside one of them, "
+                + "call layout-within-group on that container.";
+    }
+
+    /** Whether {@code reason} is (or composes) the sentence {@link #elementContainersNotSpacedByThisTool} builds. */
+    static boolean isElementContainersReason(String reason) {
+        return reason != null && reason.contains(NOT_SPACED_MARKER);
+    }
+
+    /**
      * Maps a decision record's {@code noChangeReason} to the published termination taxonomy.
      *
      * <p>Inputs:
@@ -121,13 +186,19 @@ final class SpacingEntryGuardTermination {
         if (noChangeReason != null && noChangeReason.contains(NOT_POSITIONED_MARKER)) {
             return CONTAINERS_NOT_POSITIONED_BY_THIS_TOOL;
         }
+        // Second, for the same two reasons: a structural fact about the view reads the same on a
+        // dry run, and outranks a met heuristic the composer joins to it. A view never carries both
+        // markers — this sentence requires that nothing is drawn inside a host.
+        if (isElementContainersReason(noChangeReason)) {
+            return CONTAINERS_NOT_SPACED_BY_THIS_TOOL;
+        }
         if (dryRun) {
             return "dry_run_recommendation_not_applied";
         }
         if (noChangeReason == null) {
             return "structural_no_change_unknown";
         }
-        String lower = noChangeReason.toLowerCase();
+        String lower = noChangeReason.toLowerCase(Locale.ROOT);
         if (lower.contains("already meets") || lower.contains("already at")
                 || lower.contains("already exceeds")) {
             return SpacingControlLoop.REASON_HEURISTIC_ALREADY_MET;
@@ -135,7 +206,7 @@ final class SpacingEntryGuardTermination {
         return "structural_no_change_"
                 + noChangeReason
                         .replaceAll("[^A-Za-z0-9]+", "_")
-                        .toLowerCase()
+                        .toLowerCase(Locale.ROOT)
                         .replaceAll("^_+|_+$", "");
     }
 }

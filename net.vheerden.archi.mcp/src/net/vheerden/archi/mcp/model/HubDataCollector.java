@@ -51,12 +51,20 @@ final class HubDataCollector {
      * Collects hub detection data by traversing view objects and counting connections.
      * Also tracks the maximum connection label width per view object for label-aware sizing.
      *
+     * <p>The width is that of the label Archi shows ({@link StylingHelper#resolveConnectionLabelText}, sized
+     * by {@link LabelWidthEstimator#estimateWidth}, the reader the layout engine reserves edge labels with): a
+     * hidden label, and a blank or whitespace-only one, reserve nothing, and a label expression reserves from
+     * its raw text. A connection that shows no label still counts toward the connection count.</p>
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside batch
+     *                         mode; see {@link LabelVisibilityReadback#isShown}
      * @return total connection count on the view
      */
     static int collect(IDiagramModelContainer container,
                        Map<String, Integer> connectionCounts,
                        Map<String, IDiagramModelArchimateObject> viewObjectMap,
-                       Map<String, Integer> maxLabelWidths) {
+                       Map<String, Integer> maxLabelWidths,
+                       Map<String, Boolean> queuedVisibility) {
         int totalConnections = 0;
         for (IDiagramModelObject child : container.getChildren()) {
             if (child instanceof IDiagramModelArchimateObject archimateObject) {
@@ -66,18 +74,17 @@ final class HubDataCollector {
 
                     // Count connections where this object is source
                     for (IDiagramModelConnection conn : archimateObject.getSourceConnections()) {
-                        if (conn instanceof IDiagramModelArchimateConnection archConn) {
+                        if (conn instanceof IDiagramModelArchimateConnection) {
                             String sourceId = conn.getSource().getId();
                             String targetId = conn.getTarget().getId();
                             connectionCounts.merge(sourceId, 1, Integer::sum);
                             connectionCounts.merge(targetId, 1, Integer::sum);
                             totalConnections++;
 
-                            // Track max label width per element (both ends)
-                            String relName = archConn.getArchimateRelationship() != null
-                                    ? archConn.getArchimateRelationship().getName() : null;
-                            if (relName != null && !relName.isEmpty()) {
-                                int labelWidth = (int) Math.ceil(relName.length() * 8.0 + 10.0);
+                            // Track max label width per element (both ends), from the label Archi shows
+                            int labelWidth = LabelWidthEstimator.estimateWidth(
+                                    StylingHelper.resolveConnectionLabelText(conn, queuedVisibility));
+                            if (labelWidth > 0) {
                                 maxLabelWidths.merge(sourceId, labelWidth, Math::max);
                                 maxLabelWidths.merge(targetId, labelWidth, Math::max);
                             }
@@ -89,7 +96,7 @@ final class HubDataCollector {
             // Recurse into containers (groups and nested elements)
             if (child instanceof IDiagramModelContainer nestedContainer) {
                 totalConnections += collect(nestedContainer, connectionCounts,
-                        viewObjectMap, maxLabelWidths);
+                        viewObjectMap, maxLabelWidths, queuedVisibility);
             }
         }
         return totalConnections;
@@ -121,7 +128,7 @@ final class HubDataCollector {
             IDiagramModelContainer view) {
         Map<String, Integer> connectionCounts = new HashMap<>();
         Map<String, IDiagramModelArchimateObject> viewObjectMap = new HashMap<>();
-        collect(view, connectionCounts, viewObjectMap, new HashMap<>());
+        collect(view, connectionCounts, viewObjectMap, new HashMap<>(), null);
 
         List<AssessLayoutResultDto.HubPreconditionDto> unmet = new ArrayList<>();
         for (Map.Entry<String, Integer> entry : connectionCounts.entrySet()) {

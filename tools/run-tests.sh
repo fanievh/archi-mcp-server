@@ -2,7 +2,7 @@
 #
 # Headless build + test harness for arch-mcp-server.
 #
-# ONE command that, on a machine with a local Archi 5.7 install:
+# ONE command that, on a machine with a local Archi 5.8+ install:
 #   1. compiles BOTH projects FROM SOURCE with javac against the assembled Archi/Eclipse/lib
 #      classpath (proven cleaner than the Eclipse PDE build, which error-stubs EMF refs),
 #   2. auto-discovers the test class list by scanning the tests source tree (no hard-coded list —
@@ -11,7 +11,7 @@
 #      (the silent-stale guard AllPluginTestsRunner lacked) and emits surefire JUnit XML,
 #   4. exits non-zero if any (non-quarantined) test fails or any class contributes zero tests.
 #
-# Generalizes the proven run-pins.sh classpath assembly. Designed so m0-2 (GitHub Actions) can call
+# Generalizes the proven run-pins.sh classpath assembly. Designed so CI (.github/workflows/ci.yml) can call
 # this identical script on Linux — all locations are env vars, no macOS-only assumptions in the
 # default code path (no -XstartOnFirstThread unless --swt is requested).
 #
@@ -43,6 +43,11 @@
 #   RESULTS_DIR   JUnit XML output dir  (default <repo>/build/test-results)  — surefire convention
 #                 Cleared of TEST-*.xml at the start of every run so the dir describes exactly one
 #                 invocation; a census over it cannot mistake a leftover file for current coverage.
+#                 A relative BUILD_DIR or RESULTS_DIR is resolved against the directory the script
+#                 is run from.
+#   HARNESS_CLASS_TIMEOUT_SECONDS
+#                 per-class deadline (default: the runner's, 180 s; 0 disables). A class that
+#                 overruns stops the run with a thread dump and exit code 3 instead of hanging it.
 #
 set -uo pipefail
 
@@ -57,6 +62,13 @@ ECLIPSE_HOME="${ECLIPSE_HOME:-/Applications/Eclipse.app/Contents/Eclipse}"
 M2_REPO="${M2_REPO:-$HOME/.m2/repository}"
 BUILD_DIR="${BUILD_DIR:-$REPO/build/test-harness}"
 RESULTS_DIR="${RESULTS_DIR:-$REPO/build/test-results}"
+# Resolve a relative path against the caller's directory now, before any step changes directory:
+# a step that cd's and then writes to a relative path would write somewhere else. Nothing is
+# created here; the directories may not exist yet.
+case "$BUILD_DIR" in /*) ;; *) BUILD_DIR="$PWD/$BUILD_DIR" ;; esac
+case "$RESULTS_DIR" in /*) ;; *) RESULTS_DIR="$PWD/$RESULTS_DIR" ;; esac
+# Empty = the runner's own default deadline. Passed to both passes.
+CLASS_TIMEOUT="${HARNESS_CLASS_TIMEOUT_SECONDS:-}"
 
 EXCLUDED_MANIFEST="$SCRIPT_DIR/osgi-excluded-tests.txt"
 KNOWN_FAILING="$SCRIPT_DIR/known-failing-tests.txt"
@@ -86,7 +98,7 @@ fi
 # ---- validate required paths (each failure names WHICH path is missing) ----
 ARCHI_PLUGINS="$ARCHI_HOME/plugins"
 ECLIPSE_PLUGINS="$ECLIPSE_HOME/plugins"
-[ -d "$ARCHI_PLUGINS" ]   || die "ARCHI_HOME/plugins not found: $ARCHI_PLUGINS (set ARCHI_HOME to your Archi 5.7 Eclipse dir)"
+[ -d "$ARCHI_PLUGINS" ]   || die "ARCHI_HOME/plugins not found: $ARCHI_PLUGINS (set ARCHI_HOME to your Archi 5.8+ Eclipse dir)"
 [ -d "$ECLIPSE_PLUGINS" ] || die "ECLIPSE_HOME/plugins not found: $ECLIPSE_PLUGINS (needed for JUnit + Hamcrest; set ECLIPSE_HOME)"
 [ -d "$M2_REPO" ]         || die "M2_REPO not found: $M2_REPO (needed for the Mockito stack; set M2_REPO)"
 [ -d "$PROD/src" ]        || die "production source not found: $PROD/src"
@@ -185,7 +197,12 @@ javac "${JAVAC_FLAGS[@]}" -cp "$COMPILE_CP" -d "$OUT_PROD" "@$BUILD_DIR/prod-src
 # null, not an exploded-dir file listing (ResourceHandler.loadResourceFile("") must be null). The
 # COMPILE classpaths can stay exploded; only the runtime needs jar semantics.
 PROD_JAR="$BUILD_DIR/prod.jar"
+# The run loads this jar, not the exploded classes the tests compile against. Remove the previous
+# one first and require a new one after, so the run can only load the jar packaged from this
+# compile, never one an earlier run left behind.
+rm -f "$PROD_JAR"
 ( cd "$OUT_PROD" && jar cf "$PROD_JAR" . ) || die "failed to package prod.jar"
+[ -f "$PROD_JAR" ] || die "packaging wrote no jar at $PROD_JAR"
 # Strip directory entries so getResourceAsStream on a directory path returns null (as in a real
 # deployed bundle), not a 0-byte/dir-listing stream. `jar` always writes dir entries; zip -d drops
 # them. File entries (the resources themselves) are unaffected.
@@ -194,9 +211,9 @@ if command -v zip >/dev/null; then
 else
   # Not silent: without zip the jar keeps directory entries, so getResourceAsStream on a directory
   # path returns a 0-byte stream instead of null — a class like ResourceHandlerTest will then go
-  # RED (loud), not silently wrong. m0-2 CI images must install zip (apt-get install zip).
+  # RED (loud), not silently wrong. CI images must install zip (apt-get install zip).
   echo "WARN: 'zip' not found — cannot strip jar directory entries; directory-path resource lookups" >&2
-  echo "      may diverge from a deployed bundle. Install zip (m0-2: apt-get install zip)." >&2
+  echo "      may diverge from a deployed bundle. Install zip (e.g. apt-get install zip)." >&2
 fi
 
 # ---- compile test source FROM SOURCE (against fresh prod output) ----
@@ -257,14 +274,17 @@ fi
 echo "-- running tests (JUnit XML -> $RESULTS_DIR) ..."
 LOG="$BUILD_DIR/run.log"
 # ${arr[@]+"${arr[@]}"} = expand to nothing when empty (bash 3.2 + `set -u` would otherwise abort).
+# The runner's output is STREAMED, one line per class as it finishes, and also kept whole in $LOG:
+# a stalled run then shows as a frozen last line instead of looking like a slow one. The SLF4J
+# filter keeps the run-pins.sh stdout hygiene. The pass status is the JAVA exit code, taken from
+# PIPESTATUS — not the pipeline's, which under pipefail would also go non-zero when grep filters
+# out every line.
 java ${JVM_FLAGS[@]+"${JVM_FLAGS[@]}"} \
   -Dharness.xmlDir="$RESULTS_DIR" \
   -Dharness.knownFailingFile="$KNOWN_FAILING" \
-  -cp "$RUN_CP" "$RUNNER_CLASS" "${CLASSES[@]}" > "$LOG" 2>&1
-rc=$?
-
-# Preserve the run-pins.sh SLF4J stdout-hygiene; show the per-class results + summary block.
-grep -vE 'SLF4J' "$LOG"
+  -Dharness.classTimeoutSeconds="$CLASS_TIMEOUT" \
+  -cp "$RUN_CP" "$RUNNER_CLASS" "${CLASSES[@]}" 2>&1 | tee "$LOG" | grep --line-buffered -vE 'SLF4J'
+rc=${PIPESTATUS[0]}
 
 # ---- pass 2 (--release only): the display-required "Group B" bucket -----------
 # Runs in a SECOND JVM because -XstartOnFirstThread must be set at JVM start and must NOT be
@@ -301,12 +321,13 @@ if [ "$RELEASE" -eq 1 ]; then
   fi
 
   LOG2="$BUILD_DIR/run-display.log"
+  # Streamed and filtered exactly like pass 1, for the same reasons.
   java ${DISPLAY_FLAGS[@]+"${DISPLAY_FLAGS[@]}"} \
     -Dharness.xmlDir="$RESULTS_DIR" \
     -Dharness.knownFailingFile="$KNOWN_FAILING" \
-    -cp "$RUN_CP" "$RUNNER_CLASS" "${GROUP_B[@]}" > "$LOG2" 2>&1
-  rc2=$?
-  grep -vE 'SLF4J' "$LOG2"
+    -Dharness.classTimeoutSeconds="$CLASS_TIMEOUT" \
+    -cp "$RUN_CP" "$RUNNER_CLASS" "${GROUP_B[@]}" 2>&1 | tee "$LOG2" | grep --line-buffered -vE 'SLF4J'
+  rc2=${PIPESTATUS[0]}
 
   echo
   if [ "$rc" -ne 0 ] || [ "$rc2" -ne 0 ]; then

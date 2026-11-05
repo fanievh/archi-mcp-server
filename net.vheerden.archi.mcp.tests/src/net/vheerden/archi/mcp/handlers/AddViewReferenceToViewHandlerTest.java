@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.BaseTestAccessor;
+import net.vheerden.archi.mcp.model.ImageParams;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
 import net.vheerden.archi.mcp.model.StylingParams;
@@ -264,7 +265,7 @@ public class AddViewReferenceToViewHandlerTest {
                     st != null ? st.fontStyle() : null,
                     null, null, null,
                     st != null ? st.lineStyle() : null,
-                    null, null, null);
+                    null, null, null, null, null, null);
             return new MutationResult<>(dto, null);
         });
 
@@ -406,7 +407,7 @@ public class AddViewReferenceToViewHandlerTest {
         public MutationResult<EmbeddedViewDto> addViewReferenceToView(String sessionId,
                 String viewId, String referencedViewId, Integer x, Integer y,
                 Integer width, Integer height, String parentViewObjectId,
-                StylingParams styling) {
+                StylingParams styling, ImageParams imageParams) {
             return behavior.apply(sessionId, viewId, referencedViewId, x, y,
                     width, height, parentViewObjectId, styling);
         }

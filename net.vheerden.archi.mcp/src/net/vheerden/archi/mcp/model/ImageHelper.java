@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.eclipse.swt.graphics.ImageData;
 import org.slf4j.Logger;
@@ -13,11 +14,14 @@ import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IBounds;
 import com.archimatetool.model.IDiagramModelArchimateObject;
 import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IDiagramModelImage;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.IIconic;
 import com.archimatetool.model.IProfile;
 
 import net.vheerden.archi.mcp.response.ErrorCode;
+import net.vheerden.archi.mcp.response.dto.DiagramImageDto;
+import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
 
 /**
  * Stateless image validation, read, apply, and coverage helpers.
@@ -68,7 +72,7 @@ final class ImageHelper {
                 ImageParams.positionToInt(imageParams.imagePosition());
             } catch (IllegalArgumentException e) {
                 throw new ModelAccessException(
-                    "Invalid image position: '" + imageParams.imagePosition() + "'",
+                    "Invalid image position: " + CallerText.quoted(imageParams.imagePosition()),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Valid positions: top-left, top-centre, top-right, middle-left, middle-centre, "
@@ -81,7 +85,7 @@ final class ImageHelper {
                 ImageParams.showIconToInt(imageParams.showIcon());
             } catch (IllegalArgumentException e) {
                 throw new ModelAccessException(
-                    "Invalid showIcon value: '" + imageParams.showIcon() + "'",
+                    "Invalid showIcon value: " + CallerText.quoted(imageParams.showIcon()),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Valid showIcon values: if-no-image, always, never",
@@ -113,16 +117,91 @@ final class ImageHelper {
         }
     }
 
+    /**
+     * Validates that the supplied {@code imagePath} resolves to bytes in the
+     * model archive (strict-validation default).
+     *
+     * <p>Deliberately deviates from the validation-sync principle
+     * to fail loud on agent-typed typo'd paths.</p>
+     *
+     * @throws ModelAccessException with {@code IMAGE_NOT_FOUND} when miss.
+     */
+    static void requireInArchive(IArchimateModel model, String imagePath) {
+        IArchiveManager archiveManager =
+                (IArchiveManager) model.getAdapter(IArchiveManager.class);
+        if (archiveManager == null) {
+            throw new ModelAccessException(
+                    "Cannot access model archive to validate imagePath " + CallerText.quoted(imagePath),
+                    ErrorCode.INTERNAL_ERROR, null,
+                    "The model has no archive manager attached. Re-open the model in Archi.",
+                    null);
+        }
+        byte[] bytes = archiveManager.getBytesFromEntry(imagePath);
+        if (bytes == null) {
+            throw new ModelAccessException(
+                    "imagePath " + CallerText.quoted(imagePath)
+                            + " does not resolve to an image in the model archive",
+                    ErrorCode.IMAGE_NOT_FOUND, null,
+                    "Use list-model-images to browse stored images, or "
+                            + "add-image-to-model to import a new one.",
+                    null);
+        }
+    }
+
+    /**
+     * Applies an icon to a newly created object, after validating it: the image fields, then that a
+     * non-empty path resolves in the model archive (an empty one is the clear sentinel). A null or empty
+     * {@code imageParams} changes nothing.
+     */
+    static void applyIconToNew(IArchimateModel model, IDiagramModelObject diagramObj, ImageParams imageParams) {
+        if (imageParams == null || !imageParams.hasAnyValue()) return;
+        validateImageParams(imageParams);
+        if (imageParams.imagePath() != null && !imageParams.imagePath().isEmpty()) {
+            requireInArchive(model, imageParams.imagePath());
+        }
+        applyImageToNewObject(diagramObj, imageParams);
+    }
+
     // ---- Read image state from EMF objects ----
 
     /**
      * Reads the image path from a view object, or null if no custom image.
+     *
+     * <p>A stored empty path reads as null too: Archi draws no image for it, and the plugin's own
+     * writers never store it (they turn the empty clear sentinel into null), but a model edited
+     * elsewhere can hold it.</p>
      */
     static String readImagePath(IDiagramModelObject obj) {
         if (obj instanceof IIconic iconic) {
-            return iconic.getImagePath();
+            return nullIfEmpty(iconic.getImagePath());
         }
         return null;
+    }
+
+    /**
+     * The row an image is answered and read back with: the given picture path, bounds and parent, and
+     * what the image holds of the fields Archi offers it (border colour, documentation, opacity, outline
+     * opacity, line width and line style), each null at its default.
+     */
+    static DiagramImageDto imageRow(IDiagramModelImage image, String imagePath, int x, int y, int width,
+            int height, String parentViewObjectId, List<StructuredWarningDto> structuredWarnings) {
+        String docs = image.getDocumentation();
+        return new DiagramImageDto(image.getId(), imagePath, x, y, width, height, parentViewObjectId,
+                image.getBorderColor(), (docs == null || docs.isEmpty()) ? null : docs, structuredWarnings,
+                StylingHelper.readOpacity(image), StylingHelper.readOutlineOpacity(image),
+                StylingHelper.readLineWidth(image), StylingHelper.readLineStyle(image));
+    }
+
+    /**
+     * Reads the picture a standalone image visual shows, or null when it shows none. As
+     * {@link #readImagePath}, a stored empty path reads as null.
+     */
+    static String readPicturePath(IDiagramModelImage image) {
+        return nullIfEmpty(image.getImagePath());
+    }
+
+    private static String nullIfEmpty(String path) {
+        return path == null || path.isEmpty() ? null : path;
     }
 
     /**
@@ -197,7 +276,7 @@ final class ImageHelper {
             return new int[] { data.width, data.height };
         } catch (Exception e) {
             logger.debug("Failed to read natural dimensions for image '{}': {}",
-                    imagePath, e.getMessage());
+                    CallerText.logged(imagePath), CallerText.loggedMessage(e.getMessage()));
             return null;
         }
     }
@@ -229,28 +308,47 @@ final class ImageHelper {
      *
      * <p>Lives beside the readers it defers to rather than on the caller, so both update prepares
      * describe a post-update image the same way and neither can drift from the other.</p>
+     *
+     * <p>On a standalone image visual the path is its picture, which the update replaces (an empty
+     * path is refused before this runs). On any other kind without an icon the request is not held,
+     * so the object's own value is reported.</p>
      */
     static String computePostImagePath(IDiagramModelObject diagramObj, ImageParams imageParams) {
-        if (imageParams == null || imageParams.imagePath() == null) {
+        String requested = (imageParams != null) ? imageParams.imagePath() : null;
+        if (diagramObj instanceof IDiagramModelImage image) {
+            return (requested != null && !requested.isEmpty()) ? requested : readPicturePath(image);
+        }
+        if (requested == null || !ViewObjectFieldsByKind.holdsIcon(diagramObj)) {
             return readImagePath(diagramObj);
         }
-        return imageParams.imagePath().isEmpty() ? null : imageParams.imagePath();
+        return requested.isEmpty() ? null : requested;
     }
 
-    /** As {@link #computePostImagePath}, for the image position. */
+    /** As {@link #computePostImagePath}, for the image position: only an object with an icon holds one. */
     static String computePostImagePosition(IDiagramModelObject diagramObj, ImageParams imageParams) {
-        if (imageParams == null || imageParams.imagePosition() == null) {
+        if (imageParams == null || imageParams.imagePosition() == null
+                || !ViewObjectFieldsByKind.holdsIcon(diagramObj)) {
             return readImagePosition(diagramObj);
         }
         return imageParams.imagePosition();
     }
 
-    /** As {@link #computePostImagePath}, for the icon visibility. */
+    /** As {@link #computePostImagePath}, for the icon visibility: only an object with an icon holds one. */
     static String computePostShowIcon(IDiagramModelObject diagramObj, ImageParams imageParams) {
-        if (imageParams == null || imageParams.showIcon() == null) {
+        if (imageParams == null || imageParams.showIcon() == null
+                || !ViewObjectFieldsByKind.holdsIcon(diagramObj)) {
             return readShowIcon(diagramObj);
         }
         return imageParams.showIcon();
+    }
+
+    /**
+     * The icon path an icon-coverage figure is computed for: {@code postImagePath} on an object with an
+     * icon, and null on a standalone image visual, whose path is the picture itself rather than an
+     * icon drawn over a figure.
+     */
+    static String iconPathOf(IDiagramModelObject diagramObj, String postImagePath) {
+        return ViewObjectFieldsByKind.holdsIcon(diagramObj) ? postImagePath : null;
     }
 
     // ---- Coverage calculation ----
@@ -381,7 +479,7 @@ final class ImageHelper {
         if (!mayObscure && !exceedsElement) return null;
         StringBuilder message = new StringBuilder();
         if (mayObscure) {
-            message.append(String.format(
+            message.append(String.format(Locale.ROOT,
                 FILL_POSITION.equals(imagePosition)
                     ? "Image covers %.1f%% of element area — may obscure element name. "
                         + "'fill' scales the image to the element box, so its natural size is "

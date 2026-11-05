@@ -237,9 +237,9 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
     // ---- Fixture 6: Manual-oracle M1 calibration (2026-04-27) ----
     // Real geometry from V4 manual oracle violator id-3eb9f44e263440d3a303df2871b77606
     // (API Mgmt → Mobile Banking App).
-    // Source-side flag, BP1 1px LEFT of source LEFT face → visible 1.02px diagonal.
-    // This is the canonical regression-test case pinning the new VISIBLE_DIAGONAL_MIN_PX
-    // guard against a real hand-routed connection in production.
+    // BP1 sits 1px LEFT of the source LEFT face, within that face's extent.
+    // This was the case that calibrated VISIBLE_DIAGONAL_MIN_PX; M1 now tests the segment Archi
+    // draws, and this one is not diagonal at all.
     //
     // Source: API Mgmt Platform (rect: x=642, y=94, w=300, h=250) — Integration group.
     // Target: Mobile Banking App (rect: x=70, y=299, w=174, h=55) — Producers group.
@@ -248,19 +248,20 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
     // targetAnchor (157, 326).
     //   pathPoints = [(792,219), (641,249), (157,249), (157,298), (157,326)]
     //
-    // Pre-guard: M1 = 1 — BP1 (641,249) is 1px outside APIM LEFT face (x=642), and the
-    //   geometric segment (792,219)→(641,249) has 11.2° deviation → predicate 2 fires.
-    //   The visible post-clip segment (642, 248.80)→(641, 249) is 1.02px long.
-    // Post-guard: visible 1.02 < 3.0 → suppressed → M1 = 0.
+    // BP1 (641,249): x is 1px left of the APIM LEFT face (x=642), y=249 lies within the face's
+    //   extent [94..344] → FACE zone. Archi's orthogonal anchor projects y onto the LEFT edge and
+    //   draws (642, 249)→(641, 249): horizontal, 1px → not diagonal → M1 = 0.
+    // (A centre-to-BP1 angle test sees an 11.2° diagonal, clipped to 1.02px; that model needed the
+    //   VISIBLE_DIAGONAL_MIN_PX guard to suppress it. The drawn segment needs no guard here.)
     @Test
-    public void fixture6_manualOracleNonOrth_pixelImperceptible_subThresholdShouldNotFlag() {
+    public void fixture6_manualOracleNonOrth_faceZoneBp_drawnOrthogonalShouldNotFlag() {
         AssessmentNode apiMgmt = node("apiMgmt", 642, 94, 300, 250);    // Center (792, 219)
         AssessmentNode mobile = node("mobile", 70, 299, 174, 55);        // Center (157, 326.5)
 
         AssessmentConnection conn = new AssessmentConnection(
                 "id-3eb9f44e263440d3a303df2871b77606", "apiMgmt", "mobile",
                 List.of(new double[]{792, 219},   // sourceAnchor (APIM center)
-                        new double[]{641, 249},   // BP1: 1px LEFT of LEFT face → visible 1.02px
+                        new double[]{641, 249},   // BP1: 1px LEFT of LEFT face, FACE zone
                         new double[]{157, 249},
                         new double[]{157, 298},   // 1px above target TOP face (orthogonal seg)
                         new double[]{157, 326}),  // targetAnchor
@@ -269,13 +270,12 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
         LayoutAssessmentResult result = assessor.assess(
                 List.of(apiMgmt, mobile), List.of(conn), false);
 
-        // Calibration: the manual-oracle's 1px-outside BP1 produces a sub-perceptible
-        // visible diagonal that the user cannot resolve. Pre-guard would flag (1);
-        // post-guard suppresses (0). This pins the calibration against a real oracle case.
-        assertEquals("Manual-oracle violator with sub-perceptible visible length must NOT flag M1",
+        // The manual-oracle's 1px-outside BP1 is in the LEFT face's zone, so Archi draws a
+        // perpendicular 1px stub. This pins the drawn-segment rule against a real oracle case.
+        assertEquals("Manual-oracle BP1 in a face zone is drawn orthogonal and must NOT flag M1",
                 0, result.nonOrthogonalTerminalCount());
 
-        // Sibling metrics unaffected by the M1 guard (sanity).
+        // Sibling metrics unaffected by M1 (sanity).
         assertEquals("M2 interior must be 0 — no BP strictly inside source/target",
                 0, result.interiorTerminationCount());
         assertEquals("M3 zigzag must be 0 — no shared-axis reversal triple in this path",
@@ -310,7 +310,9 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
                 "poor", result.ratingBreakdown().get("overlaps"));
         assertEquals("Tier 1L binary >0 → layoutRating=poor",
                 "poor", result.layoutRating());
-        assertEquals("max(layoutRating=poor, routingRating=excellent) = overallRating=poor",
+        assertEquals("no connections → routingRating=not-applicable",
+                "not-applicable", result.routingRating());
+        assertEquals("layoutRating=poor, routing not applicable → overallRating=poor",
                 "poor", result.overallRating());
     }
 
@@ -342,7 +344,9 @@ public class LayoutQualityAssessorPerceptionFixturesTest {
                 "poor", result.ratingBreakdown().get("overlaps"));
         assertEquals("Tier 1L binary >0 → layoutRating=poor",
                 "poor", result.layoutRating());
-        assertEquals("max(layoutRating=poor, routingRating=excellent) = overallRating=poor",
+        assertEquals("no connections → routingRating=not-applicable",
+                "not-applicable", result.routingRating());
+        assertEquals("layoutRating=poor, routing not applicable → overallRating=poor",
                 "poor", result.overallRating());
     }
 

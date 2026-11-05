@@ -27,6 +27,7 @@ public class EmbeddedViewDtoTest {
                 "Arial", 14, "bold",
                 "top-bottom", false, 128, "dashed",
                 "centre", "top",
+                "images/icon.png", "bottom-left", "always",
                 "auto-placement note");
 
         String json = MAPPER.writeValueAsString(dto);
@@ -45,6 +46,9 @@ public class EmbeddedViewDtoTest {
         assertTrue("fontStyle present", json.contains("\"fontStyle\":\"bold\""));
         assertTrue("gradient present", json.contains("\"gradient\":\"top-bottom\""));
         assertTrue("deriveLineColor present", json.contains("\"deriveLineColor\":false"));
+        assertTrue("imagePath present", json.contains("\"imagePath\":\"images/icon.png\""));
+        assertTrue("imagePosition present", json.contains("\"imagePosition\":\"bottom-left\""));
+        assertTrue("showIcon present", json.contains("\"showIcon\":\"always\""));
         assertTrue("note present", json.contains("\"note\":\"auto-placement note\""));
     }
 
@@ -72,6 +76,9 @@ public class EmbeddedViewDtoTest {
         assertFalse("textAlignment must be omitted when null", json.contains("textAlignment"));
         assertFalse("verticalTextAlignment must be omitted when null",
                 json.contains("verticalTextAlignment"));
+        assertFalse("imagePath must be omitted when null", json.contains("imagePath"));
+        assertFalse("imagePosition must be omitted when null", json.contains("imagePosition"));
+        assertFalse("showIcon must be omitted when null", json.contains("showIcon"));
         assertFalse("note must be omitted when null", json.contains("\"note\""));
     }
 
@@ -96,7 +103,7 @@ public class EmbeddedViewDtoTest {
                 "vo-parent",
                 null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null,
-                null);
+                null, null, null, null);
 
         String json = MAPPER.writeValueAsString(dto);
 
@@ -114,6 +121,7 @@ public class EmbeddedViewDtoTest {
                 null, null, "italic",
                 null, null, null, "solid",
                 null, null,
+                "images/icon.png", null, null,
                 null);
 
         String json = MAPPER.writeValueAsString(original);
@@ -127,6 +135,7 @@ public class EmbeddedViewDtoTest {
         assertEquals(original.fillColor(), roundTripped.fillColor());
         assertEquals(original.fontStyle(), roundTripped.fontStyle());
         assertEquals(original.lineStyle(), roundTripped.lineStyle());
+        assertEquals(original.imagePath(), roundTripped.imagePath());
         assertNull("null fontColor round-trips as null", roundTripped.fontColor());
     }
 }

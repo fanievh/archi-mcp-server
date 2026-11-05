@@ -1,0 +1,298 @@
+{
+ "viewId": "id-88965f01b3ec4594a1ea128bbc0e39c7",
+ "viewName": "J · Cloud Deployment",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-fa4d9b31667e425eb8ce95ead04b3484",
+   "name": "Availability Zone A",
+   "x": 60,
+   "y": 130,
+   "w": 560,
+   "h": 450,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-a9179b42cef5429ea990b3d9f892b08a"
+  },
+  {
+   "id": "id-5a1e61765f43455a8f9161d215333183",
+   "name": "Amazon EKS Cluster",
+   "x": 90,
+   "y": 190,
+   "w": 310,
+   "h": 168,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-fa4d9b31667e425eb8ce95ead04b3484"
+  },
+  {
+   "id": "id-ce527adda2654d4fbabe0ed5f8cd4814",
+   "name": "Kubernetes (Container Orchestration)",
+   "x": 100,
+   "y": 234,
+   "w": 290,
+   "h": 26,
+   "isChild": true,
+   "type": "SystemSoftware",
+   "figureType": 0,
+   "parentId": "id-5a1e61765f43455a8f9161d215333183"
+  },
+  {
+   "id": "id-3621a583f35542c2a7efe5325fa55695",
+   "name": "Core Banking Container Image",
+   "x": 100,
+   "y": 266,
+   "w": 290,
+   "h": 26,
+   "isChild": true,
+   "type": "Artifact",
+   "figureType": 0,
+   "parentId": "id-5a1e61765f43455a8f9161d215333183"
+  },
+  {
+   "id": "id-22ea94062b82496a8a7760463f7ec636",
+   "name": "Payments Hub Container Image",
+   "x": 100,
+   "y": 298,
+   "w": 290,
+   "h": 26,
+   "isChild": true,
+   "type": "Artifact",
+   "figureType": 0,
+   "parentId": "id-5a1e61765f43455a8f9161d215333183"
+  },
+  {
+   "id": "id-3c7d4ce869674072af10ca0441d903d6",
+   "name": "Amazon Aurora PostgreSQL Cluster",
+   "x": 90,
+   "y": 390,
+   "w": 260,
+   "h": 140,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-fa4d9b31667e425eb8ce95ead04b3484"
+  },
+  {
+   "id": "id-f8fc2bcc8554410faec97e79234ac2be",
+   "name": "PostgreSQL Engine",
+   "x": 100,
+   "y": 434,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "SystemSoftware",
+   "figureType": 0,
+   "parentId": "id-3c7d4ce869674072af10ca0441d903d6"
+  },
+  {
+   "id": "id-4ad6dafd180c437abe04357081da4e15",
+   "name": "Customer 360 Data Snapshot",
+   "x": 100,
+   "y": 466,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "Artifact",
+   "figureType": 0,
+   "parentId": "id-3c7d4ce869674072af10ca0441d903d6"
+  },
+  {
+   "id": "id-48188f07a16c478db286694e82167d03",
+   "name": "Availability Zone B",
+   "x": 660,
+   "y": 130,
+   "w": 560,
+   "h": 450,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-a9179b42cef5429ea990b3d9f892b08a"
+  },
+  {
+   "id": "id-8462a23ae04343a49b98eec7612c8fda",
+   "name": "Amazon MSK (Kafka) Cluster",
+   "x": 690,
+   "y": 190,
+   "w": 260,
+   "h": 140,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-48188f07a16c478db286694e82167d03"
+  },
+  {
+   "id": "id-0df5ac328e3941469700465aa7e445e9",
+   "name": "Apache Kafka",
+   "x": 700,
+   "y": 234,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "SystemSoftware",
+   "figureType": 0,
+   "parentId": "id-8462a23ae04343a49b98eec7612c8fda"
+  },
+  {
+   "id": "id-f553774215014cb3ab0e8f1c8d20410b",
+   "name": "Event Schema Registry",
+   "x": 700,
+   "y": 266,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "Artifact",
+   "figureType": 0,
+   "parentId": "id-8462a23ae04343a49b98eec7612c8fda"
+  },
+  {
+   "id": "id-e4b9b51e52ae4558b0a9a3b869e01230",
+   "name": "Amazon API Gateway",
+   "x": 690,
+   "y": 380,
+   "w": 260,
+   "h": 140,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-48188f07a16c478db286694e82167d03"
+  },
+  {
+   "id": "id-7c9bd62153104c1bbf083e2860387462",
+   "name": "API Gateway Runtime",
+   "x": 700,
+   "y": 424,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "SystemSoftware",
+   "figureType": 0,
+   "parentId": "id-e4b9b51e52ae4558b0a9a3b869e01230"
+  },
+  {
+   "id": "id-5d097086292f4f768297dccb97dcdb37",
+   "name": "API Gateway Config",
+   "x": 700,
+   "y": 456,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "Artifact",
+   "figureType": 0,
+   "parentId": "id-e4b9b51e52ae4558b0a9a3b869e01230"
+  },
+  {
+   "id": "id-5e9129c82809450ab9981c7985551e0f",
+   "name": "Core Banking Mainframe",
+   "x": 70,
+   "y": 700,
+   "w": 260,
+   "h": 120,
+   "isChild": true,
+   "type": "Node",
+   "figureType": 0,
+   "parentId": "id-59b4adb84f3a4676beca226951953539"
+  },
+  {
+   "id": "id-a3e4444694a54e00a9ccb3782bff600f",
+   "name": "Mainframe OS (z/OS)",
+   "x": 80,
+   "y": 744,
+   "w": 240,
+   "h": 26,
+   "isChild": true,
+   "type": "SystemSoftware",
+   "figureType": 0,
+   "parentId": "id-5e9129c82809450ab9981c7985551e0f"
+  },
+  {
+   "id": "id-a9179b42cef5429ea990b3d9f892b08a",
+   "name": "AWS Region eu-west-1 (VPC)",
+   "x": 40,
+   "y": 90,
+   "w": 1240,
+   "h": 520,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-59b4adb84f3a4676beca226951953539",
+   "name": "On-Premises Data Centre",
+   "x": 40,
+   "y": 650,
+   "w": 600,
+   "h": 220,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-8c26f5a7ff92455088600ad5ec811930",
+   "name": "J · Cloud Deployment — AWS region (VPC) ",
+   "x": 40,
+   "y": 14,
+   "w": 1240,
+   "h": 66,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-f4ee12381efe4399ac12fc546b22b2f4",
+   "sourceId": "id-fa4d9b31667e425eb8ce95ead04b3484",
+   "targetId": "id-48188f07a16c478db286694e82167d03",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": 281,
+     "startY": 0,
+     "endX": -319,
+     "endY": 0
+    },
+    {
+     "startX": 319,
+     "startY": -73,
+     "endX": -281,
+     "endY": -73
+    }
+   ]
+  },
+  {
+   "id": "id-f8bb816513334b40b21245f8f5a0c26b",
+   "sourceId": "id-48188f07a16c478db286694e82167d03",
+   "targetId": "id-5e9129c82809450ab9981c7985551e0f",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -281,
+     "startY": 73,
+     "endX": 459,
+     "endY": -332
+    },
+    {
+     "startX": -288,
+     "startY": 73,
+     "endX": 452,
+     "endY": -332
+    },
+    {
+     "startX": -288,
+     "startY": 405,
+     "endX": 452,
+     "endY": 0
+    },
+    {
+     "startX": -609,
+     "startY": 405,
+     "endX": 131,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

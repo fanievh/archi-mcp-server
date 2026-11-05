@@ -66,6 +66,15 @@ public record RasterProjection(int width, int height, long bytes) {
      * @return the projected dimensions and byte count
      */
     static RasterProjection project(ContentBounds bounds, double scale) {
+        return project(bounds, scale, 100);
+    }
+
+    /**
+     * As {@link #project(ContentBounds, double)}, counting the bytes of the bitmap SWT allocates at the display's
+     * {@code zoom} percent: each edge becomes {@code (int) (edge * zoom / 100.0)}, as SWT sizes the representation.
+     * The width and height stay those of the exported image, which SWT writes at 100%.
+     */
+    static RasterProjection project(ContentBounds bounds, double scale, int zoom) {
         int w;
         int h;
         if (bounds == null) {
@@ -81,7 +90,7 @@ public record RasterProjection(int width, int height, long bytes) {
         }
         w = Math.max(w, 0);
         h = Math.max(h, 0);
-        return new RasterProjection(w, h, byteCount(w, h));
+        return new RasterProjection(w, h, byteCount(zoomedEdge(w, zoom), zoomedEdge(h, zoom)));
     }
 
     /**
@@ -103,6 +112,16 @@ public record RasterProjection(int width, int height, long bytes) {
             return Integer.MAX_VALUE;
         }
         return (long) Math.ceil(boundsExtent);
+    }
+
+    /**
+     * The edge, in pixels, of the bitmap SWT allocates for an image edge of {@code edge} at {@code zoom} percent. A
+     * zoom that is not positive counts as {@link DeviceZoom#UNKNOWN_ZOOM_AS}, so the bitmap is never counted as empty.
+     */
+    static int zoomedEdge(int edge, int zoom) {
+        int at = zoom > 0 ? zoom : DeviceZoom.UNKNOWN_ZOOM_AS;
+        double zoomed = edge * (double) at / 100.0;
+        return zoomed >= Integer.MAX_VALUE ? Integer.MAX_VALUE : Math.max(0, (int) zoomed);
     }
 
     /**
@@ -143,6 +162,12 @@ public record RasterProjection(int width, int height, long bytes) {
      */
     static double largestScaleWithin(ContentBounds bounds, long budgetBytes,
             double minScale, double maxScale) {
+        return largestScaleWithin(bounds, budgetBytes, minScale, maxScale, 100);
+    }
+
+    /** As {@link #largestScaleWithin(ContentBounds, long, double, double)}, projecting at {@code zoom} percent. */
+    static double largestScaleWithin(ContentBounds bounds, long budgetBytes,
+            double minScale, double maxScale, int zoom) {
         int floorHundredths = (int) Math.round(minScale * 100);
         for (int hundredths = (int) Math.floor(maxScale * 100);
                 hundredths >= floorHundredths; hundredths--) {
@@ -156,7 +181,7 @@ public record RasterProjection(int width, int height, long bytes) {
             if (candidate < minScale || candidate > maxScale) {
                 continue;
             }
-            if (project(bounds, candidate).bytes() <= budgetBytes) {
+            if (project(bounds, candidate, zoom).bytes() <= budgetBytes) {
                 return candidate;
             }
         }

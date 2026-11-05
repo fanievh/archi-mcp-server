@@ -11,11 +11,14 @@ import org.slf4j.LoggerFactory;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
 import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationResult;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.model.ParamNameDiagnostics;
 import net.vheerden.archi.mcp.model.ProposalContext;
+import net.vheerden.archi.mcp.model.ToolErrorLog;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
@@ -55,6 +58,7 @@ public final class HandlerUtils {
                     "Provide the '" + paramName + "' parameter",
                     null);
         }
+        ToolArguments.requireTextType(args, paramName);
         Object value = args.get(paramName);
         if (!(value instanceof String str) || str.isBlank()) {
             throw ParamNameDiagnostics.missingHandlerParameter(args, paramName);
@@ -84,6 +88,7 @@ public final class HandlerUtils {
                     "Provide the '" + paramName + "' parameter",
                     null);
         }
+        ToolArguments.requireTextType(args, paramName);
         if (!(args.get(paramName) instanceof String str)) {
             throw ParamNameDiagnostics.missingHandlerParameter(args, paramName, true);
         }
@@ -91,85 +96,62 @@ public final class HandlerUtils {
     }
 
     /**
-     * Extracts an optional string parameter, returning null if absent or blank.
+     * Extracts an optional string parameter, returning null if absent or blank. A present value that is not a
+     * string is refused naming the parameter, rather than read as absent.
      */
     public static String optionalStringParam(Map<String, Object> args, String paramName) {
-        if (args == null) return null;
-        Object value = args.get(paramName);
-        if (value instanceof String str && !str.isBlank()) {
-            return str;
-        }
-        return null;
+        return ToolArguments.optionalText(args, paramName, false);
     }
 
     /**
      * Extracts an optional string parameter, preserving empty strings.
      * Returns null only if absent; empty strings are returned as-is.
-     * Needed for styling colour params where "" means "clear to default".
+     * Needed for styling colour params where "" means "clear to default". A present value that is not a
+     * string is refused naming the parameter, rather than read as absent.
      */
     public static String optionalStringParamAllowEmpty(Map<String, Object> args, String paramName) {
-        if (args == null) return null;
-        Object value = args.get(paramName);
-        if (value instanceof String str) {
-            return str;
-        }
-        return null;
+        return ToolArguments.optionalText(args, paramName, true);
     }
 
     /**
-     * Extracts an optional integer parameter, returning null if absent.
-     * Handles JSON number coercion (Double/Integer/Long) from the MCP SDK.
+     * Extracts an optional whole-number parameter, returning null if absent or null. Read by
+     * {@link ToolArguments#wholeInt(Map, String)}: a fraction, a string, a boolean or a value past the
+     * {@code int} range is refused naming the key, rather than truncated, read as absent or wrapped.
      */
     public static Integer optionalIntegerParam(Map<String, Object> args, String paramName) {
-        if (args == null) return null;
-        Object value = args.get(paramName);
-        if (value instanceof Number n) {
-            return n.intValue();
-        }
-        return null;
+        return ToolArguments.wholeInt(args, paramName);
     }
 
     /**
-     * Extracts an optional boolean parameter, returning false if absent.
+     * Extracts an optional boolean parameter, returning false if absent. Read by
+     * {@link ToolArguments#flag(Map, String)}: any value other than a boolean or the string
+     * {@code "true"}/{@code "false"} is refused.
      */
     public static boolean optionalBooleanParam(Map<String, Object> args, String paramName) {
         return optionalBooleanParam(args, paramName, false);
     }
 
     /**
-     * Extracts an optional boolean parameter with a specified default value.
-     * Handles both {@code Boolean} and {@code String} inputs (MCP clients may
-     * send boolean params as strings).
+     * Extracts an optional boolean parameter with a specified default value, used when the key is
+     * absent or null. A boolean is read as sent, and so is the string {@code "true"} or
+     * {@code "false"} in any case (MCP clients may send boolean params as strings). Any other value
+     * ({@code "yes"}, {@code 1}, an empty string) is refused with INVALID_PARAMETER rather than read
+     * as the default: the one rule {@link ToolArguments#flag(Map, String)} applies on every path.
      */
     public static boolean optionalBooleanParam(Map<String, Object> args, String paramName,
                                                 boolean defaultValue) {
-        if (args == null) return defaultValue;
-        Object value = args.get(paramName);
-        if (value instanceof Boolean b) {
-            return b;
-        }
-        if (value instanceof String s && !s.isBlank()) {
-            return Boolean.parseBoolean(s);
-        }
-        return defaultValue;
+        return ToolArguments.flag(args, paramName, defaultValue);
     }
 
     /**
-     * Extracts an optional boxed {@code Boolean} parameter — returns {@code null}
-     * when the param is absent or unparseable. Used when null carries semantic
-     * meaning (e.g., "leave unchanged" for update operations). Used for
-     * {@code associationDirected}.
+     * Extracts an optional boxed {@code Boolean} parameter: {@code null} when the param is absent or
+     * null, which carries meaning (e.g., "leave unchanged" for {@code associationDirected} on an
+     * update). Reads by the same rule as {@link #optionalBooleanParam(Map, String, boolean)}: a value
+     * that is neither a boolean nor the string {@code "true"}/{@code "false"} is refused, never read
+     * as unchanged or as false.
      */
     public static Boolean optionalBoxedBooleanParam(Map<String, Object> args, String paramName) {
-        if (args == null) return null;
-        Object value = args.get(paramName);
-        if (value instanceof Boolean b) {
-            return b;
-        }
-        if (value instanceof String s && !s.isBlank()) {
-            return Boolean.parseBoolean(s);
-        }
-        return null;
+        return ToolArguments.flag(args, paramName);
     }
 
     /**
@@ -265,7 +247,7 @@ public final class HandlerUtils {
 
     public static McpSchema.CallToolResult buildModelNotLoadedError(
             ResponseFormatter formatter, NoModelLoadedException e) {
-        logger.debug("Tool error (expected): {}", e.getMessage());
+        logger.debug("Tool error (expected): {}", CallerText.loggedMessage(e.getMessage()));
         ErrorResponse error = new ErrorResponse(
                 ErrorCode.MODEL_NOT_LOADED,
                 e.getMessage(),
@@ -277,7 +259,13 @@ public final class HandlerUtils {
 
     public static McpSchema.CallToolResult buildModelAccessError(
             ResponseFormatter formatter, ModelAccessException e) {
-        logger.debug("Tool error (expected): {} [{}]", e.getMessage(), e.getErrorCode());
+        return buildModelAccessError(formatter, e, logger);
+    }
+
+    /** As above, logging through {@code log}, so the wiring to the rule can be observed. */
+    static McpSchema.CallToolResult buildModelAccessError(
+            ResponseFormatter formatter, ModelAccessException e, Logger log) {
+        logModelAccessError(log, e);
         ErrorResponse error = new ErrorResponse(
                 e.getErrorCode(),
                 e.getMessage(),
@@ -287,14 +275,23 @@ public final class HandlerUtils {
         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
     }
 
+    /**
+     * Logs a {@link ModelAccessException} that is about to be answered to the client, through the
+     * one rule that decides how such an error is logged ({@link ToolErrorLog}, which says why).
+     */
+    static void logModelAccessError(Logger log, ModelAccessException e) {
+        ToolErrorLog.log(log, e);
+    }
+
     public static McpSchema.CallToolResult buildMutationError(
             ResponseFormatter formatter, MutationException e) {
-        logger.warn("Tool error (session survived): mutation failed - {}", e.getMessage());
+        logger.warn("Tool error (session survived): mutation failed - {}", CallerText.loggedMessage(e.getMessage()));
         ErrorResponse error = new ErrorResponse(
                 ErrorCode.MUTATION_FAILED,
                 "Mutation failed: " + e.getMessage(),
                 null,
-                "Retry the operation or check the model state",
+                e.getSuggestedCorrection() != null ? e.getSuggestedCorrection()
+                        : "Retry the operation or check the model state",
                 null);
         return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
     }

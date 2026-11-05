@@ -115,7 +115,48 @@ public record ApplyGroupSpacingRecommendationsResultDto(
          * the silence to be read as "nothing regressed".</p>
          */
         @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        List<StructuredWarningDto> structuredWarnings) {
+        List<StructuredWarningDto> structuredWarnings,
+        /**
+         * The ArchiMate elements on the canvas that hold children and that this tool did not
+         * measure, recommend for or move: it acts on native groups and {@code Grouping} elements
+         * only, by contract. Read from the view before anything is measured, so it is the same on
+         * every return path, dry run, declined call and queued call alike. Empty, and then omitted
+         * from the wire, when the view holds none.
+         */
+        @JsonInclude(JsonInclude.Include.NON_EMPTY)
+        List<SkippedContainerDto> skippedContainers) {
+
+    /**
+     * The full form as it stood before {@code skippedContainers}: every existing call site
+     * builds through it, and the field is attached with {@link #withSkippedContainers}.
+     */
+    public ApplyGroupSpacingRecommendationsResultDto(
+            String viewId,
+            boolean dryRun,
+            int totalConnectionCount,
+            int interGroupConnectionCount,
+            boolean isConnected,
+            int currentSpacingPx,
+            int targetSpacingPx,
+            int interGroupDelta,
+            String noChangeReason,
+            Integer heuristicRecommendation,
+            AssessLayoutResultDto before,
+            AssessLayoutResultDto after,
+            AdjustViewSpacingResultDto adjustResult,
+            String terminationReason,
+            int iterationCount,
+            List<Integer> appliedDeltas,
+            String densityFloorDiagnosis,
+            List<StructuredWarningDto> structuredWarnings) {
+        this(viewId, dryRun, totalConnectionCount, interGroupConnectionCount, isConnected, currentSpacingPx, targetSpacingPx, interGroupDelta, noChangeReason, heuristicRecommendation, before, after, adjustResult, terminationReason, iterationCount, appliedDeltas, densityFloorDiagnosis, structuredWarnings,
+                /*skippedContainers=*/ List.of());
+    }
+
+    /** This response with the element containers the tool did not measure attached. */
+    public ApplyGroupSpacingRecommendationsResultDto withSkippedContainers(List<SkippedContainerDto> skipped) {
+        return new ApplyGroupSpacingRecommendationsResultDto(viewId, dryRun, totalConnectionCount, interGroupConnectionCount, isConnected, currentSpacingPx, targetSpacingPx, interGroupDelta, noChangeReason, heuristicRecommendation, before, after, adjustResult, terminationReason, iterationCount, appliedDeltas, densityFloorDiagnosis, structuredWarnings, List.copyOf(skipped));
+    }
 
     /**
      * Backwards-compatible constructor for every call site that predates the rating-regression

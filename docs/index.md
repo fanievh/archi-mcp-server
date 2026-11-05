@@ -38,6 +38,10 @@ The PreparedMutation pattern, CommandStack integration, operational modes (GUI-a
 
 Tool registration via CommandRegistry, the standard response envelope format, structured error responses, session management (filters, caching, field selection), MCP resources, and transport layer configuration (HTTP, SSE, TLS, bearer-token authentication).
 
+### [Headless Deployment](headless-deployment.md)
+
+Running Archi and the server unattended under a virtual display (Xvfb): a tested container recipe, starting the server with `-pluginCustomization`, opening a model at startup with `models.xml`, the secure-storage password trap on Linux, approval mode with nobody at the screen, and notes for Linux and Windows hosts.
+
 ### [Ordering Hazards](ordering-hazards.md)
 
 The placement rule for ordering hazards — a caveat whose remedy is a change in sequence must be stated in the description of the tool that is unsafe to call at the wrong time, not only in a reference page — the scope test that decides which tools it applies to, and the registry of the hazards currently placed, with the build-fired guard that keeps the two in step.

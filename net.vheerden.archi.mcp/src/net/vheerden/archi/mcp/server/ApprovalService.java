@@ -32,9 +32,10 @@ import net.vheerden.archi.mcp.response.dto.ProposalDto;
  * holds a deferred rebuild handle + a staleness capture: at approve the {@code ProposalStalenessGuard}
  * re-resolves the targeted objects and rejects-stale (naming what the human touched) if any was edited or
  * removed during the review window, and the {@code ProposalBuilder} rebuilds the command fresh against the
- * current model otherwise. {@link #approve} still surfaces staleness as a {@link MutationException} (the
- * same signal the removed {@code decide-mutation} tool translated into a {@code PROPOSAL_STALE} error), but
- * its message is now a plain-language, target-named reason — and nothing is applied when stale.</p>
+ * current model otherwise. {@link #approve} surfaces staleness as a
+ * {@link net.vheerden.archi.mcp.model.exceptions.ProposalStaleException}, a {@link MutationException}
+ * carrying {@code PROPOSAL_STALE}, whose message is a plain-language, target-named reason; nothing is
+ * applied and the proposal stays queued. The code is raised on this seam only: no MCP tool returns it.</p>
  */
 public final class ApprovalService {
 

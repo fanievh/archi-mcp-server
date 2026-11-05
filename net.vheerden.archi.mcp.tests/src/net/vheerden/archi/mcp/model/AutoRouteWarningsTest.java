@@ -10,7 +10,12 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator;
+import net.vheerden.archi.mcp.model.routing.EgressOutcome;
+import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.model.routing.RoutingResult;
+import net.vheerden.archi.mcp.model.routing.TerminalEgressClearancePass;
+import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.NudgedElementDto;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
@@ -52,6 +57,116 @@ public class AutoRouteWarningsTest {
 
         assertTrue("no free-text warning when nothing rolled back", warnings.isEmpty());
         assertTrue("no structured warning when nothing rolled back", structured.isEmpty());
+    }
+
+    // ==================== pre-gated egress lift ====================
+
+    private static List<StructuredWarningDto> preGated(EgressOutcome outcome, List<String> warnings) {
+        List<StructuredWarningDto> structured = new ArrayList<>();
+        AutoRouteWarnings.emitEgressOutcome(outcome, DispatchArm.APPLIED, warnings, structured);
+        return structured;
+    }
+
+    @Test
+    public void emitEgressOutcome_preGatedWithHugs_namesCountGapFloorAndEveryHuggingConnection() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured =
+                preGated(new EgressOutcome(0, 7.0, List.of("c-a", "c-b", "c-c")), warnings);
+
+        assertEquals(1, structured.size());
+        StructuredWarningDto w = structured.get(0);
+        assertEquals(StructuredWarningCodes.EGRESS_LIFT_PRE_GATED, w.code());
+        assertTrue(w.message(), w.message().startsWith("3 connection(s) still hug the face they leave"));
+        assertTrue(w.message(), w.message().contains("10th-percentile gap 7.0px, below the 8px floor"));
+        assertTrue("the gap is dated to the lift pass, not claimed for the routes as written",
+                w.message().contains("when it reached that pass, its vertical connection runs sat too close"));
+        assertFalse("the gap is not measured on the routes the call writes (a later stage moves ports)",
+                w.message().contains("as routed by this call"));
+        assertEquals("apply-spacing-recommendations", w.remediationTool());
+        assertEquals("every hugging connection, in order", List.of("c-a", "c-b", "c-c"),
+                w.remediationViolatorIds());
+        assertEquals(List.of(w.message()), warnings);
+    }
+
+    @Test
+    public void emitEgressOutcome_preGatedWithoutHugs_emitsNothing() {
+        List<String> warnings = new ArrayList<>();
+        assertTrue(preGated(new EgressOutcome(0, 5.0, List.of()), warnings).isEmpty());
+        assertTrue(warnings.isEmpty());
+    }
+
+    @Test
+    public void emitEgressOutcome_passRan_emitsNoPreGatedWarning() {
+        List<String> warnings = new ArrayList<>();
+        assertTrue(preGated(new EgressOutcome(0, null, List.of()), warnings).isEmpty());
+        assertTrue(preGated(EgressOutcome.NONE, warnings).isEmpty());
+        assertTrue(preGated(null, warnings).isEmpty());
+    }
+
+    @Test
+    public void emitEgressOutcome_rolledBack_emitsOnlyTheLayoutBoundCode() {
+        List<StructuredWarningDto> structured = preGated(new EgressOutcome(2, null, List.of()), new ArrayList<>());
+        assertEquals(1, structured.size());
+        assertEquals(StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND, structured.get(0).code());
+    }
+
+    /** A gap just under the floor never prints as the floor; zero never prints as -0.0. */
+    @Test
+    public void emitEgressOutcome_printsTheGapRoundedDown_andNeverNegativeZero() {
+        assertTrue(preGated(new EgressOutcome(0, 7.96, List.of("c")), new ArrayList<>()).get(0).message()
+                .contains("gap 7.9px"));
+        assertTrue(preGated(new EgressOutcome(0, 6.9999999999, List.of("c")), new ArrayList<>()).get(0).message()
+                .contains("gap 7.0px"));
+        String justUnder = preGated(new EgressOutcome(0, 7.99999995, List.of("c")), new ArrayList<>()).get(0)
+                .message();
+        assertTrue("a skipped gap a hair under the floor must not print as the floor: " + justUnder,
+                justUnder.contains("gap 7.9px, below the 8px floor"));
+        assertTrue(preGated(new EgressOutcome(0, 5.6000000000000005, List.of("c")), new ArrayList<>()).get(0).message()
+                .contains("gap 5.6px"));
+        String zero = preGated(new EgressOutcome(0, -0.0, List.of("c")), new ArrayList<>()).get(0).message();
+        assertTrue(zero, zero.contains("gap 0.0px"));
+        assertFalse(zero, zero.contains("-0.0"));
+    }
+
+    /**
+     * The printed gap is the value the pass's pre-gate compared: a real skip on geometry built to
+     * measure 7.0 is carried through RoutingResult and emitted, and the message prints 7.0.
+     */
+    @Test
+    public void preGatedWarning_printsTheGapThePassCompared_endToEndFromARealSkip() {
+        RoutingRect s = new RoutingRect(100, 100, 80, 60, "S");
+        RoutingRect t = new RoutingRect(340, 300, 80, 50, "T");
+        int face = EdgeAttachmentCalculator.faceLineCoordinate(s, EdgeAttachmentCalculator.Face.BOTTOM);
+        List<List<AbsoluteBendpointDto>> paths = new ArrayList<>();
+        paths.add(new ArrayList<>(List.of(new AbsoluteBendpointDto(140, face),
+                new AbsoluteBendpointDto(360, face), new AbsoluteBendpointDto(360, 300))));
+        paths.add(new ArrayList<>(List.of(new AbsoluteBendpointDto(367, face), new AbsoluteBendpointDto(367, 300))));
+        TerminalEgressClearancePass.Result result = new TerminalEgressClearancePass().run(
+                List.of(new RoutingPipeline.ConnectionEndpoints("c1", s, t, List.of(), null, 0),
+                        new RoutingPipeline.ConnectionEndpoints("c2", s, t, List.of(), null, 0)),
+                paths, List.of(s, t));
+        assertTrue("precondition: the pass was skipped", result.skippedByPreGate());
+        RoutingResult routing = new RoutingResult(Map.of(), List.of(), List.of(), Map.of(), 0, Map.of(), 0,
+                result.rolled(), null, result.outcome());
+
+        List<StructuredWarningDto> structured = preGated(routing.egress(), new ArrayList<>());
+
+        assertEquals(1, structured.size());
+        assertTrue(structured.get(0).message(), structured.get(0).message().contains("gap 7.0px"));
+        assertEquals(List.of("c1"), structured.get(0).remediationViolatorIds());
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void routingResult_refusesAnEgressOutcomeThatDisagreesWithTheRolledCount() {
+        new RoutingResult(Map.of(), List.of(), List.of(), Map.of(), 0, Map.of(), 0, 3, null,
+                new EgressOutcome(2, null, List.of()));
+    }
+
+    @Test
+    public void routingResult_defaultsTheEgressOutcomeToTheRolledCount() {
+        RoutingResult r = new RoutingResult(Map.of(), List.of(), List.of(), Map.of(), 0, Map.of(), 0, 3, null);
+        assertEquals(3, r.egress().rolledBack());
+        assertFalse(r.egress().preGated());
     }
 
     @Test

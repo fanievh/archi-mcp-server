@@ -12,6 +12,7 @@ import java.util.Map;
 
 import org.junit.Test;
 
+import net.vheerden.archi.mcp.model.geometry.GeometryUtils;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.model.routing.ViewFixture;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
@@ -157,28 +158,26 @@ public class TerminalsOnlyDriftedPathTest {
     }
 
     /**
-     * The heal does not move a reported coordinate, and moves the drawn line by less than a pixel.
+     * The heal moves neither a reported coordinate nor the drawn line.
      *
      * <p>Two different claims, and they are not the same claim. A bendpoint that passes through the
      * rectifier untouched is committed at exactly the integer it was reconstructed to, so reading it
-     * back afterwards returns that same integer — the <em>reported</em> value is unchanged exactly,
-     * not approximately. What the renderer draws does move: before the heal it interpolates the two
-     * disagreeing reconstructions at full precision and lands on a fraction; afterwards both offsets
-     * name one integer and it lands on that. The gap is the single truncation, strictly under a
-     * pixel, and it is the only thing about this pass a reader could notice.
+     * back afterwards returns that same integer: the <em>reported</em> value is unchanged exactly.
+     * The renderer draws a bendpoint at a whole pixel, and the reconstruction is that pixel, so the
+     * point committed is where the line was already drawn and afterwards both offsets name it.
      *
-     * <p>It was not always under a pixel. Reconstructing at a flat one half and then committing that
-     * point healed the connection onto the <em>midpoint</em> — a position the renderer never drew —
-     * so the line was yanked by the whole shear. On this fixture that is <strong>15 px</strong>,
-     * which the mutation of the blend reproduces exactly. Reading at the render weight means the
-     * pass now heals a connection onto the line it is already drawn along, and this assertion is
-     * what holds it there.
+     * <p>It was not always so. Reconstructing at a flat one half and committing that point healed the
+     * connection onto the <em>midpoint</em>, a position the renderer never drew, so the line was
+     * yanked by the whole shear: on this fixture <strong>15 px</strong>. Reading at the render weight
+     * but truncating once still moved it by up to a whole pixel, wherever the renderer's floor and
+     * float weight parted from the truncation. Reading the drawn pixel means the pass heals a
+     * connection onto the line it is already drawn along, and this assertion holds it there.
      */
     @Test
-    public void shouldNotMoveAReportedCoordinate_andShouldMoveTheDrawnLineByUnderAPixel()
+    public void shouldMoveNeitherAReportedCoordinateNorTheDrawnLine()
             throws IOException {
         int passThroughPoints = 0;
-        double worstDrawnShift = 0.0;
+        int worstDrawnShift = 0;
         for (Subject s : subjects()) {
             List<AbsoluteBendpointDto> rectified = rectify(s, s.reconstructed());
             if (rectified == null) continue;
@@ -203,18 +202,16 @@ public class TerminalsOnlyDriftedPathTest {
                 passThroughPoints++;
 
                 BendpointDto bp = s.relative().get(i);
-                double weight = (i + 1.0) / (n + 1.0);
-                double drawnBeforeX = (bp.startX() + s.srcCentreX()) * (1.0 - weight)
-                        + (bp.endX() + s.tgtCentreX()) * weight;
-                double drawnBeforeY = (bp.startY() + s.srcCentreY()) * (1.0 - weight)
-                        + (bp.endY() + s.tgtCentreY()) * weight;
+                int drawnBeforeX = GeometryUtils.drawnBendpointCoordinate(bp.startX(), bp.endX(),
+                        s.srcCentreX(), 0, s.tgtCentreX(), 0, i, n);
+                int drawnBeforeY = GeometryUtils.drawnBendpointCoordinate(bp.startY(), bp.endY(),
+                        s.srcCentreY(), 0, s.tgtCentreY(), 0, i, n);
                 worstDrawnShift = Math.max(worstDrawnShift, Math.max(
                         Math.abs(drawnBeforeX - before.x()), Math.abs(drawnBeforeY - before.y())));
             }
         }
         assertTrue("the sweep must actually reach pass-through points", passThroughPoints > 0);
-        assertTrue("the drawn line must not jump a whole pixel, but moved " + worstDrawnShift,
-                worstDrawnShift < 1.0);
+        assertEquals("the drawn line must not move at all", 0, worstDrawnShift);
     }
 
     // ------------------------------------------------------------------ the decision

@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 import net.vheerden.archi.mcp.response.dto.HubElementEntryDto;
@@ -44,21 +45,22 @@ public final class HubSizingSuggestionBuilder {
                 int suggestedHeight = entry.height() + 15 * excess;
                 int labelAwareWidth = entry.maxLabelWidth() > 0
                         ? entry.maxLabelWidth() + entry.width() : 0;
-                int suggestedWidth = Math.max(connectionBasedWidth, labelAwareWidth);
+                // The parenthesis gives the arithmetic of the term that won, so the width and the
+                // sum beside it always agree. A tie prints the connection term (both are true).
+                String widthClause = labelAwareWidth > connectionBasedWidth
+                        ? String.format(Locale.ROOT, "%dpx (%d + longest label %dpx)",
+                                labelAwareWidth, entry.width(), entry.maxLabelWidth())
+                        : String.format(Locale.ROOT, "%dpx (%d + 15 × %d)",
+                                connectionBasedWidth, entry.width(), excess);
 
-                String suggestion = String.format(
+                String suggestion = String.format(Locale.ROOT,
                         "Element '%s' has %d connections (large hub: > %d). "
                         + "Consider increasing height to %dpx (%d + 15 × %d) for horizontal layouts, "
-                        + "or width to %dpx (%d + 15 × %d) for vertical layouts.",
+                        + "or width to %s for vertical layouts.",
                         entry.elementName(), entry.connectionCount(),
                         HubSpacingSignal.LARGE_HUB_CONNECTION_COUNT,
                         suggestedHeight, entry.height(), excess,
-                        suggestedWidth, entry.width(), excess);
-                if (labelAwareWidth > connectionBasedWidth) {
-                    suggestion += String.format(
-                            " Label-adjusted width: %dpx (longest label: %dpx).",
-                            labelAwareWidth, entry.maxLabelWidth());
-                }
+                        widthClause);
                 suggestions.add(suggestion);
 
                 if (entry.connectionCount() > LARGE_HUB_THRESHOLD) {
@@ -68,7 +70,7 @@ public final class HubSizingSuggestionBuilder {
                     int suggestedHeight2D = entry.height() + 15 * floorExcessHalf;
                     int estimatedConnsPerEdge = (entry.connectionCount() + 3) / 4;
 
-                    String suggestion2D = String.format(
+                    String suggestion2D = String.format(Locale.ROOT,
                             "Element '%s' has %d connections (large hub: > %d). "
                             + "Consider 2D resize: increase width to %dpx (%d + 15 × %d) AND "
                             + "height to %dpx (%d + 15 × %d) to distribute connections across "

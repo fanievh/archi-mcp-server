@@ -69,7 +69,27 @@ public record AdjustViewSpacingResultDto(
         Integer resolvedInterElementDelta,
         String defaultResolutionReason,
         @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedAncestors,
-        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedElements) {
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<MovedViewObjectDto> resizedElements,
+        // A container this call grew now overlaps a sibling it did not overlap before (appended);
+        // see StructuredWarningCodes.CASCADE_GROWN_INTO_SIBLING. Omitted when empty.
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<StructuredWarningDto> structuredWarnings) {
+
+    /** Constructor matching the prior 17-field shape, before the cascade overlap warning. */
+    public AdjustViewSpacingResultDto(
+            String viewId, int groupsAdjusted, int elementsRepositioned,
+            int connectionsRouted, int connectionsFailed,
+            int crossingsBefore, int crossingsAfter,
+            String overallRating, Map<String, String> ratingBreakdown,
+            int coincidentSegmentCount, int nonOrthogonalTerminalCount,
+            double averageSpacing, List<String> suggestions,
+            Integer resolvedInterElementDelta, String defaultResolutionReason,
+            List<MovedViewObjectDto> resizedAncestors, List<MovedViewObjectDto> resizedElements) {
+        this(viewId, groupsAdjusted, elementsRepositioned, connectionsRouted, connectionsFailed,
+                crossingsBefore, crossingsAfter, overallRating, ratingBreakdown,
+                coincidentSegmentCount, nonOrthogonalTerminalCount, averageSpacing, suggestions,
+                resolvedInterElementDelta, defaultResolutionReason, resizedAncestors,
+                resizedElements, List.of());
+    }
 
     /**
      * Constructor matching the prior 15-field shape. Delegates with both lists empty; each is
@@ -110,5 +130,6 @@ public record AdjustViewSpacingResultDto(
     public AdjustViewSpacingResultDto {
         resizedAncestors = resizedAncestors != null ? resizedAncestors : List.of();
         resizedElements = resizedElements != null ? resizedElements : List.of();
+        structuredWarnings = structuredWarnings != null ? structuredWarnings : List.of();
     }
 }

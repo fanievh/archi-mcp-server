@@ -1,3 +1,18 @@
+---
+relationships:
+  - permitted Association Gap Plateau
+  - permitted Association Plateau Gap
+  - permitted Realization WorkPackage Plateau
+  - permitted Realization Deliverable Plateau
+  - permitted Composition WorkPackage WorkPackage
+  - permitted Composition Deliverable Deliverable
+  - permitted Triggering ImplementationEvent WorkPackage
+  - forbidden Composition ImplementationEvent WorkPackage
+  - forbidden Composition WorkPackage ImplementationEvent
+  - forbidden Aggregation ImplementationEvent WorkPackage
+  - forbidden Aggregation WorkPackage ImplementationEvent
+---
+
 # Recipe Family — Roadmap / Migration
 
 Topology archetype: **a left-to-right time axis of plateaus, gap elements between them, work packages on a band below**. Apply the invariant build sequence from the index; only the deltas below change.

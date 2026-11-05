@@ -145,7 +145,7 @@ public class BulkInsideOpenBatchErrorTest {
     public void shouldResolveTheId_whenANestedBulkTargetsAnObjectTheOpenBatchQueued()
             throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of("description", "outer"));
+        invokeTool(registry, "begin-batch", Map.of("description", "outer", "modelId", "model-bulk-in-batch"));
         Map<String, Object> queued = invokeTool(registry, "add-group-to-view", Map.of(
                 "viewId", view.getId(), "label", "Queued",
                 "x", 0, "y", 0, "width", 200, "height", 200));
@@ -345,7 +345,7 @@ public class BulkInsideOpenBatchErrorTest {
     @Test
     public void shouldStillReportNotFound_whenTheIdExistsNowhereAtAll() throws Exception {
         CommandRegistry registry = registryOverLiveAccessor();
-        invokeTool(registry, "begin-batch", Map.of("description", "outer"));
+        invokeTool(registry, "begin-batch", Map.of("description", "outer", "modelId", "model-bulk-in-batch"));
 
         Map<String, Object> envelope = invokeTool(registry, "bulk-mutate", Map.of(
                 "operations", List.of(Map.of("tool", "update-view-object",

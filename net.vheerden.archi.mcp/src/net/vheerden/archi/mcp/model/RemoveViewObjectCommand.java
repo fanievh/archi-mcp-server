@@ -1,23 +1,23 @@
 package net.vheerden.archi.mcp.model;
 
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 import org.eclipse.gef.commands.Command;
 
+import com.archimatetool.model.IDiagramModelComponent;
 import com.archimatetool.model.IDiagramModelConnection;
 import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelObject;
 
 /**
- * GEF Command that removes a generic diagram object (group or note) from a view.
+ * GEF Command that removes a diagram object that is not an ArchiMate element object (a group,
+ * note, view reference, image, or any other view object) from its parent container.
  *
  * <p>Unlike {@link RemoveFromViewCommand} which is specific to ArchiMate element objects,
- * this command handles non-ArchiMate view objects (groups and notes). When a group contains
- * nested elements that have connections, those connections are cascade-disconnected on
- * execute and reconnected on undo (following the {@link ClearViewCommand} pattern).</p>
+ * this command handles every other view object. Every connection Archi's own delete would take
+ * with it ({@link ViewRemoval#cascade}: those attached to the object or anything inside it, and
+ * recursively those attached to those connections) is disconnected on execute and reconnected on
+ * undo (following the {@link ClearViewCommand} pattern).</p>
  *
  * <p>State is captured once on first {@code execute()} and reused on subsequent
  * {@code redo()} calls, making the command resilient to partial undo failure.</p>
@@ -26,7 +26,7 @@ import com.archimatetool.model.IDiagramModelObject;
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
  * Direct invocation of {@code execute()} bypasses undo tracking.</p>
  */
-public class RemoveViewObjectCommand extends Command {
+public class RemoveViewObjectCommand extends Command implements RemovesViewObject {
 
     private final IDiagramModelObject diagramObject;
     private final IDiagramModelContainer parent;
@@ -42,7 +42,7 @@ public class RemoveViewObjectCommand extends Command {
     /**
      * Creates a command to remove a generic view object from its parent container.
      *
-     * @param diagramObject the diagram object to remove (group or note)
+     * @param diagramObject the diagram object to remove
      * @param parent        the parent container (view or group) containing the object
      */
     public RemoveViewObjectCommand(IDiagramModelObject diagramObject,
@@ -61,9 +61,7 @@ public class RemoveViewObjectCommand extends Command {
     public void execute() {
         // Capture connections only on first execution; reuse on redo
         if (capturedConnections == null) {
-            Set<IDiagramModelConnection> uniqueConnections = new LinkedHashSet<>();
-            collectConnections(diagramObject, uniqueConnections);
-            capturedConnections = new ArrayList<>(uniqueConnections);
+            capturedConnections = ViewRemoval.cascade(diagramObject);
         }
 
         // Disconnect all connections first
@@ -111,28 +109,6 @@ public class RemoveViewObjectCommand extends Command {
         }
     }
 
-    /**
-     * Recursively collects all connections from a diagram object and its descendants.
-     */
-    private void collectConnections(IDiagramModelObject obj,
-                                     Set<IDiagramModelConnection> connections) {
-        for (Object conn : obj.getSourceConnections()) {
-            if (conn instanceof IDiagramModelConnection dc) {
-                connections.add(dc);
-            }
-        }
-        for (Object conn : obj.getTargetConnections()) {
-            if (conn instanceof IDiagramModelConnection dc) {
-                connections.add(dc);
-            }
-        }
-        if (obj instanceof IDiagramModelContainer container) {
-            for (IDiagramModelObject child : container.getChildren()) {
-                collectConnections(child, connections);
-            }
-        }
-    }
-
     /** Package-visible for testing. */
     IDiagramModelObject getDiagramObject() { return diagramObject; }
 
@@ -141,4 +117,9 @@ public class RemoveViewObjectCommand extends Command {
 
     /** Package-visible for testing. */
     List<IDiagramModelConnection> getCapturedConnections() { return capturedConnections; }
+
+    @Override
+    public IDiagramModelComponent removedViewObject() {
+        return diagramObject;
+    }
 }

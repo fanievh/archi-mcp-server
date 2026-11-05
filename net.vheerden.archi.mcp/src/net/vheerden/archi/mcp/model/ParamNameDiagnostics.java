@@ -12,10 +12,10 @@ import net.vheerden.archi.mcp.response.ErrorCode;
  * <p>The same identifier is spelled several ways across the tool surface — an element's model id is
  * {@code id} on update-element, {@code elementId} on add-to-view and delete-element, and
  * {@code objectId} on move-to-folder; a relationship's is {@code id} or {@code relationshipId}; a
- * folder's is {@code id} or {@code folderId}. No JSON-schema validator is wired into the transport
- * and the tool schemas declare no {@code additionalProperties}, so a key spelled a sibling tool's
- * way is dropped in silence and the caller is told only that something is missing — while holding
- * that something under a name one synonym away.</p>
+ * folder's is {@code id} or {@code folderId}. A key spelled a sibling tool's way is not one the
+ * tool reads; when it stands in for a required key, the call reaches the tool (see
+ * {@link ToolArguments#refuseUnknown}), which would otherwise tell the caller only that something is
+ * missing — while holding that something under a name one synonym away.</p>
  *
  * <p>This explains rather than accepts. Teaching the spelling costs no permanent schema surface,
  * keeps every tool's {@code required} list intact, and covers every spelling in the table below

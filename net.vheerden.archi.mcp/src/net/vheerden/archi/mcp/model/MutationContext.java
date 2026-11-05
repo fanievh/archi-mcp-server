@@ -3,9 +3,13 @@ package net.vheerden.archi.mcp.model;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -19,11 +23,14 @@ import com.archimatetool.model.IArchimateElement;
 import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelArchimateObject;
+import com.archimatetool.model.IDiagramModelComponent;
 import com.archimatetool.model.IDiagramModelContainer;
 import com.archimatetool.model.IDiagramModelGroup;
 import com.archimatetool.model.IDiagramModelObject;
+import com.archimatetool.model.IFolder;
 import com.archimatetool.model.IIdentifier;
 
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.BatchStatusDto;
 import net.vheerden.archi.mcp.response.dto.BatchSummaryDto;
 
@@ -83,11 +90,33 @@ class MutationContext {
     private final List<Command> commandQueue = new ArrayList<>();
     private final List<String> descriptions = new ArrayList<>();
     private int sequenceCounter = 0;
+    /**
+     * The queued commands that close this batch, keyed by operation number in queue order. Kept
+     * beside the queue rather than found by walking it, so the check every enqueue makes costs
+     * nothing until one is queued.
+     */
+    private final LinkedHashMap<Integer, BatchClosingCommand> closingCommands = new LinkedHashMap<>();
     private Instant batchStarted;
     private String batchDescription;
     // Agent-supplied intent for this batch (optional). Recorded but never depended on by the
     // server; kept distinct from batchDescription (the undo-history label) — never merged.
     private String batchIntent;
+    // The model the batch is bound to: the one active at begin. Its queued commands hold EMF
+    // references into that model, so it is the only model they may be committed into. Held as the
+    // id, never the IArchimateModel — a closed-and-reopened model is a new instance with the same id.
+    private String boundModelId;
+    private String boundModelName;
+    // Which instance with that id: the dispatcher's epoch for it, or 0 when none was recorded. The
+    // id alone cannot tell two open copies of one file apart, nor a reopened file from the original.
+    private long boundModelEpoch;
+    // Set when the bound model was closed while this batch held queued work. Those commands point
+    // into the closed instance, so reopening the file cannot make them committable again — unlike an
+    // empty batch, whose stamp simply resolves to the reopened instance.
+    private boolean boundModelOrphaned;
+    // Whether the binding came from the model the begin call addressed, rather than from following
+    // the model active in Archi. An addressed batch commits into its own instance whichever model is
+    // active; a followed one is refused once another model is active.
+    private boolean boundModelAddressed;
 
     // ---- Approval state (mode bit globalised — proposals stay per-session) ----
     private final LinkedHashMap<String, PendingProposal> pendingProposals = new LinkedHashMap<>();
@@ -100,6 +129,20 @@ class MutationContext {
     }
 
     synchronized void beginBatch(String description, String intent) {
+        beginBatch(description, intent, null, null);
+    }
+
+    synchronized void beginBatch(String description, String intent, String modelId, String modelName) {
+        beginBatch(description, intent, modelId, modelName, 0L);
+    }
+
+    synchronized void beginBatch(String description, String intent, String modelId, String modelName,
+            long modelEpoch) {
+        beginBatch(description, intent, modelId, modelName, modelEpoch, false);
+    }
+
+    synchronized void beginBatch(String description, String intent, String modelId, String modelName,
+            long modelEpoch, boolean addressed) {
         if (mode == OperationalMode.BATCH) {
             throw new IllegalStateException("Already in batch mode");
         }
@@ -107,6 +150,68 @@ class MutationContext {
         batchStarted = Instant.now();
         batchDescription = description;
         batchIntent = intent;
+        boundModelId = modelId;
+        boundModelName = modelName;
+        boundModelEpoch = modelEpoch;
+        boundModelOrphaned = false;
+        boundModelAddressed = addressed;
+    }
+
+    /** Whether the batch was bound to the model its begin call addressed. */
+    synchronized boolean isBoundModelAddressed() {
+        return boundModelAddressed;
+    }
+
+    /** Id of the model this batch is bound to, or null outside batch mode or when none was active. */
+    synchronized String getBoundModelId() {
+        return boundModelId;
+    }
+
+    /** Name of the bound model as it was at begin, or null when unbound. */
+    synchronized String getBoundModelName() {
+        return boundModelName;
+    }
+
+    /** Epoch of the bound instance, or 0 when unbound or none was recorded. */
+    synchronized long getBoundModelEpoch() {
+        return boundModelEpoch;
+    }
+
+    /**
+     * Moves an empty batch from a closed instance to {@code newEpoch}, the open instance with the same
+     * id, taking that instance's current name (a reopened file may have been renamed). Nothing queued
+     * references the closed one, so this re-points nothing. Declines, returning false, once anything
+     * is queued or if the binding has moved since the caller read {@code closedEpoch}.
+     */
+    synchronized boolean rebindEmpty(long closedEpoch, long newEpoch, String newName) {
+        if (mode != OperationalMode.BATCH || boundModelEpoch != closedEpoch || !commandQueue.isEmpty()) {
+            return false;
+        }
+        boundModelEpoch = newEpoch;
+        boundModelName = newName;
+        return true;
+    }
+
+    /** Whether the bound model was closed while this batch held queued work. */
+    synchronized boolean isBoundModelOrphaned() {
+        return boundModelOrphaned;
+    }
+
+    /**
+     * Records that a model instance was closed. Only a batch bound to that instance and holding queued
+     * work is affected: its commands now reference a closed instance. Another open copy with the same
+     * id is a different instance, so closing it leaves this batch alone.
+     */
+    synchronized void onModelClosed(long modelEpoch) {
+        if (mode == OperationalMode.BATCH && boundModelId != null && boundModelEpoch == modelEpoch
+                && !commandQueue.isEmpty()) {
+            boundModelOrphaned = true;
+        }
+    }
+
+    /** Snapshot of the queued operation descriptions, in queue order. */
+    synchronized List<String> getQueuedDescriptions() {
+        return List.copyOf(descriptions);
     }
 
     /** The agent-supplied batch intent, or null when none was given. */
@@ -120,7 +225,80 @@ class MutationContext {
         }
         commandQueue.add(command);
         descriptions.add(description);
-        return ++sequenceCounter;
+        int seq = ++sequenceCounter;
+        if (command instanceof BatchClosingCommand closing) {
+            closingCommands.put(seq, closing);
+        }
+        return seq;
+    }
+
+    /**
+     * Decides whether a proposal from {@code tool} may be stored: every queued batch-closing command,
+     * in queue order, may refuse it, since approving it would queue it after them.
+     *
+     * @param tool the tool proposing, or null when not known
+     * @return the first refusal, or null when nothing closes the batch to it
+     */
+    synchronized BatchClosingCommand.Refusal refuseProposing(String tool) {
+        for (Map.Entry<Integer, BatchClosingCommand> closing : closingCommands.entrySet()) {
+            BatchClosingCommand.Refusal refusal = closing.getValue().refuseProposal(closing.getKey(), tool);
+            if (refusal != null) {
+                return refusal;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Decides whether {@code command} may be queued next: every queued batch-closing command, in
+     * queue order, may refuse it (see {@link BatchClosingCommand}), and a command that takes off a view
+     * an object that a queued command already takes off is refused (see {@link RemovesViewObject}). The
+     * caller holds this context's lock across this check and the {@link #queueCommand} that follows it.
+     *
+     * @param tool the tool queuing it, or null when not known
+     * @return the first refusal, or null when the command may be queued
+     */
+    synchronized BatchClosingCommand.Refusal refuseQueuing(Command command, String tool) {
+        for (Map.Entry<Integer, BatchClosingCommand> closing : closingCommands.entrySet()) {
+            BatchClosingCommand.Refusal refusal = closing.getValue().refuseFollower(closing.getKey(), command, tool);
+            if (refusal != null) {
+                return refusal;
+            }
+        }
+        return refuseSecondRemoval(command);
+    }
+
+    /**
+     * Refuses {@code command} when it takes off a view an object that a queued command already takes off,
+     * matched by identity: at commit the second would find it gone, or would put it back a second time on
+     * Undo. A removal the same command repeats is not checked here.
+     */
+    private BatchClosingCommand.Refusal refuseSecondRemoval(Command command) {
+        Set<IDiagramModelComponent> removing = Collections.newSetFromMap(new IdentityHashMap<>());
+        forEachCommand(command, leaf -> {
+            if (leaf instanceof RemovesViewObject removal) {
+                removing.add(removal.removedViewObject());
+            }
+        });
+        if (removing.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < commandQueue.size(); i++) {
+            List<IDiagramModelComponent> already = new ArrayList<>();
+            forEachCommand(commandQueue.get(i), leaf -> {
+                if (leaf instanceof RemovesViewObject removal && removing.contains(removal.removedViewObject())) {
+                    already.add(removal.removedViewObject());
+                }
+            });
+            if (!already.isEmpty()) {
+                return new BatchClosingCommand.Refusal("View object " + CallerText.bare(already.get(0).getId())
+                        + " is already removed by operation #" + (i + 1) + " of this batch (" + describeQueued(i)
+                        + ").", ErrorCode.VIEW_OBJECT_NOT_FOUND,
+                        "Nothing was queued and the batch is still open. The earlier operation removes it; drop "
+                                + "this call.");
+            }
+        }
+        return null;
     }
 
     /**
@@ -306,7 +484,10 @@ class MutationContext {
         Map<String, int[]> bounds = new LinkedHashMap<>();
         for (Command queued : commandQueue) {
             forEachCommand(queued, leaf -> {
-                if (leaf instanceof UpdateViewObjectCommand update) {
+                // An update that sets no bounds axis moves nothing when it runs, and its merged
+                // rectangle only repeats what the batch had already decided (or what the object
+                // held), so it is not a decision about where the object goes.
+                if (leaf instanceof UpdateViewObjectCommand update && !NamedAxes.NONE.equals(update.getAxes())) {
                     IDiagramModelObject target = update.getDiagramObject();
                     if (target != null) {
                         bounds.put(target.getId(), new int[] { update.getNewX(), update.getNewY(),
@@ -359,6 +540,32 @@ class MutationContext {
             });
         }
         return anchors;
+    }
+
+    /**
+     * Every non-compound command this session's open batch has queued, in queue order, or null
+     * outside batch mode.
+     *
+     * <p>Its siblings each project the queue onto one question — bounds, containment, anchors,
+     * labels. This hands back the leaves themselves, for a reader whose question spans several
+     * command kinds at once (which connections a batch adds, which view components it removes,
+     * which bendpoints it rewrites) and would otherwise need one more whole-queue walk per kind.
+     * The walk is the shared {@link #forEachCommand(Command, Consumer)}, so a bulk compound and a
+     * guard-wrapped add are seen exactly as every other reader sees them.</p>
+     *
+     * <p>Mode check inside, under this lock, for the same reason as its siblings.</p>
+     *
+     * @return the queued leaf commands, empty when nothing is queued, or null outside batch mode
+     */
+    synchronized List<Command> queuedLeafCommands() {
+        if (mode != OperationalMode.BATCH) {
+            return null;
+        }
+        List<Command> leaves = new ArrayList<>();
+        for (Command queued : commandQueue) {
+            forEachCommand(queued, leaves::add);
+        }
+        return leaves;
     }
 
     /**
@@ -551,6 +758,42 @@ class MutationContext {
     }
 
     /**
+     * The folder a queued create will add a view to, or null when this session has no queued create
+     * for that id.
+     *
+     * <p>Separate from {@link #queuedCreatedView(String)} because the view it returns cannot answer
+     * this: the folder attachment is deferred to {@code execute()}, so between prepare and commit the
+     * view's own {@code eContainer()} is null. A clone of that view is placed in the same folder as
+     * its source, and only the command that will attach the source knows which folder that is.</p>
+     *
+     * <p>Mirrors {@link #queuedRelationshipEnd(String, boolean)}'s walk rather than reusing
+     * {@link #queuedCreated(String, Function)}, for the same reason: the object wanted is not the one
+     * whose id matched. Like every read-back it descends compounds, so a view a queued
+     * {@code clone-view} creates answers too.</p>
+     *
+     * @param id the queued view's id
+     * @return the folder its create will add it to, or null when nothing queued creates that id
+     */
+    synchronized IFolder queuedCreatedViewFolder(String id) {
+        if (id == null || mode != OperationalMode.BATCH) {
+            return null;
+        }
+        List<IFolder> hit = new ArrayList<>(1);
+        for (Command queued : commandQueue) {
+            forEachCommand(queued, leaf -> {
+                if (hit.isEmpty() && leaf instanceof CreateViewCommand create
+                        && id.equals(create.getView().getId())) {
+                    hit.add(create.getFolder());
+                }
+            });
+            if (!hit.isEmpty()) {
+                return hit.get(0);
+            }
+        }
+        return null;
+    }
+
+    /**
      * Resolves a connection id against the connections this session's open batch has queued but not
      * yet connected.
      *
@@ -636,7 +879,7 @@ class MutationContext {
      * declares its parent. Both the single-id lookup and the whole-queue containment map read the
      * queue through it, so neither can drift from the other on what the batch has actually queued.</p>
      */
-    private static void forEachCreated(Command command, Consumer<QueuedViewObject> sink) {
+    static void forEachCreated(Command command, Consumer<QueuedViewObject> sink) {
         forEachCommand(command, leaf -> {
             if (leaf instanceof AddGroupToViewCommand add) {
                 sink.accept(new QueuedViewObject(add.getGroup(), add.getParent()));
@@ -662,7 +905,7 @@ class MutationContext {
      * runs through it, so the containment map and the geometry map cannot disagree with each other,
      * or with the single-id lookup, about which commands the batch actually holds.</p>
      */
-    private static void forEachCommand(Command command, Consumer<Command> sink) {
+    static void forEachCommand(Command command, Consumer<Command> sink) {
         if (command instanceof CompoundCommand compound) {
             // GEF's CompoundCommand.getCommands() is a raw List on this target platform.
             for (Object child : compound.getCommands()) {
@@ -673,12 +916,19 @@ class MutationContext {
         }
     }
 
+    /**
+     * The commit's command: Archi's notifying compound holding one {@link TrackedCompoundCommand} of the
+     * queue, in order, so a command that throws can leave the ones before it to be put back. The
+     * tracker's indices are the queue's.
+     */
     synchronized NonNotifyingCompoundCommand buildCompoundCommand() {
         String label = batchDescription != null
                 ? batchDescription
                 : "Batch mutation (" + commandQueue.size() + " operations)";
+        TrackedCompoundCommand queued = new TrackedCompoundCommand(label);
+        commandQueue.forEach(queued::add);
         NonNotifyingCompoundCommand compound = new NonNotifyingCompoundCommand(label);
-        commandQueue.forEach(compound::add);
+        compound.add(queued);
         return compound;
     }
 
@@ -686,16 +936,22 @@ class MutationContext {
      * Builds the commit summary. Must be called <strong>after</strong> the compound has been
      * dispatched: a {@link CommitSkippableCommand} only knows whether it declined once it has
      * been given the chance to run, so collecting skips any earlier would always report none.
+     * The same holds for whether every queued command vouches it wrote nothing.
      */
     synchronized BatchSummaryDto buildCommitSummary() {
         Duration elapsed = Duration.between(batchStarted, Instant.now());
         String duration = formatDuration(elapsed);
+        boolean nothingApplied = !commandQueue.isEmpty()
+                && commandQueue.stream().allMatch(CommitSkippableCommand::vouchesNothingChanged);
         return new BatchSummaryDto(
                 commandQueue.size(),
                 List.copyOf(descriptions),
                 duration,
                 false,
-                collectSkippedOperations());
+                collectSkippedOperations(),
+                nothingApplied ? Boolean.TRUE : null,
+                null,
+                null);
     }
 
     /**
@@ -722,6 +978,54 @@ class MutationContext {
         return skipped.isEmpty() ? null : List.copyOf(skipped);
     }
 
+    /**
+     * Pairs each queued operation that left changes it could not undo with the caller's description of
+     * it, as {@link #collectSkippedOperations} pairs a skip. Only meaningful after the commit ran.
+     *
+     * @return one line per such operation, in queue order; empty when none
+     */
+    synchronized List<String> describeChangesLeft() {
+        List<String> described = new ArrayList<>();
+        for (int i = 0; i < commandQueue.size(); i++) {
+            List<String> reasons = CommitSkippableCommand.collectReasonsForChangesLeft(commandQueue.get(i));
+            if (!reasons.isEmpty()) {
+                String description = i < descriptions.size() ? descriptions.get(i) : "operation " + (i + 1);
+                described.add(description + " — " + String.join("; ", reasons));
+            }
+        }
+        return List.copyOf(described);
+    }
+
+    /**
+     * The caller's description of the queued operation at {@code index}, as {@link #describeChangesLeft}
+     * names one.
+     */
+    synchronized String describeQueued(int index) {
+        return index >= 0 && index < descriptions.size() ? descriptions.get(index) : "operation " + (index + 1);
+    }
+
+    /**
+     * The commit's refusal when the queue holds a command that cannot execute, naming the first one. Only
+     * for a queue whose compound cannot execute: GEF would run none of it.
+     */
+    synchronized ModelAccessException unexecutableCommitRefusal() {
+        int index = 0;
+        while (index < commandQueue.size() && commandQueue.get(index).canExecute()) {
+            index++;
+        }
+        // Each operation can run on its own but the batch as built cannot: name no operation for it.
+        String cause = index < commandQueue.size()
+                ? "operation " + (index + 1) + " (" + describeQueued(index) + ") cannot be executed"
+                : "the batch cannot be executed as built, though each operation can on its own";
+        return new ModelAccessException("The batch was not committed: " + cause + ", so none of the "
+                + commandQueue.size() + " queued operation(s) could run. Nothing was applied, and the batch is still open.",
+                ErrorCode.MUTATION_FAILED, null, index < commandQueue.size()
+                        ? "End the batch with end-batch rollback=true, then queue the operations again in a new batch "
+                                + "without that one."
+                        : "End the batch with end-batch rollback=true, then queue the operations again in a new batch.",
+                null);
+    }
+
     synchronized BatchSummaryDto buildRollbackSummary() {
         Duration elapsed = Duration.between(batchStarted, Instant.now());
         String duration = formatDuration(elapsed);
@@ -742,9 +1046,15 @@ class MutationContext {
         commandQueue.clear();
         descriptions.clear();
         sequenceCounter = 0;
+        closingCommands.clear();
         batchStarted = null;
         batchDescription = null;
         batchIntent = null;
+        boundModelId = null;
+        boundModelName = null;
+        boundModelEpoch = 0L;
+        boundModelOrphaned = false;
+        boundModelAddressed = false;
     }
 
     synchronized OperationalMode getMode() {
@@ -769,7 +1079,7 @@ class MutationContext {
                 commandQueue.size(),
                 List.copyOf(descriptions),
                 batchStarted != null ? batchStarted.toString() : null,
-                null, pendingCount);
+                null, pendingCount, boundModelId, boundModelName);
     }
 
     // ---- Approval operations (proposal storage only — mode bit globalised) ----
@@ -831,6 +1141,43 @@ class MutationContext {
         return Duration.between(createdAt, now).compareTo(ttl) > 0;
     }
 
+    /**
+     * Puts back a proposal that was removed for dispatch and then refused, keeping its id and its place
+     * in the queue, so approving oldest first still meets it before the proposals stored after it.
+     * Bypasses the cap: it was already counted when it was first stored.
+     */
+    synchronized void restoreProposal(PendingProposal proposal) {
+        if (pendingProposals.containsKey(proposal.proposalId())) {
+            return;
+        }
+        long sequence = sequenceOf(proposal.proposalId());
+        List<PendingProposal> after = new ArrayList<>();
+        var it = pendingProposals.values().iterator();
+        while (it.hasNext()) {
+            PendingProposal each = it.next();
+            if (!after.isEmpty() || sequenceOf(each.proposalId()) > sequence) {
+                after.add(each);
+                it.remove();
+            }
+        }
+        pendingProposals.put(proposal.proposalId(), proposal);
+        for (PendingProposal each : after) {
+            pendingProposals.put(each.proposalId(), each);
+        }
+    }
+
+    /** The store order of an id this context minted ({@code p-N}); one it did not mint sorts last. */
+    private static long sequenceOf(String proposalId) {
+        if (proposalId != null && proposalId.startsWith("p-")) {
+            try {
+                return Long.parseLong(proposalId.substring(2));
+            } catch (NumberFormatException e) {
+                // not minted here
+            }
+        }
+        return Long.MAX_VALUE;
+    }
+
     synchronized PendingProposal getProposal(String proposalId) {
         return pendingProposals.get(proposalId);
     }
@@ -857,6 +1204,7 @@ class MutationContext {
             return millis + "ms";
         }
         double seconds = millis / 1000.0;
-        return String.format("%.1fs", seconds);
+        // A client parses this field, so it must read 1.5s whatever number format the desktop has.
+        return String.format(Locale.ROOT, "%.1fs", seconds);
     }
 }

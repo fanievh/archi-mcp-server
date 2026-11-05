@@ -127,6 +127,46 @@ public class ElkLayoutEngineTest {
 				child1Pos.y() < parentPos.height() * 2);
 	}
 
+	@Test
+	public void shouldReturnAbsoluteBendpoints_forAnEdgeInsideAGroupAwayFromTheOrigin() {
+		// ELK places an edge between two children of a group in the group's frame; the result is
+		// read as absolute, so the group's origin is added back. Two groups side by side put the
+		// second one well away from the view's origin.
+		List<LayoutNode> nodes = new ArrayList<>();
+		nodes.add(new LayoutNode("left", 0, 0, 400, 300, null));
+		nodes.add(new LayoutNode("left-1", 20, 40, 120, 55, "left"));
+		nodes.add(new LayoutNode("left-2", 200, 160, 120, 55, "left"));
+		nodes.add(new LayoutNode("right", 600, 0, 400, 300, null));
+		nodes.add(new LayoutNode("right-1", 20, 40, 120, 55, "right"));
+		nodes.add(new LayoutNode("right-2", 200, 160, 120, 55, "right"));
+		List<LayoutEdge> edges = List.of(
+				new LayoutEdge("left-1", "left-2", "left-edge"),
+				new LayoutEdge("right-1", "right-2", "right-edge"),
+				new LayoutEdge("right-1", "right-1", "right-loop"),
+				new LayoutEdge("left-2", "right-2", "across"));
+
+		ElkLayoutResult result = engine.computeLayout(nodes, edges, "DOWN", 50);
+
+		for (String group : List.of("left", "right")) {
+			ViewPositionSpec g = findPosition(result.positions(), group);
+			for (String id : List.of(group + "-edge", "right-loop")) {
+				if (!id.startsWith(group)) continue;
+				List<AbsoluteBendpointDto> bps = result.connectionBendpoints().get(id);
+				// a straight edge has none; a loop always has some
+				assertTrue(id + " has bendpoints", !id.endsWith("loop") || !bps.isEmpty());
+				for (AbsoluteBendpointDto bp : bps) {
+					assertTrue(id + " bendpoint " + bp + " lies inside " + group + " " + g,
+							bp.x() >= g.x() && bp.x() <= g.x() + g.width()
+									&& bp.y() >= g.y() && bp.y() <= g.y() + g.height());
+				}
+			}
+		}
+		ViewPositionSpec left = findPosition(result.positions(), "left");
+		ViewPositionSpec right = findPosition(result.positions(), "right");
+		assertTrue("precondition: the groups do not share an origin: " + left + " " + right,
+				left.x() != right.x() || left.y() != right.y());
+	}
+
 	// --- Task 6.4: Test direction parameter ---
 
 	@Test

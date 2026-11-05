@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.Locale;
+
 /**
  * A deterministic, <strong>SOUND, one-sided</strong> pre-routing infeasibility
  * certificate, evaluated <em>before</em> {@code new SpacingControlLoop.Request}
@@ -266,21 +268,21 @@ public final class SpacingPreconditionInfeasibilityCertificate {
                 + "by spacing/hub adjustment alone — even an ideal uniform "
                 + "redistribution of every element across the current "
                 + "element-union canvas yields only ");
-        sb.append(String.format("~%.0fpx", idealUniformAvg));
-        sb.append(String.format(
+        sb.append(String.format(Locale.ROOT, "~%.0fpx", idealUniformAvg));
+        sb.append(String.format(Locale.ROOT,
                 " average spacing, below the prescribed flow-view band "
                 + "(%d–%dpx). ",
                 SpacingControlLoop.DENSITY_REGIME_LOWER_PX,
                 SpacingControlLoop.DENSITY_REGIME_EXCELLENT_PX));
         if (!Double.isNaN(measuredAvgSpacingPx)) {
-            sb.append(String.format(
+            sb.append(String.format(Locale.ROOT,
                     "Measured average spacing is currently %.0fpx. ",
                     measuredAvgSpacingPx));
         }
         boolean hasHub = hubWidthPx != null && hubHeightPx != null
                 && hubConnectionCount != null;
         if (hasHub) {
-            sb.append(String.format(
+            sb.append(String.format(Locale.ROOT,
                     "The dominant hub is %dx%dpx absorbing %d connections. ",
                     hubWidthPx, hubHeightPx, hubConnectionCount));
         }

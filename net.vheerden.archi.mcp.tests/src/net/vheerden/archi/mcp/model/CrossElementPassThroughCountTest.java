@@ -29,8 +29,8 @@ import net.vheerden.archi.mcp.response.dto.ViewDto;
  * publish it.
  *
  * <p>Before this component existed, both handler surfaces read {@code connectionPassThroughs
- * .size()} — a capped list of descriptions mixing the charged cross-element crossings with the
- * unrated self-element ones — as if it were the number the rating is computed on. The two
+ * .size()} — a capped list of descriptions mixing the cross-element crossings with the routes
+ * through their own ends — as if it were the cross-element count. The two
  * quantities disagree in BOTH directions, and each direction had its own consequence, so each is
  * pinned separately here.</p>
  */
@@ -54,7 +54,8 @@ public class CrossElementPassThroughCountTest {
 
     /**
      * {@code n} connections of the overshoot-and-return shape, each routing through its OWN target
-     * and nothing else. Every one is described; none is charged.
+     * and nothing else. Every one is described, and charged as an own-end crossing, not a
+     * cross-element one.
      */
     private LayoutAssessmentResult selfElementOnlyView(int n) {
         List<AssessmentNode> nodes = new ArrayList<>();
@@ -87,19 +88,20 @@ public class CrossElementPassThroughCountTest {
     // ---- The two directions the list size gets wrong --------------------------------------------
 
     @Test
-    public void shouldChargeZero_whenTheDescriptionListOverstatesWithSelfElementEntries() {
+    public void shouldCountNoCrossElementCrossing_whenTheDescriptionListHoldsOnlyOwnEndEntries() {
         LayoutAssessmentResult result = selfElementOnlyView(3);
 
         // The precondition that makes this fixture worth anything: without it the pin could pass
         // on an ordinary view where the two quantities happen to agree.
         assertEquals("the fixture must publish three descriptions", 3,
                 result.connectionPassThroughs().size());
-        assertEquals("the rating must charge none of them", "pass",
+        assertEquals("the rating charges all three, as own-end crossings", "fair",
                 result.ratingBreakdown().get("passThroughs"));
+        assertEquals(3, result.ownEndpointPassThroughCount());
 
-        assertEquals("the published charged count must be the quantity the rating was computed on,"
-                        + " which on self-element-only geometry is zero — not the three"
-                        + " descriptions beside it", 0, result.crossElementPassThroughCount());
+        assertEquals("the published cross-element count is the cross-element half of what the"
+                        + " rating was computed on, which on own-end-only geometry is zero — not the"
+                        + " three descriptions beside it", 0, result.crossElementPassThroughCount());
         assertNotEquals("this fixture no longer discriminates: the two quantities agree",
                 result.connectionPassThroughs().size(), result.crossElementPassThroughCount());
     }

@@ -2,14 +2,23 @@ package net.vheerden.archi.mcp.server;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.LockInfo;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.net.BindException;
-import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.security.GeneralSecurityException;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.function.Supplier;
 
 import org.eclipse.jetty.ee10.servlet.ServletContextHandler;
 import org.eclipse.jetty.ee10.servlet.ServletHolder;
@@ -61,7 +70,13 @@ public class TransportConfig {
     private static final Logger logger = LoggerFactory.getLogger(TransportConfig.class);
 
     private static final String SERVER_NAME = "ArchiMate MCP Server";
-    private static final String SERVER_VERSION = "1.0.0";
+    /** What a read-only server tells a client in its {@code initialize} reply. */
+    public static final String READ_ONLY_INSTRUCTIONS = "This server is read-only. It offers only tools that read "
+            + "the model; it cannot change the model or write files on the server. Suggestions in tool "
+            + "descriptions and responses that name other tools may refer to tools this server does not offer.";
+
+    /** Reported as {@code serverInfo.version} when the plugin's own version cannot be read. */
+    static final String UNKNOWN_SERVER_VERSION = "unknown";
 
     // --- Jetty resource guardrails (no request-size cap / idle timeout / thread bound on
     // the embedded server => a buggy or hostile client could OOM the JVM with a giant body or hold
@@ -107,13 +122,154 @@ public class TransportConfig {
     /** Thread-name prefix for the bounded pool, so its threads are identifiable in a JVM dump. */
     private static final String THREAD_POOL_NAME = "archi-mcp-jetty";
 
-    private Server jettyServer;
+    /**
+     * Longest {@link #stopServer()} waits for Jetty to stop (10 s). A normal stop takes milliseconds;
+     * one that runs past this is given up on, so neither the Stop command nor Archi's exit can wait on
+     * it forever. The server is then still reported as running, because it may be, until that stop
+     * finishes: then {@link #releaseFinishedStop()} or a later stop or start releases it.
+     */
+    static final long STOP_TIMEOUT_MS = 10_000L;
+
+    /** How Jetty is stopped; replaceable so a test can make a stop that does not finish. */
+    @FunctionalInterface
+    interface JettyStop {
+        void stop(Server server) throws Exception;
+    }
+
+    private static final JettyStop STOP_AND_JOIN = server -> {
+        server.stop();
+        server.join();
+    };
+
+    /** How an MCP SDK server is closed; replaceable so a test can make a close throw. */
+    @FunctionalInterface
+    interface McpServerClose {
+        void close(McpSyncServer server);
+    }
+
+    private static final McpServerClose CLOSE = McpSyncServer::close;
+
+    /** Supplies the running plugin's version for {@code serverInfo}; see {@link #serverVersion}. */
+    private final Supplier<String> versionSupplier;
+
+    private final long stopTimeoutMs;
+
+    private final JettyStop jettyStop;
+
+    private final McpServerClose mcpServerClose;
+
+    private final Logger log;
+
+    /** Reports the version of the running plugin bundle to MCP clients. */
+    public TransportConfig() {
+        this(TransportConfig::bundleVersion);
+    }
+
+    /**
+     * Package-visible so a test can supply the version the servers report.
+     *
+     * @param versionSupplier supplies the version string (may return null/blank or throw)
+     */
+    TransportConfig(Supplier<String> versionSupplier) {
+        this(versionSupplier, STOP_TIMEOUT_MS, STOP_AND_JOIN);
+    }
+
+    /**
+     * Package-visible so a test can bound the stop more tightly and replace how Jetty is stopped.
+     *
+     * @param versionSupplier supplies the version string (may return null/blank or throw)
+     * @param stopTimeoutMs   longest {@link #stopServer()} waits for the stop
+     * @param jettyStop       stops the server and waits for it
+     */
+    TransportConfig(Supplier<String> versionSupplier, long stopTimeoutMs, JettyStop jettyStop) {
+        this(versionSupplier, stopTimeoutMs, jettyStop, CLOSE);
+    }
+
+    /**
+     * Package-visible so a test can also replace how the MCP SDK servers are closed.
+     *
+     * @param versionSupplier supplies the version string (may return null/blank or throw)
+     * @param stopTimeoutMs   longest {@link #stopServer()} waits for the stop
+     * @param jettyStop       stops the server and waits for it
+     * @param mcpServerClose  closes one MCP SDK server
+     */
+    TransportConfig(Supplier<String> versionSupplier, long stopTimeoutMs, JettyStop jettyStop,
+            McpServerClose mcpServerClose) {
+        this(versionSupplier, stopTimeoutMs, jettyStop, mcpServerClose, logger);
+    }
+
+    /**
+     * Package-visible so a test can also observe what the server logs.
+     *
+     * @param versionSupplier supplies the version string (may return null/blank or throw)
+     * @param stopTimeoutMs   longest {@link #stopServer()} waits for the stop
+     * @param jettyStop       stops the server and waits for it
+     * @param mcpServerClose  closes one MCP SDK server
+     * @param log             what the server's start, stop and clean-up log through
+     */
+    TransportConfig(Supplier<String> versionSupplier, long stopTimeoutMs, JettyStop jettyStop,
+            McpServerClose mcpServerClose, Logger log) {
+        this.versionSupplier = versionSupplier;
+        this.stopTimeoutMs = stopTimeoutMs;
+        this.jettyStop = jettyStop;
+        this.mcpServerClose = mcpServerClose;
+        this.log = log;
+    }
+
+    /** The plugin bundle's version, e.g. {@code 1.9.0.202610191646}, or null when the plugin is not started. */
+    private static String bundleVersion() {
+        McpPlugin plugin = McpPlugin.getDefault();
+        return plugin == null ? null : plugin.getBundle().getVersion().toString();
+    }
+
+    /**
+     * Resolves the version reported as {@code serverInfo.version} in the {@code initialize} reply.
+     *
+     * <p>This runs on every server start, and the MCP SDK refuses a null or empty version when the
+     * server is built, so this never throws and never returns a blank: a supplier that returns
+     * nothing, or fails, yields {@link #UNKNOWN_SERVER_VERSION}. That fallback is deliberately not
+     * shaped like a version, so it cannot be mistaken for a release. Outside a running plugin (in
+     * headless tests) it is the normal answer and is logged at DEBUG; a supplier that throws is a fault
+     * in a running plugin, so that is logged as a WARN with its cause.</p>
+     *
+     * @param versionSupplier supplies the version string (may return null/blank or throw)
+     * @return the trimmed supplied version, or {@link #UNKNOWN_SERVER_VERSION}
+     */
+    static String serverVersion(Supplier<String> versionSupplier) {
+        String version;
+        try {
+            version = versionSupplier.get();
+        } catch (RuntimeException | LinkageError e) {
+            logger.warn("Plugin version could not be read; reporting '{}' to MCP clients",
+                    UNKNOWN_SERVER_VERSION, e);
+            return UNKNOWN_SERVER_VERSION;
+        }
+        if (version == null || version.isBlank()) {
+            logger.debug("Plugin version is not available; reporting '{}'", UNKNOWN_SERVER_VERSION);
+            return UNKNOWN_SERVER_VERSION;
+        }
+        return version.trim();
+    }
+
+    /** Volatile: after a stop that was given up on, the stop's own thread may forget the server. */
+    private volatile Server jettyServer;
     private McpSyncServer streamableMcpServer;
     private McpSyncServer sseMcpServer;
     private int activePort;
     private String activeBindAddress;
+    /** How the running server's bind was classified as it started; see {@link #getBindExposure()}. */
+    private BindExposure activeBindExposure;
     private boolean tlsActive;
+    /** Set when a stop ran past its bound: the server may still be running until a later stop finishes. */
+    private volatile boolean stopGivenUp;
+    /** A stop still running after its wait ran out; a later stop waits on it rather than starting another. */
+    private FutureTask<Void> stopInFlight;
+    /** Told, on the stop's own thread, each time a stop has ended; see {@link #addStopEndedListener}. */
+    private final List<Runnable> stopEndedListeners = new CopyOnWriteArrayList<>();
     private List<McpServerFeatures.SyncToolSpecification> toolSpecifications = Collections.emptyList();
+
+    /** The {@code initialize} reply's instructions on both transports; null for none. */
+    private volatile String instructions;
     private List<McpServerFeatures.SyncResourceSpecification> resourceSpecifications = Collections.emptyList();
     private List<McpServerFeatures.SyncResourceTemplateSpecification> resourceTemplateSpecifications =
             Collections.emptyList();
@@ -148,6 +304,16 @@ public class TransportConfig {
     public void setResourceTemplateSpecifications(
             List<McpServerFeatures.SyncResourceTemplateSpecification> templateSpecs) {
         this.resourceTemplateSpecifications = templateSpecs != null ? templateSpecs : Collections.emptyList();
+    }
+
+    /**
+     * Sets the instructions the {@code initialize} reply carries on both transports, applied when the
+     * server is next built; null for none.
+     *
+     * @param instructions the text, or null
+     */
+    public void setInstructions(String instructions) {
+        this.instructions = instructions;
     }
 
     /**
@@ -236,7 +402,7 @@ public class TransportConfig {
      * Starts the embedded Jetty server with MCP transports on the specified port and bind address,
      * without TLS.
      *
-     * @param port        the TCP port to listen on
+     * @param port        the TCP port to listen on, or 0 for any free port (read it back with {@link #getPort()})
      * @param bindAddress the network interface to bind to (e.g. "127.0.0.1")
      * @throws ServerStartException if the server cannot start
      */
@@ -247,7 +413,7 @@ public class TransportConfig {
     /**
      * Starts the embedded Jetty server with MCP transports, optionally with TLS.
      *
-     * @param port             the TCP port to listen on
+     * @param port             the TCP port to listen on, or 0 for any free port (read it back with {@link #getPort()})
      * @param bindAddress      the network interface to bind to (e.g. "127.0.0.1")
      * @param tlsEnabled       true to enable TLS/HTTPS
      * @param keystorePath     path to the PKCS12/JKS keystore file (required if tlsEnabled)
@@ -270,7 +436,7 @@ public class TransportConfig {
      * auth-off and unchanged. The production no-arg {@link #startServer()} resolves the effective
      * token from preferences + secure storage (fail-closed) and passes it here.</p>
      *
-     * @param port             the TCP port to listen on
+     * @param port             the TCP port to listen on, or 0 for any free port (read it back with {@link #getPort()})
      * @param bindAddress      the network interface to bind to (e.g. "127.0.0.1")
      * @param tlsEnabled       true to enable TLS/HTTPS
      * @param keystorePath     path to the PKCS12/JKS keystore file (required if tlsEnabled)
@@ -282,16 +448,26 @@ public class TransportConfig {
     public void startServer(int port, String bindAddress, boolean tlsEnabled,
                             String keystorePath, String keystorePassword,
                             String authToken) throws ServerStartException {
+        if (stopGivenUp) {
+            // The previous server may still hold its port and threads: finish that stop before starting another.
+            stopServer();
+            if (stopGivenUp) {
+                throw new ServerStartException("The previous MCP Server has not finished stopping. "
+                        + "Try again shortly, or restart Archi.", ServerStartException.SERVER_START_FAILED, null);
+            }
+        }
         if (isRunning()) {
-            logger.warn("Server is already running on port {}", activePort);
+            log.warn("Server is already running on port {}", activePort);
             return;
         }
 
-        // Validate bind address before attempting to start
+        // Validate the bind address before attempting to start, and classify it once: the guard and the
+        // server-file-access decision both read this one answer, so no second lookup can disagree with it.
+        BindExposure exposure;
         try {
-            InetAddress.getByName(bindAddress);
+            exposure = BindExposure.resolve(bindAddress);
         } catch (UnknownHostException e) {
-            logger.error("Invalid bind address: {}. Server not started.", bindAddress);
+            log.error("Invalid bind address: {}. Server not started.", bindAddress);
             throw new ServerStartException(
                     "Invalid bind address: " + bindAddress, ServerStartException.INVALID_BIND_ADDRESS, e);
         }
@@ -324,9 +500,13 @@ public class TransportConfig {
                     .resources(false, true)
                     .build();
 
+            String serverVersion = serverVersion(versionSupplier);
             var streamableBuilder = McpServer.sync(streamableTransport)
-                    .serverInfo(SERVER_NAME, SERVER_VERSION)
+                    .serverInfo(SERVER_NAME, serverVersion)
                     .capabilities(capabilities);
+            if (instructions != null) {
+                streamableBuilder.instructions(instructions);
+            }
             if (!toolSpecifications.isEmpty()) {
                 streamableBuilder.tools(toolSpecifications);
             }
@@ -339,8 +519,11 @@ public class TransportConfig {
             streamableMcpServer = streamableBuilder.build();
 
             var sseBuilder = McpServer.sync(sseTransport)
-                    .serverInfo(SERVER_NAME, SERVER_VERSION)
+                    .serverInfo(SERVER_NAME, serverVersion)
                     .capabilities(capabilities);
+            if (instructions != null) {
+                sseBuilder.instructions(instructions);
+            }
             if (!toolSpecifications.isEmpty()) {
                 sseBuilder.tools(toolSpecifications);
             }
@@ -379,7 +562,7 @@ public class TransportConfig {
                 connector = new ServerConnector(jettyServer,
                         new SslConnectionFactory(sslContextFactory, "http/1.1"),
                         new HttpConnectionFactory(httpsConfig));
-                logger.info("TLS enabled with keystore: {}", keystorePath);
+                log.info("TLS enabled with keystore: {}", keystorePath);
             } else {
                 // Plain HTTP connector
                 connector = new ServerConnector(jettyServer);
@@ -434,7 +617,7 @@ public class TransportConfig {
             sizeLimitHandler.setHandler(new OriginHostValidationHandler(
                     new BearerTokenAuthHandler(
                             new RequestCharsetValidationHandler(
-                                    new RequestBodyUtf8ValidationHandler(context)), authToken), bindAddress));
+                                    new RequestBodyUtf8ValidationHandler(context)), authToken), bindAddress, exposure));
             jettyServer.setHandler(sizeLimitHandler);
 
             // Register custom JSON error handler (replaces Jetty's default HTML error pages).
@@ -443,21 +626,22 @@ public class TransportConfig {
 
             // Start Jetty
             jettyServer.start();
-            activePort = port;
+            activePort = effectivePort(port, connector.getLocalPort());
             activeBindAddress = bindAddress;
+            activeBindExposure = exposure;
             tlsActive = tlsEnabled;
             String scheme = tlsEnabled ? "https" : "http";
-            logger.info("MCP Server started on {}://{}:{}", scheme, bindAddress, port);
+            log.info("MCP Server started on {}://{}:{}", scheme, bindAddress, activePort);
 
         } catch (BindException e) {
-            cleanup();
-            logger.error("Port {} already in use. Server not started.", port);
+            releaseFailedStart();
+            log.error("Port {} already in use. Server not started.", port);
             throw new ServerStartException("Port " + port + " already in use", e);
         } catch (ServerStartException e) {
-            cleanup();
+            releaseFailedStart();
             throw e;
         } catch (Exception e) {
-            cleanup();
+            releaseFailedStart();
             // Classify the failure so the user gets an actionable message instead of one
             // generic "startup failed". The direct catch (BindException) above is the fast path; this
             // walks the FULL cause chain — a BindException can be nested deeper than one level — and,
@@ -467,18 +651,21 @@ public class TransportConfig {
             // McpServerManager.buildErrorMessage renders the existing friendly text unchanged.
             String code = classifyStartFailure(e, tlsEnabled);
             if (ServerStartException.PORT_IN_USE.equals(code)) {
-                logger.error("Port {} already in use. Server not started.", port);
+                log.error("Port {} already in use. Server not started.", port);
                 throw new ServerStartException("Port " + port + " already in use",
                         ServerStartException.PORT_IN_USE, e);
             }
             if (ServerStartException.INVALID_TLS_CONFIG.equals(code)) {
-                logger.error("TLS keystore could not be loaded (keystore: {}). Server not started.",
+                log.error("TLS keystore could not be loaded (keystore: {}). Server not started.",
                         keystorePath, e);
                 throw new ServerStartException("Keystore could not be loaded: " + e.getMessage(),
                         ServerStartException.INVALID_TLS_CONFIG, e);
             }
-            logger.error("Failed to start MCP server on {}:{}", bindAddress, port, e);
+            log.error("Failed to start MCP server on {}:{}", bindAddress, port, e);
             throw new ServerStartException("Server startup failed: " + e.getMessage(), e);
+        } catch (Error e) {
+            releaseFailedStart();
+            throw e;
         }
     }
 
@@ -516,6 +703,19 @@ public class TransportConfig {
                     ServerStartException.INVALID_TLS_CONFIG,
                     new IllegalArgumentException("Keystore password is required when TLS is enabled"));
         }
+    }
+
+    /**
+     * The port the server reports once started: the requested one, or — when port 0 asked the system
+     * for any free port — the one the connector actually bound. Pure and package-visible so the
+     * non-zero case is pinned without starting a server.
+     *
+     * @param requested the port passed to {@code startServer}
+     * @param bound     the connector's local port after start
+     * @return {@code requested} unless it is 0, else {@code bound}
+     */
+    static int effectivePort(int requested, int bound) {
+        return requested != 0 ? requested : bound;
     }
 
     /** Bounded depth for {@link #hasCauseOfType} so a malformed or cyclic cause chain cannot loop. */
@@ -584,35 +784,197 @@ public class TransportConfig {
     }
 
     /**
-     * Gracefully stops the Jetty server and releases the port.
+     * Gracefully stops the Jetty server and releases the port, waiting at most
+     * {@link #STOP_TIMEOUT_MS} for it.
+     *
+     * <p>A stop that runs past that (or whose wait is interrupted) is given up on: it is logged at
+     * ERROR with the state of the Jetty threads, the server keeps its port and stays reported as
+     * running, and a later call (a stop, or a start) waits for that same stop again. When that stop
+     * finishes, the listeners added with {@link #addStopEndedListener} are told; the server is
+     * released only when someone then calls {@link #releaseFinishedStop()} (in Archi, the server
+     * manager does), or by a later stop or start, and until then it is still reported as running. A stop that fails with an exception has ended, so it is
+     * logged and the server is released as before.</p>
      */
     public void stopServer() {
         if (!isRunning()) {
-            logger.debug("Server is not running, nothing to stop");
+            log.debug("Server is not running, nothing to stop");
             return;
         }
 
         int stoppedPort = activePort;
+        if (!stopWithinBound(jettyServer)) {
+            stopGivenUp = true;
+            log.error("MCP Server did not finish stopping (waited up to {} ms) and may still be running on port {}. "
+                    + "Jetty threads:\n{}", stopTimeoutMs, stoppedPort, jettyThreads());
+            return;
+        }
+        cleanup();
+        log.info("MCP Server stopped (was on port {})", stoppedPort);
+    }
+
+    /**
+     * Releases what a start that failed part-way left behind. Jetty starts its thread pool before it
+     * loads the keystore, so a keystore that cannot be loaded leaves a FAILED server whose pool is still
+     * running; {@link #stopServer()} would not stop it, because a FAILED server is not running.
+     * It runs for a start that fails with an {@link Error} too.
+     *
+     * <p>The stop is bounded like {@link #stopServer()}'s. One that runs past the bound is logged and
+     * left to finish on its own daemon thread: the connectors are already closed, so it holds no port,
+     * and since the server never ran there is no later stop to retry it.</p>
+     *
+     * <p>No exception leaves here: the caller is on its way to throwing the start's own failure, which
+     * must be the one the user sees. An {@link Error} raised by the release itself is not caught and
+     * would leave in place of the start's, with one exception: {@link #cleanup()} catches a
+     * {@link LinkageError} from closing an MCP server.</p>
+     */
+    private void releaseFailedStart() {
         try {
-            if (jettyServer != null) {
-                jettyServer.stop();
-                jettyServer.join();
+            if (jettyServer != null && !jettyServer.isStopped() && !stopWithinBound(jettyServer)) {
+                String waited = Thread.currentThread().isInterrupted()
+                        ? "the wait for it was interrupted"
+                        : "waited up to " + stopTimeoutMs + " ms";
+                log.error("Jetty did not finish stopping after a failed start ({}); its threads:\n{}",
+                        waited, jettyThreads());
             }
-        } catch (Exception e) {
-            logger.error("Error stopping Jetty server", e);
+        } catch (RuntimeException e) {
+            log.error("Error stopping Jetty after a failed start", e);
         } finally {
             cleanup();
-            logger.info("MCP Server stopped (was on port {})", stoppedPort);
         }
+    }
+
+    /**
+     * Stops the server on a daemon thread of its own and waits for it at most {@link #stopTimeoutMs},
+     * so a stop that never finishes cannot hold the caller, or keep Archi's JVM alive after exit.
+     *
+     * @return false when the wait ran out or was interrupted, true when the stop ended (even by failing)
+     */
+    private boolean stopWithinBound(Server server) {
+        if (stopInFlight == null) {
+            FutureTask<Void> stop = new FutureTask<>(() -> {
+                jettyStop.stop(server);
+                return null;
+            });
+            stopInFlight = stop;
+            Thread stopper = new Thread(() -> {
+                stop.run();
+                // only once the stop counts as ended: a listener may need what the waiting caller holds
+                tellStopEnded();
+            }, THREAD_POOL_NAME + "-stop");
+            stopper.setDaemon(true);
+            stopper.start();
+        }
+        try {
+            stopInFlight.get(stopTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (ExecutionException e) {
+            log.error("Error stopping Jetty server", e.getCause());
+        } catch (TimeoutException e) {
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Interrupted while waiting for the MCP Server to stop");
+            return false;
+        }
+        stopInFlight = null;
+        return true;
+    }
+
+    /**
+     * Adds a listener told, on the stop's own thread, each time a stop has ended, however it ended and
+     * whether or not it was given up on. It is told only after the stop counts as ended, so a caller
+     * waiting for that stop is released first, and {@link #releaseFinishedStop()} called from the
+     * listener finds it finished. Listeners are told in the order they were added; one that throws an
+     * exception is logged and the others are still told. An {@link Error} from one is not caught: the
+     * listeners after it are not told.
+     *
+     * @param listener what to run when a stop has ended
+     */
+    void addStopEndedListener(Runnable listener) {
+        stopEndedListeners.add(listener);
+    }
+
+    /**
+     * Releases a server whose stop was given up on and has finished since, without waiting: the MCP
+     * SDK servers are closed and the server is forgotten, as by a {@link #stopServer()} that finished
+     * in time. Does nothing when no stop was given up on, or when the one given up on is still running.
+     * It changes the server as {@link #stopServer()} does, so the same caller (in Archi, the server
+     * manager, holding its lock) calls it.
+     *
+     * @return true when it released the server
+     */
+    boolean releaseFinishedStop() {
+        FutureTask<Void> stop = stopInFlight;
+        if (!stopGivenUp || stop == null || !stop.isDone()) {
+            return false;
+        }
+        // the stop has ended, so this returns at once
+        stopServer();
+        return !isRunning();
+    }
+
+    private void tellStopEnded() {
+        for (Runnable listener : stopEndedListeners) {
+            try {
+                listener.run();
+            } catch (RuntimeException e) {
+                log.warn("A listener told that the MCP Server's stop has ended failed", e);
+            }
+        }
+    }
+
+    /**
+     * Each Jetty thread (and the stop's own), plus any thread holding a lock one of them waits on: its
+     * state, the lock it waits on and that lock's owner, every frame, and the locks it holds.
+     */
+    static String jettyThreads() {
+        StringBuilder dump = new StringBuilder();
+        try {
+            ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+            Set<Long> owners = new HashSet<>();
+            for (ThreadInfo info : threads) {
+                if (isJettyThread(info) && info.getLockOwnerId() >= 0) {
+                    owners.add(info.getLockOwnerId());
+                }
+            }
+            for (ThreadInfo info : threads) {
+                if (isJettyThread(info) || (info != null && owners.contains(info.getThreadId()))) {
+                    appendThread(dump, info);
+                }
+            }
+        } catch (RuntimeException e) {
+            dump.append("(thread states unavailable: ").append(e).append(')');
+        }
+        return dump.toString();
+    }
+
+    private static boolean isJettyThread(ThreadInfo info) {
+        return info != null && info.getThreadName().startsWith(THREAD_POOL_NAME);
+    }
+
+    private static void appendThread(StringBuilder dump, ThreadInfo info) {
+        // the first line of toString() names the thread, its state, the lock and its owner; the rest
+        // of toString() stops at eight frames, so the frames are written here in full
+        String header = info.toString();
+        int endOfFirstLine = header.indexOf('\n');
+        dump.append(endOfFirstLine < 0 ? header + '\n' : header.substring(0, endOfFirstLine + 1));
+        for (StackTraceElement frame : info.getStackTrace()) {
+            dump.append("\tat ").append(frame).append('\n');
+        }
+        for (LockInfo held : info.getLockedSynchronizers()) {
+            dump.append("\t- locked ").append(held).append('\n');
+        }
+        dump.append('\n');
     }
 
     /**
      * Checks whether the Jetty server is currently running.
      *
-     * @return true if the server is started and running
+     * @return true if the server is started and running, or a stop of it was given up on
      */
     public boolean isRunning() {
-        return jettyServer != null && jettyServer.isRunning();
+        // read once: the server may be forgotten on another thread between two reads
+        Server server = jettyServer;
+        return server != null && (stopGivenUp || server.isRunning());
     }
 
     /**
@@ -644,6 +1006,20 @@ public class TransportConfig {
     public String getBindAddress() {
         if (isRunning()) {
             return activeBindAddress;
+        }
+        return null;
+    }
+
+    /**
+     * How the bind the server is listening on was classified when it started: the one answer the
+     * Origin/Host guard and the server-file-access decision both read. Classified once, by the same
+     * lookup that validated the bind, and never looked up again while the server runs.
+     *
+     * @return the bind's exposure, or null if the server is not running
+     */
+    public BindExposure getBindExposure() {
+        if (isRunning()) {
+            return activeBindExposure;
         }
         return null;
     }
@@ -698,26 +1074,43 @@ public class TransportConfig {
         return sseMcpServer;
     }
 
+    /**
+     * Closes both MCP SDK servers and forgets the server. A close that fails with an exception or a
+     * {@link LinkageError} (the plugin's classes are broken) is logged and nothing leaves here. Any
+     * other {@link Error} from a close (the SDK's own close raises only a
+     * {@link VirtualMachineError} or a {@link ThreadDeath}) leaves here, but only after the other
+     * close has been tried and the server forgotten.
+     */
     private void cleanup() {
-        if (streamableMcpServer != null) {
+        try {
+            closeMcpServer(streamableMcpServer, "streamable");
+        } finally {
             try {
-                streamableMcpServer.close();
-            } catch (Exception e) {
-                logger.debug("Error closing streamable MCP server during cleanup", e);
+                closeMcpServer(sseMcpServer, "SSE");
+            } finally {
+                jettyServer = null;
+                stopGivenUp = false;
+                stopInFlight = null;
+                streamableMcpServer = null;
+                sseMcpServer = null;
+                activePort = 0;
+                activeBindAddress = null;
+                activeBindExposure = null;
+                tlsActive = false;
             }
         }
-        if (sseMcpServer != null) {
-            try {
-                sseMcpServer.close();
-            } catch (Exception e) {
-                logger.debug("Error closing SSE MCP server during cleanup", e);
-            }
+    }
+
+    private void closeMcpServer(McpSyncServer server, String transport) {
+        if (server == null) {
+            return;
         }
-        jettyServer = null;
-        streamableMcpServer = null;
-        sseMcpServer = null;
-        activePort = 0;
-        activeBindAddress = null;
-        tlsActive = false;
+        try {
+            mcpServerClose.close(server);
+        } catch (Exception e) {
+            log.debug("Error closing {} MCP server during cleanup", transport, e);
+        } catch (LinkageError e) {
+            log.warn("Error closing {} MCP server during cleanup", transport, e);
+        }
     }
 }

@@ -20,7 +20,11 @@ import com.archimatetool.model.IDiagramModelConnection;
  */
 final class RelativePositionFeature {
 
-    /** Anchor value for a centred (un-offset) label — the feature default where present. */
+    /**
+     * Anchor value for a centred (un-offset) label — the feature default where present. Mirrored in
+     * {@code LabelOffsetDirection.CENTER} (duplicated due to the model / model.routing boundary; a test
+     * holds the two equal).
+     */
     static final int CENTER = 2;
 
     private static final Method GETTER = resolve("getRelativePosition", false);

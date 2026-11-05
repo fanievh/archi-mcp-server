@@ -6,7 +6,7 @@
 tools/run-tests.sh
 ```
 
-On a machine with a local Archi 5.7 install this:
+On a machine with a local Archi 5.8+ install this:
 
 1. **compiles both projects from source** with `javac --release 21` against the assembled Archi +
    Eclipse + vendored-`lib/` + Mockito classpath (no dependency on the Eclipse-produced `bin/`);
@@ -44,8 +44,8 @@ across packages, is rejected **before** the compile with a message naming the ar
 | `ARCHI_HOME`   | `/Applications/Archi.app/Contents/Eclipse`       | Archi plugin jars                |
 | `ECLIPSE_HOME` | `/Applications/Eclipse.app/Contents/Eclipse`     | JUnit 4 + Hamcrest jars          |
 | `M2_REPO`      | `~/.m2/repository`                               | Mockito / ByteBuddy / Objenesis  |
-| `BUILD_DIR`    | `<repo>/build/test-harness`                      | compile output (never the IDE `bin/`) |
-| `RESULTS_DIR`  | `<repo>/build/test-results`                      | JUnit XML output (surefire-style) |
+| `BUILD_DIR`    | `<repo>/build/test-harness`                      | compile output (never the IDE `bin/`); a relative path is resolved against the directory the script is run from |
+| `RESULTS_DIR`  | `<repo>/build/test-results`                      | JUnit XML output (surefire-style); a relative path is resolved against the directory the script is run from |
 
 Because every location is an env var with no macOS-only assumption in the default path, the same
 script runs on Linux CI (set the vars; no `-XstartOnFirstThread` unless `--swt`). This is what

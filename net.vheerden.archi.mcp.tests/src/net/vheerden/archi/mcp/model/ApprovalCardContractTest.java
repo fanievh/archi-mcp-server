@@ -53,13 +53,19 @@ public class ApprovalCardContractTest {
     private static final String IMPL_FILE =
             "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/ArchiModelAccessorImpl.java";
 
+    /** The accessor and the collaborators that build proposals of their own. */
+    private static final List<String> SITE_FILES = List.of(IMPL_FILE,
+            "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/MergeElementsOperations.java",
+            "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/ChangeElementTypeOperations.java",
+            "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/ChangeRelationshipTypeOperations.java");
+
     private static final String GAP_FILE = "tools/approval-card-gaps.txt";
 
     private static final String COLLABORATOR_FILE =
             "net.vheerden.archi.mcp/src/net/vheerden/archi/mcp/model/DeleteApprovalCardText.java";
 
     /**
-     * The measured number of proposal sites in the accessor.
+     * The measured number of proposal sites in the accessor and its collaborators.
      *
      * <p>This is a FLOOR as much as a count, and the reason matters: a parse that silently matched
      * nothing, or matched a plausible-looking subset, would report a clean scan while checking
@@ -70,7 +76,7 @@ public class ApprovalCardContractTest {
      * <p>Adding a proposal site is expected to raise this constant, in the same commit that
      * classifies the new site. Lowering it means a site was removed; verify that before editing.</p>
      */
-    private static final int EXPECTED_SITE_COUNT = 42;
+    private static final int EXPECTED_SITE_COUNT = 45;
 
     /**
      * The ratchet click. Each closed exemption deletes one line from the registry and lowers this
@@ -381,8 +387,14 @@ public class ApprovalCardContractTest {
      * each shared map-filling helper, and backward to the enclosing method's signature.
      */
     private List<Site> parseSites() throws IOException {
-        List<String> lines = Files.readAllLines(locateRepoFile(IMPL_FILE), StandardCharsets.UTF_8);
         List<Site> sites = new ArrayList<>();
+        for (String file : SITE_FILES) {
+            parseSites(Files.readAllLines(locateRepoFile(file), StandardCharsets.UTF_8), sites);
+        }
+        return sites;
+    }
+
+    private void parseSites(List<String> lines, List<Site> sites) {
 
         for (int i = 0; i < lines.size(); i++) {
             if (!SITE.matcher(lines.get(i)).find()) {
@@ -408,7 +420,6 @@ public class ApprovalCardContractTest {
                     parameterNames(signature), disclosedKeys(body.toString()),
                     targetIdArguments(tail)));
         }
-        return sites;
     }
 
     /** Walks back from a site to the declaration of the method that contains it. */

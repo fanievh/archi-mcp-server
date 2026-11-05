@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.eclipse.swt.graphics.ImageData;
@@ -79,13 +80,25 @@ final class ImageOperations {
     /** Supplies the currently active model, validating one is loaded (throws if none). */
     private final Supplier<IArchimateModel> modelSupplier;
 
+    /**
+     * Supplies the model an image import for a session may write into. Imports are not queued — they
+     * write into the archive at once — so this is where a session whose open batch is bound to a
+     * different model is refused, rather than having the image land in a model it never addressed.
+     */
+    private final Function<String, IArchimateModel> admittedModel;
+
     ImageOperations(Supplier<IArchimateModel> modelSupplier) {
+        this(modelSupplier, sessionId -> modelSupplier.get());
+    }
+
+    ImageOperations(Supplier<IArchimateModel> modelSupplier, Function<String, IArchimateModel> admittedModel) {
         this.modelSupplier = modelSupplier;
+        this.admittedModel = admittedModel;
     }
 
     AddImageResultDto addImageToModel(String sessionId, byte[] imageData, String filenameHint) {
-        logger.info("Adding image to model: filenameHint={}, dataSize={}", filenameHint, imageData != null ? imageData.length : 0);
-        IArchimateModel model = modelSupplier.get();
+        logger.info("Adding image to model: filenameHint={}, dataSize={}", CallerText.logged(filenameHint), imageData != null ? imageData.length : 0);
+        IArchimateModel model = admittedModel.apply(sessionId);
 
         if (imageData == null || imageData.length == 0) {
             throw new ModelAccessException(
@@ -127,7 +140,7 @@ final class ImageOperations {
             }
             throw new ModelAccessException(
                     "Failed to add image to model: " + e.getMessage(),
-                    ErrorCode.INTERNAL_ERROR,
+                    e, ErrorCode.INTERNAL_ERROR,
                     e.getMessage(),
                     null,
                     null);
@@ -139,8 +152,8 @@ final class ImageOperations {
     }
 
     AddImageResultDto addImageFromFilePath(String sessionId, String filePath) {
-        logger.info("Adding image from file path: {}", filePath);
-        IArchimateModel model = modelSupplier.get();
+        logger.info("Adding image from file path: {}", CallerText.logged(filePath));
+        IArchimateModel model = admittedModel.apply(sessionId);
 
         if (filePath == null || filePath.isBlank()) {
             throw new ModelAccessException(
@@ -162,7 +175,7 @@ final class ImageOperations {
         }
         if (!file.exists()) {
             throw new ModelAccessException(
-                    "File not found: " + filePath,
+                    "File not found: " + CallerText.bare(filePath),
                     ErrorCode.INVALID_PARAMETER,
                     null,
                     "Check the file path and ensure the file exists.",
@@ -208,7 +221,7 @@ final class ImageOperations {
             }
             throw new ModelAccessException(
                     "Failed to add image from file: " + e.getMessage(),
-                    ErrorCode.INTERNAL_ERROR,
+                    e, ErrorCode.INTERNAL_ERROR,
                     e.getMessage(),
                     null,
                     null);
@@ -247,7 +260,7 @@ final class ImageOperations {
         }
         String imagePath = archiveManager.addImageFromFile(file);
 
-        logger.info("Image added to model: path={}, size={}x{}, format={}", imagePath, width, height, formatDetected);
+        logger.info("Image added to model: path={}, size={}x{}, format={}", CallerText.logged(imagePath), width, height, formatDetected);
         return new AddImageResultDto(imagePath, width, height, formatDetected);
     }
 
@@ -278,7 +291,7 @@ final class ImageOperations {
                 }
             } catch (Exception e) {
                 // Skip images that can't be loaded — don't fail the whole list
-                logger.warn("Could not load image dimensions for path: {}", path, e);
+                logger.warn("Could not load image dimensions for path: {}", CallerText.logged(path), e);
                 result.add(new ModelImageDto(path, 0, 0));
             }
         }

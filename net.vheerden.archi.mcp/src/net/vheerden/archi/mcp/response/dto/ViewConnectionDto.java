@@ -57,10 +57,15 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * would name different faces. Absence never means "no face".</p>
  *
  * <p>On a connection with bendpoints the reference is the {@code absoluteBendpoints} value this
- * response publishes, whose single division truncates toward zero, while the renderer blends in
- * {@code double} and converts with {@code floor}. They agree on every non-negative coordinate and
- * can differ by one pixel on a negative one, which at a band boundary changes the face — so on
- * those coordinates this field declines where the renderer attaches, rather than guessing.</p>
+ * response publishes, which is the whole pixel the renderer draws the bendpoint at: the same float
+ * weight, double blend and floor. So the face is derived from the point the line is drawn through,
+ * on a drifted connection and at a band boundary alike.</p>
+ *
+ * <p>Added {@code textAlignment} ({@code left} or {@code right}, omitted at the centred default) and
+ * {@code properties} (omitted when the connection has none), read with the same readers as the plain
+ * connection row: {@code IDiagramModelConnection} is {@code ITextAlignment} and {@code IProperties}, so
+ * neither is view-object-only. No tool writes either on a connection, so every path, the add and update
+ * responses included, reads them off the model.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ViewConnectionDto(
@@ -84,18 +89,54 @@ public record ViewConnectionDto(
     String labelExpression,
     Integer relativePosition,
     String sourceRenderFace,
-    String targetRenderFace
+    String targetRenderFace,
+    String textAlignment,
+    List<java.util.Map<String, String>> properties
 ) {
 
     /**
+     * Constructor matching the prior 21-field shape (no text alignment or properties). Delegates with
+     * two trailing nulls, so every direct call of that arity reads as before.
+     */
+    public ViewConnectionDto(
+            String viewConnectionId,
+            String relationshipId,
+            String relationshipType,
+            String sourceViewObjectId,
+            String targetViewObjectId,
+            List<BendpointDto> bendpoints,
+            List<AbsoluteBendpointDto> absoluteBendpoints,
+            AnchorPointDto sourceAnchor,
+            AnchorPointDto targetAnchor,
+            Integer textPosition,
+            String lineColor,
+            Integer lineWidth,
+            String fontColor,
+            Boolean nameVisible,
+            String fontName,
+            Integer fontSize,
+            String fontStyle,
+            String labelExpression,
+            Integer relativePosition,
+            String sourceRenderFace,
+            String targetRenderFace) {
+        this(viewConnectionId, relationshipId, relationshipType,
+                sourceViewObjectId, targetViewObjectId, bendpoints,
+                absoluteBendpoints, sourceAnchor, targetAnchor, textPosition,
+                lineColor, lineWidth, fontColor, nameVisible,
+                fontName, fontSize, fontStyle, labelExpression, relativePosition,
+                sourceRenderFace, targetRenderFace, null, null);
+    }
+
+    /**
      * Constructor matching the prior 18-field shape (with labelExpression but no
-     * relativePosition). Delegates to the canonical constructor with trailing nulls for
+     * relativePosition). Delegates through the 21-field form with trailing nulls for
      * relativePosition and the two render faces. Preserves every existing 18-arg call site
      * (collect/read-back, prepare-update-connection, bulk-mutate, and the shorter convenience
      * constructors that delegate through this arity) byte-identically.
      *
-     * <p>This is the only arity that reaches the canonical record: the 14-, 17-, 6- and 10-arg
-     * forms all delegate through here, so a new trailing component is added in exactly one place.
+     * <p>The 14-, 17-, 6- and 10-arg forms all delegate through here, and this form through the
+     * 21-field one, so a new trailing component is added in exactly one place.
      */
     public ViewConnectionDto(
             String viewConnectionId,

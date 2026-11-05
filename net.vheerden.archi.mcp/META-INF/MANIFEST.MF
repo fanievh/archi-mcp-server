@@ -3,7 +3,7 @@ Bundle-ManifestVersion: 2
 Bundle-ActivationPolicy: lazy
 Bundle-Name: ArchiMate MCP Server
 Bundle-SymbolicName: net.vheerden.archi.mcp;singleton:=true
-Bundle-Version: 1.9.0.qualifier
+Bundle-Version: 1.10.0.qualifier
 Bundle-Activator: net.vheerden.archi.mcp.McpPlugin
 Bundle-Vendor: JS van Heerden & Claude Code
 Bundle-Localization: plugin
@@ -12,9 +12,9 @@ Require-Bundle: org.eclipse.ui,
  org.eclipse.swt,
  org.eclipse.jface,
  org.eclipse.equinox.security,
- com.archimatetool.model,
- com.archimatetool.editor,
- com.archimatetool.export.svg;bundle-version="5.7.0";resolution:=optional,
+ com.archimatetool.model;bundle-version="5.8.0",
+ com.archimatetool.editor;bundle-version="5.8.0",
+ com.archimatetool.export.svg;bundle-version="5.8.0";resolution:=optional,
  com.google.guava
 Bundle-RequiredExecutionEnvironment: JavaSE-21
 Bundle-ClassPath: .,

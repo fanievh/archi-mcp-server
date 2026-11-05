@@ -3,19 +3,26 @@ package net.vheerden.archi.mcp.model;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.emf.ecore.EObject;
+import org.eclipse.gef.commands.Command;
 
 import com.archimatetool.model.IArchimateDiagramModel;
 import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IDiagramModelArchimateConnection;
 import com.archimatetool.model.IDiagramModelConnection;
+import com.archimatetool.model.IDiagramModelContainer;
+import com.archimatetool.model.IDiagramModelGroup;
+import com.archimatetool.model.IDiagramModelNote;
 import com.archimatetool.model.IDiagramModelObject;
 import com.archimatetool.model.util.ArchimateModelUtils;
 
 import net.vheerden.archi.mcp.model.routing.ConnectionThroughNoteDetector;
+import net.vheerden.archi.mcp.model.routing.EgressOutcome;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
+import net.vheerden.archi.mcp.response.dto.AutoLayoutAndRouteResultDto;
 import net.vheerden.archi.mcp.response.dto.NudgedElementDto;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningCodes;
 import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
@@ -69,7 +76,7 @@ final class AutoRouteWarnings {
             return;
         }
         for (String connId : missingConnectionIds) {
-            warnings.add("Connection not found on view: " + connId);
+            warnings.add("Connection not found on view: " + CallerText.bare(connId));
         }
         structuredWarnings.add(new StructuredWarningDto(
                 StructuredWarningCodes.CONNECTION_NOT_FOUND,
@@ -97,7 +104,8 @@ final class AutoRouteWarnings {
     private static String connectionsNotFoundMessage(List<String> missingConnectionIds,
             String outcomeClause) {
         return missingConnectionIds.size() + " requested connection ID(s) were not found "
-                + "on the view and were skipped: " + String.join(", ", missingConnectionIds)
+                + "on the view and were skipped: "
+                + String.join(", ", missingConnectionIds.stream().map(CallerText::bare).toList())
                 + "." + outcomeClause + " Run get-view-contents to list "
                 + "the connection IDs that exist on this view.";
     }
@@ -117,9 +125,16 @@ final class AutoRouteWarnings {
      * {@code remediationViolatorIds}, not string-edited: the ids are the evidence, and rebuilding
      * the sentence around them is what keeps one clause from being spliced into another. The
      * per-ID free-text lines are untouched, because each of them is still true.</p>
+     *
+     * <p>The self-connection warning is repaired the same way and for the same reason: its loop
+     * commands ride the compound this early return never builds, so a bare self-connection still
+     * draws no line, whatever arm the call was on. Its free text is the structured message, so both
+     * sinks are replaced.</p>
+     *
+     * @param loopedSelfConnectionIds the self-connections the call was going to give a loop
      */
-    static void emitRoutingFailedDegenerateGeometry(List<String> warnings,
-            List<StructuredWarningDto> structuredWarnings) {
+    static void emitRoutingFailedDegenerateGeometry(List<String> loopedSelfConnectionIds,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
         warnings.add("Routing failed due to degenerate element geometry (overlapping or "
                 + "zero-gap elements). Use layout-flat-view or layout-within-group to "
                 + "separate elements first, then re-route.");
@@ -134,7 +149,270 @@ final class AutoRouteWarnings {
                         existing.remediationTool(),
                         existing.remediationViolatorIds()));
             }
+            if (StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED.equals(existing.code())) {
+                List<String> kept = new ArrayList<>(existing.remediationViolatorIds());
+                kept.removeAll(loopedSelfConnectionIds);
+                String message = selfConnectionsNotRoutedMessage("", kept, KEPT_AS_STORED,
+                        loopedSelfConnectionIds,
+                        " Routing then failed on the other connections, so the default loop was not "
+                        + "written either, and these, stored with no bendpoints, still draw no line: ");
+                warnings.set(warnings.indexOf(existing.message()), message);
+                structuredWarnings.set(i, new StructuredWarningDto(existing.code(), message,
+                        existing.remediationTool(), existing.remediationViolatorIds()));
+            }
         }
+    }
+
+    /** MCP tool that edits one connection's bendpoints — the lever for a loop the router skips. */
+    private static final String CONNECTION_EDIT_TOOL = "update-view-connection";
+
+    /**
+     * Emits the warning that names the self-connections a routing pass took out of its targets.
+     *
+     * <p>The router aims each end at the other end's centre, so for a connection from an object to
+     * itself it would produce a stub and replace the loop; none is routed. What then happens to
+     * one is Archi's rule applied to the bendpoints it holds when this call's compound runs: an
+     * ArchiMate one holding none is given the default loop, and any other is left as it is. On the
+     * applied arm that is straight after the prepare that sorted them, so the two lists are the
+     * outcome and are stated as such: the kept ones are "left exactly as stored", which also covers
+     * a self-connection that is not an ArchiMate connection and is never given a loop here, so it
+     * does not claim the connection has bendpoints. On a deferred arm the compound runs later,
+     * after the rest of the batch or the human's own edits, either of which can give a bare one
+     * bendpoints or clear a kept one, so neither list is an outcome: the rule is stated, and the
+     * lists are labelled as the reading taken when the call was made.</p>
+     *
+     * <p>{@code remediationViolatorIds} lists the kept ids first, then the looped ones. No-op when
+     * both lists are empty.</p>
+     *
+     * @param keptIds   self-connections holding bendpoints, or not ArchiMate connections, when read
+     * @param loopedIds ArchiMate self-connections holding no bendpoints when read
+     */
+    static void emitSelfConnectionsNotRouted(List<String> keptIds, List<String> loopedIds,
+            DispatchArm arm, List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        if (keptIds.isEmpty() && loopedIds.isEmpty()) {
+            return;
+        }
+        List<String> ids = new ArrayList<>(keptIds);
+        ids.addAll(loopedIds);
+        String message = arm == DispatchArm.APPLIED
+                ? selfConnectionsNotRoutedMessage("", keptIds, KEPT_AS_STORED, loopedIds,
+                        " Stored with no bendpoints, and so drawing no line, these were given "
+                        + "Archi's default loop: ")
+                : selfConnectionsNotRoutedMessage(" Nothing has been applied. Which of them get "
+                        + "Archi's default loop is decided " + (arm == DispatchArm.QUEUED
+                                ? "when the open batch is committed" : "only once the human approves it")
+                        + ", from the bendpoints each holds then: an ArchiMate connection holding none "
+                        + "gets it, and every other is left as it is then.", keptIds,
+                        " As read when this call was made, those not due a loop: ", loopedIds,
+                        " As read when this call was made, those due one, stored with no bendpoints and "
+                        + "so drawing no line: ");
+        emitMirrored(StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED, message,
+                CONNECTION_EDIT_TOOL, ids, warnings, structuredWarnings);
+    }
+
+    /**
+     * {@code dto} with one entry naming the self-connections the layout's routing pass did not
+     * route, or {@code dto} itself when there were none.
+     *
+     * <p>A layout call runs its routing pass several times and keeps one, so it names these once,
+     * from the pass it keeps. The wording claims no stored state: in flat mode the layout drew
+     * every loop the pass then saw, so "left exactly as stored" would describe the layout's loop,
+     * not the caller's. On every arm the loop each keeps is the one it holds when the layout is
+     * applied, and one holding none then is given Archi's default loop.</p>
+     */
+    static AutoLayoutAndRouteResultDto withSelfConnectionsKeptByLayout(AutoLayoutAndRouteResultDto dto,
+            List<String> selfConnectionIds) {
+        if (selfConnectionIds.isEmpty()) {
+            return dto;
+        }
+        List<StructuredWarningDto> structured = new ArrayList<>(dto.structuredWarnings());
+        emitMirrored(StructuredWarningCodes.SELF_CONNECTION_NOT_ROUTED, selfConnectionIds.size()
+                + " self-connection(s) were not routed; each keeps its loop. Archi draws a connection "
+                + "from an object to itself as a loop, which this router does not produce, so the "
+                + "layout leaves each the loop it holds when the layout is applied, and gives one "
+                + "holding no bendpoints then Archi's default loop: "
+                + String.join(", ", selfConnectionIds) + ".", CONNECTION_EDIT_TOOL,
+                selfConnectionIds, new ArrayList<>(), structured);
+        return dto.withStructuredWarnings(List.copyOf(structured));
+    }
+
+    /**
+     * {@code dto} with both layout disclosures: the self-connections the routing pass kept (as
+     * {@link #withSelfConnectionsKeptByLayout}) and the notes the layout leaves objects over (as
+     * {@link #withLayoutOverNotes}). One call per result site, so each site reads the same.
+     */
+    static AutoLayoutAndRouteResultDto withLayoutWarnings(AutoLayoutAndRouteResultDto dto,
+            List<String> selfConnectionIds, IArchimateDiagramModel view, Command layout, DispatchArm arm,
+            MutationDispatcher dispatcher, String sessionId) {
+        return withLayoutOverNotes(withSelfConnectionsKeptByLayout(dto, selfConnectionIds), view, layout, arm,
+                dispatcher, sessionId);
+    }
+
+    /**
+     * {@code dto} with one {@link StructuredWarningCodes#LAYOUT_OVERLAPS_NOTE} entry naming every
+     * note the layout leaves overlapping an object that is not a note, or {@code dto} itself when
+     * there is none (and on a view without notes nothing is computed).
+     *
+     * <p>The geometry is the layout's: each object's rectangle is the one the last
+     * {@code UpdateViewObjectCommand} in {@code layout} gives it, else its own, and an absolute
+     * position climbs those rectangles through its containers. So the reading is the same on every
+     * arm: once the layout is applied it is the view's, and in a batch or awaiting approval it is the
+     * layout the call computed. A pair is judged as {@code assess-layout} judges it: boxes of no
+     * width or height are not drawn and are skipped, the overlap is strict, and a note is not flagged
+     * against the container that directly holds it.</p>
+     *
+     * <p>On the queued arm the objects are those the open batch will leave on the view
+     * ({@link StagedViewState#objectsOn}): a note the batch placed earlier is there when the layout
+     * is, though it is not on the view yet. An object the batch has not attached is climbed through
+     * the container its add names, and a rectangle the batch's last bounds update gives an object is
+     * its own unless the layout moves it. The other arms read the view as it is.</p>
+     *
+     * @param dispatcher the session's dispatcher, read on the queued arm only; may be null
+     */
+    static AutoLayoutAndRouteResultDto withLayoutOverNotes(AutoLayoutAndRouteResultDto dto,
+            IArchimateDiagramModel view, Command layout, DispatchArm arm, MutationDispatcher dispatcher,
+            String sessionId) {
+        List<IDiagramModelObject> objects = new ArrayList<>();
+        Map<String, IDiagramModelContainer> parents = Map.of();
+        Map<IDiagramModelObject, int[]> laidOut = new java.util.HashMap<>();
+        if (arm == DispatchArm.QUEUED && dispatcher != null) {
+            StagedViewState staged = StagedViewState.of(dispatcher, sessionId, null);
+            objects.addAll(staged.objectsOn(view));
+            parents = staged.stagedParents();
+            for (Command leaf : staged.leaves()) {
+                if (leaf instanceof UpdateViewObjectCommand update && update.getDiagramObject() != null
+                        && !NamedAxes.NONE.equals(update.getAxes())) {
+                    laidOut.put(update.getDiagramObject(), new int[] { update.getNewX(), update.getNewY(),
+                            update.getNewWidth(), update.getNewHeight() });
+                }
+            }
+        } else {
+            collect(view, objects);
+        }
+        if (objects.stream().noneMatch(o -> o instanceof IDiagramModelNote)) {
+            return dto;
+        }
+        MutationContext.forEachCommand(layout, leaf -> {
+            if (leaf instanceof UpdateViewObjectCommand update && update.getDiagramObject() != null) {
+                laidOut.put(update.getDiagramObject(), new int[] { update.getNewX(), update.getNewY(),
+                        update.getNewWidth(), update.getNewHeight() });
+            }
+        });
+        List<String> noteIds = new ArrayList<>();
+        List<String> pairs = new ArrayList<>();
+        int count = 0;
+        for (IDiagramModelObject note : objects) {
+            int[] n = absolute(note, laidOut, parents);
+            if (!(note instanceof IDiagramModelNote) || n[2] <= 0 || n[3] <= 0) {
+                continue;
+            }
+            for (IDiagramModelObject other : objects) {
+                int[] o = absolute(other, laidOut, parents);
+                if (other instanceof IDiagramModelNote || other == parentOf(note, parents) || o[2] <= 0 || o[3] <= 0
+                        || !(n[0] < o[0] + o[2] && n[0] + n[2] > o[0] && n[1] < o[1] + o[3] && n[1] + n[3] > o[1])) {
+                    continue;
+                }
+                count++;
+                if (!noteIds.contains(note.getId())) {
+                    noteIds.add(note.getId());
+                }
+                if (pairs.size() < LayoutQualityAssessor.MAX_DESCRIPTIONS) {
+                    pairs.add("note '" + note.getId() + "' overlaps " + (other instanceof IDiagramModelGroup
+                            ? "group" : "element") + " '" + other.getId() + "'");
+                }
+            }
+        }
+        if (count == 0) {
+            return dto;
+        }
+        String listed = String.join("; ", pairs) + (count > pairs.size() ? "; and " + (count - pairs.size())
+                + " more" : "");
+        String message = switch (arm) {
+            case APPLIED -> "This layout left " + count + " note overlap(s): " + listed + ".";
+            case QUEUED -> "As read when this call was made, from the layout it computed, the layout "
+                    + "will leave " + count + " note overlap(s): " + listed + ". Nothing has been applied: "
+                    + "this layout is queued in the open batch; end-batch with rollback:true discards it.";
+            case AWAITING_APPROVAL -> "As read when this call was made, from the layout it computed, the "
+                    + "layout will leave " + count + " note overlap(s): " + listed + ". Nothing has been "
+                    + "applied: this layout is waiting on the human's decision, and rejecting it in Archi "
+                    + "leaves the view as it is.";
+        } + LAYOUT_OVER_NOTE_REMEDY;
+        List<StructuredWarningDto> structured = new ArrayList<>(dto.structuredWarnings());
+        emitMirrored(StructuredWarningCodes.LAYOUT_OVERLAPS_NOTE, message, NOTE_MOVE_REMEDY_TOOL,
+                List.copyOf(noteIds), new ArrayList<>(), structured);
+        return dto.withStructuredWarnings(List.copyOf(structured));
+    }
+
+    /** Why a layout lands on a note, and the remedy; the same on every arm, since it moves the note. */
+    private static final String LAYOUT_OVER_NOTE_REMEDY = " Notes are not laid out: the layout moves every "
+            + "other object and leaves each note where it was, so it can place objects over one. Counted per "
+            + "(note, object) pair, as assess-layout's noteOverlapCount counts them. Move each note clear with "
+            + AutoRouteWarnings.NOTE_MOVE_REMEDY_TOOL + ", or re-add it with add-note-to-view position below-content, which "
+            + "places it below the content and every other note.";
+
+    private static void collect(IDiagramModelContainer container, List<IDiagramModelObject> into) {
+        for (IDiagramModelObject child : container.getChildren()) {
+            into.add(child);
+            if (child instanceof IDiagramModelContainer nested) {
+                collect(nested, into);
+            }
+        }
+    }
+
+    /**
+     * {@code object}'s rectangle in canvas coordinates, each rectangle on the climb as {@code laidOut}
+     * gives it. An object not attached yet climbs through the container its staged add names in
+     * {@code parents}; the climb is bounded against a malformed queue.
+     */
+    private static int[] absolute(IDiagramModelObject object, Map<IDiagramModelObject, int[]> laidOut,
+            Map<String, IDiagramModelContainer> parents) {
+        int[] own = rectangle(object, laidOut);
+        int x = own[0];
+        int y = own[1];
+        int queuedHops = object.eContainer() == null ? 1 : 0;
+        Object up = parentOf(object, parents);
+        while (up instanceof IDiagramModelObject container && queuedHops <= parents.size()) {
+            int[] offset = rectangle(container, laidOut);
+            x += offset[0];
+            y += offset[1];
+            queuedHops += container.eContainer() == null ? 1 : 0;
+            up = parentOf(container, parents);
+        }
+        return new int[] { x, y, own[2], own[3] };
+    }
+
+    /** The live container of {@code object}, or the one its staged add names when it is not attached yet. */
+    private static Object parentOf(IDiagramModelObject object, Map<String, IDiagramModelContainer> parents) {
+        EObject live = object.eContainer();
+        return live != null ? live : parents.get(object.getId());
+    }
+
+    private static int[] rectangle(IDiagramModelObject object, Map<IDiagramModelObject, int[]> laidOut) {
+        int[] staged = laidOut.get(object);
+        return staged != null ? staged : new int[] { object.getBounds().getX(), object.getBounds().getY(),
+                object.getBounds().getWidth(), object.getBounds().getHeight() };
+    }
+
+    /** The kept clause wherever nothing can change them before the response is read. */
+    private static final String KEPT_AS_STORED =
+            " Those not given a loop by this call are left exactly as stored: ";
+
+    /**
+     * Composes the self-connection message: the count, {@code rule} (empty where the lists are the
+     * outcome), then each id list after the clause that ends where its ids begin.
+     */
+    private static String selfConnectionsNotRoutedMessage(String rule, List<String> keptIds,
+            String keptClause, List<String> loopedIds, String loopedClause) {
+        StringBuilder message = new StringBuilder((keptIds.size() + loopedIds.size())
+                + " self-connection(s) were not routed: Archi draws a connection from an object to "
+                + "itself as a loop, which this router does not produce.").append(rule);
+        if (!keptIds.isEmpty()) {
+            message.append(keptClause).append(String.join(", ", keptIds)).append('.');
+        }
+        if (!loopedIds.isEmpty()) {
+            message.append(loopedClause).append(String.join(", ", loopedIds)).append('.');
+        }
+        return message.toString();
     }
 
     /**
@@ -169,6 +447,80 @@ final class AutoRouteWarnings {
         emitMirrored(StructuredWarningCodes.EGRESS_LIFT_LAYOUT_BOUND, message, SPACING_REMEDY_TOOL,
                 List.of(), warnings, structuredWarnings);
     }
+
+    /**
+     * Emits whichever egress warning the pass's outcome calls for: the layout-bound rollback
+     * ({@link #emitEgressLiftLayoutBound}) or the pre-gate skip ({@link #emitEgressLiftPreGated}).
+     * The outcome cannot hold both, so at most one is emitted. A {@code null} outcome emits nothing.
+     */
+    static void emitEgressOutcome(EgressOutcome egress, DispatchArm arm,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        if (egress == null) {
+            return;
+        }
+        emitEgressLiftLayoutBound(egress.rolledBack(), arm, warnings, structuredWarnings);
+        emitEgressLiftPreGated(egress, arm, warnings, structuredWarnings);
+    }
+
+    /**
+     * Emits the pre-gated egress warning when the terminal-clearance pass was skipped wholesale by
+     * its view-level pre-gate AND at least one connection still hugs the face it leaves. A skip on a
+     * view with no hug is not news and emits nothing. The gap printed is the value the gate compared,
+     * measured on this call's routes as they stood when the pass ran. That is not the routes the view
+     * held before the call, and not quite the routes it writes either: a later stage spreads shared
+     * ports along their faces. So the message dates the gap to the pass, and {@code assess-layout}
+     * can read a different gap on the written routes. The ids of the hugging connections ride as
+     * {@code remediationViolatorIds}: counted on the first routing pass's clear routes after the
+     * spread. A violated route written under {@code force} is not counted, and with
+     * {@code autoNudge} the re-route's outcome is not reported and the first pass's routes are not
+     * re-judged against the faces the nudge moved.
+     */
+    static void emitEgressLiftPreGated(EgressOutcome egress, DispatchArm arm,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        if (egress == null || !egress.preGated() || egress.huggingConnectionIds().isEmpty()) {
+            return;
+        }
+        int count = egress.huggingConnectionIds().size();
+        String cause = "the router skipped its off-face lift pass for this view because, when it "
+                + "reached that pass, its vertical connection runs sat too close together (10th-percentile gap "
+                + gapPx(egress.preGateGapP10()) + "px, below the "
+                + (int) EgressOutcome.PRE_GATE_FLOOR_PX + "px floor), so it ";
+        String message = switch (arm) {
+            case APPLIED -> count + " connection(s) still hug the face they leave: " + cause
+                    + "left the hug(s) in place.";
+            case QUEUED -> "In this routing " + count + " connection(s) hug the face they leave: " + cause
+                    + "will leave the hug(s) in place. Nothing has been applied: this routing is "
+                    + "queued in the open batch.";
+            case AWAITING_APPROVAL -> "In this routing " + count + " connection(s) hug the face they "
+                    + "leave: " + cause + "will leave the hug(s) in place. Nothing has been applied: "
+                    + "this routing is waiting on the human's decision, so the hug(s) will only exist "
+                    + "once it is approved.";
+        } + EGRESS_PRE_GATE_REMEDY;
+        emitMirrored(StructuredWarningCodes.EGRESS_LIFT_PRE_GATED, message, SPACING_REMEDY_TOOL,
+                egress.huggingConnectionIds(), warnings, structuredWarnings);
+    }
+
+    /**
+     * The gap to one decimal, rounded DOWN so a gap just under the floor never prints as the floor
+     * itself (7.96 reads 7.9, not 8.0), and never as {@code -0.0}. The epsilon keeps a binary
+     * shortfall such as 6.9999999 from printing as 6.9 — except within it of the floor, where it
+     * would print the floor the gap fell below, so there the gap is truncated without it.
+     */
+    private static String gapPx(double gap) {
+        double down = Math.floor(gap * 10 + 1e-6) / 10;
+        if (gap < EgressOutcome.PRE_GATE_FLOOR_PX && down >= EgressOutcome.PRE_GATE_FLOOR_PX) {
+            down = Math.floor(gap * 10) / 10;
+        }
+        return String.format(Locale.ROOT, "%.1f", down == 0 ? 0.0 : down);
+    }
+
+    /**
+     * The pre-gate remedy. Like {@link #EGRESS_LIFT_CORRIDOR_REMEDY} it is about the layout, so it
+     * holds on every arm; it names the parallel runs because the gate measures their spacing.
+     */
+    private static final String EGRESS_PRE_GATE_REMEDY =
+            " Spread the parallel connection runs apart (increase element spacing) and re-route — "
+            + "re-routing alone will not lift them.";
 
     /**
      * The corridor remedy, which is a statement about the LAYOUT rather than about recovering this
@@ -258,6 +610,75 @@ final class AutoRouteWarnings {
             + "from one a later iteration reversed. Re-routing will reproduce the same result: "
             + "increase the spacing around these elements so a recommended move has room to take "
             + "effect.";
+
+    /** MCP tool that moves an element, its neighbours or its parent by id, or an element out of its parent. */
+    private static final String WITHHELD_MOVE_REMEDY_TOOL = "update-view-object";
+
+    /**
+     * Discloses the move recommendations {@link NudgeRecommendationScreen} withheld because the
+     * parent-containment clamp would absorb them.
+     *
+     * <p><strong>Arm-blind.</strong> Withholding is decided while computing, on geometry already on
+     * the view, so the sentence is the same on every arm and makes no claim about what was applied:
+     * it describes a recommendation that was not offered, not a move that was or was not made.</p>
+     *
+     * <p>Names the parent and the side for each element: the floor is the parent's, so the parent
+     * is where the caller looks. It does not tell the caller to move the parent and stop there. A
+     * nested element's position is relative to its parent, so moving the parent carries every child
+     * with it: that clears a route only when the blocked connection's other end lies outside the
+     * parent, and the message says so and names the remedies that make room inside it.</p>
+     *
+     * <p>"Held by", not "sits at": a child already left of the padding line is held there too (the
+     * flat floor would push it right), and it does not sit at the line.</p>
+     *
+     * <p>One entry per call, never truncated. No-op when nothing was withheld.</p>
+     */
+    /** "Name (id)", or the id alone when the object has no name of its own and was named by it. */
+    private static String named(String name, String id) {
+        return name == null || name.equals(id) ? String.valueOf(id) : name + " (" + id + ")";
+    }
+
+    static void emitRecommendationsWithheld(List<NudgeRecommendationScreen.Withheld> withheld,
+            List<String> warnings, List<StructuredWarningDto> structuredWarnings) {
+        if (withheld == null || withheld.isEmpty()) {
+            return;
+        }
+        List<String> ids = new ArrayList<>();
+        List<String> parentIds = new ArrayList<>();
+        StringBuilder named = new StringBuilder();
+        for (NudgeRecommendationScreen.Withheld w : withheld) {
+            ids.add(w.elementId());
+            if (w.parentId() != null && !parentIds.contains(w.parentId())) {
+                parentIds.add(w.parentId());
+            }
+            List<String> sides = new ArrayList<>();
+            List<String> directions = new ArrayList<>();
+            for (NudgeRecommendationScreen.Floor floor : w.floors()) {
+                sides.add(floor.side);
+                directions.add(floor.direction);
+            }
+            named.append(named.length() > 0 ? "; " : "")
+                    .append(named(w.elementName(), w.elementId())).append(" is held by the ")
+                    .append(String.join(" and ", sides)).append(" of its parent ")
+                    .append(named(w.parentName(), w.parentId()))
+                    .append(", so a move ").append(String.join(" or ", directions))
+                    .append(" cannot take effect inside it");
+        }
+        ids.addAll(parentIds);
+        String message = withheld.size() + " move recommendation(s) withheld because the parent "
+                + "holds the element on that side and would absorb the move: " + named
+                + ". They are not in recommendations or blockedRecommendations, and autoNudge does "
+                + "not attempt them, and re-routing against the same geometry withholds them again. "
+                + "Moving or widening the parent does not make room inside it: a nested element's "
+                + "position is relative to its parent, so every child moves with the parent. "
+                + "Moving the parent with update-view-object therefore clears the route only when "
+                + "the blocked connection's other end lies outside the parent. Otherwise make room "
+                + "inside it: move the element, or the elements beside it, with "
+                + "update-view-object, re-arrange the parent's contents with layout-within-group, "
+                + "or move the element out of the parent.";
+        emitMirrored(StructuredWarningCodes.MOVE_RECOMMENDATION_WITHHELD_BY_PARENT, message,
+                WITHHELD_MOVE_REMEDY_TOOL, List.copyOf(ids), warnings, structuredWarnings);
+    }
 
     /** MCP tool that moves a note by id — the remedy for a route the caller wants off a note. */
     private static final String NOTE_MOVE_REMEDY_TOOL = "update-view-object";

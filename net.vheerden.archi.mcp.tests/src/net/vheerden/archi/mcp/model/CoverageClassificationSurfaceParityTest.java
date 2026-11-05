@@ -80,7 +80,10 @@ public class CoverageClassificationSurfaceParityTest {
         List<String> contextual = contextual();
         List<String> permanent = permanentPartial();
 
-        assertEquals("the contextual set the surfaces describe", 3, contextual.size());
+        // Six since connectionPassThroughs gained its own undrawn-connection trigger, after
+        // connectionThroughNote and connectionGrazesVisual gained theirs; the glossary row and the
+        // served description were updated with it.
+        assertEquals("the contextual set the surfaces describe", 6, contextual.size());
         assertEquals("the permanent set the surfaces describe", 2, permanent.size());
         for (String id : contextual) {
             assertFalse("a dimension cannot be both permanent and contextual: " + id,
@@ -154,6 +157,7 @@ public class CoverageClassificationSurfaceParityTest {
             case 3: return "Three";
             case 4: return "Four";
             case 5: return "Five";
+            case 6: return "Six";
             default: return String.valueOf(n);
         }
     }

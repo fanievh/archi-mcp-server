@@ -227,7 +227,7 @@ public class ConditionalStepArmScopeTest {
 	// ---- update-view-connection ---------------------------------------------------------------
 
 	@Test
-	public void updateViewConnection_appliedArm_pinsAllFourTerminalBranches() throws Exception {
+	public void updateViewConnection_appliedArm_pinsAllThreeTerminalBranches() throws Exception {
 		accessor.updateViewConnection = applied(connectionDto());
 
 		assertEquals("bendpoints explicitly cleared", List.of(
@@ -248,14 +248,10 @@ public class ConditionalStepArmScopeTest {
 				nextSteps("update-view-connection",
 						map("viewConnectionId", "vc-1", "lineColor", "#ff0000")));
 
-		// The fourth branch needs a styling object that carries nothing hasAnyValue() counts:
-		// 'recede' is read by extractStylingParams and is not one of the fields hasAnyValue()
-		// tests, so it produces a non-null StylingParams that reports no value.
-		assertEquals("neither bendpoints nor anything hasAnyValue() sees", List.of(
-				"Connection updated. Use get-view-contents to inspect.",
-				"Use update-view-connection to change bendpoints, styling, or label visibility."),
-				nextSteps("update-view-connection",
-						map("viewConnectionId", "vc-1", "recede", Boolean.TRUE)));
+		// There was a fourth branch, for a styling object carrying nothing hasAnyValue() counts.
+		// Only a view-object key such as 'recede' could build one, and the tool now refuses a key
+		// it does not read, so the call that used to reach that branch is refused before the write.
+		assertRefusedAsUnknown(map("viewConnectionId", "vc-1", "recede", Boolean.TRUE));
 	}
 
 	@Test
@@ -270,7 +266,7 @@ public class ConditionalStepArmScopeTest {
 	}
 
 	@Test
-	public void updateViewConnection_queuedArm_reTensesAllFourTerminalBranches() throws Exception {
+	public void updateViewConnection_queuedArm_reTensesAllThreeTerminalBranches() throws Exception {
 		accessor.updateViewConnection = queued(connectionDto());
 
 		assertEquals("bendpoints explicitly cleared", concat(List.of(
@@ -298,18 +294,11 @@ public class ConditionalStepArmScopeTest {
 				nextSteps("update-view-connection",
 						map("viewConnectionId", "vc-1", "lineColor", "#ff0000")));
 
-		assertEquals("neither bendpoints nor anything hasAnyValue() sees", concat(List.of(
-				"Connection will be updated when this batch commits."
-						+ " Nothing is written yet — get-view-contents reads the committed view, "
-						+ "so inspect after end-batch.",
-				"Use update-view-connection to change bendpoints, styling, or label visibility."),
-				QUEUE_TAIL),
-				nextSteps("update-view-connection",
-						map("viewConnectionId", "vc-1", "recede", Boolean.TRUE)));
+		assertRefusedAsUnknown(map("viewConnectionId", "vc-1", "recede", Boolean.TRUE));
 	}
 
 	@Test
-	public void updateViewConnection_approvalArm_reTensesAllFourTerminalBranches() throws Exception {
+	public void updateViewConnection_approvalArm_reTensesAllThreeTerminalBranches() throws Exception {
 		accessor.updateViewConnection = proposed(connectionDto());
 
 		assertEquals("bendpoints explicitly cleared", afterFixedLines(
@@ -336,20 +325,14 @@ public class ConditionalStepArmScopeTest {
 				nextSteps("update-view-connection",
 						map("viewConnectionId", "vc-1", "lineColor", "#ff0000")));
 
-		assertEquals("neither bendpoints nor anything hasAnyValue() sees", afterFixedLines(
-				"Connection will be updated if this change is approved."
-						+ " Nothing is written yet — get-view-contents reads the committed view, "
-						+ "so inspect once the human has approved the change.",
-				"Use update-view-connection to change bendpoints, styling, or label visibility."),
-				nextSteps("update-view-connection",
-						map("viewConnectionId", "vc-1", "recede", Boolean.TRUE)));
+		assertRefusedAsUnknown(map("viewConnectionId", "vc-1", "recede", Boolean.TRUE));
 	}
 
 	/**
-	 * All six selectors stay request values, and the builder keeps reading no DTO field.
+	 * All five selectors stay request values, and the builder keeps reading no DTO field.
 	 *
 	 * <p>This tool is the one of the eight whose guidance is chosen entirely from what the caller
-	 * asked for, evaluated before the accessor is even called. That is legitimate here — the four
+	 * asked for, evaluated before the accessor is even called. That is legitimate here — the three
 	 * branches describe the <em>request's shape</em>, not the write's outcome — and it is exactly
 	 * what makes the re-tensing safe on a deferred arm, where no outcome exists to read.</p>
 	 *
@@ -409,8 +392,7 @@ public class ConditionalStepArmScopeTest {
 		accessor.removeFromView = queued(
 				new RemoveFromViewResultDto("vo-1", "viewObject", List.of("vc-1", "vc-2")));
 		assertEquals("a view object with a cascade", concat(List.of(
-				"Element will be removed from view when this batch commits "
-						+ "(2 connections will also be removed). "
+				"Element will be removed from view when this batch commits. "
 						+ "Underlying model element is unchanged.",
 				"Use get-view-contents after end-batch to inspect the view layout — it reads the "
 						+ "committed view, which still holds this object until then.",
@@ -509,6 +491,83 @@ public class ConditionalStepArmScopeTest {
 		assertNoneContains(nextSteps("remove-from-view", args), "also be removed");
 		accessor.removeFromView = proposed(clean);
 		assertNoneContains(nextSteps("remove-from-view", args), "also be removed");
+	}
+
+	/**
+	 * Every kind other than an element and an ArchiMate connection names itself, claims no model
+	 * concept survives it (none stands behind it), and names the tool that places one back, or says no
+	 * tool can.
+	 */
+	@Test
+	public void removeFromView_appliedArm_namesEachOtherKindAndItsReversal() throws Exception {
+		Map<String, Object> args = map("viewId", "v-1", "viewObjectId", "vo-1");
+		Map<String, List<String>> expected = new java.util.LinkedHashMap<>();
+		expected.put("group", List.of("Group removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"Use add-group-to-view to add a group back."));
+		expected.put("note", List.of("Note removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"Use add-note-to-view to add a note back."));
+		expected.put("viewReference", List.of("View reference removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"Use add-view-reference-to-view to add a view reference back."));
+		expected.put("image", List.of("Image removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"Use add-image-to-view to add an image back."));
+		expected.put("connection", List.of("Connection removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"No tool here can add this connection back; undo restores it while this removal is "
+						+ "still the latest change."));
+		expected.put("SketchModelSticky", List.of("SketchModelSticky removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"No tool here can add a SketchModelSticky back; undo restores it while this removal is "
+						+ "still the latest change."));
+		expected.put("ExampleObject", List.of("ExampleObject removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"No tool here can add an ExampleObject back; undo restores it while this removal is "
+						+ "still the latest change."));
+		expected.put(null, List.of("View object removed from view.",
+				"Use get-view-contents to inspect the current view layout.",
+				"No tool here can add this view object back; undo restores it while this removal is "
+						+ "still the latest change."));
+		for (Map.Entry<String, List<String>> kind : expected.entrySet()) {
+			accessor.removeFromView = applied(
+					new RemoveFromViewResultDto("vo-1", kind.getKey(), List.of("vc-1")));
+			assertEquals(String.valueOf(kind.getKey()), kind.getValue(), nextSteps("remove-from-view", args));
+		}
+	}
+
+	@Test
+	public void removeFromView_deferredArms_rescopeTheReversalForAViewReference() throws Exception {
+		Map<String, Object> args = map("viewId", "v-1", "viewObjectId", "vo-1");
+		accessor.removeFromView = queued(new RemoveFromViewResultDto("vo-1", "viewReference", null));
+		assertEquals(concat(List.of(
+				"View reference will be removed from view when this batch commits.",
+				"Use get-view-contents after end-batch to inspect the view layout — it reads the "
+						+ "committed view, which still holds this object until then.",
+				"Nothing has been removed yet: end-batch rollback:true discards this removal. "
+						+ "Calling add-view-reference-to-view instead would queue a second view reference "
+						+ "rather than restore anything."), QUEUE_TAIL),
+				nextSteps("remove-from-view", args));
+
+		accessor.removeFromView = proposed(new RemoveFromViewResultDto("vo-1", "image", null));
+		assertEquals(afterFixedLines(
+				"Image will be removed from view if this change is approved.",
+				"Use get-view-contents once the human has approved the change to inspect the view "
+						+ "layout — it reads the committed view, which still holds this object "
+						+ "until then.",
+				"Nothing has been removed yet: rejecting the change in Archi leaves the object "
+						+ "where it is. Calling add-image-to-view instead would propose a second image "
+						+ "rather than restore anything."),
+				nextSteps("remove-from-view", args));
+
+		accessor.removeFromView = queued(new RemoveFromViewResultDto("vc-1", "connection", null));
+		assertEquals("no tool can place it, so none is named", concat(List.of(
+				"Connection will be removed from view when this batch commits.",
+				"Use get-view-contents after end-batch to inspect the view layout — it reads the "
+						+ "committed view, which still holds this object until then.",
+				"Nothing has been removed yet: end-batch rollback:true discards this removal."),
+				QUEUE_TAIL), nextSteps("remove-from-view", args));
 	}
 
 	// ---- clear-view ---------------------------------------------------------------------------
@@ -1187,6 +1246,16 @@ public class ConditionalStepArmScopeTest {
 	}
 
 	// ---- driving the handlers ------------------------------------------------------------------
+
+	/** The call is refused as a caller error naming the key, before the accessor is reached. */
+	private void assertRefusedAsUnknown(Map<String, Object> args) {
+		McpSchema.CallToolResult result = viewHandler.handleUpdateViewConnection(null,
+				McpSchema.CallToolRequest.builder().name("update-view-connection").arguments(args).build());
+		String text = ((McpSchema.TextContent) result.content().get(0)).text();
+		assertTrue("refused: " + text, Boolean.TRUE.equals(result.isError()));
+		assertTrue("as a caller error naming the key: " + text,
+				text.contains("INVALID_PARAMETER") && text.contains("'recede'"));
+	}
 
 	@SuppressWarnings("unchecked")
 	private List<String> nextSteps(String toolName, Map<String, Object> args) throws Exception {

@@ -68,7 +68,12 @@ public class NotPositionedReasonSurfaceParityTest {
      * words which short-circuits fill it.
      */
     private static final List<String> OWED_PHRASES =
-            List.of("drawn inside a host", "arrange-groups");
+            List.of("drawn inside a host", "arrange-groups",
+                    // The second fixed-code reason inside the same branch: a view whose only
+                    // containers are ArchiMate elements holding children. Named by its code because
+                    // the row is the one place a reader can tell it from the genuinely flat reason.
+                    SpacingEntryGuardTermination.CONTAINERS_NOT_SPACED_BY_THIS_TOOL,
+                    "skippedContainers");
 
     // ---- the two markdown surfaces --------------------------------------------------------------
 

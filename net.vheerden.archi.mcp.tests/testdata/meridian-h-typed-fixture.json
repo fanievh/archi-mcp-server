@@ -1,0 +1,677 @@
+{
+ "viewId": "id-e3468f925d3b465e875db682cdf2c8fb",
+ "viewName": "H · Integration Architecture (hub & spoke)",
+ "_captureProvenance": "Captured 2026-10-20 via get-view-contents (raw JSON-RPC, isolated Archi 5.10.0, plugin built from main 180c3258) on a copy of the Meridian Retail Bank live model. Child x/y converted from parent-relative to absolute canvas coordinates. 'type' is the ArchiMate class name from the elements bucket, or Group / Note. 'figureType' is the diagram object's alternate-figure index; get-view-contents publishes it only for groups and Grouping elements, so it was read from the model file instead: every diagram object in this model is at figure 0.",
+ "elements": [
+  {
+   "id": "id-4b8713e0e49e40a5926151dc0d4027a3",
+   "name": "Core Banking System",
+   "x": 874,
+   "y": 54,
+   "w": 182,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-8fed41e480dc4969b1545d0fa9d95819",
+   "name": "Cards Management System",
+   "x": 874,
+   "y": 137,
+   "w": 214,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-1d1308c90cf840708eb74ef4918dcdd0",
+   "name": "Payments Hub",
+   "x": 874,
+   "y": 233,
+   "w": 126,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-1076a5894b7744e0a1d80bfec5da5f96",
+   "name": "Loan Origination System",
+   "x": 874,
+   "y": 316,
+   "w": 214,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-7ac4f28d4da44c3280a8e517a59590a2",
+   "name": "Deposits & Savings System",
+   "x": 874,
+   "y": 412,
+   "w": 230,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-8afe081ceb6d4035b937d28bda4c7362",
+   "name": "Identity & Access Management",
+   "x": 874,
+   "y": 508,
+   "w": 254,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-0303a13438d1448a95948cbf3b057cf9"
+  },
+  {
+   "id": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "name": "Event Streaming Platform",
+   "x": 484,
+   "y": 54,
+   "w": 230,
+   "h": 340,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-2b20e455a9b542098cfbfa850d675de0"
+  },
+  {
+   "id": "id-9ec10c2a8067411da46dde8095c2bc52",
+   "name": "Enterprise Service Bus",
+   "x": 484,
+   "y": 434,
+   "w": 206,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-2b20e455a9b542098cfbfa850d675de0"
+  },
+  {
+   "id": "id-e44922cc688f423498c5bb9601e729d4",
+   "name": "Fraud Detection Platform",
+   "x": 30,
+   "y": 54,
+   "w": 222,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-b24bad3c34c346e6b5c93ca46d9d0d82",
+   "name": "AML Transaction Monitoring System",
+   "x": 30,
+   "y": 150,
+   "w": 294,
+   "h": 84,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-c3629f7395d8498f9a1be53a30c42db9",
+   "name": "Customer Data Platform",
+   "x": 30,
+   "y": 262,
+   "w": 206,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-d18e956100924895bd0c637e51d2411e",
+   "name": "Data Lakehouse",
+   "x": 30,
+   "y": 345,
+   "w": 142,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-0abb14bb9c0e46b5bc532e70da5906d0",
+   "name": "Notification & Messaging Service",
+   "x": 30,
+   "y": 428,
+   "w": 286,
+   "h": 68,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-1e84dccd44a34e05bd48cea2d83ab17e",
+   "name": "Analytics & BI Platform",
+   "x": 30,
+   "y": 524,
+   "w": 214,
+   "h": 55,
+   "isChild": true,
+   "type": "ApplicationComponent",
+   "figureType": 0,
+   "parentId": "id-b5c3e17fc5fd452db2f1540196d647ad"
+  },
+  {
+   "id": "id-0303a13438d1448a95948cbf3b057cf9",
+   "name": "Producers",
+   "x": 864,
+   "y": 20,
+   "w": 274,
+   "h": 566,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-2b20e455a9b542098cfbfa850d675de0",
+   "name": "Integration & Event Backbone",
+   "x": 474,
+   "y": 20,
+   "w": 250,
+   "h": 479,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-b5c3e17fc5fd452db2f1540196d647ad",
+   "name": "Consumers",
+   "x": 20,
+   "y": 20,
+   "w": 314,
+   "h": 569,
+   "isChild": false,
+   "type": "Group",
+   "figureType": 0
+  },
+  {
+   "id": "id-16f44f7abead47a9a7ba5a7b3ccdc14a",
+   "name": "H · Integration Architecture (hub & spok",
+   "x": 20,
+   "y": -46,
+   "w": 1100,
+   "h": 56,
+   "isChild": false,
+   "type": "Note",
+   "figureType": 0
+  }
+ ],
+ "connections": [
+  {
+   "id": "id-174ab05fb26c4fe9a06fe3d48fe35698",
+   "sourceId": "id-4b8713e0e49e40a5926151dc0d4027a3",
+   "targetId": "id-9ec10c2a8067411da46dde8095c2bc52",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -241,
+     "startY": 0,
+     "endX": 137,
+     "endY": -380
+    },
+    {
+     "startX": -241,
+     "startY": 458,
+     "endX": 137,
+     "endY": 78
+    },
+    {
+     "startX": -378,
+     "startY": 458,
+     "endX": 0,
+     "endY": 78
+    }
+   ]
+  },
+  {
+   "id": "id-60afd50a1f09416d89b9f91b406736c7",
+   "sourceId": "id-4b8713e0e49e40a5926151dc0d4027a3",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -92,
+     "startY": 0,
+     "endX": 274,
+     "endY": -143
+    },
+    {
+     "startX": -171,
+     "startY": 0,
+     "endX": 195,
+     "endY": -143
+    },
+    {
+     "startX": -171,
+     "startY": 25,
+     "endX": 195,
+     "endY": -118
+    },
+    {
+     "startX": -250,
+     "startY": 25,
+     "endX": 116,
+     "endY": -118
+    }
+   ]
+  },
+  {
+   "id": "id-3f4e3c4193ee4cd798f888279c759846",
+   "sourceId": "id-8fed41e480dc4969b1545d0fa9d95819",
+   "targetId": "id-9ec10c2a8067411da46dde8095c2bc52",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -197,
+     "startY": 0,
+     "endX": 197,
+     "endY": -290
+    },
+    {
+     "startX": -197,
+     "startY": 243,
+     "endX": 197,
+     "endY": -47
+    },
+    {
+     "startX": -394,
+     "startY": 243,
+     "endX": 0,
+     "endY": -47
+    }
+   ]
+  },
+  {
+   "id": "id-bf2ef0d981c74fe89243f7c6d90b582e",
+   "sourceId": "id-8fed41e480dc4969b1545d0fa9d95819",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -108,
+     "startY": 0,
+     "endX": 274,
+     "endY": -53
+    },
+    {
+     "startX": -248,
+     "startY": 0,
+     "endX": 134,
+     "endY": -53
+    },
+    {
+     "startX": -248,
+     "startY": -18,
+     "endX": 134,
+     "endY": -71
+    },
+    {
+     "startX": -266,
+     "startY": -18,
+     "endX": 116,
+     "endY": -71
+    }
+   ]
+  },
+  {
+   "id": "id-2b49197fe6aa48609adf8130843e6fee",
+   "sourceId": "id-1d1308c90cf840708eb74ef4918dcdd0",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -64,
+     "startY": 0,
+     "endX": 274,
+     "endY": 36
+    },
+    {
+     "startX": -183,
+     "startY": 0,
+     "endX": 155,
+     "endY": 36
+    },
+    {
+     "startX": -183,
+     "startY": 35,
+     "endX": 155,
+     "endY": 71
+    },
+    {
+     "startX": -222,
+     "startY": 35,
+     "endX": 116,
+     "endY": 71
+    }
+   ]
+  },
+  {
+   "id": "id-2145d32ee80b4ff1b7a7498421df0739",
+   "sourceId": "id-1076a5894b7744e0a1d80bfec5da5f96",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -108,
+     "startY": 0,
+     "endX": 274,
+     "endY": 126
+    },
+    {
+     "startX": -266,
+     "startY": 0,
+     "endX": 116,
+     "endY": 126
+    },
+    {
+     "startX": -266,
+     "startY": -8,
+     "endX": 116,
+     "endY": 118
+    }
+   ]
+  },
+  {
+   "id": "id-041dab8e33ce491d848806576b628787",
+   "sourceId": "id-7ac4f28d4da44c3280a8e517a59590a2",
+   "targetId": "id-9ec10c2a8067411da46dde8095c2bc52",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": -2,
+     "endX": 286,
+     "endY": -17
+    },
+    {
+     "startX": -291,
+     "startY": -2,
+     "endX": 111,
+     "endY": -17
+    },
+    {
+     "startX": -291,
+     "startY": 15,
+     "endX": 111,
+     "endY": 0
+    },
+    {
+     "startX": -298,
+     "startY": 15,
+     "endX": 104,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-bf16f9c46c2b4585b66bb34e10b1ba37",
+   "sourceId": "id-7ac4f28d4da44c3280a8e517a59590a2",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": 49,
+     "endX": 274,
+     "endY": 271
+    },
+    {
+     "startX": -195,
+     "startY": 49,
+     "endX": 195,
+     "endY": 271
+    },
+    {
+     "startX": -195,
+     "startY": -246,
+     "endX": 195,
+     "endY": -24
+    },
+    {
+     "startX": -274,
+     "startY": -246,
+     "endX": 116,
+     "endY": -24
+    }
+   ]
+  },
+  {
+   "id": "id-b734faa0a93348a5bf5fde14d4dc91c9",
+   "sourceId": "id-8afe081ceb6d4035b937d28bda4c7362",
+   "targetId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -128,
+     "startY": 0,
+     "endX": 274,
+     "endY": 318
+    },
+    {
+     "startX": -167,
+     "startY": 0,
+     "endX": 235,
+     "endY": 318
+    },
+    {
+     "startX": -167,
+     "startY": -294,
+     "endX": 235,
+     "endY": 24
+    },
+    {
+     "startX": -286,
+     "startY": -294,
+     "endX": 116,
+     "endY": 24
+    }
+   ]
+  },
+  {
+   "id": "id-cf4200e7e5f44cd0b40e41fec58879c5",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-0abb14bb9c0e46b5bc532e70da5906d0",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": -24,
+     "endX": 310,
+     "endY": -262
+    },
+    {
+     "startX": -222,
+     "startY": -24,
+     "endX": 204,
+     "endY": -262
+    },
+    {
+     "startX": -222,
+     "startY": 238,
+     "endX": 204,
+     "endY": 0
+    },
+    {
+     "startX": -282,
+     "startY": 238,
+     "endX": 144,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-d1545801e10d48feb561b1e261c5ac18",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-1e84dccd44a34e05bd48cea2d83ab17e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": 24,
+     "endX": 346,
+     "endY": -303
+    },
+    {
+     "startX": -169,
+     "startY": 24,
+     "endX": 293,
+     "endY": -303
+    },
+    {
+     "startX": -169,
+     "startY": 327,
+     "endX": 293,
+     "endY": 0
+    },
+    {
+     "startX": -354,
+     "startY": 327,
+     "endX": 108,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-fa5344a538084d6fb8092c3001e9aa29",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-c3629f7395d8498f9a1be53a30c42db9",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": 71,
+     "endX": 350,
+     "endY": 6
+    },
+    {
+     "startX": -362,
+     "startY": 71,
+     "endX": 104,
+     "endY": 6
+    },
+    {
+     "startX": -362,
+     "startY": 65,
+     "endX": 104,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-82cc3d2b31794a529a08707c52042119",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-d18e956100924895bd0c637e51d2411e",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": 118,
+     "endX": 382,
+     "endY": -30
+    },
+    {
+     "startX": -271,
+     "startY": 118,
+     "endX": 227,
+     "endY": -30
+    },
+    {
+     "startX": -271,
+     "startY": 148,
+     "endX": 227,
+     "endY": 0
+    },
+    {
+     "startX": -426,
+     "startY": 148,
+     "endX": 72,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-2ed1c031775b4d85b397ca084f761ef9",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-e44922cc688f423498c5bb9601e729d4",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": -118,
+     "endX": 342,
+     "endY": 18
+    },
+    {
+     "startX": -339,
+     "startY": -118,
+     "endX": 119,
+     "endY": 18
+    },
+    {
+     "startX": -339,
+     "startY": -136,
+     "endX": 119,
+     "endY": 0
+    },
+    {
+     "startX": -346,
+     "startY": -136,
+     "endX": 112,
+     "endY": 0
+    }
+   ]
+  },
+  {
+   "id": "id-76b806edf5cf4fb7b3981844d310b971",
+   "sourceId": "id-18ff3643323c487084bd1e0e0b4ad366",
+   "targetId": "id-b24bad3c34c346e6b5c93ca46d9d0d82",
+   "label": "",
+   "bendpoints": [
+    {
+     "startX": -116,
+     "startY": -71,
+     "endX": 306,
+     "endY": -39
+    },
+    {
+     "startX": -195,
+     "startY": -71,
+     "endX": 227,
+     "endY": -39
+    },
+    {
+     "startX": -195,
+     "startY": -32,
+     "endX": 227,
+     "endY": 0
+    },
+    {
+     "startX": -274,
+     "startY": -32,
+     "endX": 148,
+     "endY": 0
+    }
+   ]
+  }
+ ]
+}

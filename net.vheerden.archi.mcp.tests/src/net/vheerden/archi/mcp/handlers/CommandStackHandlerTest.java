@@ -13,11 +13,15 @@ import org.junit.Test;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.BaseTestAccessor;
+import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
+import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ResponseFormatter;
 import net.vheerden.archi.mcp.response.dto.UndoRedoResultDto;
+import net.vheerden.archi.mcp.session.SessionManager;
 
 /**
  * Tests for {@link CommandStackHandler} undo/redo tools.
@@ -94,6 +98,21 @@ public class CommandStackHandlerTest {
 		@SuppressWarnings("unchecked")
 		List<String> labels = (List<String>) entity.get("labels");
 		assertEquals(3, labels.size());
+	}
+
+	@Test
+	public void shouldPassTheLargestStepCountThrough_toUndoAndRedo_uncapped() throws Exception {
+		accessor.setUndoResult(new UndoRedoResultDto(Integer.MAX_VALUE, 2, List.of("Op 2", "Op 1"), false, true));
+		accessor.setRedoResult(new UndoRedoResultDto(Integer.MAX_VALUE, 2, List.of("Op 1", "Op 2"), true, false));
+
+		Map<String, Object> undone = getResult(callAndParse("undo", Map.of("steps", Integer.MAX_VALUE)));
+		Map<String, Object> redone = getResult(callAndParse("redo", Map.of("steps", Integer.MAX_VALUE)));
+
+		assertEquals(Integer.MAX_VALUE, accessor.lastUndoSteps);
+		assertEquals(Integer.MAX_VALUE, accessor.lastRedoSteps);
+		assertEquals(Integer.MAX_VALUE, undone.get("operationsRequested"));
+		assertEquals(2, undone.get("operationsPerformed"));
+		assertEquals(Integer.MAX_VALUE, redone.get("operationsRequested"));
 	}
 
 	@Test
@@ -282,6 +301,60 @@ public class CommandStackHandlerTest {
 		assertEquals(1, accessor.lastRedoSteps);
 	}
 
+	// ---- Session ----
+
+	/** An exchange carrying a session id, as the transport supplies one. */
+	private static McpSyncServerExchange exchangeFor(String sessionId) {
+		return new McpSyncServerExchange(null) {
+			@Override
+			public String sessionId() {
+				return sessionId;
+			}
+		};
+	}
+
+	private CommandStackHandler sessionAwareHandler() {
+		return new CommandStackHandler(accessor, formatter, new CommandRegistry(),
+				new SessionManager(SearchHandler.VALID_TYPES, SearchHandler.VALID_LAYERS));
+	}
+
+	@Test
+	public void shouldPassTheCallersSessionToUndoAndRedo() {
+		CommandStackHandler sessionAware = sessionAwareHandler();
+		McpSchema.CallToolRequest undo = McpSchema.CallToolRequest.builder().name("undo")
+				.arguments(Map.of()).build();
+		McpSchema.CallToolRequest redo = McpSchema.CallToolRequest.builder().name("redo")
+				.arguments(Map.of()).build();
+
+		sessionAware.handleUndo(exchangeFor("session-42"), undo);
+		sessionAware.handleRedo(exchangeFor("session-43"), redo);
+
+		assertEquals("session-42", accessor.lastUndoSession);
+		assertEquals("session-43", accessor.lastRedoSession);
+	}
+
+	@Test
+	public void shouldUseTheDefaultSession_whenNoSessionManagerIsWired() throws Exception {
+		callAndParse("undo", Map.of());
+
+		assertEquals("default", accessor.lastUndoSession);
+	}
+
+	@Test
+	public void shouldReportTheBindingCode_whenUndoIsRefusedForTheSessionsBatch() throws Exception {
+		accessor.undoRefusal = new ModelAccessException("'undo' refused: this batch is bound to model "
+				+ "'Model A' (id model-a), but the active model is now 'Model B' (id model-b).",
+				ErrorCode.BOUND_MODEL_NOT_ACTIVE);
+
+		McpSchema.CallToolResult result = sessionAwareHandler().handleUndo(exchangeFor("session-42"),
+				McpSchema.CallToolRequest.builder().name("undo").arguments(Map.of()).build());
+
+		assertTrue(result.isError());
+		@SuppressWarnings("unchecked")
+		Map<String, Object> error = (Map<String, Object>) parseResult(result).get("error");
+		assertEquals("BOUND_MODEL_NOT_ACTIVE", error.get("code"));
+	}
+
 	// ---- Model not loaded test ----
 
 	@Test
@@ -357,6 +430,9 @@ public class CommandStackHandlerTest {
 		private UndoRedoResultDto redoResult;
 		int lastUndoSteps;
 		int lastRedoSteps;
+		String lastUndoSession;
+		String lastRedoSession;
+		ModelAccessException undoRefusal;
 
 		StubUndoRedoAccessor() {
 			super(true);
@@ -375,8 +451,12 @@ public class CommandStackHandlerTest {
 		}
 
 		@Override
-		public UndoRedoResultDto undo(int steps) {
+		public UndoRedoResultDto undo(String sessionId, int steps) {
+			lastUndoSession = sessionId;
 			lastUndoSteps = steps;
+			if (undoRefusal != null) {
+				throw undoRefusal;
+			}
 			if (undoResult != null) {
 				return undoResult;
 			}
@@ -384,7 +464,8 @@ public class CommandStackHandlerTest {
 		}
 
 		@Override
-		public UndoRedoResultDto redo(int steps) {
+		public UndoRedoResultDto redo(String sessionId, int steps) {
+			lastRedoSession = sessionId;
 			lastRedoSteps = steps;
 			if (redoResult != null) {
 				return redoResult;

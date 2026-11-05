@@ -14,16 +14,16 @@
 # To run the excluded set, use Eclipse PDE (the owner's `AllPluginTestsRunner` gate) for the
 # OSGi/Assume classes, and `tools/run-tests.sh --swt <Class>` for the display-required ones.
 #
-# CI status (m0-2b, 2026-06-14): these 9 classes STAY excluded from the headless `ci-junit` lane
+# CI status (2026-06-14): these 10 classes STAY excluded from the headless `ci-junit` lane
 # (scan ∖ this manifest) — removing any line would make ci-junit's scan try to run it in the plain
 # headless JVM and fail. They are run by the SEPARATE `ci-pde` lane in explicit-FQCN mode, which
 # does NOT read this manifest, so lane-1's 181-class count is unchanged. See per-group notes below.
 
 # --- Group A: entirely assumption-skipped or cannot class-init headlessly (need OSGi/Archi runtime) ---
-# CI: DEFERRED from ci-pde (m0-2b SPIKE). The provisioned Archi RCP ships no PDE JUnit runtime
+# CI: DEFERRED from ci-pde. The provisioned Archi RCP ships no PDE JUnit runtime
 # bundles, so a headless coretestapplication needs extra bundle provisioning (audit: "diminishing
-# returns"). These 6 stay owner-gated via the Eclipse AllPluginTestsRunner. Backlog row:
-# ci-pde-osgi-pde-testapp-spike.
+# returns"). These 10 stay owner-gated via the Eclipse AllPluginTestsRunner until a PDE test
+# application can be provisioned in CI.
 net.vheerden.archi.mcp.server.McpServerManagerTest                          # all tests Assume IEditorModelManager/OSGi — 0 run headlessly
 net.vheerden.archi.mcp.ui.McpPreferenceInitializerTest                      # all tests Assume ConfigurationPreferences/OSGi — 0 run headlessly
 net.vheerden.archi.mcp.model.ViewExportServiceTest                          # all tests Assume PDF/JPG export runtime — 0 run headlessly
@@ -33,6 +33,7 @@ net.vheerden.archi.mcp.integration.DeleteViewNestedConnectionRoundTripIntegratio
 net.vheerden.archi.mcp.integration.DeleteViewSurvivingPlaceholderConnectionRoundTripIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
 net.vheerden.archi.mcp.integration.RemoveFromViewCascadeIntegrationTest     # Assume IEditorModelManager/save-reload — 0 run headlessly
 net.vheerden.archi.mcp.model.MultiViewCompoundDeleteCascadeIntegrationTest  # Assume IEditorModelManager/save-reload — 0 run headlessly
+net.vheerden.archi.mcp.model.ArchiNoticeBracketTest                       # Assume IEditorModelManager — 0 run headlessly
 
 # --- Group B: require a live SWT display (pass with `--swt` / xvfb) ---
 # CI: RUN in the `ci-pde` lane, which derives this exact list from THIS section (the
@@ -70,6 +71,7 @@ net.vheerden.archi.mcp.model.TopLevelGroupingRoutingTest                        
 # no longer changes the overall status"). Keeping ci-junit green is what makes ci-pde legible.
 net.vheerden.archi.mcp.model.AdjustViewSpacingCascadeReportingTest              # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner (6 errors); GREEN with a display
 net.vheerden.archi.mcp.model.SpacingConvenienceToolNoMutationPathTest           # drives the accessor over an EMF view (add + assess) — the same shape that throws SWTError on a display-less Linux runner; GREEN with a display
+net.vheerden.archi.mcp.model.SpacingToolsElementContainerViewTest               # drives the spacing tools through the accessor over named elements (assess measures text) — SWTError on a display-less Linux runner; GREEN with a display
 net.vheerden.archi.mcp.model.BatchFitMapSeedingTest                             # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner; GREEN with a display
 net.vheerden.archi.mcp.model.EffectiveStateContractTest                         # SWTError "No more handles [gtk_init_check() failed]" on a display-less Linux runner (4 errors); GREEN with a display
 
@@ -97,3 +99,20 @@ net.vheerden.archi.mcp.model.AutoLayoutAndRouteLabelPolicyTest                  
 # the wiring: the ci-pde lane derives its class list from this block, and these are the only
 # executable pins that each of the four routing/label exclusion-set call sites is reached.
 net.vheerden.archi.mcp.model.RoutingDescendantExclusionCallSiteTest             # drives auto-route and the label pass over named fixtures via the real collector; GREEN with a display
+
+# Classified by this Group's stated rule: every test drives auto-route over a view whose relationship
+# is NAMED, so the real collector calls ElementSizer.measureText.
+net.vheerden.archi.mcp.model.RoutingCandidateLabelStateTest                     # drives auto-route and assess over a named label via the real collector; GREEN with a display
+net.vheerden.archi.mcp.model.RoutingHiddenLabelTest                             # same shape: auto-route over named relationships, measured by the real collector; GREEN with a display
+net.vheerden.archi.mcp.model.RoutingLabelWritesFollowTheRouteTest               # same shape: auto-route and the layout routing pass over a named label, measured by the real collector; GREEN with a display
+net.vheerden.archi.mcp.model.BatchLabelVisibilityReadersTest                   # same shape: batched auto-route and assessments over a named label, measured by the real collector; GREEN with a display
+net.vheerden.archi.mcp.model.ForeignLineLabelPassTest                          # same shape: the label pass and auto-route over a named label, measured by the real collector; GREEN with a display
+net.vheerden.archi.mcp.model.KeywordCaseFoldLocaleLayoutTest                  # grouped and targetRating auto-layout-and-route run a real routing/assessment pass; SWT "Invalid thread access" headless; GREEN with a display
+net.vheerden.archi.mcp.model.ViewGeometryMaximumTest                         # accepts each size bound on add-group-to-view and add-note-to-view, which fit their text box via ElementSizer.measureText; SWT "gtk_init_check() failed" headless on Linux; GREEN with a display
+net.vheerden.archi.mcp.model.AutoLayoutAndRouteSelfConnectionTest            # grouped, flat and targetRating auto-layout-and-route plus adjust-view-spacing run a real layout/routing/assessment pass; SWT "Invalid thread access" headless; GREEN with a display
+net.vheerden.archi.mcp.model.FontStringDrawnFormTest                       # parses each written font string with SWT's FontData and makes a Font from one; needs SWT natives and a display; GREEN with a display
+net.vheerden.archi.mcp.model.NoteOnNoteOverlapServedTest                    # serves assess-layout over notes, whose clip check measures their text via ElementSizer.measureText; SWT "gtk_init_check() failed" headless on Linux; GREEN with a display
+net.vheerden.archi.mcp.model.NoteFitRenderedHeightOracleTest                # lays note text out in draw2d FlowPage/TextFlow in the system font and fits notes via ElementSizer.measureText; SWT "gtk_init_check() failed" headless on Linux; GREEN with a display
+net.vheerden.archi.mcp.model.LayoutOverNotesServedTest                      # runs auto-layout-and-route flat and grouped, with and without a target rating; the layout sizes elements and the routing pass assesses candidates via SWT; "Invalid thread access" headless; GREEN with a display
+net.vheerden.archi.mcp.model.LayoutOverQueuedNotesTest                      # runs auto-layout-and-route in a batch after a queued note; the layout sizes elements via SWT; "Invalid thread access" headless on a machine without a display; GREEN with a display
+net.vheerden.archi.mcp.model.AutoLayoutSummaryCrossingRatioTest             # runs auto-layout-and-route with a target rating, flat and grouped; the layout sizes elements and the routing pass assesses candidates via SWT; "Invalid thread access" headless; GREEN with a display

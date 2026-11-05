@@ -28,8 +28,17 @@ import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
  *
  * <p>Reads the current EMF state (element positions and connection bendpoints), runs multi-trial
  * label position optimization over it, and returns the commands that apply the best positions
- * found. It re-routes nothing — only label text positions and the perpendicular label offset
+ * found. It re-routes nothing — only label text positions and the Label Offset anchor
  * change.</p>
+ *
+ * <p>Two entries share one input build, so both score the same view the same way:</p>
+ * <ul>
+ *   <li>{@link #compute} applies the best trial. Its caller, the label fallback of a targeted
+ *       {@code auto-layout-and-route}, judges the result by re-assessing the layout.</li>
+ *   <li>{@link #computeLabelsOnly} runs when a caller asks for it ({@code auto-route-connections}
+ *       {@code mode: "labels-only"}) and has no assessment behind it, so it keeps the labels' current
+ *       positions unless the best trial scores strictly lower by the optimizer's own measure.</li>
+ * </ul>
  *
  * <p>Lives outside the accessor facade because it is a self-contained pass over the diagram: it
  * needs no accessor state, only the diagram it is given.</p>
@@ -93,8 +102,179 @@ final class LabelOptimizationPass {
                 srcCentreX, srcCentreY, tgtCentreX, tgtCentreY);
     }
 
-    static Result compute(IArchimateDiagramModel diagramModel, int trials) {
+    /**
+     * Optimizes the positions and offsets of the view's shown labels over {@code trials} seeded trials.
+     *
+     * <p>Every ArchiMate connection between two objects goes to the optimizer: a shown label as a label, an
+     * unlabelled connection and one whose label is hidden as a line only, so a label is scored off every line
+     * it could be read as belonging to. A line-only entry gets no command and is not counted. Two kinds of line
+     * stay out: a connection with a connection at an end (it has no endpoint box to draw from), and a plain
+     * diagram connection, such as one to a Note.</p>
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside
+     *                         batch mode; see {@link LabelVisibilityReadback#isShown}
+     * @return the commands that apply the result, or null when nothing changes
+     */
+    static Result compute(IArchimateDiagramModel diagramModel, int trials, Map<String, Boolean> queuedVisibility) {
+        Input input = buildInput(diagramModel, queuedVisibility);
+        if (input == null) {
+            return null;
+        }
 
+        LabelPositionOptimizer optimizer = new LabelPositionOptimizer();
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                input.batchInput(), input.batchPaths(), input.allObstacles(), input.labelExcludeSets(),
+                trials, input.rng(), input.offsetWritableIds());
+
+        // An offset (or a reset of a stale one) needs no along-path change, so both must be empty to stop.
+        if (result.changedPositions().isEmpty() && result.offsets().isEmpty()) {
+            return null;
+        }
+
+        // Build SetTextPositionCommands for changed positions
+        Map<String, IDiagramModelArchimateConnection> connLookup = new LinkedHashMap<>();
+        for (IDiagramModelArchimateConnection archConn : input.batchConnections()) {
+            connLookup.put(archConn.getId(), archConn);
+        }
+
+        List<Command> commands = new ArrayList<>();
+        for (Map.Entry<String, Integer> entry : result.changedPositions().entrySet()) {
+            IDiagramModelArchimateConnection conn = connLookup.get(entry.getKey());
+            if (conn != null && conn.getTextPosition() != entry.getValue()) {
+                commands.add(new SetTextPositionCommand(conn, entry.getValue()));
+            }
+        }
+
+        // Perpendicular "Label Offset" commands (Archi 5.10+); feature-guarded → emits nothing before 5.10.
+        commands.addAll(LabelOffsetSupport.buildOffsetCommands(result.offsets(), connLookup, queuedVisibility));
+
+        if (commands.isEmpty()) {
+            return null;
+        }
+
+        NonNotifyingCompoundCommand compound =
+                new NonNotifyingCompoundCommand("Label optimization fallback ("
+                        + commands.size() + " labels, " + trials + " trials)");
+        commands.forEach(compound::add);
+        return new Result(compound, commands.size(), trials);
+    }
+
+    /**
+     * Outcome of a labels-only pass.
+     *
+     * @param compound      the label commands, possibly empty; never null
+     * @param labels        the shown labels the pass placed, 0 when the view has none
+     * @param unchanged     true when the view has labels and no placement scored strictly lower than the labels as
+     *                      they stand, so nothing changes: every label keeps its position and its anchor
+     */
+    record LabelsOnlyResult(NonNotifyingCompoundCommand compound, int labels, boolean unchanged) {}
+
+    /**
+     * Places the view's shown labels over the geometry as it stands, for a caller that asked for a labels-only pass.
+     *
+     * <p>It reads what {@link #compute} reads and runs the same {@code trials} seeded trials. It scores three
+     * assignments by the optimizer's own measure ({@link LabelPositionOptimizer#scoreAssignment}), each with the anchors
+     * it draws its labels at: the labels as they stand (their held anchors), the best trial, and the current positions
+     * with the best anchor for each Middle label ({@link LabelPositionOptimizer#computeOffsetsForPositions}). The search
+     * never tries the current assignment itself, so its best can score higher than what a hand-tuned view already
+     * holds, or the same with labels moved:</p>
+     * <ul>
+     *   <li>the lower of the two new assignments is applied when it scores strictly lower than the labels as they
+     *       stand; on a tie between them the best trial wins, as the search itself prefers a text position to a new
+     *       anchor;</li>
+     *   <li>otherwise nothing changes, so a second run over the result is a no-op.</li>
+     * </ul>
+     * <p>An anchor is offered only where it ships ({@link LabelOffsetSupport#offsetWritableIds}).</p>
+     * <p>Only {@link SetTextPositionCommand} and {@link SetTextRelativePositionCommand} are built: no bendpoint, loop,
+     * router type, bounds or label visibility changes.</p>
+     *
+     * @param queuedVisibility connection id → visibility a queued command will set, or null outside batch mode; see
+     *                         {@link LabelVisibilityReadback#isShown}
+     */
+    static LabelsOnlyResult computeLabelsOnly(IArchimateDiagramModel diagramModel, int trials,
+            Map<String, Boolean> queuedVisibility) {
+        Input input = buildInput(diagramModel, queuedVisibility);
+        if (input == null) {
+            return new LabelsOnlyResult(new NonNotifyingCompoundCommand("Labels-only pass (0 labels)"), 0, false);
+        }
+
+        LabelPositionOptimizer optimizer = new LabelPositionOptimizer();
+        LabelPositionOptimizer.MultiTrialResult best = optimizer.optimizeMultiTrial(
+                input.batchInput(), input.batchPaths(), input.allObstacles(), input.labelExcludeSets(),
+                trials, input.rng(), input.offsetWritableIds());
+
+        Map<String, Integer> current = new LinkedHashMap<>();
+        Map<String, List<AbsoluteBendpointDto>> pathsById = new LinkedHashMap<>();
+        for (int i = 0; i < input.batchInput().size(); i++) {
+            RoutingPipeline.ConnectionEndpoints conn = input.batchInput().get(i);
+            current.put(conn.connectionId(), conn.textPosition());
+            pathsById.put(conn.connectionId(), input.batchPaths().get(i));
+        }
+        double asTheyStand = optimizer.scoreAssignment(
+                input.batchInput(), input.batchPaths(), input.allObstacles(), input.labelExcludeSets(), current);
+        Map<String, Integer> anchorsInPlace = optimizer.computeOffsetsForPositions(input.batchInput(), pathsById,
+                input.allObstacles(), input.labelExcludeSets(), current, input.offsetWritableIds());
+        double inPlace = optimizer.scoreAssignment(input.batchInput(), input.batchPaths(), input.allObstacles(),
+                input.labelExcludeSets(), current, anchorsInPlace);
+
+        boolean moved = best.totalScore() <= inPlace && best.totalScore() < asTheyStand;
+        boolean anchored = !moved && inPlace < asTheyStand;
+        Map<String, Integer> positions = moved ? best.changedPositions() : Map.of();
+        Map<String, Integer> offsets = moved ? best.offsets() : anchored ? anchorsInPlace : Map.of();
+        List<Command> commands = LabelOffsetSupport.buildLabelCommands(
+                positions, offsets, input.batchConnections(), queuedVisibility);
+
+        NonNotifyingCompoundCommand compound = new NonNotifyingCompoundCommand("Labels-only pass ("
+                + input.batchConnections().size() + " labels, " + trials + " trials)");
+        commands.forEach(compound::add);
+        return new LabelsOnlyResult(compound, input.batchConnections().size(), !moved && !anchored);
+    }
+
+    /**
+     * The score {@link #computeLabelsOnly} compares against: every label at the position and Label Offset it holds,
+     * by the optimizer's own measure ({@link LabelPositionOptimizer#scoreAssignment}), over the same input. Read
+     * before and after a labels-only run, it shows the run made the view no worse by that measure.
+     *
+     * @return the score, or null when the view has no shown label to place
+     */
+    static Double labelsAsTheyStandScore(IArchimateDiagramModel diagramModel, Map<String, Boolean> queuedVisibility) {
+        Input input = buildInput(diagramModel, queuedVisibility);
+        if (input == null) {
+            return null;
+        }
+        Map<String, Integer> current = new LinkedHashMap<>();
+        input.batchInput().forEach(conn -> current.put(conn.connectionId(), conn.textPosition()));
+        LabelPositionOptimizer optimizer = new LabelPositionOptimizer();
+        return optimizer.scoreAssignment(input.batchInput(), input.batchPaths(), input.allObstacles(),
+                input.labelExcludeSets(), current);
+    }
+
+    /**
+     * The optimizer's inputs over the diagram as it stands, built one way for every entry so that each scores the
+     * same view.
+     */
+    private record Input(List<RoutingPipeline.ConnectionEndpoints> batchInput,
+            List<List<AbsoluteBendpointDto>> batchPaths, List<IDiagramModelArchimateConnection> batchConnections,
+            List<RoutingRect> allObstacles, Map<String, Set<String>> labelExcludeSets,
+            Set<String> offsetWritableIds) {
+
+        /**
+         * Seeded for reproducibility given the same EMF state. The seed counts the labels, not the line-only entries,
+         * so the trial order a view's labels are shuffled in does not move when it gains or loses an unlabelled line.
+         */
+        Random rng() {
+            return new Random(batchConnections.size() * 31L + allObstacles.size());
+        }
+    }
+
+    /**
+     * Builds the optimizer's inputs from the current EMF state, or null when the view has no shown label to place.
+     *
+     * <p>Every ArchiMate connection between two objects goes in: a shown label as a label, an unlabelled connection
+     * and one whose label is hidden as a line only. A connection with a connection at an end and a plain diagram
+     * connection stay out.</p>
+     */
+    private static Input buildInput(IArchimateDiagramModel diagramModel, Map<String, Boolean> queuedVisibility) {
         List<AssessmentNode> nodes = AssessmentCollector.collectAssessmentNodes(diagramModel);
         List<IDiagramModelConnection> allConnections =
                 AssessmentCollector.collectAllConnections(diagramModel);
@@ -137,15 +317,12 @@ final class LabelOptimizationPass {
             if (connRel != null && connRel.getName() != null) {
                 labelText = connRel.getName();
             }
-            if (labelText.isEmpty()) {
-                continue; // skip unlabeled connections
-            }
-            if (!archConn.isNameVisible()) {
-                // A hidden label renders nothing, so it has no position to optimise and no offset to
-                // apply. Including it would emit commands that change nothing visible and inflate the
-                // reported labelsOptimized count with labels the caller cannot see.
-                continue;
-            }
+            // An unlabelled connection, or one whose label is hidden (in the model, or by the batch), still
+            // draws its line, and a label lying on that line reads as its label. So it goes in as a line
+            // only: empty text, which the optimizer never places. It stays out of batchConnections, so no
+            // command is ever built for it and it is never counted in labelsOptimized: a hidden label has
+            // no position to optimise and no offset to apply.
+            boolean lineOnly = labelText.isEmpty() || !LabelVisibilityReadback.isShown(archConn, queuedVisibility);
 
             RoutingRect srcRect = new RoutingRect(
                     (int) srcNode.x(), (int) srcNode.y(),
@@ -160,12 +337,15 @@ final class LabelOptimizationPass {
 
             batchInput.add(new RoutingPipeline.ConnectionEndpoints(
                     archConn.getId(), srcRect, tgtRect, List.of(),
-                    labelText, archConn.getTextPosition()));
+                    lineOnly ? "" : labelText, archConn.getTextPosition(), List.of(),
+                    RelativePositionFeature.get(archConn)));
             batchPaths.add(path);
-            batchConnections.add(archConn);
+            if (!lineOnly) {
+                batchConnections.add(archConn);
+            }
         }
 
-        if (batchInput.isEmpty()) {
+        if (batchConnections.isEmpty()) {
             return null;
         }
 
@@ -200,42 +380,7 @@ final class LabelOptimizationPass {
             labelExcludeSets.put(conn.connectionId(), excludeIds);
         }
 
-        // Run multi-trial optimization (seeded for reproducibility given same EMF state)
-        LabelPositionOptimizer optimizer = new LabelPositionOptimizer();
-        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
-                batchInput, batchPaths, allObstacles, labelExcludeSets,
-                trials, new Random(batchInput.size() * 31L + allObstacles.size()));
-
-        // Offsets are metric-neutral (own-endpoint bleed clears with NO along-path change) → need BOTH empty.
-        if (result.changedPositions().isEmpty() && result.offsets().isEmpty()) {
-            return null;
-        }
-
-        // Build SetTextPositionCommands for changed positions
-        Map<String, IDiagramModelArchimateConnection> connLookup = new LinkedHashMap<>();
-        for (IDiagramModelArchimateConnection archConn : batchConnections) {
-            connLookup.put(archConn.getId(), archConn);
-        }
-
-        List<Command> commands = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : result.changedPositions().entrySet()) {
-            IDiagramModelArchimateConnection conn = connLookup.get(entry.getKey());
-            if (conn != null && conn.getTextPosition() != entry.getValue()) {
-                commands.add(new SetTextPositionCommand(conn, entry.getValue()));
-            }
-        }
-
-        // Perpendicular "Label Offset" commands (Archi 5.10+); feature-guarded → emits nothing on 5.7.
-        commands.addAll(LabelOffsetSupport.buildOffsetCommands(result.offsets(), connLookup));
-
-        if (commands.isEmpty()) {
-            return null;
-        }
-
-        NonNotifyingCompoundCommand compound =
-                new NonNotifyingCompoundCommand("Label optimization fallback ("
-                        + commands.size() + " labels, " + trials + " trials)");
-        commands.forEach(compound::add);
-        return new Result(compound, commands.size(), trials);
+        return new Input(batchInput, batchPaths, batchConnections, allObstacles, labelExcludeSets,
+                LabelOffsetSupport.offsetWritableIds(true, batchConnections, queuedVisibility));
     }
 }

@@ -1,5 +1,7 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.Locale;
+
 /**
  * Pure-unit-testable decision for the density-aware default-resolution code
  * path inside {@code adjustViewSpacing}
@@ -196,7 +198,7 @@ public record AdjustViewSpacingDefaultResolutionDecision(
                 ? "coincidentSegmentCount" : "connectionEdgeCoincidenceCount";
         int triggerThreshold = (trigger == TriggerMetric.COINCIDENT_SEGMENTS)
                 ? 2 : 4;
-        String reason = String.format(
+        String reason = String.format(Locale.ROOT,
                 "interElementDelta omitted; %s=%d > %d trigger; "
                 + "heuristic for connectionCount=%d => target=%d; "
                 + "currentSpacingPx=%d => delta=%d",

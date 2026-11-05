@@ -94,10 +94,16 @@ public class ContainerDefinitionSurfaceParityTest {
     private static final List<Definition> OWED = List.of(
             // The canonical model-layer predicate.
             new Definition("isTarget", MODEL + "TopLevelGroupTargets.java"),
+            // Its companion: the one "holds children" question every populated collector and the
+            // skipped-container walk share. Not a container-type test, so not an eighth answer.
+            new Definition("holdsChildren", MODEL + "TopLevelGroupTargets.java"),
+            // The spacing tools' element containers: the skipped walk, narrowed to boxes holding
+            // something other than a note or an image.
+            new Definition("collectElementContainers", MODEL + "TopLevelGroupTargets.java"),
             // The deliberate second copy above the model layer (handlers may not import EMF).
             new Definition("isContainerType", RESPONSE + "ViewContainers.java"),
             // DTO shaping and sort keys: a Grouping is bucketed among the elements, by design.
-            new Definition("collectViewContents", MODEL + "ArchiModelAccessorImpl.java"),
+            new Definition("collectViewContents", MODEL + "ViewContentsCollector.java"),
             new Definition("getFlatViewSortKey", MODEL + "ArchiModelAccessorImpl.java"),
             new Definition("getFlatViewCategoryValue", MODEL + "ArchiModelAccessorImpl.java"),
             // The upward ancestor re-fit: native groups only, at both ends. Disclosed per call.

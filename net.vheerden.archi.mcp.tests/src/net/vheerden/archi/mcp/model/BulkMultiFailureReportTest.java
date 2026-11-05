@@ -175,6 +175,111 @@ public class BulkMultiFailureReportTest {
     }
 
     /**
+     * An abstract element type is that operation's own row, not a server error that loses every
+     * other row: the factory cannot build an abstract class, so the type is refused before it is asked.
+     */
+    @Test
+    public void shouldReportAnAbstractElementType_asItsOwnRow_besideTheOthers() throws Exception {
+        int before = model.getFolder(FolderType.BUSINESS).getElements().size();
+        Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", abstractTypeOperations(), "description", "one abstract, one unknown"));
+
+        assertEquals("BULK_VALIDATION_FAILED", error(envelope).get("code"));
+        List<Map<String, Object>> failed = failedRows(envelope);
+        assertEquals(2, failed.size());
+        assertEquals(1, failed.get(0).get("index"));
+        assertEquals("INVALID_ELEMENT_TYPE", failed.get(0).get("errorCode"));
+        assertEquals(ABSTRACT_REFUSAL, failed.get(0).get("message"));
+        assertEquals(2, failed.get(1).get("index"));
+        assertEquals("INVALID_ELEMENT_TYPE", failed.get(1).get("errorCode"));
+        assertEquals("Invalid ArchiMate element type: NotARealType", failed.get(1).get("message"));
+        assertEquals("no element may be created", before,
+                model.getFolder(FolderType.BUSINESS).getElements().size());
+    }
+
+    @Test
+    public void shouldApplyTheRest_whenContinuingPastAnAbstractElementType() throws Exception {
+        Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", abstractTypeOperations().subList(0, 2), "continueOnError", true,
+                        "description", "one abstract"));
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> failed = (List<Map<String, Object>>) result(envelope).get("failed");
+        assertEquals(1, failed.size());
+        assertEquals(1, failed.get(0).get("index"));
+        assertEquals(ABSTRACT_REFUSAL, failed.get(0).get("message"));
+        assertTrue("operation 0 is applied", model.getFolder(FolderType.BUSINESS).getElements().stream()
+                .anyMatch(e -> e instanceof IBusinessActor a && "Alpha".equals(a.getName())));
+    }
+
+    private static final String ABSTRACT_REFUSAL = "Invalid ArchiMate element type: BusinessElement"
+            + " is abstract: it groups element types and names none of them";
+
+    /**
+     * An abstract relationship type is that operation's own row, refused as the type the caller sent,
+     * whether its endpoints are back-references to elements the same call creates or ids already in the
+     * model.
+     */
+    @Test
+    public void shouldReportAnAbstractRelationshipType_asItsOwnRow_overBackReferences() throws Exception {
+        int before = model.getFolder(FolderType.BUSINESS).getElements().size();
+        Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(
+                        op("create-element", Map.of("name", "Alpha", "type", "BusinessActor")),
+                        op("create-element", Map.of("name", "Beta", "type", "BusinessRole")),
+                        op("create-relationship", Map.of("type", "ArchimateRelationship",
+                                "sourceId", "$0.id", "targetId", "$1.id")),
+                        op("create-relationship", Map.of("type", "NotARealRelationship",
+                                "sourceId", "$0.id", "targetId", "$1.id"))),
+                        "description", "one abstract relationship, one unknown"));
+
+        assertAbstractAndUnknownRelationshipRows(envelope);
+        assertEquals("no element may be created", before, model.getFolder(FolderType.BUSINESS).getElements().size());
+        assertTrue(model.getFolder(FolderType.RELATIONS).getElements().isEmpty());
+    }
+
+    @Test
+    public void shouldReportAnAbstractRelationshipType_asItsOwnRow_overExistingIds() throws Exception {
+        IBusinessActor other = factory.createBusinessActor();
+        other.setId("actor-2");
+        other.setName("Other Actor");
+        model.getFolder(FolderType.BUSINESS).getElements().add(other);
+        Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(
+                        op("create-element", Map.of("name", "Alpha", "type", "BusinessActor")),
+                        op("create-element", Map.of("name", "Beta", "type", "BusinessRole")),
+                        op("create-relationship", Map.of("type", "ArchimateRelationship",
+                                "sourceId", "actor-1", "targetId", "actor-2")),
+                        op("create-relationship", Map.of("type", "NotARealRelationship",
+                                "sourceId", "actor-1", "targetId", "actor-2"))),
+                        "description", "one abstract relationship, one unknown"));
+
+        assertAbstractAndUnknownRelationshipRows(envelope);
+        assertEquals("no element may be created", 2, model.getFolder(FolderType.BUSINESS).getElements().size());
+        assertTrue(model.getFolder(FolderType.RELATIONS).getElements().isEmpty());
+    }
+
+    private static void assertAbstractAndUnknownRelationshipRows(Map<String, Object> envelope) {
+        assertEquals("BULK_VALIDATION_FAILED", error(envelope).get("code"));
+        List<Map<String, Object>> failed = failedRows(envelope);
+        assertEquals(2, failed.size());
+        assertEquals(2, failed.get(0).get("index"));
+        assertEquals("INVALID_RELATIONSHIP_TYPE", failed.get(0).get("errorCode"));
+        assertEquals("Invalid ArchiMate relationship type: ArchimateRelationship"
+                + " is abstract: it groups relationship types and names none of them", failed.get(0).get("message"));
+        assertEquals(3, failed.get(1).get("index"));
+        assertEquals("INVALID_RELATIONSHIP_TYPE", failed.get(1).get("errorCode"));
+        assertEquals("Invalid ArchiMate relationship type: NotARealRelationship", failed.get(1).get("message"));
+    }
+
+    private static List<Object> abstractTypeOperations() {
+        return List.of(
+                op("create-element", Map.of("name", "Alpha", "type", "BusinessActor")),
+                op("create-element", Map.of("name", "Beta", "type", "BusinessElement")),
+                op("create-element", Map.of("name", "Gamma", "type", "NotARealType")));
+    }
+
+    /**
      * Rows carry the caller's request index, not their position in the failure list. With the
      * operations between them removed the two diverge, and only the request index lets a caller
      * map a row back to the operation it wrote.
@@ -660,7 +765,7 @@ public class BulkMultiFailureReportTest {
             operations.add(op("bad-tool-" + i, Map.of("name", "A")));
         }
         operations.add(op("update-view-object",
-                Map.of("viewId", "view-1", "viewObjectId", "ghost-a", "x", 10)));
+                Map.of("viewObjectId", "ghost-a", "x", 10)));
         Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
                 Map.of("operations", operations, "description", "six misspelled names"));
 
@@ -687,9 +792,9 @@ public class BulkMultiFailureReportTest {
     public void shouldKeepEveryRowSelfDescribing_whenTheRowsCarryAMixture() throws Exception {
         Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
                 Map.of("operations", List.of(
-                        op("update-view-object", Map.of("viewId", "view-1",
+                        op("update-view-object", Map.of(
                                 "viewObjectId", "ghost-a", "x", 10)),
-                        op("update-view-object", Map.of("viewId", "view-1",
+                        op("update-view-object", Map.of(
                                 "viewObjectId", "ghost-b", "x", 10)),
                         op("create-element", Map.of("name", "Beta", "type", "NotARealType")),
                         op("create-element", Map.of("elementName", "Gamma", "type", "BusinessRole"))),
@@ -820,7 +925,7 @@ public class BulkMultiFailureReportTest {
     public void shouldCarryASharedCorrectionOnce_whenManyOperationsFailValidation() throws Exception {
         List<Object> operations = new ArrayList<>();
         for (int i = 0; i < 12; i++) {
-            operations.add(op("update-view-object", Map.of("viewId", "view-1",
+            operations.add(op("update-view-object", Map.of(
                     "viewObjectId", "ghost-" + i, "x", 10)));
         }
         Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
@@ -1101,9 +1206,19 @@ public class BulkMultiFailureReportTest {
                 "mutationDispatcher.queuedBounds", "bulkPendingGroupBounds.get",
                 "bulkPendingParents.get", "mutationDispatcher.queuedParents",
                 "AnchorResolver.wrapWithIconBandResize", "RecedeContainerFillCommand.wrap",
-                "guardPlacement", "AnchorResolver.recordPendingParent",
+                "guardPlacement", "RequireAttachedContainerCommand.drawing", "AnchorResolver.recordPendingParent",
                 "AnchorResolver.projectMoves", "List.copyOf", "diagramObj.getId",
-                "element.getName", "new AddToViewResultDto");
+                "element.getName", "new AddToViewResultDto",
+                // The sibling-overlap disclosure: guarded so it never throws (it logs and answers
+                // nothing), and its arm is read from two in-memory gates.
+                "CascadeOverlapWarning.forMoves", "DispatchArm.of",
+                "mutationDispatcher.isApprovalRequired", "isQueuedCall",
+                // Walks the prepared command for the recede report: reads only, never throws.
+                "RecedeContainerFillCommand.reportOf",
+                // Component accessors of the auto-connect pass's record, built before the
+                // reservation: a record accessor returns its field and cannot throw.
+                "connected.autoConnections", "connected.skippedAutoConnections",
+                "connected.declined", "connected.cappedOut");
 
         // Control flow is not a call. Without this the gate trips on the first `if` anyone adds
         // and reports it as an unknown method, which would send the next reader looking for a
@@ -1237,6 +1352,31 @@ public class BulkMultiFailureReportTest {
         assertEquals("BACK_REFERENCE_FAILED", failed.get(1).get("errorCode"));
         assertTrue("the cascade must name the label, not only a position: " + failed.get(1),
                 String.valueOf(failed.get(1).get("message")).contains("coreBanking"));
+    }
+
+    /**
+     * A server fault inside one operation is reachable, deterministically and offline: an
+     * in-memory model has no archive manager, so validating an {@code imagePath} fails as
+     * {@code INTERNAL_ERROR}. Such a row is what {@code BulkValidationFailures.record} logs; that
+     * it logs it is pinned there with a recording logger, since the class logger this call uses is
+     * bound to nothing in this lane.
+     */
+    @Test
+    public void shouldCarryTheServerFaultsOwnCode_whenAnOperationFailsServerSide() throws Exception {
+        Map<String, Object> envelope = invokeTool(registryOverLiveAccessor(), "bulk-mutate",
+                Map.of("operations", List.of(
+                        op("create-element", Map.of("name", "Bad", "type", "NotARealType")),
+                        op("add-to-view", Map.of("viewId", "view-1", "elementId", "actor-1",
+                                "imagePath", "images/missing.png"))),
+                        "description", "a client error beside a server fault"));
+
+        List<Map<String, Object>> failed = failedRows(envelope);
+        assertEquals("both operations are reported: " + envelope, 2, failed.size());
+        assertEquals("INVALID_ELEMENT_TYPE", failed.get(0).get("errorCode"));
+        assertEquals("the server fault keeps its own code: " + failed.get(1),
+                "INTERNAL_ERROR", failed.get(1).get("errorCode"));
+        assertTrue(String.valueOf(failed.get(1).get("message")),
+                String.valueOf(failed.get(1).get("message")).contains("Cannot access model archive"));
     }
 
     private static Map<String, Object> op(String tool, Map<String, Object> params) {

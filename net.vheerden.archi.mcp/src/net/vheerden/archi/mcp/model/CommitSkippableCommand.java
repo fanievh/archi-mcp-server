@@ -15,9 +15,11 @@ import org.eclipse.gef.commands.CompoundCommand;
  * multi-operation bulk request — every operation is prepared before any of them runs.
  * A precondition that read live model state at prepare time can therefore be false by
  * the time the command executes, because an earlier operation in the same request
- * changed the very thing it validated. Re-checking at prepare time cannot help: the
- * check has to happen after the preceding commands have applied their changes, which
- * means inside {@code execute()}.</p>
+ * changed the very thing it validated. A single call has the same window, narrower: it
+ * prepares on the server thread and writes on the UI thread, and an edit in Archi can
+ * land between the two. Re-checking at prepare time cannot help: the check has to
+ * happen after the preceding commands have applied their changes, which means inside
+ * {@code execute()}.</p>
  *
  * <p><strong>Why decline rather than throw.</strong> A GEF {@code CommandStack} pushes a
  * command onto the undo stack only <em>after</em> {@code execute()} returns. Throwing
@@ -32,10 +34,76 @@ import org.eclipse.gef.commands.CompoundCommand;
 interface CommitSkippableCommand {
 
     /**
+     * How a skip reason names its cause: the model changed between the prepare and the write, whichever
+     * path the command was on.
+     */
+    String CHANGED_SINCE_PREPARED =
+            "after this change was prepared (by an earlier operation in the same request, or an edit in Archi)";
+
+    /**
      * @return a plain-language explanation of why this command declined to run, or
      *         {@code null} if it executed normally. Only meaningful after execution.
      */
     String getSkipReason();
+
+    /**
+     * Whether the last run declined and left the model exactly as it was before {@code execute()}.
+     * A command opts in only where it can vouch for that; a skip reason alone does not mean nothing
+     * was written (a cascade can decline after its children ran). A command that did not run because
+     * the command it depends on declined may also vouch, with no reason of its own.
+     *
+     * @return true only when this command declined and nothing it wrote is left; false when it ran,
+     *         when it has not run, or when it is not sure
+     */
+    default boolean changedNothing() {
+        return false;
+    }
+
+    /**
+     * Whether the last run declined after writing and could not undo all of it, so part of what it wrote
+     * is still in the model with no record left to undo it. True implies {@link #changedNothing()} is false.
+     *
+     * @return true only when the last run left changes it could not undo
+     */
+    default boolean leftChangesItCouldNotUndo() {
+        return false;
+    }
+
+    /**
+     * Collects the skip reasons of every command that left changes it could not undo, walking into
+     * compounds as {@link #collectSkipReasons} does.
+     *
+     * @param command the dispatched command, possibly a compound
+     * @return the reasons in execution order; empty when no command left any
+     */
+    static List<String> collectReasonsForChangesLeft(Command command) {
+        List<String> reasons = new ArrayList<>();
+        collectLeftInto(command, reasons);
+        return List.copyOf(reasons);
+    }
+
+    /**
+     * Whether a dispatched command, possibly a compound, vouches that it left the model exactly as it
+     * was: a skippable answers for itself, without looking at its children (they can look untouched
+     * while it wrote); a compound vouches when it has children and every one of them vouches.
+     *
+     * @param command the dispatched command
+     * @return true only when every part vouches; false for a plain command or an empty compound
+     */
+    static boolean vouchesNothingChanged(Command command) {
+        if (command instanceof CommitSkippableCommand skippable) {
+            return skippable.changedNothing();
+        }
+        if (command instanceof CompoundCommand compound && !compound.isEmpty()) {
+            for (Object child : compound.getCommands()) {
+                if (!vouchesNothingChanged((Command) child)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
 
     /**
      * Collects the reasons from every command that declined, walking into compounds.
@@ -93,6 +161,17 @@ interface CommitSkippableCommand {
         if (command instanceof CompoundCommand compound) {
             for (Object child : compound.getCommands()) {
                 collectInto((Command) child, reasons);
+            }
+        }
+    }
+
+    private static void collectLeftInto(Command command, List<String> reasons) {
+        if (command instanceof CommitSkippableCommand skippable && skippable.leftChangesItCouldNotUndo()) {
+            reasons.add(skippable.getSkipReason());
+        }
+        if (command instanceof CompoundCommand compound) {
+            for (Object child : compound.getCommands()) {
+                collectLeftInto((Command) child, reasons);
             }
         }
     }

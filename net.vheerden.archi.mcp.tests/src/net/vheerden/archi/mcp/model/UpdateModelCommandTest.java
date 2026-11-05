@@ -16,16 +16,15 @@ import com.archimatetool.model.IArchimateModel;
 import com.archimatetool.model.IProperty;
 
 /**
- * Tests for {@link UpdateModelCommand} (G6).
+ * Tests for {@link UpdateModelCommand}, the model-metadata update command.
  *
  * <p>Uses real EMF objects (IArchimateFactory.eINSTANCE) to verify the command
  * correctly sets, clears, undoes, and redoes name/purpose/properties changes
  * on the loaded model. Pure JUnit — no OSGi runtime required.</p>
  *
- * <p>Mirrors {@link UpdateViewCommandTest} test conventions and naming.
- * The {@code documentation} field is intentionally NOT exercised —
- * {@code IArchimateModel} is not {@code IDocumentable} (per Task 0 OUTCOME,
- * outcome C).</p>
+ * <p>The {@code documentation} field is intentionally NOT exercised:
+ * {@code IArchimateModel} is not {@code IDocumentable}, so the model has no
+ * documentation feature to set.</p>
  */
 public class UpdateModelCommandTest {
 
@@ -57,11 +56,27 @@ public class UpdateModelCommandTest {
         // Caller passes "" via JSON, which the boundary converts to clearPurpose=true + null payload.
         UpdateModelCommand cmd = new UpdateModelCommand(model, null, null, true, null);
         cmd.execute();
-        // Archi/EMF stores "no purpose" as "" once the feature has been set; setPurpose(null) on a
-        // previously-set feature yields "" (not null). Both mean "no purpose" — see
-        // UpdateModelCommand.undo()'s null<->"" note. Accept either.
-        assertTrue("purpose should be cleared (null or empty)",
-                model.getPurpose() == null || model.getPurpose().isEmpty());
+        // "" is Archi's "no purpose": the model default, and what its Properties editor writes
+        // when the field is emptied. The generated setter stores null verbatim, so a null write
+        // would leave a state the GUI cannot produce. Assert the exact value.
+        assertEquals("", model.getPurpose());
+    }
+
+    @Test
+    public void shouldRestorePriorPurpose_whenUndoneAfterClear() {
+        UpdateModelCommand cmd = new UpdateModelCommand(model, null, null, true, null);
+        cmd.execute();
+        cmd.undo();
+        assertEquals("Old purpose", model.getPurpose());
+    }
+
+    @Test
+    public void shouldWriteEmptyStringAgain_whenRedoneAfterClear() {
+        UpdateModelCommand cmd = new UpdateModelCommand(model, null, null, true, null);
+        cmd.execute();
+        cmd.undo();
+        cmd.redo();
+        assertEquals("", model.getPurpose());
     }
 
     @Test
@@ -167,27 +182,33 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldRestoreNullPurpose_whenUndoneAfterSet() {
-        // Start with no purpose. A freshly created IArchimateModel reports "no purpose" as
-        // null OR "" depending on the EMF runtime (Archi treats them equivalently — see
-        // UpdateModelCommand.undo()'s null<->"" note), so accept either as the baseline.
+    public void shouldRestoreEmptyPurpose_whenUndoneAfterSet() {
+        // Start with no purpose. A freshly created model holds Archi's default for the
+        // attribute, which is "" (not null).
         IArchimateModel m = IArchimateFactory.eINSTANCE.createArchimateModel();
         m.setName("X");
-        assertTrue("fresh model should have no purpose (null or empty)",
-                m.getPurpose() == null || m.getPurpose().isEmpty());
+        assertEquals("", m.getPurpose());
 
         UpdateModelCommand cmd = new UpdateModelCommand(m, null, "Set purpose", false, null);
         cmd.execute();
         assertEquals("Set purpose", m.getPurpose());
 
         cmd.undo();
-        // UpdateModelCommand.undo() deliberately restores the captured oldPurpose verbatim and
-        // does NOT normalize null<->"" (see its undo() comment — Archi stores "no purpose" as ""
-        // and treats null/"" as equivalent; this is a project-wide convention mirrored in
-        // UpdateViewCommand). EMF returns "" rather than null after setPurpose(null) on a feature
-        // that has been set, so accept either as "no purpose".
-        assertTrue("purpose should be cleared (null or empty) after undo",
-                m.getPurpose() == null || m.getPurpose().isEmpty());
+        // Undo restores the captured pre-state verbatim, which here is the default "".
+        assertEquals("", m.getPurpose());
+    }
+
+    @Test
+    public void shouldRestoreLegacyNullPurposeVerbatim_whenUndone() {
+        // A model left holding null by an older write: undo restores the prior state as
+        // captured, it does not repair it.
+        model.setPurpose(null);
+
+        UpdateModelCommand cmd = new UpdateModelCommand(model, null, "Set purpose", false, null);
+        cmd.execute();
+        cmd.undo();
+
+        assertNull(model.getPurpose());
     }
 
     @Test
@@ -206,11 +227,11 @@ public class UpdateModelCommandTest {
     }
 
     @Test
-    public void shouldCaptureOldStateAtConstruction_notExecute() {
-        // Mutate AFTER construction; undo must restore the CONSTRUCTION-TIME snapshot
+    public void shouldSnapshotOldStateWhenItRuns_notWhenBuilt() {
+        // Changed between construction and execute: undo restores what the model held when the
+        // update ran, so the change made in between is not thrown away.
         UpdateModelCommand cmd = new UpdateModelCommand(model, "Renamed", null, false, null);
 
-        // Out-of-band mutation between construction and execute
         model.setName("Tampered");
         assertEquals("Tampered", model.getName());
 
@@ -218,9 +239,7 @@ public class UpdateModelCommandTest {
         assertEquals("Renamed", model.getName());
 
         cmd.undo();
-        // Snapshot was taken at construction time (when name was "Old Model Name"),
-        // so undo restores "Old Model Name" — NOT the post-tamper "Tampered".
-        assertEquals("Old Model Name", model.getName());
+        assertEquals("Tampered", model.getName());
         assertNotNull(model.getName());
     }
 }

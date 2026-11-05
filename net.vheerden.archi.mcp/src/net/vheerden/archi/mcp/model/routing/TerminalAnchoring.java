@@ -70,16 +70,13 @@ public record TerminalAnchoring(Face face) {
     }
 
     /**
-     * Absolute-canvas coordinate of the face line, one pixel outside the source rect
-     * (e.g., LEFT &rarr; {@code source.x() - 1}, RIGHT &rarr; {@code source.x() + source.width() + 1}).
+     * Absolute-canvas coordinate of the face line — {@link
+     * EdgeAttachmentCalculator#TERMINAL_FACE_MARGIN} pixels outside the source rect, delegated to
+     * {@link EdgeAttachmentCalculator#faceLineCoordinate} so this record carries no copy of the
+     * offset (e.g. LEFT &rarr; {@code source.x() - TERMINAL_FACE_MARGIN}).
      */
     public int lineCoordinate(RoutingRect source) {
-        return switch (face) {
-            case LEFT   -> source.x() - 1;
-            case RIGHT  -> source.x() + source.width() + 1;
-            case TOP    -> source.y() - 1;
-            case BOTTOM -> source.y() + source.height() + 1;
-        };
+        return EdgeAttachmentCalculator.faceLineCoordinate(source, face);
     }
 
     /**

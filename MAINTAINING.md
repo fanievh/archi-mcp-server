@@ -16,6 +16,9 @@ before moving on.
 
 ## Releases
 
+- `CHANGELOG.md` carries the next release as a draft entry, `## vX.Y.Z — DRAFT (unreleased)`, with
+  `Bundle-Version` set to `X.Y.Z.qualifier` in both `META-INF/MANIFEST.MF` files. Cutting the release
+  replaces the draft heading and its draft note with `## vX.Y.Z (YYYY-MM-DD)`.
 - Build the installable plug-in with `tools/ci/package-plugin.sh` (see [BUILDING.md](BUILDING.md));
   the output is `build/dist/<bundle>_<version>.archiplugin`.
 - The CI Archi version is pinned (`ARCHI_VERSION` in `.github/workflows/ci.yml`). Bump it

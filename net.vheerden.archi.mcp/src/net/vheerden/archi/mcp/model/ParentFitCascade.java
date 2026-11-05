@@ -119,7 +119,7 @@ final class ParentFitCascade {
             groupResizeCommands.put(groupId, new UpdateViewObjectCommand(parentGroup,
                     newX, newY, newWidth, newHeight));
             logger.debug("Auto-nudge: resized parent group {} to ({},{}) {}x{}",
-                    groupId, newX, newY, newWidth, newHeight);
+                    CallerText.logged(groupId), newX, newY, newWidth, newHeight);
 
             // Recursively resize ancestor groups. Inside a batch or a bulk pass this group may
             // itself still be DETACHED (an earlier op created it; its add command executes later),

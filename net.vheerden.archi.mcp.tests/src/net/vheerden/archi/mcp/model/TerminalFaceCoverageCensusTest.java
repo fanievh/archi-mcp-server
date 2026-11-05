@@ -38,7 +38,8 @@ import net.vheerden.archi.mcp.response.dto.BendpointDto;
  * {@code absoluteBendpoints[0]} and {@code [n - 1]} <em>are</em> the connection's attachment
  * points, so that testing them against the element box names a face. That holds only for geometry
  * the router wrote: {@code EdgeAttachmentCalculator.computeAttachmentPoint} emits the attachment
- * point one pixel outside the edge and the routing pipeline stores it as the outermost bendpoint,
+ * point {@code TERMINAL_FACE_MARGIN} px outside the edge and the routing pipeline stores it as
+ * the outermost bendpoint,
  * which is why the routing-frame censuses in {@code RoutingComparisonTest} find almost every routed
  * terminal on a face line. A bendpoint that a person or an importer placed carries no such
  * meaning — it is an intermediate waypoint, and the point where the line actually meets the
@@ -103,6 +104,15 @@ public class TerminalFaceCoverageCensusTest {
     private static final String FACE_BOTTOM = "face-bottom";
     private static final String FACE_LEFT = "face-left";
     private static final String FACE_RIGHT = "face-right";
+
+    /**
+     * The terminal face margin, read from production. The hand-built points below stand where
+     * {@code EdgeAttachmentCalculator} would attach a terminal, so they are offsets from an edge
+     * rather than coordinates in their own right; restating the offset would make this control
+     * certify a face line the router no longer writes to.
+     */
+    private static final int MARGIN =
+            net.vheerden.archi.mcp.model.routing.EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN;
     private static final String NO_BENDPOINTS = "abstain-no-bendpoints";
     private static final String OFF_EVERY_FACE_LINE = "abstain-off-every-face-line";
     private static final String PAST_FACE_EXTENT = "abstain-past-face-extent";
@@ -110,20 +120,23 @@ public class TerminalFaceCoverageCensusTest {
     private static final String UNREADABLE_BOUNDS = "abstain-unreadable-bounds";
 
     /**
-     * The four face lines of an element, one pixel outside each edge, as
+     * The four face lines of an element — {@code
+     * EdgeAttachmentCalculator.TERMINAL_FACE_MARGIN} px outside each edge — as
      * {@code {left, right, top, bottom}}.
      *
      * <p>Shared by the classifier and the distance floor so the two cannot drift apart. They are
      * the same four numbers asked two different questions — which line a point is on, and how far
      * it is from the nearest — and deriving them twice would let a change to one silently
-     * desynchronise the other.
+     * desynchronise the other. The offset itself is read from production for the same reason: a
+     * census that restates it is measuring against a line the router may no longer use.
      */
     private static int[] faceLines(ViewFixture.FixtureElement e) {
+        int margin = MARGIN;
         return new int[] {
-            e.x() - 1,
-            e.x() + e.w() + 1,
-            e.y() - 1,
-            e.y() + e.h() + 1,
+            e.x() - margin,
+            e.x() + e.w() + margin,
+            e.y() - margin,
+            e.y() + e.h() + margin,
         };
     }
 
@@ -131,8 +144,9 @@ public class TerminalFaceCoverageCensusTest {
      * Classifies one candidate terminal against the element it attaches to.
      *
      * <p>The four equality comparisons are the shape of
-     * {@code RoutingPipeline.determineFaceFromTerminal}: the router places a terminal one pixel
-     * outside the edge, so a terminal on a face <em>line</em> satisfies exactly one of them. Two
+     * {@code RoutingPipeline.determineFaceFromTerminal}: the router places a terminal
+     * {@code TERMINAL_FACE_MARGIN} px outside the edge, so a terminal on a face <em>line</em>
+     * satisfies exactly one of them. Two
      * things are added that a reporting field needs and the router's own predicate does not have.
      *
      * <p>An <strong>extent clamp</strong>: the router's guard is an or over four infinite lines
@@ -405,7 +419,8 @@ public class TerminalFaceCoverageCensusTest {
      * one. The stored outermost bendpoint is a waypoint, not an attachment point.
      *
      * <p>Contrast the routing frame, where the same predicate finds almost every terminal on a
-     * line: there the router placed the point, exactly one pixel outside the edge, by construction.
+     * line: there the router placed the point, exactly {@code TERMINAL_FACE_MARGIN} px outside the
+     * edge, by construction.
      * The two populations are different geometry, which is why the routing censuses cannot stand in
      * for this one.
      */
@@ -455,10 +470,11 @@ public class TerminalFaceCoverageCensusTest {
         // above would hold however far apart the two reconstructions drifted.
         ViewFixture.FixtureElement box =
                 new ViewFixture.FixtureElement("box", "Box", 400, 300, 120, 55, false, null);
+        int boxLeftLine = 400 - MARGIN;
         assertNotEquals("a divergence in classification is detectable",
-                classify(399, 330, box), classify(398, 330, box));
-        assertEquals(FACE_LEFT, classify(399, 330, box));
-        assertEquals(OFF_EVERY_FACE_LINE, classify(398, 330, box));
+                classify(boxLeftLine, 330, box), classify(boxLeftLine - 1, 330, box));
+        assertEquals(FACE_LEFT, classify(boxLeftLine, 330, box));
+        assertEquals(OFF_EVERY_FACE_LINE, classify(boxLeftLine - 1, 330, box));
     }
 
     /**
@@ -469,8 +485,9 @@ public class TerminalFaceCoverageCensusTest {
      * return a face at all — a broken comparison, a wrong offset sign, a guard that swallows every
      * input — and the zero above would then be measuring this class rather than the corpus. So the
      * classifier is driven here on hand-built points where the answer is known independently: the
-     * four attachment points {@code EdgeAttachmentCalculator} would place on a box, one pixel
-     * outside each edge and centred on that edge, plus one point of each abstaining shape.
+     * four attachment points {@code EdgeAttachmentCalculator} would place on a box, one
+     * {@code TERMINAL_FACE_MARGIN} outside each edge and centred on that edge, plus one point of
+     * each abstaining shape.
      *
      * <p>The element is deliberately given an odd width and an odd height. That is the population
      * a server-side field would exist for — a caller reconstructing bounds from the truncated
@@ -485,15 +502,15 @@ public class TerminalFaceCoverageCensusTest {
         int midX = 100 + 181 / 2;
         int midY = 200 + 55 / 2;
 
-        assertEquals(FACE_LEFT, classify(100 - 1, midY, odd));
-        assertEquals(FACE_RIGHT, classify(100 + 181 + 1, midY, odd));
-        assertEquals(FACE_TOP, classify(midX, 200 - 1, odd));
-        assertEquals(FACE_BOTTOM, classify(midX, 200 + 55 + 1, odd));
+        assertEquals(FACE_LEFT, classify(100 - MARGIN, midY, odd));
+        assertEquals(FACE_RIGHT, classify(100 + 181 + MARGIN, midY, odd));
+        assertEquals(FACE_TOP, classify(midX, 200 - MARGIN, odd));
+        assertEquals(FACE_BOTTOM, classify(midX, 200 + 55 + MARGIN, odd));
 
         assertEquals("a point on two face lines has two true answers",
-                CORNER, classify(100 - 1, 200 - 1, odd));
+                CORNER, classify(100 - MARGIN, 200 - MARGIN, odd));
         assertEquals("on the left face line, far above the element",
-                PAST_FACE_EXTENT, classify(100 - 1, 200 - 60, odd));
+                PAST_FACE_EXTENT, classify(100 - MARGIN, 200 - 60, odd));
         assertEquals("on no face line at all",
                 OFF_EVERY_FACE_LINE, classify(midX, midY, odd));
 
@@ -506,13 +523,12 @@ public class TerminalFaceCoverageCensusTest {
         // added and subtracted — but the far edge is short by the discarded half pixel, and the
         // face test is exact integer equality, so a terminal genuinely on the right face line
         // fails the caller's test and reads to it as off every face line.
-        int callerRightFaceLine = centre(odd)[0] + 181 / 2 + 1;
-        int trueRightFaceLine = 100 + 181 + 1;
-        assertEquals("the caller's reconstructed near edge is exact", 100 - 1,
-                centre(odd)[0] - 181 / 2 - 1);
-        assertEquals("the caller's reconstructed far edge is a pixel short", 281,
-                callerRightFaceLine);
-        assertEquals(282, trueRightFaceLine);
+        int callerRightFaceLine = centre(odd)[0] + 181 / 2 + MARGIN;
+        int trueRightFaceLine = 100 + 181 + MARGIN;
+        assertEquals("the caller's reconstructed near edge is exact", 100 - MARGIN,
+                centre(odd)[0] - 181 / 2 - MARGIN);
+        assertEquals("the caller's reconstructed far edge is a pixel short",
+                trueRightFaceLine - 1, callerRightFaceLine);
         assertEquals("and the server, holding the real bounds, names the face the caller misses",
                 FACE_RIGHT, classify(trueRightFaceLine, midY, odd));
         assertEquals(OFF_EVERY_FACE_LINE, classify(callerRightFaceLine, midY, odd));
@@ -576,17 +592,17 @@ public class TerminalFaceCoverageCensusTest {
                 resolved.get(0), resolved.get(resolved.size() - 1));
 
         // A zero-extent element still has four distinct face lines, because the offsets are
-        // applied outside the box: left and right stay two pixels apart even at zero width.
+        // applied outside the box: left and right stay two margins apart even at zero width.
         ViewFixture.FixtureElement degenerate =
                 new ViewFixture.FixtureElement("zero", "Zero", 50, 60, 0, 0, false, null);
         int[] lines = faceLines(degenerate);
-        assertEquals("left face line", 49, lines[0]);
-        assertEquals("right face line", 51, lines[1]);
+        assertEquals("left face line", 50 - MARGIN, lines[0]);
+        assertEquals("right face line", 50 + MARGIN, lines[1]);
         assertTrue("a zero-width element does not collapse its vertical face lines",
                 lines[0] < lines[1]);
         assertEquals("its centre is its origin", 50, centre(degenerate)[0]);
-        assertEquals(CORNER, classify(49, 59, degenerate));
-        assertEquals(FACE_LEFT, classify(49, 60, degenerate));
+        assertEquals(CORNER, classify(50 - MARGIN, 60 - MARGIN, degenerate));
+        assertEquals(FACE_LEFT, classify(50 - MARGIN, 60, degenerate));
         assertEquals(OFF_EVERY_FACE_LINE, classify(50, 60, degenerate));
 
         // A negative-coordinate element: the truncating division rounds toward zero, so the centre
@@ -594,7 +610,7 @@ public class TerminalFaceCoverageCensusTest {
         ViewFixture.FixtureElement negative =
                 new ViewFixture.FixtureElement("neg", "Neg", -300, -200, 181, 55, false, null);
         assertEquals("centre x truncates toward zero", -300 + 90, centre(negative)[0]);
-        assertEquals(FACE_LEFT, classify(-301, -200, negative));
+        assertEquals(FACE_LEFT, classify(-300 - MARGIN, -200, negative));
     }
 
     /**

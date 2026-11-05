@@ -1,5 +1,6 @@
 package net.vheerden.archi.mcp.model;
 
+import java.util.List;
 import java.util.Objects;
 
 import org.eclipse.emf.ecore.EObject;
@@ -7,6 +8,7 @@ import org.eclipse.gef.commands.Command;
 
 import com.archimatetool.model.IArchimateConcept;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IArchimateModelObject;
 import com.archimatetool.model.IDiagramModel;
 import com.archimatetool.model.IFolder;
 import com.archimatetool.model.INameable;
@@ -16,8 +18,9 @@ import com.archimatetool.model.INameable;
  *
  * <p>Supports moving elements, relationships, views, and subfolders.
  * Uses EMF single-containment semantics: adding to target auto-removes
- * from source. The source index is captured at construction time for
- * proper undo restoration.</p>
+ * from source. Where the object is when the move runs (its folder, index and next sibling) is
+ * recorded then, and undo returns it there: an earlier operation in the same request may have
+ * moved it, or declined to, since this command was prepared.</p>
  *
  * <p><strong>CRITICAL:</strong> This command MUST be executed via
  * {@code CommandStack.execute()} through {@link MutationDispatcher}.
@@ -46,11 +49,14 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
     // execute instead, the target folder may already be detached by an earlier move and yield null.
     private final IArchimateModel model;
 
-    // Surviving-successor anchor captured at construction, before the move. undo()
-    // returns the object to its source folder directly before this sibling rather
-    // than at the stale absolute index, so source order survives a compound that
-    // moves several siblings out of the same folder and undoes them in reverse.
-    private final EObject sourceSuccessor;
+    // Where the object was when the move last ran: the folder, its index there, and the sibling after
+    // it. undo() returns it directly before that sibling rather than at the absolute index, so order
+    // survives a compound that moves several siblings out of the same folder and undoes them in
+    // reverse. Recorded at the move, not at prepare: an earlier operation in the same request can
+    // have moved the object, or declined to, so the folder it leaves is only known when it runs.
+    private IFolder movedFrom;
+    private int movedFromIndex;
+    private EObject movedFromSuccessor;
 
     /** Non-null once {@link #execute()} has declined to run. See {@link CommitSkippableCommand}. */
     private String skipReason;
@@ -58,13 +64,17 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
     /** Whether the move actually happened, so {@link #undo()} reverses only what occurred. */
     private boolean moved;
 
+    /** Set where the last run declined with nothing it wrote left behind. */
+    private boolean changedNothing;
+
     /**
      * Creates a command to move an object between folders.
      *
      * @param object       the EMF object to move (element, relationship, view, or folder)
      * @param isFolder     true if the object is an IFolder (uses getFolders() list)
-     * @param sourceFolder the current parent folder
-     * @param sourceIndex  the object's index in the source folder's list
+     * @param sourceFolder the parent folder when the move is prepared, attached to the model
+     * @param sourceIndex  the object's index there; undo falls back to it only when the object is not
+     *                     found in the folder it leaves
      * @param targetFolder the target parent folder
      */
     public MoveToFolderCommand(EObject object, boolean isFolder,
@@ -77,9 +87,6 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
         // sourceFolder is attached to the model at construction (prepare time), so this is the
         // model even if a later co-queued move detaches the target before this command executes.
         this.model = sourceFolder.getArchimateModel();
-        this.sourceSuccessor = isFolder
-                ? SiblingUndoAnchor.successorOf(sourceFolder.getFolders(), (IFolder) object)
-                : SiblingUndoAnchor.successorOf(sourceFolder.getElements(), object);
 
         String name = (object instanceof INameable nameable)
                 ? nameable.getName() : object.toString();
@@ -104,15 +111,15 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
         if (!moved) {
             return;
         }
-        // Move back to source folder at original index.
+        // Move back to the folder it left, at the slot it left.
         // EMF single-containment auto-removes from target when added to source
         // (same semantics as moveToTarget).
         if (isFolder) {
-            SiblingUndoAnchor.restore(sourceFolder.getFolders(), (IFolder) object,
-                    sourceIndex, sourceSuccessor);
+            SiblingUndoAnchor.restore(movedFrom.getFolders(), (IFolder) object,
+                    movedFromIndex, movedFromSuccessor);
         } else {
-            SiblingUndoAnchor.restore(sourceFolder.getElements(), object,
-                    sourceIndex, sourceSuccessor);
+            SiblingUndoAnchor.restore(movedFrom.getElements(), object,
+                    movedFromIndex, movedFromSuccessor);
         }
     }
 
@@ -121,14 +128,32 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
         return skipReason;
     }
 
+    /** True when the last run declined: every guard is checked before the move writes. */
+    @Override
+    public boolean changedNothing() {
+        return changedNothing;
+    }
+
     private void applyMove() {
         moved = false;
+        changedNothing = false;
         skipReason = describeSkip();
         if (skipReason != null) {
+            changedNothing = true;
             return;
         }
+        recordWhereItIs();
         moveToTarget();
         moved = true;
+    }
+
+    /** Records the folder the object is in now, its index there and the sibling after it, for undo. */
+    private void recordWhereItIs() {
+        movedFrom = object.eContainer() instanceof IFolder container ? container : sourceFolder;
+        List<?> siblings = isFolder ? movedFrom.getFolders() : movedFrom.getElements();
+        int index = siblings.indexOf(object);
+        movedFromIndex = index >= 0 ? index : sourceIndex;
+        movedFromSuccessor = (EObject) SiblingUndoAnchor.successorOf(siblings, object);
     }
 
     /**
@@ -138,7 +163,13 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
      * {@code null} when the move is safe.
      */
     private String describeSkip() {
-        String reason = describeCircularMove();
+        String reason = describeDetachedObject();
+        if (reason == null) {
+            reason = describeDetachedTarget();
+        }
+        if (reason == null) {
+            reason = describeCircularMove();
+        }
         if (reason == null) {
             reason = describeViewHierarchyViolation();
         }
@@ -146,6 +177,43 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
             reason = describeLayerMismatch();
         }
         return reason;
+    }
+
+    /**
+     * Re-checks, at execution time, that the object itself is still in the model. An earlier operation
+     * in the same request can have removed it, or the folder it was in; moving it then would put back
+     * into the model what that operation removed. Declining leaves it removed.
+     *
+     * @return a plain-language reason to decline, or {@code null} when the object is in the model
+     */
+    private String describeDetachedObject() {
+        if (!(object instanceof IArchimateModelObject inModel) || inModel.getArchimateModel() == model) {
+            return null;
+        }
+        return "'" + displayObjectName() + "' was not moved into '" + displayName(targetFolder)
+                + "': it is no longer in the model. It was removed " + CHANGED_SINCE_PREPARED
+                + ", so it was left removed and nothing else was affected.";
+    }
+
+    /**
+     * Re-checks, at execution time, that the target folder is in the model.
+     *
+     * <p>It can have left since this command was prepared: an earlier operation in the same batch or
+     * bulk request deleted it, or it was to be created by an earlier operation that declined. Adding
+     * the object into a folder the model does not hold would take the object, and everything under a
+     * moved folder, out of the model with it. Declining leaves it where it is.</p>
+     *
+     * @return a plain-language reason to decline, or {@code null} when the target is in the model
+     */
+    private String describeDetachedTarget() {
+        if (targetFolder.getArchimateModel() == model) {
+            return null;
+        }
+        return "'" + displayObjectName() + "' was not moved into '" + displayName(targetFolder)
+                + "': that folder is not in the model. It was removed " + CHANGED_SINCE_PREPARED
+                + ", or the operation that was to create it did not. Moving into it would have taken '"
+                + displayObjectName() + "' out of the model as well, so it was left where it was and "
+                + "nothing else was affected.";
     }
 
     /**
@@ -168,8 +236,8 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
         if (isFolder && FolderOperations.isOrDescendsFrom(targetFolder, (IFolder) object)) {
             return "Folder '" + displayName((IFolder) object) + "' was not moved into '"
                     + displayName(targetFolder) + "': that target is now inside the folder being "
-                    + "moved, because an earlier operation in the same request re-parented the "
-                    + "folders. Completing the move would have detached the folder and its "
+                    + "moved, because the folders were re-parented " + CHANGED_SINCE_PREPARED
+                    + ". Completing the move would have detached the folder and its "
                     + "contents from the model, so it was left in place and nothing is lost.";
         }
         return null;
@@ -195,8 +263,8 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
             return null;
         }
         return "View '" + displayObjectName() + "' was not moved into '" + displayName(targetFolder)
-                + "': that folder is now outside the Views hierarchy, because an earlier operation "
-                + "in the same request re-parented it. A view filed outside the Views folder leaves "
+                + "': that folder is now outside the Views hierarchy, because it was re-parented "
+                + CHANGED_SINCE_PREPARED + ". A view filed outside the Views folder leaves "
                 + "the model unable to be saved, so it was left in place.";
     }
 
@@ -222,7 +290,7 @@ public class MoveToFolderCommand extends Command implements CommitSkippableComma
         }
         return "'" + displayObjectName() + "' was not moved into '" + displayName(targetFolder)
                 + "': that folder is now under a different ArchiMate layer than this object "
-                + "belongs to, because an earlier operation in the same request re-parented it. A "
+                + "belongs to, because it was re-parented " + CHANGED_SINCE_PREPARED + ". A "
                 + "concept filed under the wrong layer leaves the model unable to be saved, so it "
                 + "was left in place.";
     }

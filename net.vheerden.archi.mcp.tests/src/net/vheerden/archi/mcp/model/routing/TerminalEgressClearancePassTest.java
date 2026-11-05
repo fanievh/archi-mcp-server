@@ -2,6 +2,7 @@ package net.vheerden.archi.mcp.model.routing;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import java.util.ArrayList;
@@ -66,7 +67,14 @@ public class TerminalEgressClearancePassTest {
         return list;
     }
 
-    // Source S: bottom edge y=160, BOTTOM face line y=161, center x=140.
+    // Source S: bottom edge y=160, centre x=140; its BOTTOM face line is derived.
+
+    /** The face-line coordinate, read from production; its value is pinned by
+     * {@code EdgeAttachmentCalculatorTest}. */
+    private static int faceLine(RoutingRect r, EdgeAttachmentCalculator.Face f) {
+        return EdgeAttachmentCalculator.faceLineCoordinate(r, f);
+    }
+
     private static final RoutingRect S = new RoutingRect(100, 100, 80, 60, "S");
     private static final RoutingRect T = new RoutingRect(340, 300, 80, 50, "T");
 
@@ -75,14 +83,14 @@ public class TerminalEgressClearancePassTest {
     // ===================================================================
 
     /**
-     * The View-D shape: terminal on S's BOTTOM face (y=161), an immediate horizontal parallel
-     * run at y=161 (1px under the edge — the M4 hug), then down to the target. Expect: one
+     * The View-D shape: terminal on S's BOTTOM face line, an immediate horizontal parallel
+     * run at the same y (just under the edge — the M4 hug), then down to the target. Expect: one
      * proposal lengthening the perpendicular egress to clearance (y=168), the terminal
      * bendpoint UNCHANGED (terminal anchoring preserved), and an inserted A' producing a clean L.
      */
     @Test
     public void egressClearance_pushesParallelHugOffOwnFace() {
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
         List<AbsoluteBendpointDto> original = new ArrayList<>(p);
         List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, T));
@@ -94,11 +102,11 @@ public class TerminalEgressClearancePassTest {
         EgressProposal pr = proposals.get(0);
         // geomEdge=160, away=+1, smallest clearance k=8 -> newOrth=168.
         assertEquals("egress pushed to y=168 (8px clearance from the edge)",
-                List.of(bp(140, 161), bp(140, 168), bp(360, 168), bp(360, 300)),
+                List.of(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 168), bp(360, 168), bp(360, 300)),
                 pr.newPath());
 
         Snapshot snap = pass.apply(pr, paths);
-        assertEquals("terminal anchor unchanged", bp(140, 161), paths.get(0).get(0));
+        assertEquals("terminal anchor unchanged", bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), paths.get(0).get(0));
         assertTrue("parallel run cleared the edge", Math.abs(paths.get(0).get(2).y() - 160) > 3);
 
         pass.restore(snap, paths);
@@ -113,7 +121,7 @@ public class TerminalEgressClearancePassTest {
     @Test
     public void egressClearance_noRoom_degradesToNoOp() {
         RoutingRect blocker = new RoutingRect(120, 162, 200, 120, "E"); // y=[162,282], x=[120,320]
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
         List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, T));
         List<RoutingRect> obstacles = List.of(S, T, blocker);
@@ -128,7 +136,7 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_alreadyPerpendicular_noProposal() {
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(140, 250), bp(360, 250));
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 250), bp(360, 250));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
         List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, T));
         List<RoutingRect> obstacles = List.of(S, T);
@@ -151,14 +159,14 @@ public class TerminalEgressClearancePassTest {
     @Test
     public void egressClearance_connectionGapAware_pushesPastNeighbour() {
         // Control: single connection, no neighbour -> naive 8px push to y=168.
-        List<AbsoluteBendpointDto> solo = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> solo = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<EgressProposal> soloProposals =
                 pass.evaluate(conns(conn("c1", S, T)), paths(solo), List.of(S, T));
         assertEquals(1, soloProposals.size());
         assertEquals("no neighbour -> 8px push to y=168", 168, soloProposals.get(0).newPath().get(2).y());
 
         // With a neighbouring horizontal connection run at y=170 (only 2px below y=168).
-        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<AbsoluteBendpointDto> neighbour = path(bp(150, 170), bp(355, 170));
         List<List<AbsoluteBendpointDto>> withNeighbour = paths(hug, neighbour);
         List<EgressProposal> proposals = pass.evaluate(
@@ -185,8 +193,8 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_connectionGapAware_healthyFloorNotInflatedByVp10() {
-        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
-        List<AbsoluteBendpointDto> vPairPartner = path(bp(390, 161), bp(390, 300)); // V_p10 = 30
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> vPairPartner = path(bp(390, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(390, 300)); // V_p10 = 30
         List<AbsoluteBendpointDto> midNeighbour = path(bp(150, 196), bp(370, 196));  // 28px from y=168
 
         List<EgressProposal> proposals = pass.evaluate(
@@ -209,8 +217,8 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_preGate_skipsTightVp10View() {
-        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
-        List<AbsoluteBendpointDto> tightNeighbour = path(bp(365, 161), bp(365, 300)); // gap 5 -> V_p10=5
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> tightNeighbour = path(bp(365, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(365, 300)); // gap 5 -> V_p10=5
         List<AbsoluteBendpointDto> hugOriginal = new ArrayList<>(hug);
         List<AbsoluteBendpointDto> neighbourOriginal = new ArrayList<>(tightNeighbour);
         List<List<AbsoluteBendpointDto>> paths = paths(hug, tightNeighbour);
@@ -233,38 +241,197 @@ public class TerminalEgressClearancePassTest {
     @Test
     public void egressClearance_preGate_boundaryAtExactly8_doesNotSkip() {
         // V_p10 == 8.0 exactly (x=360 vs x=368 vertical runs, full y-overlap) -> NOT skipped.
-        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
-        List<AbsoluteBendpointDto> partner8 = path(bp(368, 161), bp(368, 300));
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> partner8 = path(bp(368, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(368, 300));
         Result atEight = pass.run(conns(conn("c1", S, T), conn("c2", S, T)),
                 paths(hug, partner8), List.of(S, T));
         assertFalse("V_p10 == 8.0 is NOT < 8.0 -> pass runs", atEight.skippedByPreGate());
 
         // V_p10 == 7.0 (x=360 vs x=367) -> skipped.
-        List<AbsoluteBendpointDto> hug2 = path(bp(140, 161), bp(360, 161), bp(360, 300));
-        List<AbsoluteBendpointDto> partner7 = path(bp(367, 161), bp(367, 300));
+        List<AbsoluteBendpointDto> hug2 = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> partner7 = path(bp(367, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(367, 300));
         Result belowEight = pass.run(conns(conn("c1", S, T), conn("c2", S, T)),
                 paths(hug2, partner7), List.of(S, T));
         assertTrue("V_p10 == 7.0 < 8.0 -> pass skipped", belowEight.skippedByPreGate());
     }
 
     // ===================================================================
+    // Pre-gate outcome: what a skip reports to the caller
+    // ===================================================================
+
+    /**
+     * A skip reports the p10 the gate compared (7.0 here, built so) and the connections still
+     * hugging by the router's own predicate. Both preconditions are asserted first: the gate
+     * really measures 7.0, and the hug really exists (the un-gated control proposes a lift for
+     * it), so the report is read off a real skip of a real hug.
+     */
+    @Test
+    public void preGateSkip_reportsTheComparedGapAndTheHuggingConnections() {
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)),
+                bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> partner7 = path(bp(367, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(367, 300));
+        List<List<AbsoluteBendpointDto>> paths = paths(hug, partner7);
+        List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, T), conn("c2", S, T));
+        assertEquals("precondition: the gate measures 7.0", 7.0,
+                HubPerimeterRoutingStage.computeVAxisParallelGapP10(paths), 1e-9);
+        assertEquals("precondition: c1 hugs (a lift is proposed for it when un-gated)", "c1",
+                pass.evaluate(connections, paths, List.of(S, T)).get(0).connectionId());
+
+        Result result = pass.run(connections, paths, List.of(S, T));
+
+        assertTrue(result.skippedByPreGate());
+        EgressOutcome outcome = result.outcome();
+        assertTrue(outcome.preGated());
+        assertEquals("the p10 the gate compared", 7.0, outcome.preGateGapP10(), 1e-9);
+        assertEquals("only c1 hugs; c2 leaves its faces perpendicularly", List.of("c1"),
+                outcome.huggingConnectionIds());
+        assertEquals("a skip never rolls a lift back", 0, outcome.rolledBack());
+    }
+
+    /**
+     * The router's predicate is per terminal; the report is per connection. A connection hugging
+     * at BOTH ends is named once, and ids keep routing order.
+     */
+    @Test
+    public void preGateSkip_namesAConnectionHuggingAtBothEndsOnce_inRoutingOrder() {
+        // c0: plain vertical, no hug. c1: hugs S's BOTTOM face at the source AND TT's TOP face at
+        // the target (last segment runs along y=300). c2: the 7px partner run that trips the gate.
+        RoutingRect src = new RoutingRect(100, 100, 80, 60, "SRC");
+        List<AbsoluteBendpointDto> clean = path(bp(500, 100), bp(500, 400));
+        List<AbsoluteBendpointDto> both = path(bp(140, faceLine(src, EdgeAttachmentCalculator.Face.BOTTOM)),
+                bp(250, faceLine(src, EdgeAttachmentCalculator.Face.BOTTOM)), bp(250, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)),
+                bp(340, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)));
+        List<AbsoluteBendpointDto> partner = path(bp(257, faceLine(src, EdgeAttachmentCalculator.Face.BOTTOM)),
+                bp(257, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)));
+        RoutingRect far = new RoutingRect(480, 40, 40, 40, "F");
+        List<List<AbsoluteBendpointDto>> paths = paths(clean, both, partner);
+
+        Result result = pass.run(conns(conn("c0", far, far), conn("c1", src, TT), conn("c2", far, far)),
+                paths, List.of(src, TT, far));
+
+        assertTrue("precondition: the gate fired", result.skippedByPreGate());
+        assertEquals(List.of("c1"), result.outcome().huggingConnectionIds());
+    }
+
+    /**
+     * A connection whose source exit is clean and whose TARGET end hugs is named: the target half
+     * of the per-terminal predicate is read, not only the source half.
+     */
+    @Test
+    public void preGateSkip_namesAConnectionHuggingOnlyAtItsTarget() {
+        // c1 leaves SRC's bottom face perpendicular (clean), then arrives along TT's TOP face line
+        // (a hug at the target only). c2 is the 7px partner run that trips the gate.
+        RoutingRect src = new RoutingRect(100, 100, 80, 60, "SRC");
+        int bottom = faceLine(src, EdgeAttachmentCalculator.Face.BOTTOM);
+        int top = faceLine(TT, EdgeAttachmentCalculator.Face.TOP);
+        List<AbsoluteBendpointDto> targetHug = path(bp(140, bottom), bp(140, top), bp(340, top));
+        List<AbsoluteBendpointDto> partner = path(bp(147, bottom), bp(147, top));
+        RoutingRect far = new RoutingRect(480, 40, 40, 40, "F");
+
+        Result result = pass.run(conns(conn("c1", src, TT), conn("c2", far, far)),
+                paths(targetHug, partner), List.of(src, TT, far));
+
+        assertTrue("precondition: the gate fired", result.skippedByPreGate());
+        assertEquals(List.of("c1"), result.outcome().huggingConnectionIds());
+    }
+
+    /** A skip on a view with no hug reports the gap and NO connection (so nothing is emitted). */
+    @Test
+    public void preGateSkip_withNoHug_reportsNoConnection() {
+        List<AbsoluteBendpointDto> a = path(bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> b = path(bp(365, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(365, 300));
+        Result result = pass.run(conns(conn("c1", S, T), conn("c2", S, T)), paths(a, b), List.of(S, T));
+        assertTrue("precondition: the gate fired", result.skippedByPreGate());
+        assertTrue(result.outcome().preGated());
+        assertEquals(5.0, result.outcome().preGateGapP10(), 1e-9);
+        assertTrue(result.outcome().huggingConnectionIds().isEmpty());
+    }
+
+    /** Exactly 8.0 is not a skip: the outcome carries no pre-gate report even with a hug present. */
+    @Test
+    public void preGateNotFired_outcomeCarriesNoPreGateReport() {
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)),
+                bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
+        List<AbsoluteBendpointDto> partner8 = path(bp(368, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(368, 300));
+        Result result = pass.run(conns(conn("c1", S, T), conn("c2", S, T)), paths(hug, partner8), List.of(S, T));
+        assertFalse("precondition: the gate did not fire", result.skippedByPreGate());
+        assertFalse(result.outcome().preGated());
+        assertNull(result.outcome().preGateGapP10());
+        assertTrue(result.outcome().huggingConnectionIds().isEmpty());
+    }
+
+    /**
+     * The hugging connections are those in the routes the call WRITES. On this captured view the
+     * coincident-port spread, which runs after the egress pass, moves terminals along their faces
+     * and leaves connections hugging that the pass never saw; the report must name all of them.
+     * 21 in the written routes: 20 by the router's former exact-face-line rule, plus one whose
+     * target terminal sits 2 px off the target's right face (not on the face line the router
+     * places terminals on) with a vertical trunk running up beside that face — a hug a reader sees,
+     * and one the shared {@link OffFaceHug} predicate counts as the assessor does.
+     */
+    @Test
+    public void preGateSkip_namesTheConnectionsHuggingInTheWrittenRoutes_notOnlyThoseThePassSaw()
+            throws Exception {
+        ViewFixture fx = ViewFixture.load("testdata/st-source-clone-fixture.json");
+        List<RoutingPipeline.ConnectionEndpoints> connections = fx.buildConnectionEndpoints();
+
+        RoutingResult result = new RoutingPipeline().routeAllConnections(connections, fx.buildAllObstacles(), null);
+
+        assertTrue("precondition: the pre-gate fired on this view", result.egress().preGated());
+        List<List<AbsoluteBendpointDto>> written = new ArrayList<>();
+        for (RoutingPipeline.ConnectionEndpoints c : connections) {
+            written.add(result.routed().get(c.connectionId()));
+        }
+        List<String> hugging = TerminalEgressClearancePass.huggingConnectionIds(connections, written);
+        assertEquals("precondition: the written routes hold the measured 21 hugging connections", 21, hugging.size());
+        assertEquals(hugging, result.egress().huggingConnectionIds());
+    }
+
+    /** A skip that rolled something back is impossible by construction; the outcome refuses it. */
+    @Test(expected = IllegalArgumentException.class)
+    public void egressOutcome_refusesAPreGateSkipThatRolledBack() {
+        new EgressOutcome(1, 5.0, List.of("c1"));
+    }
+
+    /** Hugging ids without a skip would be a report of a skip that did not happen. */
+    @Test(expected = IllegalArgumentException.class)
+    public void egressOutcome_refusesANonFiniteGap() {
+        new EgressOutcome(0, Double.NaN, List.of("c1"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void egressOutcome_refusesAnInfiniteGap() {
+        new EgressOutcome(0, Double.POSITIVE_INFINITY, List.of("c1"));
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void result_refusesASkipWithoutTheGapItCompared() {
+        new Result(0, 0, true, 0);
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void egressOutcome_refusesHuggingIdsWithoutASkip() {
+        new EgressOutcome(0, null, List.of("c1"));
+    }
+
+    // ===================================================================
     // Target-side egress (sourceSide=false) — the reversal + index branch
     // ===================================================================
 
-    // Target TT: top edge y=300, TOP face line y=299, center x=340.
+    // Target TT: top edge y=300, centre x=340; its TOP face line is derived.
     private static final RoutingRect TT = new RoutingRect(300, 300, 80, 60, "TT");
 
     /**
-     * The hug is on the TARGET face (TT's TOP, y=299), and the source side has a clean
+     * The hug is on the TARGET face (TT's TOP face line), and the source side has a clean
      * perpendicular egress (no source hug) — so the proposal must come from the target-side
      * branch (`sourceSide=false`): A' inserted at lastIdx-1, the target terminal unchanged at
      * lastIdx (terminal anchoring via the reversed-path predicate), pushed up to y=292 (8px above the edge).
      */
     @Test
     public void egressClearance_targetSide_pushesHugOffTargetFace() {
-        // src (140,161) on S BOTTOM, perpendicular stub down to (140,299) -> no source hug;
-        // then horizontal run (140,299)->(340,299) hugging TT's TOP edge (y=300) -> target hug.
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(140, 299), bp(340, 299));
+        // src on S's BOTTOM face line, perpendicular stub down to TT's TOP face line -> no
+        // source hug; then a horizontal run along that line hugging TT's TOP edge -> target hug.
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)), bp(340, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
         List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, TT));
         List<RoutingRect> obstacles = List.of(S, TT);
@@ -275,10 +442,10 @@ public class TerminalEgressClearancePassTest {
         EgressProposal pr = proposals.get(0);
         // geomEdge=300, away=-1 (TOP), k=8 -> newOrth=292. A' at (term.x, 292) inserted at lastIdx-1.
         assertEquals("target-side egress pushed to y=292 (8px above the top edge)",
-                List.of(bp(140, 161), bp(140, 292), bp(340, 292), bp(340, 299)),
+                List.of(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 292), bp(340, 292), bp(340, faceLine(TT, EdgeAttachmentCalculator.Face.TOP))),
                 pr.newPath());
         // Terminal anchoring: the target terminal (last bendpoint) is unchanged.
-        assertEquals("target terminal anchor unchanged", bp(340, 299),
+        assertEquals("target terminal anchor unchanged", bp(340, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)),
                 pr.newPath().get(pr.newPath().size() - 1));
     }
 
@@ -288,7 +455,7 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_targetSide_alreadyPerpendicular_noProposal() {
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(140, 250), bp(340, 250), bp(340, 299));
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 250), bp(340, 250), bp(340, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
         List<RoutingPipeline.ConnectionEndpoints> connections = conns(conn("c1", S, TT));
         List<RoutingRect> obstacles = List.of(S, TT);
@@ -317,7 +484,7 @@ public class TerminalEgressClearancePassTest {
     public void egressClearance_run_commitsOnStubDropEvenWhenM4StaysFlat() {
         RoutingRect f = new RoutingRect(360, 300, 110, 60, "F"); // top edge y=300, x=[360,470]
         List<AbsoluteBendpointDto> p = path(
-                bp(140, 161), bp(360, 161), bp(360, 300), bp(500, 300), bp(500, 400));
+                bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300), bp(500, 300), bp(500, 400));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
 
         Result result = pass.run(conns(conn("c1", S, f)), paths, List.of(S, f));
@@ -329,7 +496,7 @@ public class TerminalEgressClearancePassTest {
         // Terminal byte-identical (perimeter-immutable); source stub lifted to y=168 (8px off S's
         // bottom edge y=160), the inserted A' making a clean perpendicular L. The interior F-graze
         // tail is UNTOUCHED — M4 stayed flat, so this commit is driven solely by the stub-count drop.
-        assertEquals("terminal byte-identical", bp(140, 161), paths.get(0).get(0));
+        assertEquals("terminal byte-identical", bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), paths.get(0).get(0));
         assertEquals("source stub lifted off the face (perpendicular A')", bp(140, 168), paths.get(0).get(1));
         assertEquals("interior F-graze preserved", bp(360, 300), paths.get(0).get(3));
         assertEquals("interior F-graze preserved", bp(500, 300), paths.get(0).get(4));
@@ -342,7 +509,7 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_run_appliesWhenM4Drops() {
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
 
         Result result = pass.run(conns(conn("c1", S, T)), paths, List.of(S, T));
@@ -350,7 +517,7 @@ public class TerminalEgressClearancePassTest {
         assertFalse("not a pre-gate skip", result.skippedByPreGate());
         assertEquals("the egress was committed", 1, result.applied());
         assertEquals("nothing rolled back", 0, result.rolled());
-        assertEquals("terminal anchor unchanged (B71)", bp(140, 161), paths.get(0).get(0));
+        assertEquals("terminal anchor unchanged (B71)", bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), paths.get(0).get(0));
         assertEquals("parallel run pushed to 8px clearance", 168, paths.get(0).get(2).y());
     }
 
@@ -370,7 +537,7 @@ public class TerminalEgressClearancePassTest {
     public void egressClearance_run_rollsBackWhenPushNarrowsVp10BelowHealthyFloor() {
         RoutingRect n1 = new RoutingRect(0, 500, 20, 20, "N1");
         RoutingRect n2 = new RoutingRect(0, 600, 20, 20, "N2");
-        List<AbsoluteBendpointDto> hug = path(bp(140, 161), bp(360, 161), bp(360, 300));
+        List<AbsoluteBendpointDto> hug = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300));
         List<AbsoluteBendpointDto> original = new ArrayList<>(hug);
         List<AbsoluteBendpointDto> vNeighbour = path(bp(150, 155), bp(150, 175)); // x=150, overlaps the stub's y[161,168]
         List<List<AbsoluteBendpointDto>> paths = paths(hug, vNeighbour);
@@ -397,8 +564,8 @@ public class TerminalEgressClearancePassTest {
      */
     @Test
     public void egressClearance_shortRun_ownFaceMicroHug_isDetectedAndCleared() {
-        // term on S's BOTTOM face line (y=161), a 7px horizontal parallel run, then down.
-        List<AbsoluteBendpointDto> p = path(bp(140, 161), bp(147, 161), bp(147, 250));
+        // term on S's BOTTOM face line, a 7px horizontal parallel run, then down.
+        List<AbsoluteBendpointDto> p = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(147, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(147, 250));
         List<List<AbsoluteBendpointDto>> paths = paths(p);
 
         Result result = pass.run(conns(conn("c1", S, T)), paths, List.of(S, T));
@@ -407,7 +574,7 @@ public class TerminalEgressClearancePassTest {
         assertEquals("the short own-face micro-hug is detected", 1, result.proposalsEvaluated());
         assertEquals("committed via the sub-M4 stub-count drop", 1, result.applied());
         assertEquals("nothing rolled back", 0, result.rolled());
-        assertEquals("terminal byte-identical (perimeter-immutable)", bp(140, 161), paths.get(0).get(0));
+        assertEquals("terminal byte-identical (perimeter-immutable)", bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), paths.get(0).get(0));
         assertEquals("stub lifted to 8px clearance (perpendicular A')", bp(140, 168), paths.get(0).get(1));
     }
 
@@ -423,8 +590,8 @@ public class TerminalEgressClearancePassTest {
         // horizontal interior run at y=250. c2: clean perpendicular exit off T's TOP face, with a
         // horizontal interior run at y=257 (7px co-axial overlap with c1's run) — neither terminal
         // is a parallel-on-own-face hug.
-        List<AbsoluteBendpointDto> p1 = path(bp(140, 161), bp(140, 250), bp(300, 250), bp(300, 280));
-        List<AbsoluteBendpointDto> p2 = path(bp(360, 299), bp(360, 257), bp(220, 257), bp(220, 200));
+        List<AbsoluteBendpointDto> p1 = path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 250), bp(300, 250), bp(300, 280));
+        List<AbsoluteBendpointDto> p2 = path(bp(360, faceLine(TT, EdgeAttachmentCalculator.Face.TOP)), bp(360, 257), bp(220, 257), bp(220, 200));
         List<List<AbsoluteBendpointDto>> paths = paths(p1, p2);
         List<AbsoluteBendpointDto> o1 = new ArrayList<>(p1);
         List<AbsoluteBendpointDto> o2 = new ArrayList<>(p2);
@@ -504,19 +671,19 @@ public class TerminalEgressClearancePassTest {
         // even though y=168 is inside CONTAINER's band.
         List<EgressProposal> cleared = pass.evaluate(
                 conns(conn("c1", S, T, List.of(FAR))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 allObstacles);
         assertEquals("ancestor excluded → the container-nested hug clears", 1, cleared.size());
         assertEquals("pushed to y=168 (8px off the face, inside the container band)",
-                List.of(bp(140, 161), bp(140, 168), bp(360, 168), bp(360, 300)),
+                List.of(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(140, 168), bp(360, 168), bp(360, 300)),
                 cleared.get(0).newPath());
-        assertEquals("terminal unchanged (B71)", bp(140, 161), cleared.get(0).newPath().get(0));
+        assertEquals("terminal unchanged (B71)", bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), cleared.get(0).newPath().get(0));
 
         // Ancestor PRESENT in the passthrough set → predecessor behaviour: every candidate pierces
         // the container interior → sound no-op.
         List<EgressProposal> noop = pass.evaluate(
                 conns(conn("c1", S, T, List.of(FAR, CONTAINER))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 allObstacles);
         assertTrue("ancestor in the passthrough set → sound no-op (predecessor)", noop.isEmpty());
     }
@@ -537,7 +704,7 @@ public class TerminalEgressClearancePassTest {
         // Control: no F → naive 8px push to y=168.
         List<EgressProposal> control = pass.evaluate(
                 conns(conn("c1", S, T, List.of(FAR))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 List.of(S, FAR));
         assertEquals(1, control.size());
         assertEquals("no foreign blocker → 8px push to y=168", 168, control.get(0).newPath().get(2).y());
@@ -545,7 +712,7 @@ public class TerminalEgressClearancePassTest {
         // With F (genuine foreign, in conn.obstacles()): y=168 pierces F → retry to y=191.
         List<EgressProposal> retried = pass.evaluate(
                 conns(conn("c1", S, T, List.of(f))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 List.of(S, f));
         assertEquals("a clean coordinate exists past F within the cap", 1, retried.size());
         assertEquals("retried past F to y=191 (clears F's bottom edge y=186 by edgeRequired=5 = 3+2)",
@@ -566,7 +733,7 @@ public class TerminalEgressClearancePassTest {
 
         List<EgressProposal> proposals = pass.evaluate(
                 conns(conn("c1", S, T, List.of(foreign))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 List.of(S, foreign));
         assertTrue("genuine foreign element spanning the range → still rejected (no over-exclusion)",
                 proposals.isEmpty());
@@ -586,7 +753,7 @@ public class TerminalEgressClearancePassTest {
         // Control: ancestor excluded, NO sibling → clears at y=168 (proves the container exclusion works).
         List<EgressProposal> control = pass.evaluate(
                 conns(conn("c1", S, T, List.of(FAR))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 List.of(S, CONTAINER, FAR));
         assertEquals("ancestor excluded, no sibling → clears", 1, control.size());
         assertEquals(168, control.get(0).newPath().get(2).y());
@@ -595,7 +762,7 @@ public class TerminalEgressClearancePassTest {
         // → sound no-op (deferred relocation).
         List<EgressProposal> noop = pass.evaluate(
                 conns(conn("c1", S, T, List.of(sibling))),
-                paths(path(bp(140, 161), bp(360, 161), bp(360, 300))),
+                paths(path(bp(140, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, faceLine(S, EdgeAttachmentCalculator.Face.BOTTOM)), bp(360, 300))),
                 List.of(S, CONTAINER, sibling));
         assertTrue("ancestor excluded but sibling blocks → sound no-op (deferred relocation)",
                 noop.isEmpty());

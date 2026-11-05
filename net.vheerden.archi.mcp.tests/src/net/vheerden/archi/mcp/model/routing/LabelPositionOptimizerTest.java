@@ -111,7 +111,7 @@ public class LabelPositionOptimizerTest {
 
         assertTrue("Should change position to avoid obstacle", result.containsKey("c1"));
         int newPos = result.get("c1");
-        // Source (15%) or target (85%) should be selected since middle overlaps
+        // Source or Target (just beyond either end of the line) should be selected since Middle overlaps
         assertTrue("Should select source (0) or target (2)", newPos == 0 || newPos == 2);
     }
 
@@ -447,23 +447,27 @@ public class LabelPositionOptimizerTest {
     }
 
     @Test
-    public void offset_middleLabelOnOwnEndpoint_getsPerpendicularOffset() {
-        // Short horizontal chain: source [0..100], 20px gap, target [120..220]; "Accesses" (w=74) at Middle
-        // centres at x=110 → spans 73..147, overlapping BOTH endpoint boxes ~0.365 of its area (>= 0.30).
-        // Along-path scoring excludes own endpoints, so the Middle pick stands and the offset is the only
-        // channel that can clear it. First perpendicular candidate (NORTH) lifts it off both boxes.
+    public void offset_middleLabelOnOwnEndpoint_leavesItsEndpoints_forTheClearSourceFirstInOrder() {
+        // Short horizontal chain: source [0..100], 20px gap, target [120..220], both y [10..40]; "Accesses"
+        // (74 x 20) at Middle centres at (110,25) → x 73..147, y 15..35, overlapping BOTH endpoint boxes
+        // 27 x 20 / 1480 = 0.365 of its area (>= 0.30). Element scoring skips own endpoints, but the
+        // own-endpoint penalty counts that bleed, so Middle at Centre scores 2. Archi lifts a Middle
+        // label NORTH by 20/2 + 5 = 15 px: y 0..20, leaving 27 x 10 / 1480 = 0.18 on each box, under
+        // the bar — so NORTH clears. Source
+        // (x 114..210, y 43..63) is clear too and comes before the anchors in candidate order, so the label
+        // goes to Source and no anchor is written. With the position fixed at Middle, NORTH is the anchor
+        // (computeOffsets_middleLabelOnOwnEndpoint_getsPerpendicularOffset).
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 100, 50, 120, 0, 100, 50, "Accesses", 1));
+                conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1));
         List<List<AbsoluteBendpointDto>> paths = List.of(
                 straightHorizontalPath(100, 25, 120));
 
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
                 connections, paths, List.of(), ownEndpointExclude("c1"), 1, new Random(0));
 
-        assertTrue("Middle label already best along-path → no position change",
-                result.changedPositions().isEmpty());
-        assertEquals("Own-endpoint Middle bleed → perpendicular offset (NORTH first)",
-                Integer.valueOf(NORTH), result.offsets().get("c1"));
+        assertEquals("The label leaves its endpoints, for the clear Source",
+                Map.of("c1", 0), result.changedPositions());
+        assertTrue("Off Middle no anchor is written", result.offsets().isEmpty());
     }
 
     @Test
@@ -498,20 +502,61 @@ public class LabelPositionOptimizerTest {
     }
 
     @Test
-    public void offset_candidateOrderIsDeterministic_firstCardinalBlockedSecondChosen() {
-        // Own-endpoint bleed with a third-party box blocking the NORTH displacement only → the next
-        // perpendicular cardinal (SOUTH) is chosen, proving deterministic perpendicular-first ordering.
-        RoutingRect blockNorth = new RoutingRect(60, -60, 120, 52, "blockN");
+    public void offset_drawnLiftTooShortForTallEndpointBoxes_noOffsetAndLabelLeavesMiddle() {
+        // The same chain with 50 px tall boxes, y [0..50]. Archi moves the 74 x 20 label by 15 px on y and
+        // 42 px on x: NORTH y 0..20 and SOUTH y 30..50 still leave 27 x 20 / 1480 = 0.365 on each box; WEST
+        // x 31..105 and EAST x 115..189 sit on the source and target; the diagonals likewise. No direction
+        // clears, so the greedy pass writes no offset (a 40 px lift, y -25..-5, would have been accepted here, and the
+        // label drawn on both boxes regardless). With no rescue the Middle bleed is penalised on both boxes
+        // (2), so the label leaves Middle. Where Archi draws them (draw2d ConnectionEndpointLocator), Source
+        // starts 14 px beyond the source, x 114..210 y 43..63, on the target; the last bendpoint sits on the
+        // target's left edge line, inside its band, so the line ends at the target centre (170, 25) and the
+        // Target label hangs below it, x 188..284 y 39..59, with only 18% of it on the target, under the own-
+        // endpoint bar. So the label goes to Target and is placeable (on the 15%/85% boxes every position was
+        // on a box and it was reported unplaceable).
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
                 conn("c1", 0, 0, 100, 50, 120, 0, 100, 50, "Accesses", 1));
         List<List<AbsoluteBendpointDto>> paths = List.of(
                 straightHorizontalPath(100, 25, 120));
 
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
-                connections, paths, List.of(blockNorth), ownEndpointExclude("c1"), 1, new Random(0));
+                connections, paths, List.of(), ownEndpointExclude("c1"), 1, new Random(0));
 
-        assertEquals("NORTH blocked → deterministic next perpendicular (SOUTH)",
-                Integer.valueOf(SOUTH), result.offsets().get("c1"));
+        assertTrue("No drawn lift clears a 50 px box → no offset", result.offsets().isEmpty());
+        assertEquals("Unrescued Middle bleeds two boxes → re-picked off Middle, to the clear Target",
+                Integer.valueOf(2), result.allPositions().get("c1"));
+        assertEquals("Target is clear → placeable", Set.of(), result.unresolvableLabels());
+        // With the position fixed at Middle the best anchor is written even though none clears: WEST
+        // (x 9..105) still sits on the source but is off the target, one bleed (1) instead of Centre's two.
+        assertEquals("Position fixed at Middle: the anchor that bleeds one box rather than two",
+                Integer.valueOf(WEST), optimizer.computeOffsetsForPositions(connections,
+                        pathMap("c1", straightHorizontalPath(100, 25, 120)),
+                        List.of(), ownEndpointExclude("c1"), Map.of("c1", 1)).get("c1"));
+    }
+
+    @Test
+    public void offset_firstCardinalBlocked_secondChosen() {
+        // Own-endpoint bleed with a third-party box blocking the NORTH displacement only → SOUTH, the only
+        // anchor that clears both the box and the endpoints. Drawn NORTH is y 0..20 (inset y 6.67..13.33),
+        // which blockN's y -20..10 overlaps by 3.33 px; drawn SOUTH is y 30..50 (inset 36.67..43.33), clear of
+        // it and 0.18 on each 30 px endpoint box. The position is fixed at Middle: left free, the label takes
+        // the clear Source, which comes before the anchors in candidate order. Scored, SOUTH is 0 and every
+        // other anchor 1 or 2, so this pins the best anchor over the first, not a tie: the candidate-order
+        // tie-break is pinned by computeOffsets_middleLabelOnOwnEndpoint_getsPerpendicularOffset (NORTH before
+        // SOUTH on a horizontal segment) and offset_verticalHostingSegment_triesWestEastFirst (WEST before EAST).
+        RoutingRect blockNorth = new RoutingRect(60, -20, 120, 30, "blockN");
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1));
+
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(connections,
+                pathMap("c1", straightHorizontalPath(100, 25, 120)), List.of(blockNorth),
+                ownEndpointExclude("c1"), Map.of("c1", 1));
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                connections, List.of(straightHorizontalPath(100, 25, 120)), List.of(blockNorth),
+                ownEndpointExclude("c1"), 1, new Random(0));
+
+        assertEquals("NORTH blocked → SOUTH", Integer.valueOf(SOUTH), offsets.get("c1"));
+        assertEquals("Left free, the clear Source", Map.of("c1", 0), result.changedPositions());
     }
 
     @Test
@@ -520,36 +565,45 @@ public class LabelPositionOptimizerTest {
         // "Hi" (w=26) at Middle centres at (25,53) → pokes ~0.35 of its area into BOTH boxes. The hosting
         // segment is VERTICAL, so the perpendicular cardinals are WEST/EAST — the offset must move sideways
         // (WEST first), not NORTH/SOUTH (which run along the segment). Proves orientation comes from the
-        // hosting segment, not the source→target vector.
+        // hosting segment, not the source→target vector. WEST and EAST both clear, so this is the tie-break.
+        // In the greedy pass the clear Source (x 43..75, y 64..84, 0.22 of it on the target) comes first.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
                 conn("c1", 0, 0, 50, 50, 0, 56, 50, 50, "Hi", 1));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightVerticalPath(25, 50, 56));
 
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(connections,
+                pathMap("c1", straightVerticalPath(25, 50, 56)), List.of(), ownEndpointExclude("c1"),
+                Map.of("c1", 1));
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
-                connections, paths, List.of(), ownEndpointExclude("c1"), 1, new Random(0));
+                connections, List.of(straightVerticalPath(25, 50, 56)), List.of(), ownEndpointExclude("c1"), 1,
+                new Random(0));
 
-        assertEquals("Vertical hosting segment → WEST tried (and clears) first",
-                Integer.valueOf(WEST), result.offsets().get("c1"));
+        assertEquals("Vertical hosting segment → WEST before EAST",
+                Integer.valueOf(WEST), offsets.get("c1"));
+        assertEquals("Left free, the clear Source", Map.of("c1", 0), result.changedPositions());
     }
 
     @Test
     public void offset_middleLabelOnTinyJunction_getsPerpendicularOffset() {
         // A 14x14 junction target fully enclosed by a Middle "Accesses" label (w=74). The label-area fraction
-        // over the junction is only ~0.13 (below 0.30), so without the box-coverage rule chooseOffset sees no
-        // own-endpoint bleed and returns null. The source box is clear of the label (fraction 0). The label
+        // over the junction is only ~0.13 (below 0.30), so without the box-coverage rule no anchor would see
+        // an own-endpoint bleed to clear. The source box is clear of the label (fraction 0). The label
         // covers 100% of the junction box → the box-coverage rule fires and NORTH lifts the label clear.
         // Mirrors the assessor's tiny-junction detection so the FIX engages exactly where DETECTION flags.
+        // The position is fixed at Middle: left free, the label takes Source (x 54..150, y 29..49, 0.21 of
+        // the junction), which is clear and comes before the anchors.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
                 conn("c1", 0, 0, 40, 50, 103, 18, 14, 14, "Accesses", 1));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightHorizontalPath(90, 25, 130));
 
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(connections,
+                pathMap("c1", straightHorizontalPath(90, 25, 130)), List.of(), ownEndpointExclude("c1"),
+                Map.of("c1", 1));
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
-                connections, paths, List.of(), ownEndpointExclude("c1"), 1, new Random(0));
+                connections, List.of(straightHorizontalPath(90, 25, 130)), List.of(), ownEndpointExclude("c1"),
+                1, new Random(0));
 
         assertEquals("Tiny-junction Middle bleed → perpendicular offset (NORTH first)",
-                Integer.valueOf(NORTH), result.offsets().get("c1"));
+                Integer.valueOf(NORTH), offsets.get("c1"));
+        assertEquals("Left free, the clear Source", Map.of("c1", 0), result.changedPositions());
     }
 
     @Test
@@ -583,7 +637,7 @@ public class LabelPositionOptimizerTest {
         // allObstacles is empty: own-endpoint detection + the candidate re-check read source/target from the
         // ConnectionEndpoints record directly (not from allObstacles), so NORTH clears with no third-party boxes.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 100, 50, 120, 0, 100, 50, "Accesses", 1));
+                conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1));
 
         Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
                 connections, pathMap("c1", straightHorizontalPath(100, 25, 120)),
@@ -591,6 +645,28 @@ public class LabelPositionOptimizerTest {
 
         assertEquals("Own-endpoint Middle bleed → perpendicular offset (NORTH first)",
                 Integer.valueOf(NORTH), offsets.get("c1"));
+    }
+
+    @Test
+    public void middleLabelOnOwnEndpoint_whereNoOffsetShips_choosesAmongThePositionsAndWritesNoAnchor() {
+        // The chain above where no offset ships (an empty offset-writable set: Archi before 5.10, a hidden label,
+        // a routing pass that writes no offset): only the three positions are scored, the bleed at Middle is a
+        // cost (2, one per endpoint), so the label takes the clear Source. The residual is empty: Source is a
+        // collision-free position. With the position fixed at Middle, no anchor is searched.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(connections,
+                List.of(straightHorizontalPath(100, 25, 120)), List.of(), ownEndpointExclude("c1"), Set.of());
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(connections,
+                pathMap("c1", straightHorizontalPath(100, 25, 120)), List.of(), ownEndpointExclude("c1"),
+                Map.of("c1", 1), Set.of());
+
+        assertEquals("The bleed is a cost: the label takes the clear Source", Map.of("c1", 0),
+                result.changedPositions());
+        assertTrue("No anchor where none ships", result.offsets().isEmpty());
+        assertTrue("Source is clear, so the label is placeable", result.unresolvableLabels().isEmpty());
+        assertEquals("No anchor at a fixed Middle either", Map.of(), offsets);
     }
 
     @Test
@@ -637,7 +713,7 @@ public class LabelPositionOptimizerTest {
         // A connection absent from chosenPositions falls back to its own textPosition() — here Middle (1) —
         // so its own-endpoint bleed still gets offset even when the routing pass reported no position for it.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 100, 50, 120, 0, 100, 50, "Accesses", 1));
+                conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1));
 
         Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
                 connections, pathMap("c1", straightHorizontalPath(100, 25, 120)),
@@ -659,6 +735,153 @@ public class LabelPositionOptimizerTest {
         assertTrue("No routed path → connection skipped", offsets.isEmpty());
     }
 
+    // --- A held Label Offset comes first ---
+    //
+    // A connection may already hold an anchor (set by hand, or by an earlier run before the elements
+    // moved). Kept while it draws the label clear, reset to Centre once it lands the label on a box and the
+    // un-offset label is clear, otherwise the search from the un-offset label as for Centre.
+
+    private static final int EAST = 16;
+    private static final int CENTER = LabelOffsetDirection.CENTER;
+
+    private RoutingPipeline.ConnectionEndpoints held(RoutingPipeline.ConnectionEndpoints c, int anchor) {
+        return new RoutingPipeline.ConnectionEndpoints(c.connectionId(), c.source(), c.target(),
+                c.obstacles(), c.labelText(), c.textPosition(), c.groupBoundaries(), anchor);
+    }
+
+    /** The tight own-endpoint chain: "Accesses" at Middle bleeds both boxes; NORTH and SOUTH both clear. */
+    private RoutingPipeline.ConnectionEndpoints bleedingChain(int anchor) {
+        return held(conn("c1", 0, 10, 100, 30, 120, 10, 100, 30, "Accesses", 1), anchor);
+    }
+
+    /**
+     * A long horizontal connection whose Middle label is clear (scored box x 252..348, y 15..35) and a box to
+     * its right at x 360..410. The label clears it by 12 px (no near-miss), so Middle stays the best
+     * position; a held EAST draws the label 53 px right, x 305..401 (inset 315..391), onto the box. (The
+     * box moved from x 350 when the optimizer began scoring the 96 px render-calibrated box rather than
+     * the 74 px raw one: at 350 the wider label was a 2 px near-miss.)
+     */
+    private static final RoutingRect EAST_BOX = new RoutingRect(360, 0, 50, 50, "eastBox");
+
+    private RoutingPipeline.ConnectionEndpoints longClear(int anchor, int textPosition) {
+        return held(conn("c1", 0, 0, 100, 50, 500, 0, 100, 50, "Accesses", textPosition), anchor);
+    }
+
+    @Test
+    public void heldOffset_thatDrawsClear_isKept_greedy() {
+        // The first clearing direction is NORTH, so a held SOUTH (also clear: 0.18 on each box) would be
+        // replaced by it under the search alone. The held one wins and nothing is written.
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                List.of(bleedingChain(SOUTH)), List.of(straightHorizontalPath(100, 25, 120)),
+                List.of(), ownEndpointExclude("c1"), 1, new Random(0));
+
+        assertNull("A held offset that draws clear is left alone", result.offsets().get("c1"));
+        assertEquals("The label stays at Middle: its bleed is still rescuable",
+                Integer.valueOf(1), result.allPositions().get("c1"));
+        assertTrue("and is not reported unplaceable", result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void heldOffset_thatDrawsClear_isKept_positionPreserving() {
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                List.of(bleedingChain(SOUTH)), pathMap("c1", straightHorizontalPath(100, 25, 120)),
+                List.of(), ownEndpointExclude("c1"), Map.of());
+
+        assertTrue("A held offset that draws clear is left alone", offsets.isEmpty());
+    }
+
+    @Test
+    public void staleHeldOffset_overAClearLabel_isResetToCentre_greedy() {
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                List.of(longClear(EAST, 1)), List.of(straightHorizontalPath(100, 25, 500)),
+                List.of(EAST_BOX), ownEndpointExclude("c1"), 1, new Random(0));
+
+        assertEquals("The label stays at Middle", Integer.valueOf(1), result.allPositions().get("c1"));
+        assertEquals("A held offset that lands the label on a box is reset",
+                Integer.valueOf(CENTER), result.offsets().get("c1"));
+    }
+
+    @Test
+    public void staleHeldOffset_overAClearLabel_isResetToCentre_positionPreserving() {
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                List.of(longClear(EAST, 1)), pathMap("c1", straightHorizontalPath(100, 25, 500)),
+                List.of(EAST_BOX), ownEndpointExclude("c1"), Map.of());
+
+        assertEquals("A held offset that lands the label on a box is reset",
+                Integer.valueOf(CENTER), offsets.get("c1"));
+    }
+
+    @Test
+    public void staleHeldOffset_overABleedingLabel_searchesAsForCentre() {
+        // Held NORTH lands on blockN (drawn y 0..20 against y -20..10); the un-offset label bleeds both
+        // endpoints, so it is not reset: the search runs and picks SOUTH, as it does for Centre. Left free,
+        // the greedy pass takes the clear Source and leaves the held NORTH alone (Archi ignores it there).
+        RoutingRect blockNorth = new RoutingRect(60, -20, 120, 30, "blockN");
+
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                List.of(bleedingChain(NORTH)), pathMap("c1", straightHorizontalPath(100, 25, 120)),
+                List.of(blockNorth), ownEndpointExclude("c1"), Map.of());
+        LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                List.of(bleedingChain(NORTH)), List.of(straightHorizontalPath(100, 25, 120)),
+                List.of(blockNorth), ownEndpointExclude("c1"), 1, new Random(0));
+
+        assertEquals(Integer.valueOf(SOUTH), offsets.get("c1"));
+        assertEquals(Map.of("c1", 0), result.changedPositions());
+        assertTrue(result.offsets().isEmpty());
+    }
+
+    @Test
+    public void heldOffset_onASourceOrTargetLabel_isNeitherKeptNorReset() {
+        // Archi ignores the anchor on a Source or Target label, so a dormant user setting is left alone.
+        for (int position : new int[]{0, 2}) {
+            Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                    List.of(longClear(EAST, position)), pathMap("c1", straightHorizontalPath(100, 25, 500)),
+                    List.of(EAST_BOX), ownEndpointExclude("c1"), Map.of());
+            assertTrue("position " + position + ": nothing written", offsets.isEmpty());
+        }
+    }
+
+    @Test
+    public void heldMaskThatMovesNothing_isTreatedAsCentre() {
+        // 0 and 32 name no axis, so the label is drawn where Centre draws it and the search runs as today.
+        for (int anchor : new int[]{0, 32, CENTER}) {
+            Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                    List.of(bleedingChain(anchor)), pathMap("c1", straightHorizontalPath(100, 25, 120)),
+                    List.of(), ownEndpointExclude("c1"), Map.of());
+            assertEquals("anchor " + anchor, Integer.valueOf(NORTH), offsets.get("c1"));
+        }
+    }
+
+    @Test
+    public void heldMaskThatMovesNothing_isTreatedAsCentre_greedy() {
+        // The greedy pass picks for a held 0 or 32 exactly what it picks for a held Centre.
+        LabelPositionOptimizer.MultiTrialResult centre = optimizer.optimizeMultiTrial(
+                List.of(bleedingChain(CENTER)), List.of(straightHorizontalPath(100, 25, 120)),
+                List.of(), ownEndpointExclude("c1"), 1, new Random(0));
+        for (int anchor : new int[]{0, 32}) {
+            LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
+                    List.of(bleedingChain(anchor)), List.of(straightHorizontalPath(100, 25, 120)),
+                    List.of(), ownEndpointExclude("c1"), 1, new Random(0));
+            assertEquals("anchor " + anchor, centre.allPositions(), result.allPositions());
+            assertEquals("anchor " + anchor, centre.offsets(), result.offsets());
+            assertEquals("anchor " + anchor, centre.totalScore(), result.totalScore(), 0.0);
+        }
+    }
+
+    @Test
+    public void heldOffset_withBothBitsOnAnAxis_isJudgedWhereItsWinningBitDrawsIt() {
+        // NORTH|SOUTH draws as NORTH. blockN sits where NORTH draws the label, so the held mask is stale;
+        // the un-offset label bleeds both ends, so the search runs and picks SOUTH. Read as SOUTH it would
+        // have been kept.
+        RoutingRect blockNorth = new RoutingRect(60, -20, 120, 30, "blockN");
+
+        Map<String, Integer> offsets = optimizer.computeOffsetsForPositions(
+                List.of(bleedingChain(NORTH | SOUTH)), pathMap("c1", straightHorizontalPath(100, 25, 120)),
+                List.of(blockNorth), ownEndpointExclude("c1"), Map.of());
+
+        assertEquals(Integer.valueOf(SOUTH), offsets.get("c1"));
+    }
+
     // --- Own-endpoint-aware position RE-PICK (scorePosition penalty) ---
     //
     // The element-overlap loop excludes a connection's own source/target, so a label sitting squarely on
@@ -666,14 +889,30 @@ public class LabelPositionOptimizerTest {
     // own-endpoint penalty that supplies the missing incentive: re-pick off an own endpoint when a clearer
     // position exists, stay put when none does, and never move a clear label.
 
+    /**
+     * Source (0,0 100x50) and target (130,0 100x50) side by side, 30 px apart, joined by a detour below
+     * ({@link #detourBelow}). Archi draws a Source label 14 px beyond the source's face and 4 px below the
+     * line (draw2d {@code ConnectionEndpointLocator}): "ConnLabel" (107 px) at x 114..221, y 29..49, over the
+     * target. It cannot land on its own source; across a short gap it lands on the other endpoint. The Middle
+     * label is centred on the detour's corner (110, 200), clear of both, and the Target label hangs right of
+     * the line below the target, also clear.
+     */
+    private RoutingPipeline.ConnectionEndpoints sourceLabelOnItsTarget() {
+        return conn("c1", 0, 0, 100, 50, 130, 0, 100, 50, "ConnLabel", 0);
+    }
+
+    /** Right out of the source to x 110, down to y 200, right to x 180, up into the target's bottom face. */
+    private List<AbsoluteBendpointDto> detourBelow() {
+        return List.of(new AbsoluteBendpointDto(110, 25), new AbsoluteBendpointDto(110, 200),
+                new AbsoluteBendpointDto(180, 200));
+    }
+
     @Test
     public void ownEndpoint_sourceBleed_repicksToClearMiddle() {
-        // Big source box + short hop: the Source-position label (15% along) lands ON its own source box,
-        // but Middle (50%) is clear of both endpoints. The own-endpoint penalty must move it off Source.
-        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 200, 80, 500, 0, 80, 80, "ConnLabel", 0));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightHorizontalPath(200, 40, 500));
+        // The Source label lands ON its own target box (see sourceLabelOnItsTarget), but Middle, on the
+        // detour's corner, is clear of both endpoints. The own-endpoint penalty must move it off Source.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(sourceLabelOnItsTarget());
+        List<List<AbsoluteBendpointDto>> paths = List.of(detourBelow());
 
         Map<String, Integer> result = optimizer.optimize(
                 connections, paths, List.of(), Map.of());
@@ -715,12 +954,11 @@ public class LabelPositionOptimizerTest {
 
     @Test
     public void computeTotalScore_reflectsOwnEndpointPenalty() {
-        // Same source-bleed fixture: the Source assignment (label ON its own box) must total higher than the
-        // Middle assignment (clear), so multi-trial selection — which ranks by computeTotalScore — prefers Middle.
-        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 200, 80, 500, 0, 80, 80, "ConnLabel", 0));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightHorizontalPath(200, 40, 500));
+        // Same own-endpoint fixture: the Source assignment (label ON its own target box) must total higher than
+        // the Middle assignment (clear), so multi-trial selection — which ranks by computeTotalScore — prefers
+        // Middle.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(sourceLabelOnItsTarget());
+        List<List<AbsoluteBendpointDto>> paths = List.of(detourBelow());
 
         double sourceTotal = optimizer.computeTotalScore(
                 Map.of("c1", 0), connections, paths, List.of(), Map.of());
@@ -735,11 +973,9 @@ public class LabelPositionOptimizerTest {
     @Test
     public void multiTrial_picksOwnEndpointFreeAssignment() {
         // End-to-end: multi-trial must converge on the own-endpoint-free (Middle) assignment for a Source-pinned
-        // label that bleeds its own box, with a total score of 0.
-        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 200, 80, 500, 0, 80, 80, "ConnLabel", 0));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightHorizontalPath(200, 40, 500));
+        // label that bleeds onto its own target box, with a total score of 0.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(sourceLabelOnItsTarget());
+        List<List<AbsoluteBendpointDto>> paths = List.of(detourBelow());
 
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
                 connections, paths, List.of(), Map.of(), 5, new Random(42));
@@ -750,17 +986,19 @@ public class LabelPositionOptimizerTest {
     }
 
     @Test
-    public void ownEndpoint_repickToMiddle_firesOffsetFinisher() {
-        // Source & target positions each bleed their own (big) endpoint box; an extra obstacle further taxes
-        // the Source position, leaving Middle the best escape. The re-pick lands on Middle, and because the
-        // Middle label still grazes a third-party obstacle there, the Middle-only offset finisher then fires.
-        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
-                conn("c1", 0, 0, 200, 80, 500, 0, 200, 80, "ConnLabel", 0));
-        List<List<AbsoluteBendpointDto>> paths = List.of(
-                straightHorizontalPath(200, 40, 500));
+    public void ownEndpoint_repickToMiddle_withTheAnchorThatClearsIt() {
+        // The Source position bleeds its own target box (see sourceLabelOnItsTarget) and an extra obstacle
+        // further taxes it; two obstacles sit on the Target slot (x 184..291, y 64..84), leaving Middle the
+        // best escape. The re-pick lands on Middle, and because the Middle label (x 56..164, y 190..210)
+        // still sits on a third-party obstacle there, the label takes an anchor at Middle: West and
+        // East (the perpendiculars of the vertical leg into the corner) stay on it, North clears it.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(sourceLabelOnItsTarget());
+        List<List<AbsoluteBendpointDto>> paths = List.of(detourBelow());
         List<RoutingRect> obstacles = List.of(
-                new RoutingRect(150, 30, 40, 40, "obsA"),   // taxes the Source position
-                new RoutingRect(330, 30, 40, 40, "obsB"));  // grazes the Middle position
+                new RoutingRect(110, 35, 18, 20, "obsA"),   // taxes the Source position
+                new RoutingRect(90, 200, 40, 40, "obsB"),   // on the Middle position
+                new RoutingRect(200, 60, 30, 30, "obsC"),   // on the Target position
+                new RoutingRect(250, 60, 30, 30, "obsD"));  // on the Target position
         Map<String, Set<String>> excludeSets = Map.of("c1", Set.of("src-c1", "tgt-c1"));
 
         LabelPositionOptimizer.MultiTrialResult result = optimizer.optimizeMultiTrial(
@@ -768,7 +1006,7 @@ public class LabelPositionOptimizerTest {
 
         assertEquals("Re-pick should land on Middle", Integer.valueOf(1),
                 result.allPositions().get("c1"));
-        assertEquals("Offset finisher should lift the Middle landing clear (NORTH off obsB)",
+        assertEquals("An anchor should lift the Middle landing clear (NORTH off obsB)",
                 Integer.valueOf(NORTH), result.offsets().get("c1"));
     }
 
@@ -784,12 +1022,19 @@ public class LabelPositionOptimizerTest {
     // near-misses total 1.0 and would otherwise be indistinguishable from one genuine overlap.
     // Hiding a label for passing near two boxes would be exactly the over-suppression this must avoid.
 
-    /** Source box, target box, and a middle blocker wide enough that no offset direction escapes it. */
+    /**
+     * Blockers on the three slots of the 50..550 "Flows" line, where Archi draws them (draw2d
+     * {@code ConnectionEndpointLocator} for Source and Target). The first bendpoint sits on the source's
+     * face, so the drawn end segment has no length and the Source box hangs 18 px below the line, x 64..128
+     * y 43..63. The last sits on the target's left edge line, inside its band, so the line ends at the target
+     * centre (575, 25) and the Target box is below it, x 593..657 y 39..59. The middle blocker is wide enough
+     * that no offset direction escapes it.
+     */
     private List<RoutingRect> allThreePositionsBlockedHorizontal() {
         return List.of(
-                new RoutingRect(90, 10, 50, 30, "obsSrcPos"),      // blocks Source (15% → x≈107)
-                new RoutingRect(200, -100, 200, 300, "obsMidPos"), // blocks Middle (50% → x=300) at every offset
-                new RoutingRect(470, 10, 50, 30, "obsTgtPos"));    // blocks Target (85% → x≈492)
+                new RoutingRect(80, 40, 40, 30, "obsSrcPos"),      // blocks Source
+                new RoutingRect(200, -100, 200, 300, "obsMidPos"), // blocks Middle (x 268..332) at every offset
+                new RoutingRect(600, 40, 40, 30, "obsTgtPos"));    // blocks Target
     }
 
     @Test
@@ -834,10 +1079,12 @@ public class LabelPositionOptimizerTest {
                 conn("c1", 0, 0, 50, 50, 0, 550, 50, 50, "Flows", 1));
         List<List<AbsoluteBendpointDto>> paths = List.of(
                 straightVerticalPath(25, 50, 550));
+        // Source (x 43..107, y 64..84) and Target (x 29..93, y 589..609) where Archi draws them: right of
+        // the line, past the bendpoints on the faces (see allThreePositionsBlockedHorizontal).
         List<RoutingRect> obstacles = List.of(
-                new RoutingRect(5, 90, 60, 30, "obsSrcPos"),
+                new RoutingRect(40, 60, 60, 30, "obsSrcPos"),
                 new RoutingRect(-100, 200, 300, 200, "obsMidPos"),
-                new RoutingRect(5, 475, 60, 30, "obsTgtPos"));
+                new RoutingRect(40, 585, 60, 30, "obsTgtPos"));
 
         LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
                 connections, paths, obstacles, Map.of());
@@ -898,16 +1145,18 @@ public class LabelPositionOptimizerTest {
     }
 
     @Test
-    public void shouldNotReportUnresolvable_whenOffsetFinisherRescuesTheMiddleLabel() {
+    public void shouldNotReportUnresolvable_whenAClearAnchorRescuesTheMiddleLabel() {
         // A Middle label that overlaps a small third-party box which a perpendicular offset lifts it
         // clear of is PLACEABLE — the engine has not proven it cannot be placed, so it must not be hidden.
+        // "Flows" (50 x 20) at Middle is x 275..325, y 15..35 (inset y 21.67..28.33), on the 10 px strip
+        // y 20..30. Archi's NORTH lift of 15 px gives y 0..20 (inset 6.67..13.33): clear.
         List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
                 conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
         List<List<AbsoluteBendpointDto>> paths = List.of(
                 straightHorizontalPath(50, 25, 550));
         List<RoutingRect> obstacles = List.of(
                 new RoutingRect(90, 10, 50, 30, "obsSrcPos"),
-                new RoutingRect(280, 10, 50, 30, "obsMidPosSmall"), // small → an offset direction clears it
+                new RoutingRect(280, 20, 50, 10, "obsMidPosSmall"), // small → an offset direction clears it
                 new RoutingRect(470, 10, 50, 30, "obsTgtPos"));
 
         LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
@@ -915,6 +1164,30 @@ public class LabelPositionOptimizerTest {
 
         assertTrue("An offset-rescuable Middle label still has a valid position",
                 result.unresolvableLabels().isEmpty());
+    }
+
+    @Test
+    public void shouldReportUnresolvable_whenTheDrawnLiftCannotClearTheMiddleObstacle() {
+        // The rescue case with a 30 px tall Middle obstacle, y 10..40. Archi's lifts of the 50 x 20 "Flows"
+        // label (15 px on y, 30 px on x) all leave its inset box over the obstacle: NORTH inset y 6.67..13.33
+        // and SOUTH 36.67..43.33 cross y 10..40; WEST inset x 255..285 and EAST 315..345 cross x 280..330.
+        // Source and Target are blocked too (where Archi draws them, see
+        // allThreePositionsBlockedHorizontal), so the label is unplaceable — the verdict a caller's
+        // "auto-hide-on-collision" label policy acts on. A 40 px lift (y -25..-5) would have called it
+        // rescued.
+        List<RoutingPipeline.ConnectionEndpoints> connections = List.of(
+                conn("c1", 0, 0, 50, 50, 550, 0, 50, 50, "Flows", 1));
+        List<List<AbsoluteBendpointDto>> paths = List.of(
+                straightHorizontalPath(50, 25, 550));
+        List<RoutingRect> obstacles = List.of(
+                new RoutingRect(80, 40, 40, 30, "obsSrcPos"),
+                new RoutingRect(280, 10, 50, 30, "obsMidPos"),
+                new RoutingRect(600, 40, 40, 30, "obsTgtPos"));
+
+        LabelPositionOptimizer.LabelOptimizationResult result = optimizer.optimizeWithResidual(
+                connections, paths, obstacles, Map.of());
+
+        assertEquals(Set.of("c1"), result.unresolvableLabels());
     }
 
     @Test

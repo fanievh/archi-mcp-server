@@ -1,12 +1,15 @@
 package net.vheerden.archi.mcp.model;
 
 import java.util.Objects;
+import java.util.function.Supplier;
 
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.gef.commands.Command;
 import org.eclipse.gef.commands.CompoundCommand;
 
+import com.archimatetool.model.IArchimateConcept;
 import com.archimatetool.model.IArchimateModel;
+import com.archimatetool.model.IArchimateRelationship;
 import com.archimatetool.model.INameable;
 
 /**
@@ -40,17 +43,21 @@ import com.archimatetool.model.INameable;
  * <p>The model reference is captured at construction, while the container is still attached, for
  * the same reason {@code MoveToFolderCommand} captures it: derived lazily at execution the
  * container may already be detached and yield null, leaving nothing to compare against.</p>
+ *
+ * <p>A caller may add a check of its own that must also hold before the guarded command runs (a
+ * clone's source), so the pair declines before anything is written.</p>
  */
 class RequireAttachedContainerCommand extends CompoundCommand implements CommitSkippableCommand {
 
     /**
      * Which sentence the decline is explained with.
      *
-     * <p>The three differ by more than a noun. A create lands <em>inside</em> the thing that went
+     * <p>They differ by more than a noun. A create lands <em>inside</em> the thing that went
      * missing; a placement lands inside it too but is added to a view rather than created; a
-     * connection is not added to its endpoints at all, it joins them — so a single verb parameter
-     * would produce "the view object it was to be added to", which is false. Each wording is
-     * therefore written out, once, here rather than at the six call sites, so the agent-facing
+     * connection is not added to its endpoints at all, it joins them; a view reference lands on one
+     * view and points at another, which may never have entered the model at all — so a single verb
+     * parameter would produce "the view object it was to be added to", which is false. Each wording is
+     * therefore written out, once, here rather than at the call sites, so the agent-facing
      * prose stays in one place and the model layer keeps owning it.</p>
      */
     enum Wording {
@@ -59,7 +66,30 @@ class RequireAttachedContainerCommand extends CompoundCommand implements CommitS
         /** Added to a view, inside a container that was removed — the {@code add-*-to-view} family. */
         ADD_TO_CONTAINER,
         /** Joined two view objects, one of which was removed — {@code add-connection-to-view}. */
-        CONNECT_ENDPOINT
+        CONNECT_ENDPOINT,
+        /**
+         * Referred to a view that is not in the model — {@code add-view-reference-to-view}. Removed, or
+         * never created: its own operation in the same request can decline, so "removed" alone is false.
+         */
+        REFERENCED_VIEW,
+        /**
+         * Updated something that is not in the model — {@code update-folder}, {@code update-view},
+         * {@code update-element}, {@code update-relationship}, {@code update-view-object},
+         * {@code update-view-connection}. The guarded object is its own container here: removed, or never
+         * created by its own operation.
+         */
+        UPDATED,
+        /**
+         * Drew a concept that is not in the model — the element {@code add-to-view} draws, the relationship
+         * {@code add-connection-to-view} or an automatic connection draws. Removed, or never created by its
+         * own operation.
+         */
+        DRAWN_CONCEPT,
+        /**
+         * Joined an element that is not in the model — either end of {@code create-relationship}. Removed,
+         * or never created by its own operation.
+         */
+        RELATIONSHIP_END
     }
 
     private final EObject container;
@@ -68,11 +98,24 @@ class RequireAttachedContainerCommand extends CompoundCommand implements CommitS
     private final String containerKind;
     private final Wording wording;
 
+    /**
+     * The caller's own reason to decline, asked by {@link #execute()} only once the container is attached;
+     * {@code null} from it means run. Redo does not ask again: it keeps the verdict execute reached, so the
+     * guarded command redoes exactly what it did the first time, as the commands beside it do.
+     */
+    private final Supplier<String> alsoDecline;
+
+    /** Whether the last {@link #execute()} declined on the caller's own check. */
+    private boolean callerDeclined;
+
     /** Non-null once {@link #execute()} has declined to run. See {@link CommitSkippableCommand}. */
     private String skipReason;
 
     /** Whether the wrapped command actually ran, so {@link #undo()} reverses only what occurred. */
     private boolean ran;
+
+    /** Set where the last run declined with nothing it wrote left behind. */
+    private boolean changedNothing;
 
     /**
      * @param guarded       the fully prepared command, wrappers and all
@@ -84,30 +127,53 @@ class RequireAttachedContainerCommand extends CompoundCommand implements CommitS
      */
     RequireAttachedContainerCommand(Command guarded, EObject container, IArchimateModel model,
             String subject, String containerKind, Wording wording) {
+        this(guarded, container, model, subject, containerKind, wording, () -> null);
+    }
+
+    /**
+     * @param alsoDecline the caller's own reason to decline, or {@code null} to run, asked after the
+     *                    container check passes, on execute only
+     */
+    RequireAttachedContainerCommand(Command guarded, EObject container, IArchimateModel model,
+            String subject, String containerKind, Wording wording, Supplier<String> alsoDecline) {
         super(Objects.requireNonNull(guarded, "guarded must not be null").getLabel());
         this.container = Objects.requireNonNull(container, "container must not be null");
         this.model = model;
         this.subject = subject;
         this.containerKind = containerKind;
         this.wording = wording;
+        this.alsoDecline = Objects.requireNonNull(alsoDecline, "alsoDecline must not be null");
         add(guarded);
     }
 
     @Override
     public void execute() {
         skipReason = describeSkip();
+        callerDeclined = false;
+        if (skipReason == null) {
+            skipReason = alsoDecline.get();
+            callerDeclined = skipReason != null;
+        }
         ran = skipReason == null;
+        changedNothing = false;
         if (ran) {
             super.execute();
+        } else {
+            changedNothing = true;
         }
     }
 
     @Override
     public void redo() {
-        skipReason = describeSkip();
+        if (!callerDeclined) {
+            skipReason = describeSkip();
+        }
         ran = skipReason == null;
+        changedNothing = false;
         if (ran) {
             super.redo();
+        } else {
+            changedNothing = true;
         }
     }
 
@@ -126,6 +192,17 @@ class RequireAttachedContainerCommand extends CompoundCommand implements CommitS
     }
 
     /**
+     * True when this guard declined, or when it ran and its direct child is a skippable that vouches it
+     * changed nothing (a nested endpoint guard). The skip reason then comes from that child. A plain
+     * compound child is never vouched for.
+     */
+    @Override
+    public boolean changedNothing() {
+        return changedNothing
+                || (ran && getGuarded() instanceof CommitSkippableCommand inner && inner.changedNothing());
+    }
+
+    /**
      * Re-checks, at execution time, that the container this command was prepared against is still
      * reachable from the model it belonged to. Returns the reason to decline, or {@code null} when
      * the mutation is safe.
@@ -138,23 +215,69 @@ class RequireAttachedContainerCommand extends CompoundCommand implements CommitS
         return switch (wording) {
             case CREATE_IN_FOLDER -> "'" + displayName(subject) + "' was not created: the " + named
                     + " it was to be added to was removed from the "
-                    + "model by an earlier operation in the same request. Anything created there would "
+                    + "model " + CHANGED_SINCE_PREPARED + ". Anything created there would "
                     + "have been unreachable from the model and lost on reload, so nothing was created "
                     + "and nothing else was affected. Create it in a separate request, or name "
                     + article(containerKind) + containerKind + " the request does not delete.";
             case ADD_TO_CONTAINER -> "'" + displayName(subject) + "' was not added to the view: the "
-                    + named + " it was to be added to was removed from the model by an earlier "
-                    + "operation in the same request. Anything added there would have been "
+                    + named + " it was to be added to was removed from the model "
+                    + CHANGED_SINCE_PREPARED + ". Anything added there would have been "
                     + "unreachable from the model and lost on reload, so nothing was added and "
                     + "nothing else was affected. Add it in a separate request, or name "
                     + article(containerKind) + containerKind + " the request does not delete.";
             case CONNECT_ENDPOINT -> "'" + displayName(subject) + "' was not added to the view: the "
-                    + named + " it connects was removed from the model by an earlier operation in "
-                    + "the same request. A connection to an object the view no longer holds would "
+                    + named + " it connects was removed from the model " + CHANGED_SINCE_PREPARED
+                    + ". A connection to an object the view no longer holds would "
                     + "have been unreachable from the model and lost on reload, so nothing was "
                     + "added and nothing else was affected. Add it in a separate request, or "
                     + "connect view objects the request does not remove.";
+            case REFERENCED_VIEW -> "A reference to the " + named + " was not added: that view is not in "
+                    + "the model. It was removed " + CHANGED_SINCE_PREPARED + ", or the operation that was "
+                    + "to create it did not. A reference to a view the model does not hold would have been "
+                    + "lost on reload, so nothing was added and nothing else was affected. Add it in a "
+                    + "separate request, or refer to a view the request does not delete.";
+            case UPDATED -> "The " + named + " was not updated: it is not in the model. It was removed "
+                    + CHANGED_SINCE_PREPARED + ", or the operation that was to create it did not. Nothing "
+                    + "was changed.";
+            case DRAWN_CONCEPT -> "The " + named + " was not added to the view: it is not in the model. It was "
+                    + "removed " + CHANGED_SINCE_PREPARED + ", or the operation that was to create it did not. A "
+                    + "view object or connection for a concept the model does not hold would have pointed at "
+                    + "nothing on reload, so nothing was added and nothing else was affected. Add it in a separate "
+                    + "request, or draw a concept the request does not delete.";
+            case RELATIONSHIP_END -> "'" + displayName(subject) + "' was not created: its " + named + " is not in "
+                    + "the model. It was removed " + CHANGED_SINCE_PREPARED + ", or the operation that was to "
+                    + "create it did not. A relationship to an element the model does not hold would have pointed "
+                    + "at nothing on reload, so nothing was created and nothing else was affected. Create it in a "
+                    + "separate request, or connect elements the request does not delete.";
         };
+    }
+
+    /**
+     * Wraps a prepared placement so it declines when the concept it draws, an element or a relationship, is
+     * not in {@code model} when it runs. Inert while the concept is attached, which is every immediate call.
+     */
+    static Command drawing(Command cmd, IArchimateConcept concept, IArchimateModel model) {
+        return new RequireAttachedContainerCommand(cmd, concept, model, concept.getName(),
+                concept instanceof IArchimateRelationship ? "relationship" : "element", Wording.DRAWN_CONCEPT);
+    }
+
+    /**
+     * Wraps a prepared relationship create so it declines when either end is not in {@code model} when it
+     * runs, naming the end that is gone; the source speaks when both are. Inert while both are attached.
+     */
+    static Command joining(Command cmd, IArchimateConcept source, IArchimateConcept target, IArchimateModel model,
+            String subject) {
+        return new RequireAttachedContainerCommand(new RequireAttachedContainerCommand(cmd, target, model, subject,
+                "target element", Wording.RELATIONSHIP_END), source, model, subject, "source element",
+                Wording.RELATIONSHIP_END);
+    }
+
+    /**
+     * Wraps a prepared update so it declines when what it updates is not in {@code model} when it runs,
+     * rather than writing into a detached object and reporting success. Inert while it is attached.
+     */
+    static Command updating(Command cmd, EObject target, IArchimateModel model, String kind) {
+        return new RequireAttachedContainerCommand(cmd, target, model, null, kind, Wording.UPDATED);
     }
 
     /** Whether {@code object} still reaches {@code model} by containment. */

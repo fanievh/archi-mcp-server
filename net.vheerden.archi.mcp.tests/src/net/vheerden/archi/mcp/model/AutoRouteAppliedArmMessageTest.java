@@ -11,6 +11,7 @@ import java.util.Map;
 import org.junit.Test;
 
 import net.vheerden.archi.mcp.model.AutoRouteArmFixture.Arm;
+import net.vheerden.archi.mcp.model.routing.EgressOutcome;
 import net.vheerden.archi.mcp.model.routing.RoutingPipeline;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.AutoRouteResultDto;
@@ -25,7 +26,7 @@ import net.vheerden.archi.mcp.response.dto.StructuredWarningDto;
  * <p><strong>Why whole-string equality rather than the usual fragment assertions.</strong> The
  * sibling suites assert that a message names a count, or a floor, or a tool. Each of those stays
  * green while the sentence around the fragment is rewritten — which is exactly the edit that turns
- * an applied-arm sentence into a deferred-arm one, or the reverse. These six strings are the
+ * an applied-arm sentence into a deferred-arm one, or the reverse. These seven strings are the
  * published applied-arm contract, and the only thing that can hold a contract about a sentence is
  * the sentence.</p>
  *
@@ -50,6 +51,13 @@ public class AutoRouteAppliedArmMessageTest {
             + "parallel-connection gap below the 15px healthy floor, so the router kept the "
             + "hug(s) in place. This is layout-bound: increase element spacing in the affected "
             + "corridor and re-route — re-routing alone will not clear it.";
+
+    private static final String EGRESS_PRE_GATED_APPLIED =
+            "2 connection(s) still hug the face they leave: the router skipped its off-face lift pass "
+            + "for this view because, when it reached that pass, its vertical connection runs sat too "
+            + "close together (10th-percentile gap 5.6px, below the 8px floor), so it left the hug(s) in place. "
+            + "Spread the parallel connection runs apart (increase element spacing) and re-route — "
+            + "re-routing alone will not lift them.";
 
     private static final String NET_ZERO_APPLIED =
             "1 element(s) processed by autoNudge ended at their starting position (net "
@@ -79,6 +87,12 @@ public class AutoRouteAppliedArmMessageTest {
             + "higher. Move the note(s) clear with update-view-object and re-assess; moving a "
             + "note changes the routes around it, so position notes after routing.";
 
+    private static final String SELF_CONNECTIONS_APPLIED =
+            "2 self-connection(s) were not routed: Archi draws a connection from an object to "
+            + "itself as a loop, which this router does not produce. Those not given a loop by this "
+            + "call are left exactly as stored: sc-kept. Stored with no bendpoints, and so drawing no line, "
+            + "these were given Archi's default loop: sc-bare.";
+
     private static final String NUDGE_SKIPPED_APPLIED =
             "autoNudge skipped because sibling elements have overlapping bounding boxes. Use "
             + "layout-flat-view or layout-within-group to separate elements first.";
@@ -107,6 +121,19 @@ public class AutoRouteAppliedArmMessageTest {
         assertEquals(EGRESS_LIFT_APPLIED, structured.get(0).message());
         assertEquals("the free-text sink carries the identical string, not a paraphrase",
                 structured.get(0).message(), warnings.get(0));
+    }
+
+    @Test
+    public void egressLiftPreGated_appliedArm_isByteIdenticalOnBothSinks() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+
+        AutoRouteWarnings.emitEgressLiftPreGated(
+                new EgressOutcome(0, 5.6000000000000005, List.of("conn-1", "conn-2")),
+                DispatchArm.APPLIED, warnings, structured);
+
+        assertEquals(EGRESS_PRE_GATED_APPLIED, structured.get(0).message());
+        assertEquals(structured.get(0).message(), warnings.get(0));
     }
 
     @Test
@@ -149,8 +176,20 @@ public class AutoRouteAppliedArmMessageTest {
     }
 
     @Test
+    public void selfConnectionsNotRouted_appliedArm_isByteIdenticalOnBothSinks() {
+        List<String> warnings = new ArrayList<>();
+        List<StructuredWarningDto> structured = new ArrayList<>();
+
+        AutoRouteWarnings.emitSelfConnectionsNotRouted(List.of("sc-kept"), List.of("sc-bare"),
+                DispatchArm.APPLIED, warnings, structured);
+
+        assertEquals(SELF_CONNECTIONS_APPLIED, structured.get(0).message());
+        assertEquals(structured.get(0).message(), warnings.get(0));
+    }
+
+    @Test
     public void nudgeSkippedSiblingOverlap_appliedArm_isByteIdenticalOnBothSinks() {
-        // The only one of the six with no extractable emitter: the message is composed inline on
+        // The only one of the seven with no extractable emitter: the message is composed inline on
         // the accessor's autoNudge pre-gate, so the real accessor is the only thing that can
         // produce it. Driving it here rather than restating the literal is what makes this a pin
         // on the shipped string instead of a copy of it.

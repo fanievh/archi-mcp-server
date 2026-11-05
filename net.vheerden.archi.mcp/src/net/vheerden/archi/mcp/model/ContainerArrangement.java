@@ -46,7 +46,7 @@ final class ContainerArrangement {
      * Lays {@code containers} out from {@code (originX, originY)} in the requested arrangement.
      *
      * @param arrangement one of {@code row}, {@code column} or {@code grid}, already normalized
-     * @param columns the caller's grid column count, or null to estimate one
+     * @param columns the caller's grid column count, or null to estimate one; a count past the containers is one row
      * @param spacing the gap between adjacent containers
      * @param laneSizes per-gap widths that override {@code spacing} where the standalone lane has
      *     something to place; empty when the lane did not run, which is the ordinary case
@@ -114,7 +114,8 @@ final class ContainerArrangement {
     private static Placement grid(List<IDiagramModelObject> containers, Integer columns,
             int spacing, int originX, int originY) {
         List<int[]> positions = new ArrayList<>();
-        int cols = (columns != null) ? columns : estimateColumns(containers, spacing);
+        // Never more columns than there are containers, so the count reported is the count used.
+        int cols = (columns != null) ? Math.min(columns, containers.size()) : estimateColumns(containers, spacing);
         int curX = originX;
         int curY = originY;
         int colIdx = 0;

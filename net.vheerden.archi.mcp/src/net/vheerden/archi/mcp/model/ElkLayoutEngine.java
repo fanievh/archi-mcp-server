@@ -5,6 +5,7 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -30,6 +31,7 @@ import org.slf4j.LoggerFactory;
 
 import org.eclipse.elk.core.data.LayoutMetaDataService;
 
+import net.vheerden.archi.mcp.model.routing.LabelBoxEstimate;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.dto.AbsoluteBendpointDto;
 import net.vheerden.archi.mcp.response.dto.ViewPositionSpec;
@@ -52,13 +54,12 @@ class ElkLayoutEngine {
 	private static final double DEFAULT_SPACING = 50.0;
 
 	/**
-	 * Fixed label height (px) handed to ELK for edge-label dummies. Matches the
-	 * label-height estimate the crowding detector uses
-	 * ({@code LABEL_CHAR_HEIGHT 14 + LABEL_PADDING_Y 6}). Height barely affects
+	 * Fixed label height (px) handed to ELK for edge-label dummies: the shared
+	 * connection-label height (14 + 6). Height barely affects
 	 * the dominant (between-layer, width-driven) reservation; a fixed value keeps
 	 * the engine headless and SWT-free.
 	 */
-	private static final double EDGE_LABEL_HEIGHT = 20.0;
+	private static final double EDGE_LABEL_HEIGHT = LabelBoxEstimate.HEIGHT;
 
 	/**
 	 * Spacing (px) ELK keeps between an edge label and its edge. Kept small so
@@ -94,7 +95,7 @@ class ElkLayoutEngine {
 	ElkLayoutResult computeLayout(List<LayoutNode> nodes, List<LayoutEdge> edges,
 			String direction, int spacing) {
 		logger.info("ELK layout: nodes={}, edges={}, direction={}, spacing={}",
-				nodes.size(), edges.size(), direction, spacing);
+				nodes.size(), edges.size(), CallerText.logged(direction), spacing);
 
 		// Lazily register ELK algorithm providers so that
 		// RecursiveGraphLayoutEngine can resolve "org.eclipse.elk.layered".
@@ -260,7 +261,7 @@ class ElkLayoutEngine {
 
 		// Extract connection bendpoints
 		Map<String, List<AbsoluteBendpointDto>> connectionBendpoints = new LinkedHashMap<>();
-		extractBendpoints(rootGraph, connectionBendpoints, new HashSet<>());
+		extractBendpoints(rootGraph, 0, 0, connectionBendpoints, new HashSet<>());
 
 		int connectionsRouted = connectionBendpoints.size();
 
@@ -343,8 +344,12 @@ class ElkLayoutEngine {
 
 	/**
 	 * Recursively extracts bendpoints from all edges in the graph hierarchy.
+	 *
+	 * <p>ELK places an edge's points in the frame of the node that contains it, which for an edge
+	 * between two children of a group is the group. The caller reads every bendpoint as absolute,
+	 * so each container's absolute origin ({@code offsetX}, {@code offsetY}) is added back.</p>
 	 */
-	private void extractBendpoints(ElkNode container,
+	private void extractBendpoints(ElkNode container, double offsetX, double offsetY,
 			Map<String, List<AbsoluteBendpointDto>> result, Set<String> visited) {
 		for (ElkEdge edge : container.getContainedEdges()) {
 			// Skip edges already processed at a higher hierarchy level (dedup)
@@ -360,8 +365,8 @@ class ElkLayoutEngine {
 				// the edge.
 				for (ElkBendPoint bp : section.getBendPoints()) {
 					bps.add(new AbsoluteBendpointDto(
-							(int) Math.round(bp.getX()),
-							(int) Math.round(bp.getY())));
+							(int) Math.round(offsetX + bp.getX()),
+							(int) Math.round(offsetY + bp.getY())));
 				}
 			}
 			// Store bendpoints even if empty (clears any previous bendpoints)
@@ -370,7 +375,8 @@ class ElkLayoutEngine {
 
 		// Recurse into child nodes for hierarchical graphs
 		for (ElkNode child : container.getChildren()) {
-			extractBendpoints(child, result, visited);
+			extractBendpoints(child, offsetX + child.getX(), offsetY + child.getY(),
+					result, visited);
 		}
 	}
 
@@ -478,7 +484,7 @@ class ElkLayoutEngine {
 		if (direction == null || direction.isBlank()) {
 			return Direction.DOWN;
 		}
-		switch (direction.toUpperCase()) {
+		switch (direction.toUpperCase(Locale.ROOT)) {
 		case "DOWN":
 			return Direction.DOWN;
 		case "RIGHT":
@@ -489,7 +495,7 @@ class ElkLayoutEngine {
 			return Direction.LEFT;
 		default:
 			throw new ModelAccessException(
-					"Invalid direction '" + direction + "'. Valid: DOWN, RIGHT, UP, LEFT",
+					"Invalid direction " + CallerText.quoted(direction) + ". Valid: DOWN, RIGHT, UP, LEFT",
 					ErrorCode.INVALID_PARAMETER);
 		}
 	}

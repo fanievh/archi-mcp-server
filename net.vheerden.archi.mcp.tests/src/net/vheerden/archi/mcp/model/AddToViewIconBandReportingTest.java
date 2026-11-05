@@ -469,7 +469,8 @@ public class AddToViewIconBandReportingTest {
      * {@code parentViewObjectId}, because this fixture nests its subject and a nested object's
      * {@code x} and {@code y} are relative to that container. A top-level placement is the case
      * that stayed byte-identical, and it is pinned as such by
-     * {@code PlacementParentReportingTest}.</p>
+     * {@code PlacementParentReportingTest}. It also carries {@code recededParent}: nesting into the
+     * unauthored {@code actor-1} recedes that container's fill, which the caller did not name.</p>
      */
     @Test
     public void shouldSayNothing_whenThePlacementReservedNoBand() throws Exception {
@@ -489,7 +490,8 @@ public class AddToViewIconBandReportingTest {
                         + "\"elementId\":\"actor-2\",\"elementName\":\"Actor 2\","
                         + "\"elementType\":\"BusinessActor\",\"x\":0,\"y\":270,"
                         + "\"width\":50,\"height\":30,"
-                        + "\"parentViewObjectId\":\"" + plain + "\"}}",
+                        + "\"parentViewObjectId\":\"" + plain + "\"},"
+                        + "\"recededParent\":{\"viewObjectId\":\"" + plain + "\",\"fillColor\":\"#F4F4F4\"}}",
                 json);
     }
 

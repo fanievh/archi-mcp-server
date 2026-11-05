@@ -19,6 +19,7 @@ import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.MutationDispatcher;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
 import net.vheerden.archi.mcp.model.OperationalMode;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.model.exceptions.MutationException;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
@@ -46,6 +47,10 @@ import net.vheerden.archi.mcp.session.SessionManager;
 public class MutationHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(MutationHandler.class);
+
+    /** The next step for a commit or bulk call that applied nothing, so there is no step to undo. */
+    private static final String NOTHING_APPLIED = "Nothing was applied (see skippedOperations), so there is "
+            + "nothing to undo.";
 
     private static final Set<String> VIEW_TOOLS = Set.of(
             "add-to-view", "add-connection-to-view", "remove-from-view",
@@ -107,17 +112,28 @@ public class MutationHandler {
                         + "(The agent's-note card line is rendered for 'bulk-mutate' intent.)");
 
         Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put(ModelCallScope.MODEL_ID, ModelCallScope.modelIdProperty("Required. The id of the "
+                + "open model this batch is bound to (get-models lists them). Every operation queued into "
+                + "the batch acts on it, and the commit applies to it."));
         properties.put("description", descriptionProp);
         properties.put("intent", intentProp);
 
         McpSchema.JsonSchema inputSchema = new McpSchema.JsonSchema(
-                "object", properties, null, null, null, null);
+                "object", properties, List.of(ModelCallScope.MODEL_ID), null, null, null);
 
         McpSchema.Tool tool = McpSchema.Tool.builder()
                 .name("begin-batch")
                 .description("[Mutation] Start batch mode for mutations. "
                         + "Subsequent mutation operations will be queued instead of applied immediately. "
                         + "Use end-batch to commit all changes or rollback to discard. "
+                        + "modelId is required: the batch is bound to that model (get-batch-status "
+                        + "reports it as boundModelId and boundModelName), and the commit applies to "
+                        + "it whichever model is active in Archi. Inside the batch a call that omits "
+                        + "modelId acts on the batch's model, and a change that names a different model is "
+                        + "refused with BATCH_MODEL_MISMATCH (a read may name any open model). If the "
+                        + "bound model is closed, every further "
+                        + "mutation and the commit are refused with BOUND_MODEL_CLOSED — nothing is "
+                        + "applied and the queue is kept. "
                         + "While a batch is open every mutation response is reshaped: the tool's normal "
                         + "result moves to result.preview, and a result.batch sibling carries "
                         + "sequenceNumber (its success and description fields are constants and carry "
@@ -140,11 +156,13 @@ public class MutationHandler {
                         + "of add-connection-to-view's relationship, view and endpoint ids — "
                         + "whether or not that operation also carries a back-reference of its "
                         + "own. Tools that update, delete or re-file a concept rather than place it "
-                        + "— update-element, update-relationship, update-view, remove-from-view, "
-                        + "clear-view, set-view-label-expression, the delete-* family, "
-                        + "move-to-folder, and create-relationship's endpoints — report such an id "
-                        + "as not found; queue those operations here instead, or "
+                        + "— update-element, update-relationship, remove-from-view, delete-element, "
+                        + "delete-relationship, delete-view, delete-folder, move-to-folder and "
+                        + "create-relationship's endpoints — report "
+                        + "such an id as not found; queue those operations here instead, or "
                         + "end-batch first and then use bulk-mutate on its own. "
+                        + "A queued merge-elements closes the batch to every operation but another "
+                        + "merge-elements until end-batch, so queue merges last. "
                         + "Related: end-batch (commit/rollback), get-batch-status (check queue).")
                 .inputSchema(inputSchema)
                 .build();
@@ -166,11 +184,11 @@ public class MutationHandler {
             String description = null;
             String intent = null;
             if (request.arguments() != null) {
-                Object descObj = request.arguments().get("description");
+                Object descObj = ToolArguments.optionalText(request.arguments(), "description", false);
                 if (descObj instanceof String d && !d.isBlank()) {
                     description = d;
                 }
-                Object intentObj = request.arguments().get("intent");
+                Object intentObj = ToolArguments.optionalText(request.arguments(), "intent", false);
                 if (intentObj instanceof String it && !it.isBlank()) {
                     intent = it;
                 }
@@ -183,6 +201,20 @@ public class MutationHandler {
                         "A batch is already active for this session",
                         null,
                         "Use end-batch to commit or rollback the current batch before starting a new one",
+                        null);
+                return HandlerUtils.buildResult(
+                        formatter.toJsonString(formatter.formatError(error)), true);
+            }
+
+            // A batch is a declaration of which model it is for, never an inherited default.
+            Object modelIdObj = request.arguments() != null ? request.arguments().get(ModelCallScope.MODEL_ID) : null;
+            if (!(modelIdObj instanceof String modelId) || modelId.isBlank()) {
+                ErrorResponse error = new ErrorResponse(
+                        ErrorCode.INVALID_PARAMETER,
+                        "begin-batch requires modelId: the batch is bound to the model it names",
+                        ModelCallScope.describe(accessor.getModels(sessionId)),
+                        "Retry begin-batch with modelId set to the id of the model the batch is for "
+                                + "(see details, or get-models)",
                         null);
                 return HandlerUtils.buildResult(
                         formatter.toJsonString(formatter.formatError(error)), true);
@@ -204,6 +236,8 @@ public class MutationHandler {
 
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
+        } catch (ModelAccessException e) {
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (Exception e) {
             logger.error("Unexpected error handling begin-batch", e);
             ErrorResponse error = new ErrorResponse(
@@ -244,7 +278,17 @@ public class MutationHandler {
                         + "reported for it before the changes were applied names nothing — "
                         + "skippedOperations is the authority. That field is absent when "
                         + "everything ran, which is the normal case. operationCount counts what "
-                        + "was queued, so it still includes anything skipped. "
+                        + "was queued, so it still includes anything skipped. When every operation "
+                        + "was skipped, nothingApplied is true and there is no undo step. "
+                        + "An operation that fails part-way and cannot put back all of what it wrote, or "
+                        + "that fails unexpectedly, fails the commit instead: every other operation that "
+                        + "ran is put back, the batch ends, and the error names the operation whose "
+                        + "changes may still be in the model. "
+                        + "A commit applies to the model the batch is bound to whichever model is active "
+                        + "in Archi, and is refused with BOUND_MODEL_CLOSED when that model was closed; "
+                        + "nothing is applied, the batch stays open, and details lists the queued "
+                        + "operations. A rollback is always allowed and then names the bound model in "
+                        + "boundModelId and boundModelName. "
                         + "Related: begin-batch (start batch), get-batch-status (check queue).")
                 .inputSchema(inputSchema)
                 .build();
@@ -258,21 +302,21 @@ public class MutationHandler {
     McpSchema.CallToolResult handleEndBatch(
             McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
         logger.info("Handling end-batch request");
+        MutationDispatcher dispatcher = null;
+        String sessionId = null;
         try {
-            HandlerUtils.requireModelLoaded(accessor);
-            MutationDispatcher dispatcher = requireDispatcher();
+            dispatcher = accessor.getMutationDispatcher();
 
-            String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
-            boolean rollback = false;
-            if (request.arguments() != null) {
-                Object rollbackObj = request.arguments().get("rollback");
-                if (rollbackObj instanceof Boolean rb) {
-                    rollback = rb;
-                }
-            }
+            sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
+            // Read strictly: a value read as "not a rollback" would commit the batch it meant to discard.
+            boolean rollback = ToolArguments.flag(request.arguments(), "rollback", false);
 
-            // Check in batch mode
-            if (dispatcher.getMode(sessionId) != OperationalMode.BATCH) {
+            // No loaded model is required once a batch is open: a rollback must always be able to
+            // discard it, and a commit whose bound model was closed is refused by the dispatcher
+            // with a reason naming that model rather than a generic no-model error.
+            if (dispatcher == null || dispatcher.getMode(sessionId) != OperationalMode.BATCH) {
+                HandlerUtils.requireModelLoaded(accessor);
+                requireDispatcher();
                 ErrorResponse error = new ErrorResponse(
                         ErrorCode.BATCH_NOT_ACTIVE,
                         "No active batch for this session",
@@ -291,6 +335,10 @@ public class MutationHandler {
                 nextSteps = List.of(
                         "All queued mutations discarded — model unchanged",
                         "Use begin-batch to start a new batch");
+            } else if (Boolean.TRUE.equals(summary.nothingApplied())) {
+                nextSteps = List.of(
+                        NOTHING_APPLIED,
+                        "Use get-model-info to verify model state");
             } else {
                 nextSteps = List.of(
                         "Changes applied as single undoable operation",
@@ -305,13 +353,23 @@ public class MutationHandler {
 
         } catch (NoModelLoadedException e) {
             return HandlerUtils.buildModelNotLoadedError(formatter, e);
+        } catch (ModelAccessException e) {
+            // The batch is bound to a model that is no longer the active one, or has been closed.
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (MutationException e) {
             logger.error("Mutation failed during batch commit", e);
+            // A commit that ran and could not be fully put back ends the batch: a retry would run it again.
+            boolean ended = dispatcher != null && dispatcher.getMode(sessionId) != OperationalMode.BATCH;
+            String suggestion = !ended
+                    ? "The batch is still active. Use end-batch to retry or end-batch with rollback=true to discard."
+                    : "The batch has ended and its queue was discarded. Nothing it queued was applied, except "
+                            + "what the message says may still be in the model. Check it with get-model-info and "
+                            + "get-element before going on, and use begin-batch to start a new batch.";
             ErrorResponse error = new ErrorResponse(
                     ErrorCode.MUTATION_FAILED,
                     "Batch commit failed: " + e.getMessage(),
                     null,
-                    "The batch is still active. Use end-batch to retry or end-batch with rollback=true to discard.",
+                    suggestion,
                     null);
             return HandlerUtils.buildResult(
                     formatter.toJsonString(formatter.formatError(error)), true);
@@ -339,7 +397,8 @@ public class MutationHandler {
                         + "Shows whether in GUI-attached or batch mode, and if in batch mode, "
                         + "the number of queued operations. Call this to learn which response shape "
                         + "mutations will return. Returns mode ('GUI_ATTACHED' or 'BATCH'); "
-                        + "queuedCount, queuedDescriptions and batchStarted only in batch mode; "
+                        + "queuedCount, queuedDescriptions, batchStarted, and the model the batch is "
+                        + "bound to (boundModelId, boundModelName) only in batch mode; "
                         + "approvalRequired only when the human's approval gate is on (it is never "
                         + "false — the field is absent instead); and pendingApprovalCount only when "
                         + "at least one proposal is pending (never 0). "
@@ -373,8 +432,7 @@ public class MutationHandler {
             } else {
                 nextSteps = new ArrayList<>();
                 nextSteps.add(status.queuedCount() + " mutation(s) queued");
-                nextSteps.add("Use end-batch to commit all changes, or rollback to discard them");
-                nextSteps.add("Use end-batch with rollback=true to discard all changes");
+                nextSteps.add("Use end-batch to commit all changes, or end-batch with rollback=true to discard them");
             }
 
             Map<String, Object> envelope = formatter.formatSuccess(
@@ -413,7 +471,8 @@ public class MutationHandler {
         Map<String, Object> paramsProp = new LinkedHashMap<>();
         paramsProp.put("type", "object");
         paramsProp.put("description",
-                "Parameters for the tool (same as calling the tool directly)");
+                "Parameters for the tool (same as calling the tool directly). A parameter the tool "
+                        + "does not accept is refused as this operation's failure, naming it.");
 
         // Optional, and deliberately not in "required": an operation names itself only when a
         // later one needs to point at it. Published so a caller can discover the form at all —
@@ -515,7 +574,8 @@ public class MutationHandler {
                         + "run yet, so no verdict is reported at all and the field is absent. The "
                         + "per-operation entries are built before the changes are applied, so one "
                         + "can name an action that did not happen; skippedOperations is the "
-                        + "authority. "
+                        + "authority. When every operation was skipped once the changes were applied, "
+                        + "nothingApplied is true, modelChanged is false and there is no undo step. "
                         + "With continueOnError: true, valid operations execute and failed ones are "
                         + "reported separately in the 'failed' array. A back-reference ($N.id or "
                         + "$name.id) to a failed operation cascades failure to dependent operations. "
@@ -541,10 +601,13 @@ public class MutationHandler {
                         + "point to operations earlier in the batch — neither the current operation "
                         + "(self-reference) nor any future operation is allowed. The "
                         + "referenced operation must be a create-tool (create-element, "
-                        + "create-relationship, create-view, add-to-view, add-connection-to-view, "
-                        + "add-group-to-view, add-note-to-view) — update/delete operations cannot "
-                        + "be back-referenced. What a resolved reference may then be USED as depends on "
-                        + "what the referenced operation made: the four that place something on a "
+                        + "create-relationship, create-view, create-folder, add-to-view, "
+                        + "add-connection-to-view, add-group-to-view, add-note-to-view) — update/delete "
+                        + "operations cannot be back-referenced. What a resolved reference may then be USED "
+                        + "as depends on what the referenced operation made: a create-folder id is a valid "
+                        + "folderId (create-element, create-view), parentId (create-folder), targetFolderId "
+                        + "(move-to-folder) and update-folder id, but a folder created in the call cannot "
+                        + "also be moved or deleted in it; the four that place something on a "
                         + "view yield an id that is also a valid target for the matching update "
                         + "in the same call — add-to-view, add-group-to-view and add-note-to-view "
                         + "for update-view-object, add-connection-to-view for "
@@ -573,14 +636,26 @@ public class MutationHandler {
                         + "the same name — read that tool's description for per-operation detail. "
                         + "One operation is an exception because no standalone tool exists for it: "
                         + "set-view-label-expression is bulk-only. It stamps a label expression "
-                        + "onto every eligible object in one view — required viewId, required "
+                        + "onto every eligible object in one view, including those earlier "
+                        + "operations in the same call or the enclosing batch place on it, and on "
+                        + "a view either created — required viewId, required "
                         + "labelExpression (empty string clears it), optional objectTypes (array; "
                         + "non-empty subset of element, note, group; default element only) — and "
-                        + "reports appliedCount and skippedCount. Objects outside objectTypes are "
+                        + "reports appliedCount and skippedCount, with one "
+                        + "LABEL_EXPRESSION_PROPERTY_MISSING structured warning per "
+                        + "'${property:KEY}' that some applied object does not carry (Archi draws "
+                        + "it as nothing). Objects outside objectTypes are "
                         + "skipped; blank-named objects are skipped only when setting a non-empty "
                         + "expression, never when clearing. "
-                        + "Note: autoConnect is forced false for add-to-view in bulk context "
-                        + "— use explicit add-connection-to-view operations instead. "
+                        + "add-to-view's autoConnect connects what is there at that point in the call: "
+                        + "objects placed, and relationships created, by earlier operations in this call "
+                        + "or the enclosing batch, and not by later ones; the operation's result then "
+                        + "carries autoConnections (the connections drawn, possibly empty; absent when "
+                        + "autoConnect was not asked) and, when any, skippedDueToNesting and skippedByCap. "
+                        + "update-view-object here refuses anchorTarget, anchorEdge, anchorDx and anchorDy "
+                        + "as that operation's failure: set anchors with the update-view-object tool, which "
+                        + "also queues inside begin-batch. add-note-to-view's position is refused when an "
+                        + "earlier operation in this call (or the open batch) has changed that view's content. "
                         + "Use a reference to an add-group-to-view operation as parentViewObjectId in "
                         + "subsequent add-to-view or add-group-to-view operations to nest elements "
                         + "inside groups. The same reference also works as the viewObjectId of a later "
@@ -601,10 +676,10 @@ public class MutationHandler {
                         + "works in a single nested call. An operation name is scoped to its own "
                         + "call and never addresses the enclosing batch's queue. "
                         + "Tools that update, delete or re-file a concept rather than place it — "
-                        + "update-element, update-relationship, update-view, remove-from-view, "
-                        + "clear-view, set-view-label-expression, the delete-* family, "
-                        + "move-to-folder, and create-relationship's endpoints — report such an id "
-                        + "as not found; queue those operations individually in the open batch, or "
+                        + "update-element, update-relationship, remove-from-view, delete-element, "
+                        + "delete-relationship, delete-view, delete-folder, move-to-folder and "
+                        + "create-relationship's endpoints — report "
+                        + "such an id as not found; queue those operations individually in the open batch, or "
                         + "end-batch first and then call bulk-mutate. A back-reference to an "
                         + "object this same call created always wins over the enclosing batch's "
                         + "queue. "
@@ -616,6 +691,10 @@ public class MutationHandler {
                         + "Ids created by an approved bulk are stable, unlike single-tool "
                         + "mutations: approving applies the reviewed compound itself rather than "
                         + "rebuilding it, so the ids in the preview are the ids you get. "
+                        + "An operation's structuredWarnings, when it has any, are the disclosures "
+                        + "the same tool called on its own returns (an annotation placed across a "
+                        + "routed connection, for one), and appear in every mode, because they are "
+                        + "measured when the operation is prepared. "
                         + "The per-operation fields below report what the operation actually "
                         + "landed, and appear only once the changes have been applied — never in "
                         + "batch or approval mode, where nothing has executed. For an operation on a "
@@ -630,9 +709,12 @@ public class MutationHandler {
                         + "call only, which is why naming the operation is the surer guard; "
                         + "resizedAncestors "
                         + "names any container the "
-                        + "operation GREW that it was not asked to touch, and movedObjects names any "
+                        + "operation GREW that it was not asked to touch (one that now overlaps a "
+                        + "sibling it did not overlap before is named in the operation's "
+                        + "structuredWarnings as CASCADE_GROWN_INTO_SIBLING), and movedObjects names any "
                         + "object ANCHORED to something it moved or grew, each carrying where it "
-                        + "landed. For an operation on a view connection, effectiveConnection is the "
+                        + "landed; recededParent names the container a placement receded to a "
+                        + "backdrop and the fill it now holds. For an operation on a view connection, effectiveConnection is the "
                         + "state the connection holds after the write — its styling, its typography, "
                         + "its label position, its routing points, and the view objects and anchor "
                         + "points it joins, which is the whole report the single-tool "
@@ -861,7 +943,9 @@ public class MutationHandler {
                     continue;
                 }
 
-                BulkOperation op = new BulkOperation(toolName, typedParams, (String) asObj);
+                // Held to its tool's served keys, refused as its own row when it carries another.
+                BulkOperation op = new BulkOperation(toolName, typedParams, (String) asObj,
+                        ToolArguments.inBulk(ArgumentCallScope.shapeOf(registry, toolName)));
                 try {
                     op.validate();
                 } catch (IllegalArgumentException e) {
@@ -888,7 +972,7 @@ public class MutationHandler {
             String sessionId = HandlerUtils.extractSessionId(sessionManager, exchange);
             String description = HandlerUtils.optionalStringParam(args, "description");
             String intent = HandlerUtils.optionalStringParam(args, "intent");
-            boolean continueOnError = Boolean.TRUE.equals(args.get("continueOnError"));
+            boolean continueOnError = ToolArguments.flag(args, "continueOnError", false);
             BulkMutationResult result = accessor.executeBulk(
                     sessionId, operations, description, continueOnError, intent);
 
@@ -936,7 +1020,8 @@ public class MutationHandler {
         if (executed) {
             resultMap.put("allSucceeded", result.allSucceeded());
         }
-        boolean modelChanged = executed && succeededCount > 0;
+        boolean nothingApplied = Boolean.TRUE.equals(result.nothingApplied());
+        boolean modelChanged = executed && succeededCount > 0 && !nothingApplied;
         resultMap.put("modelChanged", modelChanged);
         // Operations that declined when the changes were applied. This map is built field by
         // field, so the DTO carrying them reaches the wire only if it is copied across here.
@@ -944,6 +1029,9 @@ public class MutationHandler {
         // entry below still reports the action it was prepared to take.
         if (!result.skippedOperations().isEmpty()) {
             resultMap.put("skippedOperations", result.skippedOperations());
+        }
+        if (nothingApplied) {
+            resultMap.put("nothingApplied", true);
         }
 
         // Succeeded operations
@@ -1024,6 +1112,26 @@ public class MutationHandler {
             if (opResult.effectiveElement() != null) {
                 opMap.put("effectiveElement", opResult.effectiveElement());
             }
+            // The operation's own structured warnings, as the single tool answers them. Each states
+            // its own basis (applied, queued or awaiting approval), so it is not gated on modelChanged.
+            if (!opResult.structuredWarnings().isEmpty()) {
+                opMap.put("structuredWarnings", opResult.structuredWarnings());
+            }
+            // The connections a placement drew, or will draw, for itself with autoConnect, and the
+            // pairs it declined — the rows the single tool answers. Present (possibly empty) only
+            // when autoConnect was asked; not gated on modelChanged, because the single tool names
+            // them in a batch and on a card too, and the dispatched path has already kept only the
+            // lines that are on the view. Copied across explicitly because this map is hand-built
+            // key by key, which is where the same family's effective geometry was lost once before.
+            if (opResult.autoConnections() != null) {
+                opMap.put("autoConnections", opResult.autoConnections());
+            }
+            if (!opResult.skippedDueToNesting().isEmpty()) {
+                opMap.put("skippedDueToNesting", opResult.skippedDueToNesting());
+            }
+            if (!opResult.skippedByCap().isEmpty()) {
+                opMap.put("skippedByCap", opResult.skippedByCap());
+            }
             // Objects this operation grew or displaced that it was never asked to touch. Neither
             // is the operation's own entity, so effectiveBounds above can never describe them, and
             // the standalone tool reports both — omitting them here left the bulk caller blind to
@@ -1043,6 +1151,11 @@ public class MutationHandler {
                 }
                 if (!opResult.movedObjects().isEmpty()) {
                     opMap.put("movedObjects", opResult.movedObjects());
+                }
+                // The container this placement receded to a backdrop, as the standalone tool says
+                // it: written when the operation ran, so it too is reported only once it has.
+                if (opResult.recededParent() != null && opResult.recededParent().receded()) {
+                    opMap.put("recededParent", opResult.recededParent());
                 }
             }
             opResults.add(opMap);
@@ -1102,7 +1215,7 @@ public class MutationHandler {
             nextSteps.add("Use end-batch to commit all queued mutations");
         } else {
             nextSteps = new ArrayList<>();
-            if (succeededCount > 0) {
+            if (succeededCount > 0 && !nothingApplied) {
                 nextSteps.add("Use get-element to verify created elements");
                 nextSteps.add("Use get-relationships to verify connections");
                 boolean hasViewTools = result.operations().stream()
@@ -1115,7 +1228,9 @@ public class MutationHandler {
                 nextSteps.add(failedCount + " operations failed — review the 'failed' array, "
                         + "fix errors, and retry failed operations in a new bulk-mutate call");
             }
-            if (succeededCount > 0) {
+            if (nothingApplied) {
+                nextSteps.add(NOTHING_APPLIED);
+            } else if (succeededCount > 0) {
                 nextSteps.add("All " + succeededCount
                         + " succeeded operations can be undone as a single unit via undo");
             }

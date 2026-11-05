@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -16,7 +17,10 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import net.vheerden.archi.mcp.model.ArchiModelAccessor;
+import net.vheerden.archi.mcp.model.CallerText;
+import net.vheerden.archi.mcp.model.ModelAccessException;
 import net.vheerden.archi.mcp.model.NoModelLoadedException;
+import net.vheerden.archi.mcp.model.ToolArguments;
 import net.vheerden.archi.mcp.registry.CommandRegistry;
 import net.vheerden.archi.mcp.response.ErrorCode;
 import net.vheerden.archi.mcp.response.ErrorResponse;
@@ -141,15 +145,15 @@ public class FolderHandler {
             List<String> excludeParam = null;
 
             if (request.arguments() != null) {
-                Object parentIdObj = request.arguments().get("parentId");
+                Object parentIdObj = ToolArguments.optionalText(request.arguments(), "parentId", false);
                 if (parentIdObj instanceof String p && !p.isBlank()) {
                     parentId = p;
                 }
-                Object nameObj = request.arguments().get("name");
+                Object nameObj = ToolArguments.optionalText(request.arguments(), "name", false);
                 if (nameObj instanceof String n && !n.isBlank()) {
                     nameFilter = n;
                 }
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -157,7 +161,7 @@ public class FolderHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -169,7 +173,7 @@ public class FolderHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -196,8 +200,8 @@ public class FolderHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
 
@@ -206,7 +210,7 @@ public class FolderHandler {
 
             if (nameFilter != null && parentId == null) {
                 // Name filter without parentId: search ALL folders recursively
-                logger.debug("get-folders with name='{}' (recursive search)", nameFilter);
+                logger.debug("get-folders with name='{}' (recursive search)", CallerText.logged(nameFilter));
                 folders = accessor.searchFolders(nameFilter);
             } else if (parentId != null) {
                 // List children of specific folder
@@ -220,7 +224,7 @@ public class FolderHandler {
                     }
                     ErrorResponse error = new ErrorResponse(
                             ErrorCode.FOLDER_NOT_FOUND,
-                            "No folder found with ID '" + parentId + "'",
+                            "No folder found with ID " + CallerText.quoted(parentId),
                             "The model contains " + rootCount + " root folders.",
                             "Use get-folders without parentId to see root folders",
                             null);
@@ -230,10 +234,11 @@ public class FolderHandler {
 
                 // Apply name post-filter if both parentId and name specified
                 if (nameFilter != null) {
-                    logger.debug("get-folders with parentId='{}', name='{}'", parentId, nameFilter);
-                    String lowerName = nameFilter.toLowerCase();
+                    logger.debug("get-folders with parentId='{}', name='{}'", CallerText.logged(parentId), CallerText.logged(nameFilter));
+                    // Names are the user's own text: folded in the user's locale on purpose, not in Locale.ROOT.
+                    String lowerName = nameFilter.toLowerCase(Locale.getDefault());
                     folders = folders.stream()
-                            .filter(f -> f.name() != null && f.name().toLowerCase().contains(lowerName))
+                            .filter(f -> f.name() != null && f.name().toLowerCase(Locale.getDefault()).contains(lowerName))
                             .toList();
                 }
             } else {
@@ -282,6 +287,9 @@ public class FolderHandler {
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
 
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
         } catch (Exception e) {
             logger.error("Unexpected error handling get-folders", e);
             ErrorResponse error = new ErrorResponse(
@@ -366,19 +374,19 @@ public class FolderHandler {
             List<String> excludeParam = null;
 
             if (request.arguments() != null) {
-                Object rootIdObj = request.arguments().get("rootId");
+                Object rootIdObj = ToolArguments.optionalText(request.arguments(), "rootId", false);
                 if (rootIdObj instanceof String r && !r.isBlank()) {
                     rootId = r;
                 }
-                Object nameObj = request.arguments().get("name");
+                Object nameObj = ToolArguments.optionalText(request.arguments(), "name", false);
                 if (nameObj instanceof String n && !n.isBlank()) {
                     nameFilter = n;
                 }
-                Object depthObj = request.arguments().get("depth");
-                if (depthObj instanceof Number d) {
-                    depth = d.intValue();
+                Integer depthParam = ToolArguments.wholeInt(request.arguments(), "depth");
+                if (depthParam != null) {
+                    depth = depthParam;
                 }
-                Object fieldsObj = request.arguments().get("fields");
+                Object fieldsObj = ToolArguments.optionalText(request.arguments(), "fields", false);
                 if (fieldsObj instanceof String f && !f.isBlank()) {
                     fieldsParam = f;
                 }
@@ -386,7 +394,7 @@ public class FolderHandler {
                 if (excludeObj instanceof List<?> el && !el.isEmpty()) {
                     excludeParam = new ArrayList<>();
                     for (Object item : el) {
-                        if (item instanceof String s && !s.isBlank()) excludeParam.add(s);
+                        if (ToolArguments.textItem(item, "each exclude entry") instanceof String s) excludeParam.add(s);
                     }
                     if (excludeParam.isEmpty()) excludeParam = null;
                 }
@@ -409,7 +417,7 @@ public class FolderHandler {
                     if (!FieldSelector.VALID_EXCLUDE_FIELDS.contains(field)) {
                         ErrorResponse error = new ErrorResponse(
                                 ErrorCode.INVALID_PARAMETER,
-                                "Invalid exclude field: '" + field + "'",
+                                "Invalid exclude field: " + CallerText.quoted(field),
                                 null,
                                 "Valid exclude fields: " + FieldSelector.validExcludeFieldsAsProse(),
                                 null);
@@ -436,8 +444,8 @@ public class FolderHandler {
                 if (parsed.isPresent()) {
                     preset = parsed.get();
                 } else {
-                    warningMessage = "Invalid fields preset '" + effectiveFieldsPreset
-                            + "', using 'standard'. Valid presets: minimal, standard, full";
+                    warningMessage = "Invalid fields preset " + CallerText.quoted(effectiveFieldsPreset)
+                            + ", using 'standard'. Valid presets: minimal, standard, full";
                 }
             }
 
@@ -453,7 +461,7 @@ public class FolderHandler {
                     }
                     ErrorResponse error = new ErrorResponse(
                             ErrorCode.FOLDER_NOT_FOUND,
-                            "No folder found with ID '" + rootId + "'",
+                            "No folder found with ID " + CallerText.quoted(rootId),
                             "The model contains " + rootCount + " root folders.",
                             "Use get-folders without parentId to see root folders",
                             null);
@@ -466,8 +474,8 @@ public class FolderHandler {
 
             // Apply name filter: prune branches that don't contain matching folders
             if (nameFilter != null && !nameFilter.isEmpty()) {
-                logger.debug("get-folder-tree with name='{}'", nameFilter);
-                String lowerName = nameFilter.toLowerCase();
+                logger.debug("get-folder-tree with name='{}'", CallerText.logged(nameFilter));
+                String lowerName = nameFilter.toLowerCase(Locale.getDefault());
                 tree = pruneTree(tree, lowerName);
             }
 
@@ -504,6 +512,10 @@ public class FolderHandler {
                     null);
             return buildResult(formatter.toJsonString(formatter.formatError(error)), true);
 
+        } catch (ModelAccessException e) {
+            // A value a strict argument reader refuses is a caller error, not an internal one.
+            return HandlerUtils.buildModelAccessError(formatter, e);
+
         } catch (Exception e) {
             logger.error("Unexpected error handling get-folder-tree", e);
             ErrorResponse error = new ErrorResponse(
@@ -532,7 +544,7 @@ public class FolderHandler {
 
     private FolderTreeDto pruneNode(FolderTreeDto node, String lowerNameFilter) {
         boolean nameMatches = node.name() != null
-                && node.name().toLowerCase().contains(lowerNameFilter);
+                && node.name().toLowerCase(Locale.getDefault()).contains(lowerNameFilter);
 
         // Recursively prune children
         List<FolderTreeDto> prunedChildren = null;

@@ -31,7 +31,7 @@ CI runs the test suite on every push; a failing test turns the build red.
 | Need | Why | Notes |
 |------|-----|-------|
 | **JDK 21+** | Archi 5.x targets Java 21 | `java -version` / `javac -version` must both be 21+ |
-| **A local Archi install** | provides the Archi/EMF/GEF/SWT jars the build compiles against | Download from <https://www.archimatetool.com/download/>. `ARCHI_HOME` is the directory that contains `plugins/` (macOS: `/Applications/Archi.app/Contents/Eclipse`; Linux: `<extracted>/Archi`) |
+| **A local Archi install (5.8+)** | provides the Archi/EMF/GEF/SWT jars the build compiles against; CI builds and tests against 5.10.0 | Download from <https://www.archimatetool.com/download/>. `ARCHI_HOME` is the directory that contains `plugins/` (macOS: `/Applications/Archi.app/Contents/Eclipse`; Linux: `<extracted>/Archi`) |
 | **Maven** | fetches the pinned test dependencies | only needed to provision JUnit/Hamcrest/Mockito (below) |
 | **`zip`, `bash`, `git`** | packaging + scripts | `zip` is required so resource lookups match a deployed bundle |
 
@@ -73,7 +73,7 @@ tools/run-tests.sh
 A green run prints, e.g.:
 
 ```
-SUMMARY: 252 classes | 5389 tests run | 0 failed | 0 errors | 0 empty-class violations
+SUMMARY: 530 classes | 9957 tests run | 0 failed | 0 errors | 0 empty-class violations
 RESULT: PASS
 ```
 
@@ -88,6 +88,11 @@ tools/run-tests.sh --swt [Class…]    # add -XstartOnFirstThread for SWT classe
 
 JUnit XML is written to `build/test-results/`. The harness **exit code is the gate**: non-zero
 on a compile error, any non-quarantined failure, or a class that contributes zero tests.
+
+Each test class has a deadline, 180 s by default. A class that overruns it stops the run instead of
+hanging it: the runner prints a `[TIMEOUT]` line naming the class and the test it was in, dumps every
+thread, records the class in its JUnit XML as a timeout error, and exits with code **3**. Classes after
+it are not run. Set `HARNESS_CLASS_TIMEOUT_SECONDS` to change the deadline, or to `0` to turn it off.
 
 ### The two test manifests
 
@@ -114,6 +119,13 @@ ARCHI_HOME=/Applications/Archi.app/Contents/Eclipse tools/ci/package-plugin.sh
 # -> build/dist/net.vheerden.archi.mcp_<version>.<timestamp>.archiplugin
 ```
 
+The bundle's contents come from `bin.includes` in `net.vheerden.archi.mcp/build.properties`, and
+the packager checks the finished archive against that list: if a file is missing, the build fails
+and the archive is deleted. Symbolic links, other special files, file names holding a non-ASCII
+or control character (such as a newline) or a backslash, and a bundle directory the packager cannot
+read in full also stop the build, because the packager cannot copy and check them the same way on
+every platform. CI runs the packager on every pull request and every push to `main`.
+
 To install it into Archi: **Help → Manage plug-ins… → Install…**, select the `.archiplugin`,
 then restart Archi.
 
@@ -129,13 +141,14 @@ then restart Archi.
 suite in **two lanes**, each invoking `tools/run-tests.sh` unmodified; both upload JUnit XML and a
 job summary. A failing test in either lane turns the build red.
 
-- **`ci-junit`** — the headless pure-JUnit bucket (the bulk of the suite, currently ~250 classes /
-  ~5,400 tests). No display is needed, so it runs without `xvfb`, and it auto-discovers `*Test.java` — a
+- **`ci-junit`** — the headless pure-JUnit bucket (the bulk of the suite). No display is needed, so it runs without `xvfb`, and it auto-discovers `*Test.java` — a
   new headless test is picked up with no workflow change.
 - **`ci-pde`** — the SWT-display classes listed in `tools/osgi-excluded-tests.txt` (a small subset),
   run under **`xvfb`** so SWT can bind to a virtual framebuffer. The harness runs in explicit-FQCN
   mode for just those classes; no JVM display flag is passed (the display comes from `xvfb`). It
   reuses `ci-junit`'s Archi and Maven caches.
+
+Each lane is capped at 20 minutes, and the job summary shows any `[TIMEOUT]` line the harness printed.
 
 The remaining OSGi/PDE-only classes — those that need a live Eclipse platform, not merely a display
 — are **not** yet run in CI; exercise them locally via the Eclipse PDE JUnit runner

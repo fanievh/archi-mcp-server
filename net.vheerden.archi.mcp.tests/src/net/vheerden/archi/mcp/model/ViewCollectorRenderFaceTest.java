@@ -188,6 +188,11 @@ public class ViewCollectorRenderFaceTest {
      * <p>These values were produced by the pre-fold implementation in a worktree at its own commit
      * and diffed against the folded one, field for field, across all four shapes. Re-running the
      * new code twice would only have proved it deterministic.
+     *
+     * <p>Four bendpoint coordinates have moved since, each by one pixel down, to where the renderer
+     * draws them. Three are whole-number blends that draw2d's float weight lands a hair low and
+     * floors: conn-2's y values, 1089/3 and 1092/3, and conn-4's y, -36/3. The fourth, conn-4's x, is
+     * -10/3, which the floor takes away from zero where truncation took it toward.
      */
     @Test
     public void shouldReportEveryPreExistingField_whenTheCollectorCallsTheSharedBuilder() {
@@ -208,9 +213,9 @@ public class ViewCollectorRenderFaceTest {
         assertEquals(305, two.targetAnchor().y());
         assertEquals(2, two.absoluteBendpoints().size());
         assertEquals(206, two.absoluteBendpoints().get(0).x());
-        assertEquals(363, two.absoluteBendpoints().get(0).y());
+        assertEquals("drawn a pixel below the exact blend", 362, two.absoluteBendpoints().get(0).y());
         assertEquals(302, two.absoluteBendpoints().get(1).x());
-        assertEquals(364, two.absoluteBendpoints().get(1).y());
+        assertEquals("drawn a pixel below the exact blend", 363, two.absoluteBendpoints().get(1).y());
 
         ViewConnectionDto three = connection("conn-3");
         assertEquals("a source two groups deep", 170, three.sourceAnchor().x());
@@ -219,8 +224,8 @@ public class ViewCollectorRenderFaceTest {
         ViewConnectionDto four = connection("conn-4");
         assertEquals("negative canvas coordinates survive", -70, four.targetAnchor().x());
         assertEquals(-56, four.targetAnchor().y());
-        assertEquals(-3, four.absoluteBendpoints().get(0).x());
-        assertEquals(-12, four.absoluteBendpoints().get(0).y());
+        assertEquals("a negative fraction, floored away from zero", -4, four.absoluteBendpoints().get(0).x());
+        assertEquals("drawn a pixel below the exact blend", -13, four.absoluteBendpoints().get(0).y());
     }
 
     /**

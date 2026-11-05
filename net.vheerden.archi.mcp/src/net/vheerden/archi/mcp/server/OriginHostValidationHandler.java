@@ -1,6 +1,5 @@
 package net.vheerden.archi.mcp.server;
 
-import java.net.InetAddress;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -38,11 +37,12 @@ import org.slf4j.LoggerFactory;
  *       (sandboxed/{@code file://} origins) is rejected.</li>
  *   <li>The allowlist is the lowercased loopback literals {@code localhost}, {@code 127.0.0.1},
  *       {@code ::1}, plus the host-part of the configured bind address. No preference, no UI.</li>
- *   <li>When the effective bind address is <em>not</em> a loopback address (a deliberate,
- *       owner-warned LAN/{@code 0.0.0.0} bind), header validation is relaxed to pass-through and
- *       a single INFO line is logged — DNS-rebinding is a loopback-only threat, and silently
- *       403-ing the user's own LAN access would be a surprising breakage. Such a deployment is
- *       bounded by the bind-address exposure warning and opt-in token auth.</li>
+ *   <li>When the bind is {@linkplain BindExposure#EXPOSED exposed} (a deliberate, owner-warned
+ *       LAN/{@code 0.0.0.0} bind), header validation is relaxed to pass-through and a single WARN
+ *       line is logged — DNS-rebinding is a loopback-only threat, and silently 403-ing the user's
+ *       own LAN access would be a surprising breakage. Such a deployment is bounded by the
+ *       bind-address exposure warning and opt-in token auth. A bind that cannot be classified
+ *       ({@link BindExposure#UNKNOWN}) enforces: that is the closed answer for this guard.</li>
  * </ul>
  *
  * <p>Mirrors {@link JsonErrorHandler}: it lives in the {@code server/} package and touches only
@@ -60,17 +60,29 @@ public class OriginHostValidationHandler extends Handler.Wrapper {
     private final Set<String> allowlist;
 
     /**
-     * Whether header validation is enforced. True when the effective bind is a loopback address
-     * (the default and the actual DNS-rebinding attack surface); false for a deliberate
-     * non-loopback bind, in which case the guard passes every request through.
+     * Whether header validation is enforced: {@link BindExposure#enforcesOriginHost()} of the bind's
+     * classification. True for a loopback bind (the default and the actual DNS-rebinding attack
+     * surface) and for one that cannot be classified; false for a deliberate exposed bind, in which
+     * case the guard passes every request through.
      */
     private final boolean enforcing;
 
     /**
-     * @param wrapped     the downstream handler (the servlet context holding both transports)
-     * @param bindAddress the effective bind address the server is starting on
+     * Classifies {@code bindAddress} itself. For a guard built outside the server's start path; the
+     * server hands the classification it already made to the three-argument constructor instead.
      */
-    public OriginHostValidationHandler(Handler wrapped, String bindAddress) {
+    OriginHostValidationHandler(Handler wrapped, String bindAddress) {
+        this(wrapped, bindAddress, BindExposure.of(bindAddress));
+    }
+
+    /**
+     * @param wrapped     the downstream handler (the servlet context holding both transports)
+     * @param bindAddress the effective bind address the server is starting on; its host part joins
+     *                    the allowlist
+     * @param exposure    how the server classified that bind as it started; the guard enforces
+     *                    exactly when {@link BindExposure#enforcesOriginHost()} says so
+     */
+    public OriginHostValidationHandler(Handler wrapped, String bindAddress, BindExposure exposure) {
         super(wrapped);
 
         Set<String> hosts = new HashSet<>(LOOPBACK_LITERALS);
@@ -83,7 +95,7 @@ public class OriginHostValidationHandler extends Handler.Wrapper {
             hosts.add(bindHost);
         }
         this.allowlist = Set.copyOf(hosts);
-        this.enforcing = isLoopbackBind(bindAddress);
+        this.enforcing = java.util.Objects.requireNonNull(exposure, "exposure").enforcesOriginHost();
 
         if (!enforcing) {
             // Disabling a security control warrants WARN, not INFO.
@@ -216,7 +228,7 @@ public class OriginHostValidationHandler extends Handler.Wrapper {
         return s;
     }
 
-    /** True if header validation is enforced for this bind (i.e. the bind is loopback). */
+    /** True if header validation is enforced for this bind (a loopback bind, or one that could not be classified). */
     boolean isEnforcing() {
         return enforcing;
     }
@@ -224,42 +236,5 @@ public class OriginHostValidationHandler extends Handler.Wrapper {
     /** Package-visible for assertions in tests. */
     Set<String> allowlist() {
         return allowlist;
-    }
-
-    /**
-     * The authoritative loopback test that gates server-side enforcement ({@code enforcing =
-     * isLoopbackBind(bindAddress)}). Promoted from {@code private} so the UI preference page can
-     * classify "exposed?" with the EXACT same semantics the server uses to decide whether this
-     * handler enforces — there must be exactly one implementation, so the bind-address exposure
-     * warning can never drift from enforcement (e.g. on {@code ::1} or {@code 127.255.255.254}).
-     *
-     * <p><b>Fail-safe semantics:</b> a null/blank/unresolvable bind classifies as loopback
-     * (no scary warning for a value that would prevent the server from starting anyway, and
-     * matches enforcement). Do not "fail-loud" here.</p>
-     *
-     * @param bindAddress the bind address to classify (may be null)
-     * @return true if the bind is a loopback address (⇒ enforcement ON ⇒ no exposure warning)
-     */
-    public static boolean isLoopbackBind(String bindAddress) {
-        try {
-            // getByName(null) resolves to loopback, so a null/blank bind enforces (fail-safe).
-            return InetAddress.getByName(bindAddress).isLoopbackAddress();
-        } catch (Exception e) {
-            // Unresolvable bind address: enforce (the server would fail to start anyway).
-            return true;
-        }
-    }
-
-    /**
-     * True if this bind exposes the server beyond loopback — the strict complement of
-     * {@link #isLoopbackBind(String)}, and therefore the exact condition under which Origin/Host
-     * enforcement is relaxed. The UI exposure warning is shown <em>iff</em> this returns true,
-     * making the "warning shown ⇔ enforcement OFF" invariant structural rather than coincidental.
-     *
-     * @param bindAddress the bind address to classify (may be null)
-     * @return true if the bind is non-loopback (⇒ enforcement OFF ⇒ show exposure warning)
-     */
-    public static boolean isExposedBind(String bindAddress) {
-        return !isLoopbackBind(bindAddress);
     }
 }

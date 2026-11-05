@@ -44,7 +44,7 @@ final class RelationshipIdAllowList {
             EObject relObj = ArchimateModelUtils.getObjectByID(model, allowedId);
             if (!(relObj instanceof IArchimateRelationship)) {
                 throw new ModelAccessException(
-                        "Relationship not found: " + allowedId,
+                        "Relationship not found: " + CallerText.bare(allowedId),
                         ErrorCode.RELATIONSHIP_NOT_FOUND,
                         null,
                         "Use get-relationships or search-relationships to find valid relationship IDs",

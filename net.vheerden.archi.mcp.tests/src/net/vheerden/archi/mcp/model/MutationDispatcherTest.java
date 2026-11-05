@@ -47,6 +47,34 @@ public class MutationDispatcherTest {
         dispatcher = new TestMutationDispatcher();
     }
 
+    // ---- fallback after the active model closes ----
+
+    private static IArchimateModel namedModel(String id) {
+        IArchimateModel model = IArchimateFactory.eINSTANCE.createArchimateModel();
+        model.setId(id);
+        model.setName(id);
+        return model;
+    }
+
+    @Test
+    public void shouldNeverReturnTheClosingModel_evenWhenItHoldsTheLatestActivationAndIsStillListed() {
+        IArchimateModel older = namedModel("older");
+        IArchimateModel closing = namedModel("closing");
+        dispatcher.onModelActive(older);
+        dispatcher.onModelActive(closing);   // the latest activation, and never reported closed here
+
+        assertSame(older, dispatcher.fallbackAfterClose(List.of(closing, older), closing));
+        assertNull(dispatcher.fallbackAfterClose(List.of(closing), closing));
+    }
+
+    @Test
+    public void shouldReturnNoModel_whenNothingRemains() {
+        IArchimateModel closing = namedModel("closing");
+
+        assertNull(dispatcher.fallbackAfterClose(null, closing));
+        assertNull(dispatcher.fallbackAfterClose(List.of(), closing));
+    }
+
     // ---- beginBatch tests ----
 
     @Test
@@ -964,8 +992,13 @@ public class MutationDispatcherTest {
                 note, dispatcher.queuedViewObject("session-1", "note-1").object());
         assertEquals("its destined parent comes back with it",
                 view, dispatcher.queuedViewObject("session-1", "note-1").parent());
-        assertNull("but it is never a nesting parent",
-                dispatcher.queuedParentContainer("session-1", "note-1"));
+        try {
+            dispatcher.queuedParentContainer("session-1", "note-1");
+            fail("a queued note is never a nesting parent");
+        } catch (ModelAccessException e) {
+            assertEquals("Parent view object must be a group or element: note-1 is the note this batch places",
+                    e.getMessage());
+        }
         assertNull("an unknown id resolves to nothing",
                 dispatcher.queuedViewObject("session-1", "note-nope"));
         assertNull("another session sees nothing of this batch",

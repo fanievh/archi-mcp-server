@@ -96,7 +96,7 @@ class GroupTopologyOrderer {
      *
      * @param groupIds  list of group IDs to order
      * @param weights   adjacency weight matrix
-     * @param columns   number of grid columns
+     * @param columns   number of grid columns, at least one; a count past the groups is one row of them
      * @return ordered list of group IDs in row-major grid order
      */
     List<String> orderGrid(List<String> groupIds, Map<String, Map<String, Integer>> weights, int columns) {
@@ -107,6 +107,8 @@ class GroupTopologyOrderer {
             return new ArrayList<>(groupIds);
         }
 
+        // More columns than groups is one row of them; the grid is never sized past the groups it holds.
+        columns = Math.min(columns, groupIds.size());
         int rows = (int) Math.ceil((double) groupIds.size() / columns);
         String[][] grid = new String[rows][columns];
         boolean[][] occupied = new boolean[rows][columns];
